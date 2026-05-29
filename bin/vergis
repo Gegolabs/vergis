@@ -1,0 +1,4 @@
+#!/bin/sh
+# Lanzador de Vergis CLI (v0.1). Corre el CLI TypeScript vía tsx, sin paso de build.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$DIR/node_modules/.bin/tsx" "$DIR/packages/cli/src/main.ts" "$@"

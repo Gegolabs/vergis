@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agencydomains.org/schema/mira-spec-1.0.json",
+  "title": "Mira spec (DSL de configuración composicional v1.0)",
+  "description": "Schema formal del DSL de Mira. Deriva del doc 3 del cluster 006. Valida la estructura de los 5 bloques canónicos antes de que el Botler acepte el Botlet.",
+  "type": "object",
+  "required": ["mira_version", "identity", "piece", "data", "quality", "delivery"],
+  "additionalProperties": true,
+  "properties": {
+    "mira_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" },
+    "identity": {
+      "type": "object",
+      "required": ["id", "display_name", "classification"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "display_name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "owner": { "type": "string" },
+        "classification": { "enum": ["public", "internal", "confidential", "regulated"] },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "piece": { "type": "object" },
+    "data": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["capability"],
+        "additionalProperties": true,
+        "properties": {
+          "capability": { "type": "string", "minLength": 1 },
+          "params": { "type": "object" },
+          "shape": { "type": "object" },
+          "cache_key": { "type": "string" },
+          "watermark_field": { "type": "string" }
+        }
+      }
+    },
+    "quality": { "type": "object" },
+    "delivery": { "type": "object" }
+  }
+}
