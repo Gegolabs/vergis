@@ -1,0 +1,41 @@
+# Fuerza un fallo catastrófico de Capability para ejercitar el fallback agéntico.
+# Sirve al criterio de aceptación 5 (dispara on_botlet_failure → log agentic-fallback).
+mira_version: "1.0"
+
+identity:
+  id: fuerza-fallo
+  display_name: "Fuerza fallo de Capability"
+  classification: public
+
+piece:
+  layout: rows
+  elements:
+    - kpi:
+        metric: data.estado.agentes_vivos
+        label: "Agentes vivos"
+        format: int_0
+
+data:
+  estado:
+    capability: static-data
+    params:
+      __force_fail: true
+      rows:
+        - { agentes_vivos: 1 }
+    shape:
+      type: single_row
+      fields: { agentes_vivos: integer }
+
+quality:
+  freshness: { max_age: PT0S, source_watermark: ignore }
+  refresh: { mode: on-demand }
+  degradation: { on_capability_fail: agentic_fallback }
+
+delivery:
+  render:
+    - { format: html, target: web }
+  channels:
+    - type: file
+      capability: publicar-artefacto
+      params: { path: fallo.html }
+      schedule: on_refresh
