@@ -15,7 +15,8 @@
     "paths": {
       "@vergis/botler": ["packages/botler/src/index.ts"],
       "@vergis/capabilities": ["packages/capabilities/src/index.ts"],
-      "@vergis/mira": ["packages/mira/src/index.ts"]
+      "@vergis/mira": ["packages/mira/src/index.ts"],
+      "@vergis/policy": ["packages/policy/src/index.ts"]
     }
   }
 }
