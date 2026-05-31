@@ -73,6 +73,15 @@ describe('Paso 4 · gate → claims (parser de cabeceras)', () => {
     const id = identityFromHeaders({ 'x-forwarded-groups': 'Producción', 'x-forwarded-email': 'jefe@gh.com' })
     expect(id).toEqual({ agent: 'vergis', user: 'jefe@gh.com', claims: { groups: ['Producción'] } })
   })
+  it('decodeUtf8 recupera acentos mal codificados por el transporte HTTP (latin1→utf8)', () => {
+    // Node entrega las cabeceras como latin1: "Producción" UTF-8 llega como "ProducciÃ³n".
+    const mangled = Buffer.from('Producción', 'utf8').toString('latin1')
+    expect(mangled).not.toBe('Producción') // confirma que el transporte lo deformó
+    const m = { claims: { groups: 'x-forwarded-groups' }, decodeUtf8: true }
+    expect(claimsFromHeaders({ 'x-forwarded-groups': mangled }, m)).toEqual({ groups: ['Producción'] })
+    // sin decodeUtf8 NO se recupera (default seguro para valores ya correctos in-proc)
+    expect(claimsFromHeaders({ 'x-forwarded-groups': 'Producción' })).toEqual({ groups: ['Producción'] })
+  })
 })
 
 describe('Paso 4 · la Capability inyecta los claims como settings request-scoped', () => {
