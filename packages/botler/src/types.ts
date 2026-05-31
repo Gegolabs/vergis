@@ -3,9 +3,20 @@
 
 export type BotletId = string
 
+/**
+ * Claims del consumidor: claim → valor(es). Los entrega el gate (oauth2-proxy/AAD);
+ * el Botler los porta en la identidad e inyecta hacia el motor (doc 10 §5). El consumidor
+ * JAMÁS los controla. Estructuralmente idéntico al `ClaimSet` de `@vergis/policy` (que no
+ * puede importarse acá: policy depende de botler, no al revés).
+ */
+export type ClaimSet = Record<string, string[] | string | undefined>
+
 export interface IdentityContext {
   agent: string
   user?: string
+  /** Grupos/atributos del consumidor (los del gate). Canal por el que viaja la identidad
+   *  hasta la inyección de RLS; el consumidor no puede escribirlos. */
+  claims?: ClaimSet
 }
 
 /** Error estructurado y accionable — principio Agent First (canon §6). */
