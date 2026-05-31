@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@vergis/botler": "*",
+    "@vergis/policy": "*",
     "mssql": "^12.5.4",
     "tedious": "^19.2.1",
     "vega": "^5.30.0",

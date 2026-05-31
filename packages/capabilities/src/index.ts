@@ -10,6 +10,8 @@ export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'
 export type { SqlConnectionProfile } from './execute-sql-dwh'
+export { createExecuteSqlClickHouse, fetchChTransport } from './execute-sql-ch'
+export type { ClickHouseProfile, ChQueryRequest, ChQueryResult, ChTransport } from './execute-sql-ch'
 export { getTheme, registerTheme, defaultTheme, arbolTheme } from './themes'
 export type { Theme, ThemeTokens, DashboardMeta } from './themes'
 
