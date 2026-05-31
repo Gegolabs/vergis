@@ -1,0 +1,54 @@
+# Ejemplo GENÉRICO de un PI con RLS (paso 5): se sirve consultando un store con ROW POLICY,
+# y cada consumidor ve solo las filas que sus claims (grupos del gate) permiten. La fuente
+# filtra (motor B), no el render. Sintético; no es instancia de ningún cliente.
+mira_version: "1.0"
+
+identity:
+  id: rls-areas-demo
+  display_name: "Demo RLS por Área"
+  code: "RLS-DEMO"
+  org: "Vergis"
+  classification: confidential
+
+piece:
+  layout: rows
+  elements:
+    - layout: grid
+      columns: 2
+      elements:
+        - kpi: { label: "Presentes", accent: blue, format: int_0, agg: { dataset: areas, op: sum, field: present } }
+        - kpi: { label: "Total", accent: gray, format: int_0, agg: { dataset: areas, op: sum, field: total } }
+    - semaforo:
+        data: data.areas
+        label: area
+        present: present
+        total: total
+        thresholds: { green: 90, yellow: 70 }
+        title: "Asistencia por Área"
+
+data:
+  areas:
+    capability: execute-sql-ch
+    params:
+      sql: "SELECT area, total, present FROM demo.areas"
+    shape:
+      type: rows
+      fields:
+        area: string
+        total: integer
+        present: integer
+
+quality:
+  audience:
+    rls:
+      - { column: area, claim: groups, op: in }
+    default: deny
+
+delivery:
+  render:
+    - { format: html, target: web }
+  channels:
+    - type: file
+      capability: publicar-artefacto
+      params: { path: rls-areas.html }
+      schedule: on_refresh
