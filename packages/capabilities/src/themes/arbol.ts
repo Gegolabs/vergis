@@ -156,6 +156,9 @@ export const arbolTheme: Theme = {
   .tray-credit a:hover { color: var(--green); }
 
   .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .kpi-lg { display: flex; flex-direction: column; justify-content: center; min-height: 132px; padding: 24px; }
+  .kpi-lg .kpi-value { font-size: 52px; }
+  .kpi-lg .kpi-label { font-size: 13px; }
   .kpi-value { font-size: 32px; font-weight: 800; line-height: 1.05; }
   .kpi-label { font-size: 11px; color: var(--fg-dim); margin-top: 6px; text-transform: uppercase; letter-spacing: .05em; }
   .kpi-comparison { color: var(--fg-dim); text-transform: none; letter-spacing: 0; }
