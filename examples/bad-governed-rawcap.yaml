@@ -1,0 +1,42 @@
+# NEGATIVO: PI gobernado (audience.rls = policy) que sirve datos por una capability CRUDA
+# (static-data, no aplica la policy) → rechazado (no-bypass, charter §2a). Los datos gobernados
+# solo se sirven por capabilities con enforcement (execute-sql-ch / push-down).
+mira_version: "1.0"
+
+identity:
+  id: bad-governed-rawcap
+  display_name: "Gobernado por vía cruda"
+  classification: confidential
+
+piece:
+  layout: rows
+  elements:
+    - kpi: { metric: data.estado.n, label: "N", format: int_0 }
+
+data:
+  estado:
+    capability: static-data
+    params:
+      rows:
+        - { area: "Finanzas", n: 1 }
+    shape:
+      type: single_row
+      fields: { area: string, n: integer }
+
+quality:
+  freshness: { max_age: PT0S, source_watermark: ignore }
+  refresh: { mode: on-demand }
+  degradation: { on_capability_fail: agentic_fallback }
+  audience:
+    rls:
+      - { column: area, claim: groups, op: in }
+    default: deny
+
+delivery:
+  render:
+    - { format: html, target: web }
+  channels:
+    - type: file
+      capability: publicar-artefacto
+      params: { path: bad-governed-rawcap.html }
+      schedule: on_refresh

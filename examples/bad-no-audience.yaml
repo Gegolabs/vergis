@@ -1,35 +1,32 @@
+# NEGATIVO: PI sin declaración de audiencia → rechazado (fail-closed por omisión, charter §2a).
+# La omisión NO es público: hay que declarar 'rls: [...]' o 'rls: public' a propósito.
 mira_version: "1.0"
 
 identity:
-  id: hello-vergis
-  display_name: "Hola, Vergis"
+  id: bad-no-audience
+  display_name: "Sin audiencia"
   classification: public
 
 piece:
   layout: rows
   elements:
-    - markdown_block:
-        content: "# Hola, Vergis — {{ data.estado.fecha }}"
-    - kpi:
-        metric: data.estado.agentes_vivos
-        label: "Agentes vivos"
-        format: int_0
+    - kpi: { metric: data.estado.n, label: "N", format: int_0 }
 
 data:
   estado:
     capability: static-data
     params:
       rows:
-        - { agentes_vivos: 1, fecha: "2026-05-28" }
+        - { n: 1 }
     shape:
       type: single_row
-      fields: { agentes_vivos: integer, fecha: string }
+      fields: { n: integer }
 
 quality:
   freshness: { max_age: PT0S, source_watermark: ignore }
   refresh: { mode: on-demand }
   degradation: { on_capability_fail: agentic_fallback }
-  audience: { rls: public }   # apertura deliberada: PI sin datos sensibles (fail-closed por omisión)
+  # (sin audience → debe rechazarse)
 
 delivery:
   render:
@@ -37,5 +34,5 @@ delivery:
   channels:
     - type: file
       capability: publicar-artefacto
-      params: { path: hello.html }
+      params: { path: bad-no-audience.html }
       schedule: on_refresh
