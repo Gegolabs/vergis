@@ -15,16 +15,33 @@ import type { Combine, Policy, PolicyDecl, Predicate, PredicateOp } from './ir'
 
 const OPS: readonly PredicateOp[] = ['in', 'eq']
 const COMBINES: readonly Combine[] = ['and', 'or']
+const RELATIONS: Record<string, 'descendant_of'> = { descendant_of: 'descendant_of', subordinate_of: 'descendant_of' }
 
-/** Una dimensión gobernante de una entidad: el discriminador + el claim que lo porta. */
+/**
+ * Una dimensión gobernante de una entidad: el criterio de visibilidad sobre una dimensión. Puede ser
+ * PERTENENCIA (Nivel-1: `op` in/eq) o JERÁRQUICO (Nivel-2: `relation: descendant_of` recorriendo la
+ * jerarquía `via`). El criterio lo declara la política; no hay discriminador universal.
+ */
 export interface DimensionGovernance {
-  /** Nombre canónico de la dimensión (p.ej. `area`). El mapeo la liga a una columna física. */
+  /** Nombre canónico de la dimensión (p.ej. `area`). El mapeo la liga a una columna física por dataset. */
   dimension: string
-  /** Claim del gate que trae los valores permitidos. */
+  /** Claim del gate que trae el/los valor(es) o el nodo del viewer. */
   claim: string
-  /** `in` (pertenencia, default) o `eq` (escalar). */
+  /** Pertenencia: `in` (default) o `eq`. Mutuamente excluyente con `relation`. */
   op?: unknown
+  /** Jerárquico: `descendant_of` (o alias `subordinate_of`). Recorre la jerarquía `via`. */
+  relation?: unknown
+  /** Jerarquía de referencia (dataset de cierre del trust-base) — requerido con `relation`. */
+  via?: unknown
+  /** Columnas del cierre (default `ancestor`/`descendant`). */
+  ancestor?: unknown
+  descendant?: unknown
 }
+
+/** Gobierno parseado: pertenencia o jerárquico. */
+type ParsedGovernance =
+  | { kind: 'membership'; dimension: string; claim: string; op: PredicateOp }
+  | { kind: 'hierarchy'; dimension: string; claim: string; rel: 'descendant_of'; via: string; ancestor: string; descendant: string }
 
 /** Una entidad de negocio canónica con su política de gobierno (autoría única). */
 export interface EntityDecl {
@@ -64,10 +81,10 @@ export function isEntityStore(doc: unknown): doc is EntityStoreDoc {
   return !!d && (Array.isArray(d.entities) || Array.isArray(d.datasets))
 }
 
-function parseGovernance(g: unknown, entity: string, i: number): { dimension: string; claim: string; op: PredicateOp } {
+function parseGovernance(g: unknown, entity: string, i: number): ParsedGovernance {
   const path = `entities[${entity}].governed_by[${i}]`
   if (typeof g !== 'object' || g == null || Array.isArray(g)) {
-    throw err('governance-malformed', path, g, `Cada gobierno debe ser un objeto {dimension, claim, op}.`, `Corregir el gobierno ${i} de '${entity}'.`)
+    throw err('governance-malformed', path, g, `Cada gobierno debe ser un objeto {dimension, claim, op|relation}.`, `Corregir el gobierno ${i} de '${entity}'.`)
   }
   const o = g as Record<string, unknown>
   if (typeof o.dimension !== 'string' || o.dimension.length === 0) {
@@ -76,11 +93,26 @@ function parseGovernance(g: unknown, entity: string, i: number): { dimension: st
   if (typeof o.claim !== 'string' || o.claim.length === 0) {
     throw err('governance-claim', `${path}.claim`, o.claim, `'claim' debe ser el nombre (string) de un claim de identidad.`, `Declarar 'claim'.`)
   }
+  // Jerárquico (Nivel-2) si declara `relation`; si no, pertenencia (Nivel-1).
+  if (o.relation != null) {
+    if (typeof o.relation !== 'string' || !(o.relation in RELATIONS)) {
+      throw err('governance-relation', `${path}.relation`, o.relation, `'relation' debe ser del vocabulario: ${Object.keys(RELATIONS).join(', ')}.`, `Usar 'descendant_of'.`)
+    }
+    if (typeof o.via !== 'string' || o.via.length === 0) {
+      throw err('governance-via', `${path}.via`, o.via, `'via' debe nombrar la jerarquía de referencia (cierre del trust-base).`, `Declarar 'via: <jerarquía>'.`)
+    }
+    const ancestor = o.ancestor ?? 'ancestor'
+    const descendant = o.descendant ?? 'descendant'
+    if (typeof ancestor !== 'string' || typeof descendant !== 'string') {
+      throw err('governance-closure-cols', path, { ancestor, descendant }, `'ancestor'/'descendant' deben ser strings.`, `Omitir o declarar nombres válidos.`)
+    }
+    return { kind: 'hierarchy', dimension: o.dimension, claim: o.claim, rel: RELATIONS[o.relation], via: o.via, ancestor, descendant }
+  }
   const op = o.op ?? 'in'
   if (typeof op !== 'string' || !OPS.includes(op as PredicateOp)) {
     throw err('governance-op', `${path}.op`, op, `'op' debe ser uno de: ${OPS.join(', ')}.`, `Usar 'in' (pertenencia) o 'eq' (escalar).`)
   }
-  return { dimension: o.dimension, claim: o.claim, op: op as PredicateOp }
+  return { kind: 'membership', dimension: o.dimension, claim: o.claim, op: op as PredicateOp }
 }
 
 /**
@@ -130,18 +162,21 @@ export function resolveEntityStore(doc: EntityStoreDoc | undefined): Map<string,
     }
     const dimsMap = (m.dimensions ?? {}) as Record<string, unknown>
     const predicates: Predicate[] = gov.map((g, gi) => {
-      const { dimension, claim, op } = parseGovernance(g, entity.entity, gi)
-      const column = dimsMap[dimension]
+      const parsed = parseGovernance(g, entity.entity, gi)
+      const column = dimsMap[parsed.dimension]
       if (typeof column !== 'string' || column.length === 0) {
         throw err(
           'dimension-unmapped',
-          `${path}.dimensions.${dimension}`,
+          `${path}.dimensions.${parsed.dimension}`,
           column,
-          `El dataset '${m.dataset}' realiza '${entity.entity}', gobernado por la dimensión '${dimension}', pero no mapea esa dimensión a una columna.`,
-          `Declarar 'dimensions: { ${dimension}: <columna> }' en el dataset.`,
+          `El dataset '${m.dataset}' realiza '${entity.entity}', gobernado por la dimensión '${parsed.dimension}', pero no mapea esa dimensión a una columna.`,
+          `Declarar 'dimensions: { ${parsed.dimension}: <columna> }' en el dataset.`,
         )
       }
-      return { column, claim, op }
+      if (parsed.kind === 'hierarchy') {
+        return { kind: 'hierarchy', rel: parsed.rel, column, claim: parsed.claim, via: parsed.via, ancestor: parsed.ancestor, descendant: parsed.descendant }
+      }
+      return { kind: 'membership', column, claim: parsed.claim, op: parsed.op }
     })
     const combine = parseCombine(entity.combine, entity.entity)
     const policy: Policy = { predicates, combine, default: 'deny' }

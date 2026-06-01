@@ -13,17 +13,24 @@
 import { VergisError } from '@vergis/botler'
 import {
   claimValues,
+  isHierarchy,
   isPublic,
   type ClaimSet,
   type Policy,
   type PolicyDecl,
   type Predicate,
+  type ReferenceData,
 } from './ir'
 
 export const SETTINGS_PREFIX = 'vergis_'
 
 /** Identificadores seguros (columna, claim, rol, tabla): evita inyección por nombre. */
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Identificador calificado (p.ej. `db.tabla` de una jerarquía de referencia): cada parte segura. */
+function qualifiedIdent(kind: string, value: string): string {
+  return value.split('.').map((part) => ident(kind, part)).join('.')
+}
 
 export interface ClickHouseTarget {
   /** Base de datos del store. */
@@ -73,6 +80,14 @@ function predicateExpr(pred: Predicate): string {
   const col = ident('column', pred.column)
   const setting = settingForClaim(pred.claim)
   const get = `getSetting('${setting}')`
+  if (isHierarchy(pred)) {
+    // Nivel-2 (charter §4b): row[column] ∈ descendientes del nodo del viewer en la jerarquía `via`.
+    // Subquery al cierre con el nodo del viewer inyectado (lista por coma → soporta multi-nodo).
+    const via = qualifiedIdent('via', pred.via)
+    const anc = ident('ancestor', pred.ancestor)
+    const desc = ident('descendant', pred.descendant)
+    return `(${get} != '' AND ${col} IN (SELECT ${desc} FROM ${via} WHERE has(splitByChar(',', ${get}), ${anc})))`
+  }
   if (pred.op === 'eq') {
     return `(${get} != '' AND ${col} = ${get})`
   }
@@ -160,11 +175,13 @@ function splitByChar(s: string): string[] {
   return s === '' ? [] : s.split(',') // guard `!= ''` ya cubre el caso vacío en la expr
 }
 
-/** Evalúa la expresión generada con la semántica de ClickHouse, dado el mapa de settings. */
+/** Evalúa la expresión generada con la semántica de ClickHouse, dado el mapa de settings.
+ *  `refs` aporta los cierres de las jerarquías (`via`) para los predicados Nivel-2 (subquery). */
 export function emulate(
   enforcement: ClickHouseEnforcement,
   settings: Record<string, string>,
   row: Record<string, unknown>,
+  refs: ReferenceData = {},
 ): boolean {
   const { policy } = enforcement
   if (policy.predicates.length === 0) return false
@@ -173,6 +190,17 @@ export function emulate(
     const s = settings[setting] ?? '' // getSetting default ''
     if (s === '') return false // el guard `!= ''`
     const cell = row[pred.column] == null ? '' : String(row[pred.column])
+    if (isHierarchy(pred)) {
+      // subquery al cierre: descendientes de los nodos del viewer (s, lista por coma)
+      const ancestors = new Set(splitByChar(s))
+      const closure = refs[pred.via] ?? []
+      const visible = new Set(
+        closure
+          .filter((r) => ancestors.has(String((r as Record<string, unknown>)[pred.ancestor] ?? r.ancestor)))
+          .map((r) => String((r as Record<string, unknown>)[pred.descendant] ?? r.descendant)),
+      )
+      return visible.has(cell)
+    }
     if (pred.op === 'eq') return cell === s
     return splitByChar(s).includes(cell)
   }
