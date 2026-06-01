@@ -7,20 +7,25 @@
  * filtra → el dashboard sale segmentado (cada quien ve solo su Área).
  *
  * Lo elige la imagen cuando VERGIS_RLS=1 (ver Dockerfile). Config por entorno:
- *  - VERGIS_SPEC          spec de instancia con `audience.rls` que sirve vía execute-sql-ch.
+ *  - VERGIS_SPEC          spec de instancia (AUTHZ-BLIND: no declara autorización; solo qué dato muestra).
+ *  - VERGIS_POLICIES      ruta(s) a archivos del POLICY STORE (data-anchored): atan política → dataset.
  *  - VERGIS_CH_URL        HTTP del store ClickHouse (p.ej. http://clickhouse:8123).
  *  - VERGIS_CH_ADMIN_USER / _PASS   usuario admin (bootstrap + ingesta). Default 'default'.
  *  - VERGIS_CH_CONSUMER_USER        usuario data-plane de bajo privilegio. Default 'botler'.
  *  - VERGIS_CH_SCHEMA     JSON {database, table, columns:{col:tipoCH}} del store.
- *  - VERGIS_CH_SEED       (opcional) ruta a JSON [filas] a ingerir al arrancar (datos sintéticos
- *                         o semilla). Sin esto, se asume que otra corriente ingiere.
- *  - VERGIS_REFRESH_MS    (opcional) re-ingesta de la semilla cada N ms.
+ *  - VERGIS_CH_SEED       (opcional) ruta a JSON [filas] a ingerir al arrancar.
+ *  - VERGIS_INGEST        (opcional) {database_ref, sql} para ingerir de la fuente (Fabric).
+ *  - VERGIS_REFRESH_MS    (opcional) re-ingesta cada N ms.
  *  - PORT                 default 8080.
+ *
+ * Modelo data-anchored (charter §2a): la política vive ATADA AL DATO (policy store), NO en el spec.
+ * El PI es ciego a la autorización. Default-deny: una tabla sin política en el store no se sirve.
  */
 import { createServer, type ServerResponse } from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { identityFromHeaders, DEFAULT_GATE_MAPPING, type GateHeaders } from '@vergis/botler'
 import { parseSpec } from '@vergis/mira'
@@ -32,13 +37,14 @@ import {
   type ChStoreSchema,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
-import { trivialClickHouseProvider, type AuthorizationProvider } from '@vergis/policy'
+import { compileClickHouse, parsePolicyStore, type PolicyDecl, type PolicyStoreDoc } from '@vergis/policy'
 
 const PORT = Number(process.env['PORT'] ?? 8080)
 const SPEC = process.env['VERGIS_SPEC'] ?? '/specs/asistencia-diaria-hijuelas-clickhouse.yaml'
 const CH_URL = process.env['VERGIS_CH_URL'] ?? 'http://clickhouse:8123'
 const ADMIN = { url: CH_URL, user: process.env['VERGIS_CH_ADMIN_USER'] ?? 'default', password: process.env['VERGIS_CH_ADMIN_PASS'] }
 const CONSUMER_USER = process.env['VERGIS_CH_CONSUMER_USER'] ?? 'botler'
+const TARGET_ROLE = process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role'
 const REFRESH_MS = Number(process.env['VERGIS_REFRESH_MS'] ?? 0)
 
 const SCHEMA = JSON.parse(process.env['VERGIS_CH_SCHEMA'] ?? '{}') as ChStoreSchema
@@ -46,18 +52,25 @@ if (!SCHEMA.database || !SCHEMA.table || !SCHEMA.columns) {
   throw new Error('VERGIS_CH_SCHEMA inválido (esperado {database, table, columns}).')
 }
 
-// Proveedor de autorización (el PUERTO, charter 012 · Custos). Hoy: el trivial (membership).
-// Para enchufar Custos completo en el futuro, se cambia SOLO esta línea — Vergis no se entera.
-const authz: AuthorizationProvider = trivialClickHouseProvider
-
-// Enforcement compilado UNA vez desde la audience del spec (specialize-time), vía el puerto.
-const spec = parseSpec(readFileSync(resolve(SPEC), 'utf8')) as { quality?: { audience?: unknown }; identity?: { display_name?: string } }
-const enforcement = authz.compile(spec.quality?.audience as Parameters<typeof authz.compile>[0], {
-  database: SCHEMA.database,
-  table: SCHEMA.table,
-  role: process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role',
-})
-if (!enforcement) throw new Error('El spec no declara RLS (audience pública); este server espera una policy.')
+// Policy store (data-anchored): la política viene ATADA AL DATO, no del spec. Default-deny:
+// si la tabla servida no tiene política declarada en el store, NO se sirve.
+const dataset = `${SCHEMA.database}.${SCHEMA.table}`
+const store = new Map<string, PolicyDecl>()
+for (const p of (process.env['VERGIS_POLICIES'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  const doc = parseYaml(readFileSync(resolve(p), 'utf8')) as PolicyStoreDoc
+  for (const [ds, pol] of parsePolicyStore(doc)) store.set(ds, pol)
+}
+const policy = store.get(dataset)
+if (!policy) {
+  throw new Error(
+    `Sin política para el dataset '${dataset}' en el policy store (VERGIS_POLICIES). ` +
+      `Default-deny: declara su política ('rls: [...]' o 'grant: all') — el dato no se sirve sin política.`,
+  )
+}
+// El spec es AUTHZ-BLIND: solo se lee para el título/render, nunca para autorizar.
+const spec = parseSpec(readFileSync(resolve(SPEC), 'utf8')) as { identity?: { display_name?: string } }
+// Enforcement compilado desde la política del DATO (null = grant:all → sin restricción de fila).
+const enforcement = compileClickHouse(policy, { database: SCHEMA.database, table: SCHEMA.table, role: TARGET_ROLE })
 
 const botlerProfile = { url: CH_URL, user: CONSUMER_USER, database: SCHEMA.database }
 
