@@ -62,7 +62,7 @@ describe('Compilador de policy · front-end (audience → IR)', () => {
   it('parsea la declaración de QW-04 a un IR con default-deny', () => {
     const p = parseAudience(QW04_AUDIENCE) as Policy
     expect(isPublic(p)).toBe(false)
-    expect(p.predicates).toEqual([{ column: 'area', claim: 'groups', op: 'in' }])
+    expect(p.predicates).toEqual([{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }])
     expect(p.combine).toBe('and')
     expect(p.default).toBe('deny')
   })
@@ -192,6 +192,7 @@ describe('Compilador de policy · property test (codegen ≡ IR de referencia)',
       const predicates = Array.from({ length: nPred }, () => {
         const useArea = rnd() < 0.5
         return {
+          kind: 'membership' as const,
           column: useArea ? 'area' : 'region',
           claim: useArea ? 'groups' : 'regions',
           op: (rnd() < 0.5 ? 'in' : 'eq') as 'in' | 'eq',
@@ -388,6 +389,7 @@ describe('Compilador de policy · property test (Fabric ≡ IR de referencia ≡
       const predicates = Array.from({ length: nPred }, () => {
         const useArea = rnd() < 0.5
         return {
+          kind: 'membership' as const,
           column: useArea ? 'area' : 'region',
           claim: useArea ? 'groups' : 'regions',
           op: (rnd() < 0.5 ? 'in' : 'eq') as 'in' | 'eq',
