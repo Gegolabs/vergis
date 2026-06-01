@@ -100,6 +100,17 @@ function discover(): Report[] {
       continue
     }
     const tables = [...new Set(Object.values(data).flatMap((d) => tablesOf(d.params?.sql ?? '')))]
+    // GATE DE GOBERNANZA (fail-closed, charter §2b) — crítico en push-down: en Fabric una tabla SIN
+    // política devuelve TODAS sus filas (el motor no niega por omisión) → un PI que lea una tabla
+    // no-gobernada FUGA. No se sirve un PI a menos que CADA tabla que toca tenga política (rls o
+    // grant:all). En clickhouse la seguridad la da el bootstrap (solo existen tablas gobernadas).
+    if (ENGINE === 'fabric') {
+      const ungoverned = tables.filter((t) => !store.has(t))
+      if (ungoverned.length > 0) {
+        console.warn(`[vergis-rls] '${p}' no servible: lee tabla(s) sin política → fuga en push-down: ${ungoverned.join(', ')} — omitido`)
+        continue
+      }
+    }
     const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
     out.push({ code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath: p, tables })
   }
