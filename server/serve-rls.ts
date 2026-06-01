@@ -249,10 +249,30 @@ const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-gro
   }, {})
 const GATE_MAPPING = { ...DEFAULT_GATE_MAPPING, claims: gateClaims, decodeUtf8: true }
 
+// RESOLVER DE IDENTIDAD desde un DIRECTORIO (charter §4–§5): cuando el claim del criterio no viaja
+// en la cabecera del gate sino que se deriva de la identidad autenticada (p.ej. el ÁREA del viewer
+// a partir de su email corporativo), se resuelve contra un mapa de referencia. VERGIS_IDENTITY_MAP
+// apunta a un JSON { email → { claim: valor(es) } } (trust-base; lo produce un proceso admin —
+// p.ej. reconciliación AAD↔directorio de personas). Fail-closed: email no mapeado → sin claim → deny.
+const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = process.env['VERGIS_IDENTITY_MAP']
+  ? (JSON.parse(readFileSync(resolve(process.env['VERGIS_IDENTITY_MAP']), 'utf8')) as Record<string, Record<string, string | string[]>>)
+  : null
+
+/** Identidad del gate + claims enriquecidos desde el directorio (si hay mapa y el email matchea). */
+function identityFor(headers: GateHeaders) {
+  const identity = identityFromHeaders(headers, GATE_MAPPING)
+  if (!IDENTITY_MAP || !identity.user) return identity
+  const extra = IDENTITY_MAP[identity.user.toLowerCase()]
+  if (!extra) return identity // no mapeado → sin claim del directorio → default-deny
+  const claims: ClaimSet = { ...(identity.claims ?? {}) }
+  for (const [c, v] of Object.entries(extra)) claims[c] = Array.isArray(v) ? v.map(String) : [String(v)]
+  return { ...identity, claims }
+}
+
 async function renderReport(report: Report, headers: GateHeaders): Promise<string> {
   const out = await runSpec({
     specPath: report.specPath,
-    identity: identityFromHeaders(headers, GATE_MAPPING),
+    identity: identityFor(headers),
     baseDir: process.env['VERGIS_OUT'] ?? tmpdir(),
     // HARDENING (charter §2b): catálogo de serving = solo el conector enforcing + render/publish.
     // SIN starters (no `static-data` ni vías crudas) → imposible servir dato no-gobernado.
@@ -285,7 +305,7 @@ const server = createServer((req, res) => {
     return
   }
   if (!ready) return fail(res, 503, 'Inicializando…')
-  const claims = identityFromHeaders(req.headers as GateHeaders, GATE_MAPPING).claims ?? {}
+  const claims = identityFor(req.headers as GateHeaders).claims ?? {}
   const all = discover()
   if (url === '/' || url === '') {
     const visible = visibleFor(all, claims) // índice PER-CONSUMIDOR: solo PIs a los que tiene acceso
