@@ -12,5 +12,5 @@ ENV NODE_ENV=production \
     VERGIS_OUT=/tmp/vergis
 EXPOSE 8080
 
-# VERGIS_RLS=1 → server con render por-consumidor (RLS); si no, el server estático clásico.
-CMD ["sh", "-c", "if [ \"$VERGIS_RLS\" = \"1\" ]; then exec npx tsx server/serve-rls.ts; else exec npx tsx server/serve.ts; fi"]
+# Único server: render POR CONSUMIDOR con RLS (data-anchored). No hay camino de servir sin RLS.
+CMD ["npx", "tsx", "server/serve-rls.ts"]

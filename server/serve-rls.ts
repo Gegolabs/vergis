@@ -14,12 +14,12 @@
  *  - VERGIS_CONNECTIONS  perfiles SQL (para ingesta desde fuente). VERGIS_REFRESH_MS · PORT.
  */
 import { createServer, type ServerResponse } from 'node:http'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { identityFromHeaders, DEFAULT_GATE_MAPPING, type GateHeaders } from '@vergis/botler'
+import { identityFromHeaders, DEFAULT_GATE_MAPPING, type ClaimSet, type GateHeaders } from '@vergis/botler'
 import { parseSpec } from '@vergis/mira'
 import {
   bootstrapClickHouse,
@@ -32,7 +32,7 @@ import {
   type ChColumnType,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
-import { compileClickHouse, parsePolicyStore, type ClickHouseEnforcement, type PolicyDecl, type PolicyStoreDoc } from '@vergis/policy'
+import { claimValues, compileClickHouse, isPublic, parsePolicyStore, type ClickHouseEnforcement, type PolicyDecl, type PolicyStoreDoc } from '@vergis/policy'
 
 const PORT = Number(process.env['PORT'] ?? 8080)
 const CH_URL = process.env['VERGIS_CH_URL'] ?? 'http://clickhouse:8123'
@@ -41,19 +41,54 @@ const CONSUMER_USER = process.env['VERGIS_CH_CONSUMER_USER'] ?? 'botler'
 const TARGET_ROLE = process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role'
 const REFRESH_MS = Number(process.env['VERGIS_REFRESH_MS'] ?? 0)
 
-// --- Reportes (specs authz-blind, ruteados por slug) ------------------------
-interface Report { code: string; slug: string; name: string; specPath: string }
+// --- Productos de Información (specs authz-blind, ruteados por slug) ---------
+// DESCUBRIMIENTO DINÁMICO: desde un directorio (VERGIS_SPECS_DIR) o una lista (VERGIS_SPECS),
+// re-escaneado por request → agregar un PI = soltar su spec, sin reiniciar. Solo se incluyen
+// specs SERVIBLES (todas sus data-capabilities en el catálogo RLS) — los demás se omiten (no-bypass).
+interface Report { code: string; slug: string; name: string; specPath: string; tables: string[] }
+const SPECS_DIR = process.env['VERGIS_SPECS_DIR']
+const SPECS_LIST = (process.env['VERGIS_SPECS'] ?? process.env['VERGIS_SPEC'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+if (!SPECS_DIR && SPECS_LIST.length === 0) throw new Error('Falta VERGIS_SPECS_DIR o VERGIS_SPECS.')
+const SERVING_CAPS = new Set(['execute-sql-ch']) // catálogo de data-capabilities servibles (enforcing)
+
 function slugify(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
-const SPEC_PATHS = (process.env['VERGIS_SPECS'] ?? process.env['VERGIS_SPEC'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-if (SPEC_PATHS.length === 0) throw new Error('Falta VERGIS_SPECS (o VERGIS_SPEC).')
-const REPORTS: Report[] = SPEC_PATHS.map((p) => {
-  const specPath = resolve(p)
-  const spec = parseSpec(readFileSync(specPath, 'utf8')) as { identity?: { code?: string; id?: string; display_name?: string } }
-  const code = spec.identity?.code ?? spec.identity?.id ?? 'report'
-  return { code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath }
-})
+function tablesOf(sql: string): string[] {
+  return [...sql.matchAll(/\b(?:from|join)\s+([a-z_][\w]*\.[a-z_][\w]*)/gi)].map((m) => m[1])
+}
+function specPaths(): string[] {
+  if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
+  return SPECS_LIST.map((p) => resolve(p))
+}
+/** Re-escanea y parsea los PIs servibles. Barato para pocos specs; truly live. */
+function discover(): Report[] {
+  const out: Report[] = []
+  for (const p of specPaths()) {
+    let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string } }> }
+    try { spec = parseSpec(readFileSync(p, 'utf8')) as typeof spec } catch { continue }
+    const data = spec.data ?? {}
+    const caps = Object.values(data).map((d) => d.capability ?? '')
+    if (caps.length === 0 || !caps.every((c) => SERVING_CAPS.has(c))) {
+      console.warn(`[vergis-rls] '${p}' no servible (capability fuera del catálogo RLS: ${caps.join(',')}) — omitido`)
+      continue
+    }
+    const tables = [...new Set(Object.values(data).flatMap((d) => tablesOf(d.params?.sql ?? '')))]
+    const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
+    out.push({ code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath: p, tables })
+  }
+  return out
+}
+/** ¿El consumidor puede acceder a algún dato de este PI? (índice per-consumidor) */
+function canAccess(table: string, claims: ClaimSet): boolean {
+  const policy = store.get(table)
+  if (!policy) return false // sin política → deny
+  if (isPublic(policy)) return true // grant: all
+  return policy.predicates.some((pred) => claimValues(claims, pred.claim).length > 0)
+}
+function visibleFor(reports: Report[], claims: ClaimSet): Report[] {
+  return reports.filter((r) => r.tables.length === 0 || r.tables.some((t) => canAccess(t, claims)))
+}
 
 // --- Policy store (data-anchored): política ATADA AL DATO --------------------
 const store = new Map<string, PolicyDecl>()
@@ -161,8 +196,8 @@ function fail(res: ServerResponse, code: number, msg: string): void {
   res.end(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:40px"><h1>${code}</h1><p>${msg}</p></body>`)
 }
 
-function indexHtml(): string {
-  const items = REPORTS.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`).join('')
+function indexHtml(reports: Report[]): string {
+  const items = reports.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`).join('')
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Vergis · Productos de Información</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
 h1{font-size:20px}ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:#3c3836;border:1px solid #504945;border-radius:10px;color:#ebdbb2;text-decoration:none}
@@ -174,25 +209,28 @@ const server = createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
   if (url === '/healthz') {
     res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: ready, lastErr, reports: REPORTS.map((r) => r.slug), datasets: BOUND.map((b) => `${b.schema.database}.${b.schema.table}`) }))
+    res.end(JSON.stringify({ ok: ready, lastErr, pi: discover().map((r) => r.slug), datasets: BOUND.map((b) => `${b.schema.database}.${b.schema.table}`) }))
     return
   }
   if (!ready) return fail(res, 503, 'Inicializando el store…')
+  const claims = identityFromHeaders(req.headers as GateHeaders, GATE_MAPPING).claims ?? {}
+  const all = discover()
   if (url === '/' || url === '') {
-    if (REPORTS.length === 1) {
-      renderReport(REPORTS[0], req.headers as GateHeaders).then((html) => {
+    const visible = visibleFor(all, claims) // índice PER-CONSUMIDOR: solo PIs a los que tiene acceso
+    if (visible.length === 1) {
+      renderReport(visible[0], req.headers as GateHeaders).then((html) => {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
         res.end(html)
       }).catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
       return
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(indexHtml())
+    res.end(indexHtml(visible))
     return
   }
   const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
-  const report = REPORTS.find((r) => r.slug === slug)
-  if (!report) return fail(res, 404, `Reporte no encontrado. <a href="/">Ver reportes</a>`)
+  const report = all.find((r) => r.slug === slug)
+  if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
   renderReport(report, req.headers as GateHeaders)
     .then((html) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
@@ -203,6 +241,7 @@ const server = createServer((req, res) => {
 
 await bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
 if (REFRESH_MS > 0) setInterval(() => void ingestAll().catch((e) => console.error('[vergis-rls] re-ingesta:', e)), REFRESH_MS)
-server.listen(PORT, () =>
-  console.log(`[vergis-rls] ${REPORTS.length} producto(s) de información por-consumidor en :${PORT} · rutas: ${REPORTS.map((r) => '/' + r.slug).join(' ')} · store ${CH_URL}`),
-)
+server.listen(PORT, () => {
+  const r = discover()
+  console.log(`[vergis-rls] ${r.length} producto(s) de información por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')} · store ${CH_URL}`)
+})
