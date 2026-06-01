@@ -22,7 +22,7 @@ import {
   type ChQueryRequest,
   type ChTransport,
 } from '@vergis/capabilities'
-import { compileClickHouse, emulate, parseAudience, type Policy } from '@vergis/policy'
+import { compileClickHouse, emulate, parseAudience, trivialClickHouseProvider, type Policy } from '@vergis/policy'
 
 // --- store sintético idéntico al PoC / a la suite del compilador ------------
 type Row = { area: string; present: number }
@@ -144,6 +144,23 @@ describe('Paso 4 · la Capability inyecta los claims como settings request-scope
       { agent: 'vergis', claims: { groups: ['Finanzas'] } },
     )
     expect(calls[0].settings).toEqual({ vergis_claim_groups: 'Finanzas' }) // ganó la identidad, no params
+  })
+})
+
+describe('Puerto de autorización · el provider trivial (Custos v0) implementa el protocolo', () => {
+  it('compile + resolve filtran igual que llamar al compilador directo', () => {
+    // compile (specialize-time) por el puerto == compileClickHouse directo
+    const viaProvider = trivialClickHouseProvider.compile(QW04_AUDIENCE, TARGET)!
+    expect(viaProvider.rowPolicySQL).toBe(ENFORCEMENT.rowPolicySQL)
+    // resolve (request-time) por el puerto == requestSettings directo
+    const settings = trivialClickHouseProvider.resolve(viaProvider, { groups: ['Producción'] })
+    expect(settings).toEqual({ vergis_claim_groups: 'Producción' })
+    // y el resultado filtra: solo Producción
+    const visibles = STORE.filter((r) => emulate(viaProvider, settings, r as unknown as Record<string, unknown>))
+    expect(areas(visibles)).toEqual(['Producción'])
+  })
+  it('PI público (sin rls) → compile devuelve null (sin RLS de fila)', () => {
+    expect(trivialClickHouseProvider.compile({}, TARGET)).toBeNull()
   })
 })
 
