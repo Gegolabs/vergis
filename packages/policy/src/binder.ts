@@ -1,16 +1,17 @@
-// Binder del compilador: liga el Policy IR contra el schema del store y los claims
-// disponibles (doc 10 §2, etapa Binder). Verifica existencia de columna y de claim
-// antes de generar enforcement; falla ruidoso (nunca arranca con una policy que
-// referencia una columna inexistente).
+// Binder del compilador: liga el Policy IR contra el schema del store, los claims disponibles y
+// las jerarquías de referencia (doc 10 §2, charter §4–§5). Verifica existencia antes de generar
+// enforcement; falla ruidoso (nunca arranca con una policy que referencia algo inexistente).
 
 import { VergisError } from '@vergis/botler'
-import { isPublic, type PolicyDecl } from './ir'
+import { isHierarchy, isPublic, type PolicyDecl } from './ir'
 
 export interface BindContext {
   /** Columnas existentes en el store/dataset destino. */
   columns: string[]
-  /** Claims que el gate (IdP) puede entregar. Si está vacío, no se valida el claim (puede no conocerse al compilar). */
+  /** Claims que el gate (IdP) puede entregar. Vacío → no se valida el claim (puede no conocerse al compilar). */
   claims?: string[]
+  /** Jerarquías de referencia disponibles en el trust-base (para predicados `descendant_of`). Vacío → no se valida `via`. */
+  references?: string[]
 }
 
 function err(code: string, path: string, value: unknown, message: string, remediation: string): VergisError {
@@ -37,6 +38,15 @@ export function bindPolicy(policy: PolicyDecl, ctx: BindContext): PolicyDecl {
         pred.claim,
         `La policy referencia el claim '${pred.claim}', que el gate no entrega. Disponibles: ${ctx.claims.join(', ')}.`,
         `Corregir 'claim' o configurar el gate para emitir ese claim.`,
+      )
+    }
+    if (isHierarchy(pred) && ctx.references && ctx.references.length > 0 && !ctx.references.includes(pred.via)) {
+      throw err(
+        'unknown-reference',
+        `quality.audience.rls[${i}].via`,
+        pred.via,
+        `La policy recorre la jerarquía '${pred.via}', que no existe en el trust-base. Disponibles: ${ctx.references.join(', ')}.`,
+        `Corregir 'via' o declarar esa jerarquía de referencia.`,
       )
     }
   })

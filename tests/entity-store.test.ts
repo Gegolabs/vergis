@@ -43,9 +43,9 @@ describe('Store entidad-canónico · resolución a Map<dataset → PolicyDecl>',
   it('una entidad (Empleado/Área) gobierna N datasets, cada uno con SU columna', () => {
     const m = resolveEntityStore(ENTITY_STORE)
     // mismo claim/op para todos; la COLUMNA sale del mapeo de cada dataset
-    expect((m.get('pi04.asistencia') as Policy).predicates).toEqual([{ column: 'area', claim: 'groups', op: 'in' }])
-    expect((m.get('pi04.licencia') as Policy).predicates).toEqual([{ column: 'area', claim: 'groups', op: 'in' }])
-    expect((m.get('dbo.fct_asistencia_dia') as Policy).predicates).toEqual([{ column: 'area_name', claim: 'groups', op: 'in' }])
+    expect((m.get('pi04.asistencia') as Policy).predicates).toEqual([{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }])
+    expect((m.get('pi04.licencia') as Policy).predicates).toEqual([{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }])
+    expect((m.get('dbo.fct_asistencia_dia') as Policy).predicates).toEqual([{ kind: 'membership', column: 'area_name', claim: 'groups', op: 'in' }])
     // referencia abierta
     expect(isPublic(m.get('dim_area')!)).toBe(true)
   })

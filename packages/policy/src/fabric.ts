@@ -23,11 +23,13 @@
 import { VergisError } from '@vergis/botler'
 import { settingsForInjections } from './clickhouse'
 import {
+  isHierarchy,
   isPublic,
   type ClaimSet,
   type Policy,
   type PolicyDecl,
   type Predicate,
+  type ReferenceData,
 } from './ir'
 
 export const SETTINGS_PREFIX = 'vergis_'
@@ -103,10 +105,27 @@ function sessionRead(claim: string): string {
   return `CAST(SESSION_CONTEXT(N'${settingForClaim(claim)}') AS NVARCHAR(MAX))`
 }
 
+/** Referencia T-SQL calificada `[schema].[tabla]` de la jerarquía `via` (default al schema del target). */
+function qualifyRef(via: string, schema: string): string {
+  const parts = via.split('.')
+  if (parts.length === 2) return `[${ident('via.schema', parts[0])}].[${ident('via.table', parts[1])}]`
+  return `[${schema}].[${ident('via', via)}]`
+}
+
 /** Cláusula WHERE de un predicado en T-SQL, con guard de default-deny (`<> ''`). */
-function predicateClause(pred: Predicate): string {
+function predicateClause(pred: Predicate, schema: string): string {
   const col = ident('column', pred.column)
   const read = sessionRead(pred.claim)
+  if (isHierarchy(pred)) {
+    // Nivel-2 (charter §4b): @column ∈ descendientes del nodo del viewer en la jerarquía `via`.
+    const ref = qualifyRef(pred.via, schema)
+    const anc = ident('ancestor', pred.ancestor)
+    const desc = ident('descendant', pred.descendant)
+    return (
+      `(${read} <> N'' AND @${col} IN (` +
+      `SELECT ${desc} FROM ${ref} WHERE ${anc} IN (SELECT value FROM STRING_SPLIT(${read}, N','))))`
+    )
+  }
   if (pred.op === 'eq') {
     return `(${read} <> N'' AND @${col} = ${read})`
   }
@@ -137,7 +156,7 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
   const whereExpr =
     policy.predicates.length === 0
       ? '1 = 0' // deny-all explícito (sin predicados)
-      : policy.predicates.map(predicateClause).join(combiner)
+      : policy.predicates.map((p) => predicateClause(p, schema)).join(combiner)
 
   const createFunction =
     `CREATE FUNCTION ${q(fnName)}(${paramDecls})\n` +
@@ -214,11 +233,13 @@ function stringSplit(s: string): string[] {
   return s === '' ? [] : s.split(',')
 }
 
-/** Evalúa la expresión generada con la semántica de T-SQL, dado el mapa de settings. */
+/** Evalúa la expresión generada con la semántica de T-SQL, dado el mapa de settings.
+ *  `refs` aporta los cierres de las jerarquías (`via`) para los predicados Nivel-2 (subquery). */
 export function emulateFabric(
   enforcement: FabricEnforcement,
   settings: Record<string, string>,
   row: Record<string, unknown>,
+  refs: ReferenceData = {},
 ): boolean {
   const { policy } = enforcement
   if (policy.predicates.length === 0) return false
@@ -226,6 +247,16 @@ export function emulateFabric(
     const s = settings[settingForClaim(pred.claim)] ?? '' // SESSION_CONTEXT ausente → NULL → CAST '' por el guard
     if (s === '') return false // el guard `<> ''`
     const cell = row[pred.column] == null ? '' : String(row[pred.column])
+    if (isHierarchy(pred)) {
+      const ancestors = new Set(stringSplit(s))
+      const closure = refs[pred.via] ?? []
+      const visible = new Set(
+        closure
+          .filter((r) => ancestors.has(String((r as Record<string, unknown>)[pred.ancestor] ?? r.ancestor)))
+          .map((r) => String((r as Record<string, unknown>)[pred.descendant] ?? r.descendant)),
+      )
+      return visible.has(cell)
+    }
     if (pred.op === 'eq') return cell === s
     return stringSplit(s).includes(cell)
   }
