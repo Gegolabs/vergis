@@ -28,6 +28,14 @@ export interface RunOptions {
    * Mantiene runSpec genérico: el ensamblado de RLS lo arma el llamador.
    */
   extraCapabilities?: Capability[]
+  /**
+   * Registrar el catálogo starter (incluye `static-data`, que **embebe** datos). Default true.
+   * El server RLS lo pone en `false` para HARDENING del catálogo de serving (charter §2b): sobre
+   * dato gobernado el catálogo solo debe tener capabilities que aplican la policy + render/publish,
+   * nunca una vía de embebido/cruda → bypass estructuralmente imposible. El llamador provee todo
+   * vía `extraCapabilities`.
+   */
+  registerStarters?: boolean
 }
 
 export interface RunOutcome {
@@ -73,9 +81,11 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
     return 'mark-for-regeneration'
   })
 
-  for (const cap of starterCapabilities) botler.registerCapability(cap)
-  if (options.connections && Object.keys(options.connections).length > 0) {
-    botler.registerCapability(createExecuteSqlDwh(options.connections))
+  if (options.registerStarters !== false) {
+    for (const cap of starterCapabilities) botler.registerCapability(cap)
+    if (options.connections && Object.keys(options.connections).length > 0) {
+      botler.registerCapability(createExecuteSqlDwh(options.connections))
+    }
   }
   for (const cap of options.extraCapabilities ?? []) botler.registerCapability(cap)
 
