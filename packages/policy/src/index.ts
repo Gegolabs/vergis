@@ -36,6 +36,14 @@ export {
 } from './fabric'
 export { trivialClickHouseProvider, type AuthorizationProvider } from './provider'
 export { parsePolicyStore, type DataPolicyDecl, type PolicyStoreDoc } from './store'
+export {
+  resolveEntityStore,
+  isEntityStore,
+  type EntityStoreDoc,
+  type EntityDecl,
+  type DatasetMappingDecl,
+  type DimensionGovernance,
+} from './entities'
 
 /**
  * Compila la declaración `audience` de un spec a enforcement de ClickHouse.
