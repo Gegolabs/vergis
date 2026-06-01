@@ -62,6 +62,7 @@ export interface ResolvedNode {
   agg?: Aggregation
   comparisonAgg?: Aggregation
   size?: string
+  span?: number
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
@@ -101,7 +102,10 @@ export const renderHtmlPiece: Capability = {
 async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string> {
   if (node.layout) {
     const children = await Promise.all((node.elements ?? []).map((e) => renderNode(e, opts)))
-    const style = node.layout === 'grid' && node.columns ? ` style="--cols:${node.columns}"` : ''
+    const styles: string[] = []
+    if (node.layout === 'grid' && node.columns) styles.push(`--cols:${node.columns}`)
+    if (node.span) styles.push(`grid-column:span ${node.span}`) // abarcar N columnas del grid padre
+    const style = styles.length ? ` style="${styles.join(';')}"` : ''
     return `<div class="layout layout-${escapeHtml(node.layout)}"${style}>\n${children.join('\n')}\n</div>`
   }
   switch (node.type) {
