@@ -47,6 +47,7 @@ export interface ResolvedNode {
   agg?: Aggregation
   comparisonAgg?: Aggregation
   size?: string
+  span?: number
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
@@ -87,6 +88,7 @@ export function composePiece(
     return {
       layout: String(node['layout']),
       columns: node['columns'] as number | undefined,
+      span: node['span'] as number | undefined,
       elements: elements.map((e) => composePiece(e, results, spec)),
     }
   }
