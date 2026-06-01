@@ -28,7 +28,9 @@ import {
   bootstrapClickHouse,
   createIngestClickHouse,
   createExecuteSqlClickHouse,
+  createExecuteSqlDwh,
   type ChStoreSchema,
+  type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { trivialClickHouseProvider, type AuthorizationProvider } from '@vergis/policy'
 
@@ -80,19 +82,38 @@ async function bootstrapAndSeed(): Promise<void> {
       await sleep(2000)
     }
   }
-  // 2 · ingesta de la semilla (si la hay)
-  await ingestSeed()
+  // 2 · ingesta (desde fuente real, o semilla)
+  await ingestData()
   ready = true
   lastErr = null
 }
 
-async function ingestSeed(): Promise<void> {
+// Ingesta al store. Prefiere FUENTE (Fabric/DWH vía VERGIS_INGEST) sobre semilla (VERGIS_CH_SEED).
+// VERGIS_INGEST = {"database_ref": "...", "sql": "..."} — el Botler tira la consulta a la fuente
+// (real, p.ej. Buk en Fabric) y full-replace en ClickHouse. Es el "Botler ingiere a ClickHouse".
+const INGEST = process.env['VERGIS_INGEST']
+  ? (JSON.parse(process.env['VERGIS_INGEST']) as { database_ref: string; sql: string })
+  : null
+const ingestCap = createIngestClickHouse(ADMIN, SCHEMA)
+const dwh =
+  INGEST && process.env['VERGIS_CONNECTIONS']
+    ? createExecuteSqlDwh(JSON.parse(process.env['VERGIS_CONNECTIONS']) as Record<string, SqlConnectionProfile>)
+    : null
+
+async function ingestData(): Promise<void> {
+  if (INGEST && dwh) {
+    const out = (await dwh.execute({ database_ref: INGEST.database_ref, sql: INGEST.sql }, { agent: 'vergis' })) as {
+      rows: Record<string, unknown>[]
+    }
+    const r = (await ingestCap.execute({ rows: out.rows }, { agent: 'vergis' })) as { ingested: number }
+    console.log(`[vergis-rls] ingesta desde fuente (${INGEST.database_ref}): ${r.ingested} filas en ${SCHEMA.database}.${SCHEMA.table}`)
+    return
+  }
   const seedPath = process.env['VERGIS_CH_SEED']
   if (!seedPath || !existsSync(seedPath)) return
   const rows = JSON.parse(readFileSync(seedPath, 'utf8')) as Record<string, unknown>[]
-  const ingest = createIngestClickHouse(ADMIN, SCHEMA)
-  const out = (await ingest.execute({ rows }, { agent: 'vergis' })) as { ingested: number }
-  console.log(`[vergis-rls] semilla ingerida: ${out.ingested} filas en ${SCHEMA.database}.${SCHEMA.table}`)
+  const r = (await ingestCap.execute({ rows }, { agent: 'vergis' })) as { ingested: number }
+  console.log(`[vergis-rls] semilla ingerida: ${r.ingested} filas en ${SCHEMA.database}.${SCHEMA.table}`)
 }
 
 // Las cabeceras del gate vienen de un server HTTP real → re-decodificar latin1→utf8
@@ -138,5 +159,5 @@ const server = createServer((req, res) => {
 await bootstrapAndSeed().catch((e) => {
   console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`)
 })
-if (REFRESH_MS > 0) setInterval(() => void ingestSeed().catch((e) => console.error('[vergis-rls] re-ingesta:', e)), REFRESH_MS)
+if (REFRESH_MS > 0) setInterval(() => void ingestData().catch((e) => console.error('[vergis-rls] re-ingesta:', e)), REFRESH_MS)
 server.listen(PORT, () => console.log(`[vergis-rls] sirviendo "${spec.identity?.display_name ?? SPEC}" por-consumidor en :${PORT} · store ${CH_URL}`))
