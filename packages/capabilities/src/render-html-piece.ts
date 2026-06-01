@@ -61,6 +61,7 @@ export interface ResolvedNode {
   comparisonLabel?: string
   agg?: Aggregation
   comparisonAgg?: Aggregation
+  size?: string
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
@@ -134,8 +135,9 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
     node.comparison != null
       ? ` <span class="kpi-comparison">${escapeHtml(node.comparisonLabel ?? '')} ${escapeHtml(formatValue(node.comparison, 'int_0'))}</span>`
       : ''
+  const sizeCls = node.size ? ` kpi-${escapeHtml(node.size)}` : ''
   return (
-    `<section class="kpi"${accent}${dataAttrs}>` +
+    `<section class="kpi${sizeCls}"${accent}${dataAttrs}>` +
     `<div class="kpi-value">${escapeHtml(value)}</div>` +
     `<div class="kpi-label">${escapeHtml(String(node.label ?? ''))}${comparison}</div>` +
     `</section>`
