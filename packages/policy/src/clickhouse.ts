@@ -122,8 +122,19 @@ export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget):
  *  - un valor con coma se RECHAZA (rompería el encoding delimitado por coma).
  */
 export function requestSettings(enforcement: ClickHouseEnforcement, claims: ClaimSet): Record<string, string> {
+  return settingsForInjections(enforcement.injections, claims)
+}
+
+/**
+ * Igual que `requestSettings` pero sobre una lista de inyecciones arbitraria — para servir VARIAS
+ * tablas/políticas con UN solo canal: el nodo inyecta la UNIÓN de los claims de todas sus políticas.
+ */
+export function settingsForInjections(
+  injections: { setting: string; claim: string }[],
+  claims: ClaimSet,
+): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const inj of enforcement.injections) {
+  for (const inj of injections) {
     const values = claimValues(claims, inj.claim).filter((v) => v.length > 0)
     for (const v of values) {
       if (v.includes(',')) {

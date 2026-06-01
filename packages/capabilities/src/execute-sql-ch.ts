@@ -14,7 +14,7 @@
 // `requestSettings` (de @vergis/policy) calcula el mapa setting→valor; acá solo lo transportamos.
 
 import type { Capability, IdentityContext } from '@vergis/botler'
-import { requestSettings, type ClickHouseEnforcement } from '@vergis/policy'
+import { requestSettings, settingsForInjections, type ClickHouseEnforcement } from '@vergis/policy'
 
 /** Perfil de conexión a ClickHouse (data-plane de bajo privilegio: SELECT sobre la tabla con policy). */
 export interface ClickHouseProfile {
@@ -91,7 +91,7 @@ export const fetchChTransport: ChTransport = async (req) => {
 export function createExecuteSqlClickHouse(
   profile: ClickHouseProfile,
   enforcement: ClickHouseEnforcement | null,
-  opts: { transport?: ChTransport; name?: string } = {},
+  opts: { transport?: ChTransport; name?: string; injections?: { setting: string; claim: string }[] } = {},
 ): Capability {
   const transport = opts.transport ?? fetchChTransport
   const name = opts.name ?? 'execute-sql-ch'
@@ -101,9 +101,14 @@ export function createExecuteSqlClickHouse(
     async execute(params: unknown, identity: IdentityContext): Promise<ChQueryResult> {
       const p = (params ?? {}) as ChParams
       if (!p.sql) throw new Error(`${name}: falta params.sql`)
-      // Inyección request-time: settings = claims del consumidor. Si no hay enforcement
-      // (PI público) o no hay claims, requestSettings produce '' → default-deny por el guard.
-      const settings = enforcement ? requestSettings(enforcement, identity.claims ?? {}) : {}
+      // Inyección request-time: settings = claims del consumidor. `opts.injections` (la UNIÓN de
+      // todas las políticas del nodo) permite servir VARIAS tablas por un solo canal; si no, cae
+      // al enforcement único. Sin claims → '' → default-deny por el guard de la row policy.
+      const settings = opts.injections
+        ? settingsForInjections(opts.injections, identity.claims ?? {})
+        : enforcement
+          ? requestSettings(enforcement, identity.claims ?? {})
+          : {}
       return transport({
         url: profile.url,
         user: profile.user,
