@@ -1,6 +1,15 @@
 import Ajv, { type ValidateFunction } from 'ajv'
 import addFormats from 'ajv-formats'
 import { VergisError } from '@vergis/botler'
+import { parseAudience, isPublic, type AudienceDecl } from '@vergis/policy'
+
+/**
+ * Capabilities que APLICAN la policy de fila al servir (no-bypass). Un PI gobernado
+ * (con `audience.rls`) solo puede recuperar datos por una de estas; las vías crudas
+ * (execute-sql-dwh sin OBO, static-data) servirían todas las filas → bypass. El push-down
+ * con RLS nativa de la fuente se agrega aquí cuando exista.
+ */
+const ENFORCING_CAPABILITIES = new Set<string>(['execute-sql-ch'])
 
 export interface MiraDataset {
   capability: string
@@ -107,7 +116,37 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     }
   }
 
-  // 5 · Policy (v0.1 mínimo): la clasificación ya está acotada por el enum del schema.
+  // 5 · Gobernanza data-anchored — RLS por construcción (charter 012 §2a/§10).
+  // (a) Fail-closed por omisión: el PI DEBE declarar su audiencia explícitamente — una policy
+  //     de filas (rls: [...]) o apertura deliberada (rls: public). La omisión NO es público.
+  const audience = (s.quality as { audience?: { rls?: unknown } } | undefined)?.audience
+  if (!audience || audience.rls == null) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'audience-undeclared',
+      path: 'quality.audience.rls',
+      message:
+        'El PI no declara su audiencia. Bajo el modelo data-anchored la omisión es fail-closed: no se publica nada abierto por accidente.',
+      remediation: "Declarar 'quality.audience.rls' con una policy [{column,claim,op}], o 'rls: public' como apertura deliberada.",
+    })
+  }
+  // (b) No-bypass: si el PI es gobernado, sus datos solo se sirven por capabilities que aplican
+  //     la policy. Un dataset gobernado servido por una vía cruda sería una fuga.
+  const policy = parseAudience(audience as AudienceDecl)
+  if (!isPublic(policy)) {
+    for (const [name, ds] of Object.entries(s.data)) {
+      if (!ENFORCING_CAPABILITIES.has(ds.capability)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'governed-data-needs-enforcing-capability',
+          path: `data.${name}.capability`,
+          value: ds.capability,
+          message: `El PI declara RLS pero el dataset '${name}' se sirve por '${ds.capability}', que no aplica la policy (bypass).`,
+          remediation: `Servir datos gobernados solo por una capability con enforcement (${[...ENFORCING_CAPABILITIES].join(', ')}) — ClickHouse-RLS o push-down. O marcar el PI 'rls: public' si no hay dato sensible.`,
+        })
+      }
+    }
+  }
   return s
 }
 
