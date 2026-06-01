@@ -46,6 +46,7 @@ export interface ResolvedNode {
   comparisonLabel?: string
   agg?: Aggregation
   comparisonAgg?: Aggregation
+  size?: string
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
@@ -103,6 +104,7 @@ export function composePiece(
       comparison_label?: string
       agg?: Aggregation
       comparison_agg?: Aggregation
+      size?: string
     }
     // Valor inicial: por agregación sobre un dataset, o por path directo.
     let value: unknown
@@ -125,6 +127,7 @@ export function composePiece(
       comparisonLabel: kpi.comparison_label,
       agg: kpi.agg ? { ...kpi.agg, dataset: kpi.agg.dataset } : undefined,
       comparisonAgg: kpi.comparison_agg,
+      size: kpi.size,
     }
   }
   if (node['semaforo']) {
