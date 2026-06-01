@@ -18,6 +18,7 @@ export { bindPolicy, type BindContext } from './binder'
 export {
   compileClickHouse,
   requestSettings,
+  settingsForInjections,
   emulate,
   settingForClaim,
   SETTINGS_PREFIX,
