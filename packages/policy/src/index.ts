@@ -25,6 +25,7 @@ export {
   type ClickHouseTarget,
 } from './clickhouse'
 export { trivialClickHouseProvider, type AuthorizationProvider } from './provider'
+export { parsePolicyStore, type DataPolicyDecl, type PolicyStoreDoc } from './store'
 
 /**
  * Compila la declaración `audience` de un spec a enforcement de ClickHouse.

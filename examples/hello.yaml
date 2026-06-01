@@ -29,7 +29,6 @@ quality:
   freshness: { max_age: PT0S, source_watermark: ignore }
   refresh: { mode: on-demand }
   degradation: { on_capability_fail: agentic_fallback }
-  audience: { rls: public }   # apertura deliberada: PI sin datos sensibles (fail-closed por omisión)
 
 delivery:
   render:
