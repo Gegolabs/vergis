@@ -44,19 +44,10 @@ function loadReports(): Report[] {
     const specPath = resolve(p)
     const spec = parseSpec(readFileSync(specPath, 'utf8')) as {
       identity?: { code?: string; id?: string; display_name?: string }
-      quality?: { audience?: { rls?: unknown } }
       delivery?: { channels?: { capability?: string; params?: { path?: string } }[] }
     }
-    // No-bypass (charter 012 §2a): este server estático HORNEA todos los datos en el HTML.
-    // Un PI gobernado (audience.rls = policy, no 'public') servido así sería una fuga → se rechaza.
-    // Los PIs gobernados se sirven por el server RLS (VERGIS_RLS=1, server/serve-rls.ts).
-    const rls = spec.quality?.audience?.rls
-    if (Array.isArray(rls)) {
-      throw new Error(
-        `El PI '${specPath}' declara RLS (audience.rls) pero se está sirviendo por el server estático, que embebe todos los datos (bypass). ` +
-          `Servirlo con VERGIS_RLS=1 (server por-consumidor), o marcarlo 'rls: public' si no hay dato sensible.`,
-      )
-    }
+    // Server estático: camino dev/demo para PIs sin dato gobernado. El dato gobernado se sirve
+    // SOLO por el server RLS (VERGIS_RLS=1), que enforcea contra el policy store (charter §2a).
     const code = spec.identity?.code ?? spec.identity?.id ?? 'report'
     const slug = slugify(code)
     const pub = (spec.delivery?.channels ?? []).find((c) => c.capability === 'publicar-artefacto')

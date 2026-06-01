@@ -1,38 +1,48 @@
-// RLS por construcción (charter 012 §2a/§10): la gobernanza data-anchored es invariante de
-// validación, no opcional. Un PI no se publica abierto por accidente (fail-closed por omisión),
-// y un PI gobernado no puede servir datos por una vía que no aplica la policy (no-bypass).
+// Gobernanza data-anchored · el POLICY STORE (charter §2a). La política vive atada al DATO,
+// no en el reporte. La accesibilidad la deciden SOLO estas políticas; no existe `public` como
+// flag del reporte — abrir es una decisión explícita y gobernada (`grant: all`). Default-deny:
+// un dataset sin entrada queda sin política (el server no le concede acceso).
 
-import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { runSpec } from '@vergis/cli'
+import { describe, expect, it } from 'vitest'
+import { VergisError } from '@vergis/botler'
+import { compileClickHouse, emulate, isPublic, parsePolicyStore, requestSettings, type Policy } from '@vergis/policy'
 
-const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const ex = (n: string) => join(ROOT, 'examples', n)
+const TARGET = { database: 'vergis', table: 'areas', role: 'consumer_role' }
+type Row = { area: string }
+const STORE_ROWS: Row[] = [{ area: 'Producción' }, { area: 'Finanzas' }, { area: 'Comercial' }]
 
-let work: string
-beforeAll(() => { work = mkdtempSync(join(tmpdir(), 'gov-')) })
-afterAll(() => { rmSync(work, { recursive: true, force: true }) })
-
-describe('Gobernanza data-anchored · RLS por construcción', () => {
-  it('fail-closed por omisión: un PI sin audiencia se rechaza (no se asume público)', async () => {
-    await expect(
-      runSpec({ specPath: ex('bad-no-audience.yaml'), baseDir: work }),
-    ).rejects.toMatchObject({ structured: { error: 'mira/spec-invalid', code: 'audience-undeclared' } })
+describe('Policy store · la política vive atada al dato', () => {
+  it('rls: [...] → política de filas (filtra por claim)', () => {
+    const m = parsePolicyStore({ policies: [{ dataset: 'vergis.areas', rls: [{ column: 'area', claim: 'groups', op: 'in' }], default: 'deny' }] })
+    const policy = m.get('vergis.areas')!
+    expect(isPublic(policy)).toBe(false)
+    const enf = compileClickHouse(policy as Policy, TARGET)!
+    const settings = requestSettings(enf, { groups: ['Finanzas'] })
+    const visibles = STORE_ROWS.filter((r) => emulate(enf, settings, r as unknown as Record<string, unknown>))
+    expect(visibles.map((r) => r.area)).toEqual(['Finanzas'])
   })
 
-  it('no-bypass: un PI gobernado servido por capability cruda (static-data) se rechaza', async () => {
-    await expect(
-      runSpec({ specPath: ex('bad-governed-rawcap.yaml'), baseDir: work }),
-    ).rejects.toMatchObject({
-      structured: { error: 'mira/spec-invalid', code: 'governed-data-needs-enforcing-capability', path: 'data.estado.capability' },
-    })
+  it('grant: all → apertura explícita gobernada (sin restricción de fila)', () => {
+    const m = parsePolicyStore({ policies: [{ dataset: 'vergis.areas', grant: 'all' }] })
+    const policy = m.get('vergis.areas')!
+    expect(isPublic(policy)).toBe(true)
+    expect(compileClickHouse(policy, TARGET)).toBeNull() // sin row policy → el consumidor (con SELECT) ve todo
   })
 
-  it('un PI público explícito (rls: public) se publica con cualquier capability', async () => {
-    const out = await runSpec({ specPath: ex('hello.yaml'), baseDir: work })
-    expect(out.ok).toBe(true) // hello usa static-data + rls: public → válido
+  it('`public` NO existe como política — se rechaza (abrir es grant: all)', () => {
+    expect(() => parsePolicyStore({ policies: [{ dataset: 'vergis.areas', rls: 'public' }] })).toThrow(VergisError)
+  })
+
+  it('una entrada sin rls ni grant se rechaza (la omisión es deny: no declares la entrada)', () => {
+    expect(() => parsePolicyStore({ policies: [{ dataset: 'vergis.areas' }] })).toThrow(/no declara/)
+  })
+
+  it('rls y grant juntos se rechazan (decisión ambigua)', () => {
+    expect(() => parsePolicyStore({ policies: [{ dataset: 'x', rls: [], grant: 'all' }] })).toThrow(VergisError)
+  })
+
+  it('default-deny: un dataset sin entrada en el store queda sin política', () => {
+    const m = parsePolicyStore({ policies: [{ dataset: 'vergis.areas', grant: 'all' }] })
+    expect(m.get('otra.tabla')).toBeUndefined() // el server no le concede acceso → deny
   })
 })
