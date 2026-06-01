@@ -12,6 +12,7 @@
 
 import { VergisError } from '@vergis/botler'
 import { parseAudience } from './frontend'
+import { isEntityStore, resolveEntityStore } from './entities'
 import type { PolicyDecl } from './ir'
 
 /** Una entrada del store: ata una política a un dataset/tabla del dato gobernado. */
@@ -38,8 +39,15 @@ function err(code: string, path: string, value: unknown, message: string, remedi
 /**
  * Parsea un documento de policy store a un mapa `dataset → PolicyDecl`. Fail-closed: una entrada
  * malformada lanza; lo que no está en el mapa queda **sin política** (el bootstrap lo niega).
+ *
+ * Acepta DOS formas (charter §2c), ambas resuelven al mismo mapa:
+ *  - **entidad-canónica** (`entities` + `datasets`): autoría por entidad de negocio (preferida).
+ *  - **legacy por-tabla** (`policies`): una entrada por dataset físico.
  */
-export function parsePolicyStore(doc: PolicyStoreDoc | undefined): Map<string, PolicyDecl> {
+export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; datasets?: unknown }) | undefined): Map<string, PolicyDecl> {
+  // La forma entidad-canónica (charter §2c) se resuelve al MISMO mapa por-dataset.
+  if (isEntityStore(doc)) return resolveEntityStore(doc)
+
   const out = new Map<string, PolicyDecl>()
   const list = doc?.policies
   if (!Array.isArray(list)) return out
