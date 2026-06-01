@@ -58,7 +58,7 @@ function tablesOf(sql: string): string[] {
   return [...sql.matchAll(/\b(?:from|join)\s+([a-z_][\w]*\.[a-z_][\w]*)/gi)].map((m) => m[1])
 }
 function specPaths(): string[] {
-  if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
+  if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => !f.startsWith('.') && /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
   return SPECS_LIST.map((p) => resolve(p))
 }
 /** Re-escanea y parsea los PIs servibles. Barato para pocos specs; truly live. */
