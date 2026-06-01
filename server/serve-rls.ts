@@ -234,8 +234,20 @@ if (ENGINE === 'clickhouse') {
   }
 }
 
+// Mapeo claim→cabecera CONFIGURABLE: cada instancia trae sus claims en sus cabeceras (el criterio
+// de la política decide qué claims importan: `groups`, `viewer_area`, etc.). Formato:
+// VERGIS_GATE_CLAIMS="viewer_area:x-forwarded-area,groups:x-forwarded-groups" (default: groups).
 // Las cabeceras del gate vienen latin1 → re-decodificar para acentos ("Producción").
-const GATE_MAPPING = { ...DEFAULT_GATE_MAPPING, decodeUtf8: true }
+const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-groups')
+  .split(',')
+  .map((p) => p.trim())
+  .filter(Boolean)
+  .reduce<Record<string, string>>((acc, pair) => {
+    const [claim, header] = pair.split(':').map((s) => s.trim())
+    if (claim && header) acc[claim] = header.toLowerCase()
+    return acc
+  }, {})
+const GATE_MAPPING = { ...DEFAULT_GATE_MAPPING, claims: gateClaims, decodeUtf8: true }
 
 async function renderReport(report: Report, headers: GateHeaders): Promise<string> {
   const out = await runSpec({
