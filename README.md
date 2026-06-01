@@ -28,7 +28,7 @@ Más allá de los *mocks*, Mira consume datos reales vía Capabilities de acceso
 
 ## Servidor y despliegue
 
-`server/serve.ts` sirve uno o varios reportes (ruteo por `identity.code`, índice en `/`), regenerándolos en cadencia (`VERGIS_REFRESH_MS`). La imagen (`Dockerfile`) es **genérica y agnóstica de instancia**: los specs y conexiones se inyectan por entorno. Empaquetado Free: `docker-compose.yml` + `.env.example`.
+`server/serve-rls.ts` sirve uno o varios **Productos de Información** **por consumidor** (RLS data-anchored): descubre los specs (`VERGIS_SPECS_DIR`/`VERGIS_SPECS`), rutea por `identity.code` (índice per-consumidor en `/`), aplica la política del **policy store** (`VERGIS_POLICIES`) sobre el store ClickHouse (`VERGIS_DATASETS`), e inyecta los claims del gate. **No hay camino de servir sin RLS** (el server estático fue retirado). La imagen (`Dockerfile`) es **genérica y agnóstica de instancia**: specs, policies, datasets y conexiones se inyectan por entorno.
 
 ## Layout
 
