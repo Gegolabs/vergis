@@ -30,7 +30,7 @@ import {
   createExecuteSqlClickHouse,
   type ChStoreSchema,
 } from '@vergis/capabilities'
-import { compileClickHouse, parseAudience, type Policy } from '@vergis/policy'
+import { trivialClickHouseProvider, type AuthorizationProvider } from '@vergis/policy'
 
 const PORT = Number(process.env['PORT'] ?? 8080)
 const SPEC = process.env['VERGIS_SPEC'] ?? '/specs/asistencia-diaria-hijuelas-clickhouse.yaml'
@@ -44,9 +44,13 @@ if (!SCHEMA.database || !SCHEMA.table || !SCHEMA.columns) {
   throw new Error('VERGIS_CH_SCHEMA inválido (esperado {database, table, columns}).')
 }
 
-// Enforcement compilado UNA vez desde la audience del spec (specialize-time).
+// Proveedor de autorización (el PUERTO, charter 012 · Custos). Hoy: el trivial (membership).
+// Para enchufar Custos completo en el futuro, se cambia SOLO esta línea — Vergis no se entera.
+const authz: AuthorizationProvider = trivialClickHouseProvider
+
+// Enforcement compilado UNA vez desde la audience del spec (specialize-time), vía el puerto.
 const spec = parseSpec(readFileSync(resolve(SPEC), 'utf8')) as { quality?: { audience?: unknown }; identity?: { display_name?: string } }
-const enforcement = compileClickHouse(parseAudience(spec.quality?.audience as Parameters<typeof parseAudience>[0]) as Policy, {
+const enforcement = authz.compile(spec.quality?.audience as Parameters<typeof authz.compile>[0], {
   database: SCHEMA.database,
   table: SCHEMA.table,
   role: process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role',
