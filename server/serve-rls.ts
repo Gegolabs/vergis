@@ -26,6 +26,8 @@ import {
   createIngestClickHouse,
   createExecuteSqlClickHouse,
   createExecuteSqlDwh,
+  renderHtmlPiece,
+  publicarArtefacto,
   type ChStoreSchema,
   type ChColumnType,
   type SqlConnectionProfile,
@@ -145,7 +147,10 @@ async function renderReport(report: Report, headers: GateHeaders): Promise<strin
     specPath: report.specPath,
     identity: identityFromHeaders(headers, GATE_MAPPING),
     baseDir: process.env['VERGIS_OUT'] ?? tmpdir(),
-    extraCapabilities: [execSqlCh],
+    // HARDENING (charter §2b): catálogo de serving = solo enforcing (execute-sql-ch) + render/publish.
+    // SIN starters (no `static-data` ni vías crudas) → es imposible servir dato no-gobernado acá.
+    registerStarters: false,
+    extraCapabilities: [execSqlCh, renderHtmlPiece, publicarArtefacto],
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out.html ?? ''
@@ -159,10 +164,10 @@ function fail(res: ServerResponse, code: number, msg: string): void {
 function indexHtml(): string {
   const items = REPORTS.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`).join('')
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vergis · Reportes</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
+<title>Vergis · Productos de Información</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
 h1{font-size:20px}ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:#3c3836;border:1px solid #504945;border-radius:10px;color:#ebdbb2;text-decoration:none}
 li a:hover{border-color:#b8bb26}.c{font-family:ui-monospace,Menlo,monospace;color:#b8bb26;font-weight:700}.f{margin-top:24px;color:#a89984;font-size:11px}</style></head>
-<body><h1>Reportes · Grupo Hijuelas</h1><ul>${items}</ul><div class="f">Powered by Vergis · seguridad por dato (RLS)</div></body></html>`
+<body><h1>Productos de Información · Grupo Hijuelas</h1><ul>${items}</ul><div class="f">Powered by Vergis · seguridad por dato (RLS)</div></body></html>`
 }
 
 const server = createServer((req, res) => {
@@ -199,5 +204,5 @@ const server = createServer((req, res) => {
 await bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
 if (REFRESH_MS > 0) setInterval(() => void ingestAll().catch((e) => console.error('[vergis-rls] re-ingesta:', e)), REFRESH_MS)
 server.listen(PORT, () =>
-  console.log(`[vergis-rls] ${REPORTS.length} reporte(s) por-consumidor en :${PORT} · rutas: ${REPORTS.map((r) => '/' + r.slug).join(' ')} · store ${CH_URL}`),
+  console.log(`[vergis-rls] ${REPORTS.length} producto(s) de información por-consumidor en :${PORT} · rutas: ${REPORTS.map((r) => '/' + r.slug).join(' ')} · store ${CH_URL}`),
 )

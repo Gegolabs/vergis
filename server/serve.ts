@@ -99,13 +99,13 @@ function indexHtml(): string {
     (r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`,
   ).join('')
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vergis · Reportes</title><style>
+<title>Vergis · Productos de Información</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
 h1{font-size:20px}ul{list-style:none;padding:0;max-width:560px}
 li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:#3c3836;border:1px solid #504945;border-radius:10px;color:#ebdbb2;text-decoration:none}
 li a:hover{border-color:#b8bb26}.c{font-family:ui-monospace,Menlo,monospace;color:#b8bb26;font-weight:700}
 .f{margin-top:24px;color:#a89984;font-size:11px}</style></head>
-<body><h1>Reportes · Grupo Hijuelas</h1><ul>${items}</ul><div class="f">Powered by Vergis</div></body></html>`
+<body><h1>Productos de Información · Grupo Hijuelas</h1><ul>${items}</ul><div class="f">Powered by Vergis</div></body></html>`
 }
 
 const server = createServer((req, res) => {
