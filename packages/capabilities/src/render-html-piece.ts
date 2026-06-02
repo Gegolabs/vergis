@@ -3,6 +3,7 @@ import { compile, type TopLevelSpec } from 'vega-lite'
 import type { Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
+import { TABLE_RUNTIME_SOURCE } from './table-runtime'
 
 /**
  * `render-html-piece` — árbol de pieza resuelto (compuesto por Mira) → HTML estático
@@ -38,6 +39,14 @@ export interface TableColumn {
   format?: string
   align?: string
   colorscale?: boolean
+  /** Override del auto-on: orden por esta columna (default: true). */
+  sortable?: boolean
+  /** Override del auto-on: búsqueda por esta columna (default: true). */
+  searchable?: boolean
+  /** Override de la heurística: faceta de filtro (default: auto por cardinalidad). */
+  filter?: boolean
+  /** Override de la heurística: disponible para agrupar (default: igual que filter). */
+  groupBy?: boolean
 }
 interface Aggregation {
   dataset?: string
@@ -76,12 +85,48 @@ export interface ResolvedNode {
   thresholds?: { green?: number; yellow?: number }
   dataset?: string
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
+  /** Tabla: `false` desactiva la interactividad (orden/filtro/búsqueda/agrupar) → tabla estática. */
+  interactive?: boolean
 }
 
 interface RenderOpts {
   tokens: ThemeTokens
   interactive: boolean
 }
+
+/**
+ * CSS de la tabla interactiva. Usa las variables del theme con fallback al look claro,
+ * así sirve en `arbol` (que define las vars) y en `default` (que cae al fallback).
+ * Se inyecta una vez por documento (ver renderHtmlPiece).
+ */
+const TABLE_INTERACTIVE_CSS = `
+.vtable .vt-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
+.vtable .vt-global-search{flex:1 1 220px;min-width:170px;padding:7px 10px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.vtable .vt-groupby-wrap label{font-size:12px;color:var(--fg-dim,#64748b);display:inline-flex;gap:6px;align-items:center}
+.vtable .vt-groupby{padding:6px 8px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.vtable .vt-count{font-size:12px;color:var(--fg-dim,#64748b);margin-left:auto;white-space:nowrap}
+.vtable .vt-filters{display:flex;flex-wrap:wrap;gap:8px;flex-basis:100%}
+.vtable .vt-facet{position:relative}
+.vtable .vt-facet>summary{list-style:none;cursor:pointer;font-size:12px;padding:5px 10px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--card,#fff);color:var(--fg,#1f2937)}
+.vtable .vt-facet>summary::-webkit-details-marker{display:none}
+.vtable .vt-facet[open]>summary{border-color:var(--green,#2563eb);color:var(--green,#2563eb)}
+.vtable .vt-facet-opts{position:absolute;z-index:30;margin-top:4px;min-width:180px;max-height:260px;overflow:auto;background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.22)}
+.vtable .vt-facet-opts label{display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 2px;color:var(--fg,#1f2937);white-space:nowrap;cursor:pointer}
+.vtable .vt-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.vtable .vt-chips:empty{display:none}
+.vtable .vt-chip{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--card,#eef2ff);color:var(--fg,#1f2937);border:1px solid var(--border,#e2e8f0);cursor:pointer}
+.vtable .vt-chip:hover{border-color:var(--red,#dc2626);color:var(--red,#dc2626)}
+.vtable .vt-scroll{overflow-x:auto}
+.vtable th.vt-sortable{cursor:pointer;user-select:none;white-space:nowrap}
+.vtable th.vt-sortable:hover{color:var(--green,#2563eb)}
+.vtable .vt-sort-ind{font-size:10px;margin-left:4px}
+.vtable .vt-search-row th{padding-top:0;padding-bottom:8px}
+.vtable .vt-col-search{width:100%;box-sizing:border-box;padding:4px 6px;font-size:12px;font-weight:400;border:1px solid var(--border,#e2e8f0);border-radius:5px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.vtable tr.vt-group-head td{background:var(--panel,#f1f5f9);font-weight:700;color:var(--fg,#1f2937);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+.vtable .vt-gcount{color:var(--fg-dim,#64748b);font-weight:600}
+.vtable tr.vt-empty td{text-align:center;color:var(--fg-dim,#64748b);padding:18px;font-style:italic}
+@media print{.vtable .vt-controls,.vtable .vt-chips,.vtable .vt-search-row{display:none!important}}
+`
 
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
@@ -94,6 +139,11 @@ export const renderHtmlPiece: Capability = {
     if (interactive) {
       // La bandeja (con su uña/pestaña) es overlay universal: no forma parte del dashboard.
       body = renderFaceta(interactive, theme.palettes) + body + renderInteractiveScript(interactive)
+    }
+    // Tabla interactiva (orden/filtro/búsqueda/agrupar): CSS + runtime se inyectan UNA vez
+    // por documento si hay al menos una `.vtable`. Cada tabla se autoarranca desde su JSON.
+    if (body.includes('class="table vtable"')) {
+      body += `<style>${TABLE_INTERACTIVE_CSS}</style><script>${TABLE_RUNTIME_SOURCE}</script>`
     }
     return { html: theme.wrap({ title: title ?? 'Vergis', body, meta }) }
   },
@@ -355,8 +405,26 @@ function renderTable(node: ResolvedNode): string {
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const ranges = colorscaleRanges(cols, rows)
-  const head = cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('')
-  const body = rows
+  const tbody = renderTableBody(cols, rows, ranges)
+  const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
+
+  // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
+  if (node.interactive === false) {
+    const head = cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('')
+    return (
+      `<section class="table">${titleHtml}` +
+      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
+    )
+  }
+  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml)
+}
+
+function renderTableBody(
+  cols: TableColumn[],
+  rows: Record<string, unknown>[],
+  ranges: Record<string, { min: number; max: number }>,
+): string {
+  return rows
     .map((r) => {
       const cells = cols
         .map((c) => {
@@ -369,9 +437,68 @@ function renderTable(node: ResolvedNode): string {
       return `<tr>${cells}</tr>`
     })
     .join('\n')
+}
+
+function renderInteractiveTable(
+  node: ResolvedNode,
+  cols: TableColumn[],
+  rows: Record<string, unknown>[],
+  ranges: Record<string, { min: number; max: number }>,
+  tbody: string,
+  titleHtml: string,
+): string {
+  // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
+  const colMeta = cols.map((c) => ({
+    field: c.field,
+    label: c.label ?? c.field,
+    align: c.align ?? 'left',
+    format: c.format,
+    colorscale: c.colorscale === true || undefined,
+    ranges: c.colorscale ? ranges[c.field] : undefined,
+    sortable: c.sortable !== false,
+    searchable: c.searchable !== false,
+    filter: c.filter,
+    groupBy: c.groupBy,
+  }))
+  const anySearchable = colMeta.some((c) => c.searchable)
+
+  const headCells = colMeta
+    .map((c) => {
+      const sortAttr = c.sortable ? ' data-sortable="1"' : ''
+      const sortCls = c.sortable ? ' vt-sortable' : ''
+      return (
+        `<th class="align-${c.align}${sortCls}" data-field="${escapeHtml(c.field)}"${sortAttr} aria-sort="none">` +
+        `${escapeHtml(c.label)}<span class="vt-sort-ind"></span></th>`
+      )
+    })
+    .join('')
+  const searchCells = colMeta
+    .map((c) =>
+      c.searchable
+        ? `<th class="align-${c.align}"><input class="vt-col-search" data-field="${escapeHtml(c.field)}" type="text" placeholder="buscar…" aria-label="Buscar en ${escapeHtml(c.label)}"></th>`
+        : `<th class="align-${c.align}"></th>`,
+    )
+    .join('')
+
+  const controls =
+    `<div class="vt-controls">` +
+    (anySearchable
+      ? `<input class="vt-global-search" type="search" placeholder="Buscar en toda la tabla…" aria-label="Buscar en toda la tabla">`
+      : '') +
+    `<span class="vt-groupby-wrap"><label>Agrupar por <select class="vt-groupby"><option value="">(sin agrupar)</option></select></label></span>` +
+    `<span class="vt-count" role="status" aria-live="polite"></span>` +
+    `<div class="vt-filters"></div>` +
+    `</div>` +
+    `<div class="vt-chips"></div>`
+
+  // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
+  const payload = JSON.stringify({ rows, cols: colMeta }).replace(/</g, '\\u003c')
+
   return (
-    `<section class="table">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}` +
-    `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></section>`
+    `<section class="table vtable">${titleHtml}${controls}` +
+    `<div class="vt-scroll"><table><thead><tr class="vt-head-row">${headCells}</tr>` +
+    `<tr class="vt-search-row">${searchCells}</tr></thead><tbody>${tbody}</tbody></table></div>` +
+    `<script type="application/json" class="vtable-data">${payload}</script></section>`
   )
 }
 

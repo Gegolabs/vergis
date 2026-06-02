@@ -30,6 +30,10 @@ export interface TableColumn {
   format?: string
   align?: string
   colorscale?: boolean
+  sortable?: boolean
+  searchable?: boolean
+  filter?: boolean
+  groupBy?: boolean
 }
 
 export interface ResolvedNode {
@@ -61,6 +65,7 @@ export interface ResolvedNode {
   thresholds?: { green?: number; yellow?: number }
   dataset?: string
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
+  interactive?: boolean
 }
 
 /** Resuelve data.<dataset>.<field> a un valor (single_row → fila[0]; rows → columna o filas). */
@@ -193,12 +198,13 @@ export function composePiece(
       sort?: string
       limit?: number
       title?: string
+      interactive?: boolean
     }
     const dataset = stripData(String(t.data ?? '')).split('.')[0]
     let rows = [...(results[dataset]?.rows ?? [])]
     rows = sortRows(rows, t.sort)
     if (typeof t.limit === 'number') rows = rows.slice(0, t.limit)
-    return { type: 'table', rows, columnsSpec: t.columns ?? [], title: t.title }
+    return { type: 'table', rows, columnsSpec: t.columns ?? [], title: t.title, interactive: t.interactive }
   }
   const key = Object.keys(node)[0] ?? 'unknown'
   return { type: key }

@@ -1,0 +1,215 @@
+import { describe, expect, it } from 'vitest'
+import {
+  renderHtmlPiece,
+  TABLE_RUNTIME_SOURCE,
+  vtNorm,
+  vtIsNumericCol,
+  vtDistinct,
+  vtIsCategorical,
+  vtFormat,
+  vtApply,
+  vtGroup,
+  type ResolvedNode,
+  type VtState,
+} from '@vergis/capabilities'
+
+/**
+ * Tabla interactiva (orden/filtro/búsqueda/agrupación). La lógica del navegador y la testeada
+ * aquí son LA MISMA fuente (table-runtime.ts → embebida vía toString), así que estos tests de
+ * funciones puras cubren el comportamiento real del cliente. Más: estructura del HTML emitido,
+ * kill-switch estático y validez sintáctica del runtime serializado.
+ */
+
+const ROWS: Record<string, unknown>[] = [
+  { id: 3, nombre: 'Ana Pérez', area: 'Logística', estado: 'Presente' },
+  { id: 1, nombre: 'Beto Soto', area: 'Logística', estado: 'Ausente' },
+  { id: 2, nombre: 'Carla Díaz', area: 'Finanzas', estado: 'Presente' },
+  { id: 10, nombre: 'Édgar Ñúñez', area: 'Finanzas', estado: 'Licencia' },
+]
+
+const baseState = (over: Partial<VtState> = {}): VtState => ({
+  sort: { field: '', dir: 'asc' },
+  globalSearch: '',
+  colSearch: {},
+  facets: {},
+  groupBy: '',
+  ...over,
+})
+
+describe('table-runtime · helpers puros', () => {
+  it('vtNorm normaliza minúsculas y acentos', () => {
+    expect(vtNorm('Édgar Ñúñez')).toBe('edgar nunez')
+    expect(vtNorm(null)).toBe('')
+    expect(vtNorm(42)).toBe('42')
+  })
+
+  it('vtIsNumericCol distingue numéricas de texto', () => {
+    expect(vtIsNumericCol(ROWS, 'id')).toBe(true)
+    expect(vtIsNumericCol(ROWS, 'nombre')).toBe(false)
+    expect(vtIsNumericCol(ROWS, 'area')).toBe(false)
+  })
+
+  it('vtDistinct preserva orden de aparición', () => {
+    expect(vtDistinct(ROWS, 'area')).toEqual(['Logística', 'Finanzas'])
+  })
+
+  it('vtIsCategorical: baja cardinalidad sí, numérica/alta no; override gana', () => {
+    expect(vtIsCategorical(ROWS, 'area')).toBe(true)
+    expect(vtIsCategorical(ROWS, 'estado')).toBe(true)
+    expect(vtIsCategorical(ROWS, 'id')).toBe(false) // numérica
+    expect(vtIsCategorical(ROWS, 'nombre')).toBe(false) // cardinalidad = nº filas
+    expect(vtIsCategorical(ROWS, 'nombre', true)).toBe(true) // override fuerza
+    expect(vtIsCategorical(ROWS, 'area', false)).toBe(false) // override desactiva
+  })
+
+  it('vtFormat: números, porcentajes y recorte de fecha ISO', () => {
+    expect(vtFormat(0.123, 'percent_1')).toBe('12.3%')
+    expect(vtFormat('2026-05-25T00:00:00.000Z')).toBe('2026-05-25')
+    expect(vtFormat('Presente')).toBe('Presente')
+  })
+})
+
+describe('table-runtime · vtApply (filtro + búsqueda + orden)', () => {
+  it('faceta filtra por valores seleccionados', () => {
+    const out = vtApply(ROWS, baseState({ facets: { area: ['Finanzas'] } }))
+    expect(out.map((r) => r.nombre)).toEqual(['Carla Díaz', 'Édgar Ñúñez'])
+  })
+
+  it('faceta multi-valor une las selecciones', () => {
+    const out = vtApply(ROWS, baseState({ facets: { estado: ['Presente', 'Licencia'] } }))
+    expect(out).toHaveLength(3)
+  })
+
+  it('búsqueda global es insensible a acentos y mayúsculas', () => {
+    expect(vtApply(ROWS, baseState({ globalSearch: 'nunez' }))).toHaveLength(1)
+    expect(vtApply(ROWS, baseState({ globalSearch: 'PEREZ' })).map((r) => r.id)).toEqual([3])
+  })
+
+  it('búsqueda por columna solo mira esa columna', () => {
+    const out = vtApply(ROWS, baseState({ colSearch: { estado: 'pres' } }))
+    expect(out.map((r) => r.id).sort()).toEqual([2, 3])
+  })
+
+  it('orden numérico asc/desc', () => {
+    expect(vtApply(ROWS, baseState({ sort: { field: 'id', dir: 'asc' } })).map((r) => r.id)).toEqual([1, 2, 3, 10])
+    expect(vtApply(ROWS, baseState({ sort: { field: 'id', dir: 'desc' } })).map((r) => r.id)).toEqual([10, 3, 2, 1])
+  })
+
+  it('orden de texto respeta acentos vía normalización', () => {
+    const out = vtApply(ROWS, baseState({ sort: { field: 'nombre', dir: 'asc' } }))
+    expect(out.map((r) => r.nombre)).toEqual(['Ana Pérez', 'Beto Soto', 'Carla Díaz', 'Édgar Ñúñez'])
+  })
+
+  it('no muta el arreglo de entrada', () => {
+    const before = ROWS.map((r) => r.id)
+    vtApply(ROWS, baseState({ sort: { field: 'id', dir: 'desc' } }))
+    expect(ROWS.map((r) => r.id)).toEqual(before)
+  })
+
+  it('combina faceta + búsqueda + orden', () => {
+    const out = vtApply(
+      ROWS,
+      baseState({ facets: { area: ['Logística'] }, globalSearch: 'o', sort: { field: 'id', dir: 'asc' } }),
+    )
+    expect(out.map((r) => r.nombre)).toEqual(['Beto Soto', 'Ana Pérez']) // ambos de Logística contienen 'o' (Soto, Logística)
+  })
+})
+
+describe('table-runtime · vtGroup (categorización)', () => {
+  it('agrupa por columna, grupos en orden alfabético, conteo correcto', () => {
+    const sorted = vtApply(ROWS, baseState({ sort: { field: 'nombre', dir: 'asc' } }))
+    const groups = vtGroup(sorted, 'area')
+    expect(groups.map((g) => g.key)).toEqual(['Finanzas', 'Logística'])
+    expect(groups.map((g) => g.rows.length)).toEqual([2, 2])
+  })
+
+  it('preserva el orden de filas (hereda el sort) dentro del grupo', () => {
+    const sorted = vtApply(ROWS, baseState({ sort: { field: 'id', dir: 'desc' } }))
+    const groups = vtGroup(sorted, 'area')
+    const log = groups.find((g) => g.key === 'Logística')!
+    expect(log.rows.map((r) => r.id)).toEqual([3, 1]) // desc por id dentro del grupo
+  })
+})
+
+describe('render-html-piece · tabla interactiva', () => {
+  const piece: ResolvedNode = {
+    type: 'table',
+    title: 'Personal',
+    columnsSpec: [
+      { field: 'id', label: 'ID', align: 'right' },
+      { field: 'nombre', label: 'Nombre' },
+      { field: 'area', label: 'Área' },
+      { field: 'estado', label: 'Estado' },
+    ],
+    rows: ROWS,
+  }
+
+  it('auto-on: emite controles, headers ordenables, búsqueda y datos embebidos', async () => {
+    const { html } = (await renderHtmlPiece.execute({ piece, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
+    expect(html).toContain('class="table vtable"')
+    expect(html).toContain('vt-controls')
+    expect(html).toContain('vt-global-search')
+    expect(html).toContain('class="vt-groupby"')
+    expect(html).toContain('data-sortable="1"')
+    expect(html).toContain('vt-col-search')
+    // datos embebidos + meta de columnas
+    expect(html).toContain('class="vtable-data"')
+    expect(html).toContain('"field":"area"')
+    expect(html).toContain('Édgar Ñúñez')
+    // runtime + CSS inyectados una sola vez
+    expect(html).toContain('function vtBootstrap')
+    expect(html).toContain('.vtable .vt-controls')
+    expect(html.match(/function vtBootstrap/g)).toHaveLength(1)
+  })
+
+  it('kill-switch: interactive:false → tabla estática, sin runtime', async () => {
+    const { html } = (await renderHtmlPiece.execute({
+      piece: { ...piece, interactive: false },
+      title: 'X',
+      theme: 'arbol',
+    }, { agent: 'test' })) as { html: string }
+    expect(html).not.toContain('vtable')
+    expect(html).not.toContain('vt-controls')
+    expect(html).not.toContain('function vtBootstrap')
+    expect(html).toContain('<table>') // sigue habiendo tabla
+    expect(html).toContain('Ana Pérez')
+  })
+
+  it('override por columna: sortable:false quita data-sortable de esa columna', async () => {
+    const p: ResolvedNode = {
+      ...piece,
+      columnsSpec: [
+        { field: 'id', label: 'ID', sortable: false },
+        { field: 'nombre', label: 'Nombre' },
+      ],
+    }
+    const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
+    // el th de id no es ordenable; el de nombre sí
+    expect(html).toMatch(/data-field="id"(?![^>]*data-sortable)/)
+    expect(html).toMatch(/data-field="nombre"[^>]*data-sortable="1"/)
+  })
+
+  it('payload escapa < para no romper el </script>', async () => {
+    const p: ResolvedNode = {
+      ...piece,
+      rows: [{ id: 1, nombre: '<script>x</script>', area: 'A', estado: 'P' }],
+      columnsSpec: piece.columnsSpec,
+    }
+    const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
+    expect(html).not.toContain('"nombre":"<script>')
+    expect(html).toContain('\\u003c')
+  })
+})
+
+describe('table-runtime · runtime serializado', () => {
+  it('TABLE_RUNTIME_SOURCE es JS sintácticamente válido (compila sin ejecutar)', () => {
+    // new Function compila el cuerpo; no lo ejecuta → no toca document/window.
+    expect(() => new Function(TABLE_RUNTIME_SOURCE)).not.toThrow()
+  })
+
+  it('incluye las funciones puras serializadas', () => {
+    for (const name of ['vtNorm', 'vtApply', 'vtGroup', 'vtIsCategorical', 'vtFormat']) {
+      expect(TABLE_RUNTIME_SOURCE).toContain('function ' + name)
+    }
+  })
+})
