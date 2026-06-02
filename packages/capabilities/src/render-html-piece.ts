@@ -152,6 +152,8 @@ const TABLE_INTERACTIVE_CSS = `
  *  Se inyecta una vez por documento cuando hay gaveta (dashboard o tabla). Variables del theme
  *  con fallback claro → sirve en arbol y default. */
 const TRAY_CSS = `
+.tray{display:flex;flex-direction:column}
+.tray-credit{margin-top:auto;border-top:none;padding-top:14px;font-size:9px;line-height:1.5;text-align:center;color:var(--fg-dim,#94a3b8);opacity:.35;word-break:break-word}
 .tray-tabin{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
 .tray-tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border,#e2e8f0)}
 .tray-tablabel{flex:1;text-align:center;font-size:12px;padding:7px 4px;cursor:pointer;color:var(--fg-dim,#94a3b8);border-bottom:2px solid transparent;margin-bottom:-1px;user-select:none}
@@ -328,8 +330,9 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
   // Restaura la paleta elegida por el usuario (persistida por reporte) sobre el default de plataforma.
   const restore =
     `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}})();</script>`
+  // Crédito: pie discreto al fondo de la gaveta. Sin hipervínculos; el URL va como texto.
   const credit =
-    `<div class="tray-credit">Powered by <strong>Vergis</strong><br>© 2026 Gegolabs · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPL-3.0</a> · <a href="https://agencydomains.org" target="_blank" rel="noopener">código fuente</a></div>`
+    `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>`
   return (
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
     `<label for="vergis-tray-toggle" class="tray-tab" title="Controles" aria-label="Abrir controles">` +
