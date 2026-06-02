@@ -8,6 +8,7 @@ import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { parseSpec } from './dsl/parse'
 import { validateSpec, type MiraDataset, type MiraSpec } from './dsl/validate'
 import { checkFreshness } from './freshness'
+import { resolveTheme } from './theme-config'
 
 export interface MiraOptions {
   schema: object
@@ -115,12 +116,15 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
+      // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
+      const { theme, palette } = resolveTheme(resolved, r.theme)
       const rendered = (await host.capabilityCall(
         'render-html-piece',
         {
           piece: resolved,
           title: spec.identity.display_name,
-          theme: r.theme,
+          theme,
+          palette,
           meta: {
             date: freshness.watermark,
             generatedAt: new Date(),

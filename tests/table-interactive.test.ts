@@ -9,9 +9,11 @@ import {
   vtFormat,
   vtApply,
   vtGroup,
+  vtGroupTree,
   type ResolvedNode,
   type VtState,
 } from '@vergis/capabilities'
+import { classifyPiece, platformThemeDefault, resolveTheme } from '@vergis/mira'
 
 /**
  * Tabla interactiva (orden/filtro/búsqueda/agrupación). La lógica del navegador y la testeada
@@ -129,6 +131,29 @@ describe('table-runtime · vtGroup (categorización)', () => {
     const log = groups.find((g) => g.key === 'Logística')!
     expect(log.rows.map((r) => r.id)).toEqual([3, 1]) // desc por id dentro del grupo
   })
+
+  it('vtGroupTree: agrupación jerárquica multinivel (área › estado)', () => {
+    const tree = vtGroupTree(ROWS, ['area', 'estado'])
+    expect(tree.leaf).toBe(false)
+    expect(tree.field).toBe('area')
+    expect(tree.groups!.map((g) => g.key)).toEqual(['Finanzas', 'Logística'])
+    // nivel 2 dentro de Finanzas: Carla (Presente) + Édgar (Licencia) → 2 subgrupos
+    const fin = tree.groups!.find((g) => g.key === 'Finanzas')!
+    expect(fin.count).toBe(2)
+    expect(fin.child.leaf).toBe(false)
+    expect(fin.child.field).toBe('estado')
+    expect(fin.child.groups!.map((g) => g.key)).toEqual(['Licencia', 'Presente'])
+    // la hoja lleva las filas
+    const lic = fin.child.groups!.find((g) => g.key === 'Licencia')!
+    expect(lic.child.leaf).toBe(true)
+    expect(lic.child.rows!.map((r) => r.nombre)).toEqual(['Édgar Ñúñez'])
+  })
+
+  it('vtGroupTree: sin campos → hoja con todas las filas', () => {
+    const tree = vtGroupTree(ROWS, [])
+    expect(tree.leaf).toBe(true)
+    expect(tree.rows).toHaveLength(4)
+  })
 })
 
 describe('render-html-piece · tabla interactiva', () => {
@@ -144,32 +169,59 @@ describe('render-html-piece · tabla interactiva', () => {
     rows: ROWS,
   }
 
-  it('auto-on: emite controles, headers ordenables, búsqueda y datos embebidos', async () => {
+  it('auto-on: gaveta común + ícono/popover por columna + headers ordenables + datos embebidos', async () => {
     const { html } = (await renderHtmlPiece.execute({ piece, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
     expect(html).toContain('class="table vtable"')
-    expect(html).toContain('vt-controls')
-    expect(html).toContain('vt-global-search')
-    expect(html).toContain('class="vt-groupby"')
+    // gaveta común (shell) emitida también para PI tabular
+    expect(html).toContain('id="vergis-tray-toggle"')
+    expect(html).toContain('class="tray"')
+    expect(html).toContain('tray-sections')
+    expect(html).toContain('faceta-appearance') // apariencia universal (theme arbol con paletas)
+    // ícono + popover por columna (uno por columna)
+    expect(html).toContain('vt-filter-btn')
+    expect(html).toContain('vt-col-pop')
+    expect(html.match(/class="vt-filter-btn"/g)).toHaveLength(4)
+    // orden por header
     expect(html).toContain('data-sortable="1"')
-    expect(html).toContain('vt-col-search')
+    expect(html).toContain('vt-th-label')
     // datos embebidos + meta de columnas
     expect(html).toContain('class="vtable-data"')
     expect(html).toContain('"field":"area"')
     expect(html).toContain('Édgar Ñúñez')
     // runtime + CSS inyectados una sola vez
     expect(html).toContain('function vtBootstrap')
-    expect(html).toContain('.vtable .vt-controls')
+    expect(html).toContain('.vtable .vt-col-pop')
     expect(html.match(/function vtBootstrap/g)).toHaveLength(1)
+    // los controles globales NO van inline (los inyecta el runtime en la gaveta)
+    expect(html).not.toContain('class="vt-controls"')
+    // gaveta de 3 tabs: Controles · Guardados · Config
+    expect(html).toContain('id="vergis-tt-controles"')
+    expect(html).toContain('id="vergis-tt-guardados"')
+    expect(html).toContain('id="vergis-tt-config"')
+    expect(html).toContain('tray-panel-guardados')
+    expect(html).toContain('class="tray-saved"')
+    expect(html).toContain('Apariencia (Theme)')
   })
 
-  it('kill-switch: interactive:false → tabla estática, sin runtime', async () => {
+  it('paleta: se propaga a data-palette del html (theme arbol)', async () => {
+    const { html } = (await renderHtmlPiece.execute(
+      { piece, title: 'X', theme: 'arbol', palette: 'blanco' },
+      { agent: 'test' },
+    )) as { html: string }
+    expect(html).toContain('data-palette="blanco"')
+    // el radio de la paleta activa queda marcado
+    expect(html).toMatch(/value="blanco"[^>]*checked|checked[^>]*value="blanco"/)
+  })
+
+  it('kill-switch: interactive:false → tabla estática, sin runtime ni gaveta', async () => {
     const { html } = (await renderHtmlPiece.execute({
       piece: { ...piece, interactive: false },
       title: 'X',
       theme: 'arbol',
     }, { agent: 'test' })) as { html: string }
     expect(html).not.toContain('vtable')
-    expect(html).not.toContain('vt-controls')
+    expect(html).not.toContain('vt-filter-btn')
+    expect(html).not.toContain('tray-sections')
     expect(html).not.toContain('function vtBootstrap')
     expect(html).toContain('<table>') // sigue habiendo tabla
     expect(html).toContain('Ana Pérez')
@@ -184,9 +236,22 @@ describe('render-html-piece · tabla interactiva', () => {
       ],
     }
     const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
-    // el th de id no es ordenable; el de nombre sí
-    expect(html).toMatch(/data-field="id"(?![^>]*data-sortable)/)
-    expect(html).toMatch(/data-field="nombre"[^>]*data-sortable="1"/)
+    // el th de id no es ordenable (sin vt-sortable ni data-sortable); el de nombre sí
+    expect(html).toContain('<th class="align-left vt-col" data-field="id" aria-sort="none">')
+    expect(html).toMatch(/data-field="nombre" data-sortable="1"/)
+  })
+
+  it('override por columna: filter:false quita el ícono de filtro de esa columna', async () => {
+    const p: ResolvedNode = {
+      ...piece,
+      columnsSpec: [
+        { field: 'id', label: 'ID', filter: false },
+        { field: 'area', label: 'Área' },
+      ],
+    }
+    const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
+    expect(html.match(/class="vt-filter-btn"/g)).toHaveLength(1) // solo area
+    expect(html).toMatch(/data-field="area"[^]*?vt-filter-btn/)
   })
 
   it('payload escapa < para no romper el </script>', async () => {
@@ -211,5 +276,30 @@ describe('table-runtime · runtime serializado', () => {
     for (const name of ['vtNorm', 'vtApply', 'vtGroup', 'vtIsCategorical', 'vtFormat']) {
       expect(TABLE_RUNTIME_SOURCE).toContain('function ' + name)
     }
+  })
+})
+
+describe('theme-config · default por tipo de PI', () => {
+  const tablePiece = { type: 'table' as const }
+  const dashPiece = { layout: 'rows', elements: [{ type: 'kpi' }, { type: 'semaforo' }] }
+  const mixedPiece = { layout: 'rows', elements: [{ type: 'table' }, { type: 'kpi' }] }
+
+  it('classifyPiece: tabla→report, kpi/semáforo→dashboard, mixto→dashboard', () => {
+    expect(classifyPiece(tablePiece)).toBe('report')
+    expect(classifyPiece(dashPiece)).toBe('dashboard')
+    expect(classifyPiece(mixedPiece)).toBe('dashboard')
+  })
+
+  it('platformThemeDefault: reportes → paleta blanco; dashboard → sin paleta forzada', () => {
+    expect(platformThemeDefault('report').palette).toBe('blanco')
+    expect(platformThemeDefault('dashboard').palette).toBeUndefined()
+  })
+
+  it('resolveTheme: un reporte hereda paleta blanco; el theme del spec gana sobre el default', () => {
+    const r = resolveTheme(tablePiece, 'arbol')
+    expect(r.theme).toBe('arbol') // spec gana en theme
+    expect(r.palette).toBe('blanco') // paleta del default de plataforma (report)
+    const d = resolveTheme(dashPiece, 'arbol')
+    expect(d.palette).toBeUndefined() // dashboard sin paleta forzada
   })
 })

@@ -1,9 +1,22 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as vega from 'vega'
 import { compile, type TopLevelSpec } from 'vega-lite'
 import type { Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
+
+/** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
+const VERGIS_VERSION = (() => {
+  try {
+    const p = resolve(dirname(fileURLToPath(import.meta.url)), '../../../package.json')
+    return (JSON.parse(readFileSync(p, 'utf8')) as { version?: string }).version ?? '0.1.0'
+  } catch {
+    return '0.1.0'
+  }
+})()
 
 /**
  * `render-html-piece` — árbol de pieza resuelto (compuesto por Mira) → HTML estático
@@ -29,6 +42,8 @@ interface RenderParams {
   piece: ResolvedNode
   title?: string
   theme?: string
+  /** Paleta inicial del theme (default por tipo de PI; el usuario la cambia en la gaveta). */
+  palette?: string
   meta?: DashboardMeta
   interactive?: Interactive
 }
@@ -100,52 +115,111 @@ interface RenderOpts {
  * Se inyecta una vez por documento (ver renderHtmlPiece).
  */
 const TABLE_INTERACTIVE_CSS = `
-.vtable .vt-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
-.vtable .vt-global-search{flex:1 1 220px;min-width:170px;padding:7px 10px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
-.vtable .vt-groupby-wrap label{font-size:12px;color:var(--fg-dim,#64748b);display:inline-flex;gap:6px;align-items:center}
-.vtable .vt-groupby{padding:6px 8px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
-.vtable .vt-count{font-size:12px;color:var(--fg-dim,#64748b);margin-left:auto;white-space:nowrap}
-.vtable .vt-filters{display:flex;flex-wrap:wrap;gap:8px;flex-basis:100%}
-.vtable .vt-facet{position:relative}
-.vtable .vt-facet>summary{list-style:none;cursor:pointer;font-size:12px;padding:5px 10px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--card,#fff);color:var(--fg,#1f2937)}
-.vtable .vt-facet>summary::-webkit-details-marker{display:none}
-.vtable .vt-facet[open]>summary{border-color:var(--green,#2563eb);color:var(--green,#2563eb)}
-.vtable .vt-facet-opts{position:absolute;z-index:30;margin-top:4px;min-width:180px;max-height:260px;overflow:auto;background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.22)}
-.vtable .vt-facet-opts label{display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 2px;color:var(--fg,#1f2937);white-space:nowrap;cursor:pointer}
 .vtable .vt-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .vtable .vt-chips:empty{display:none}
 .vtable .vt-chip{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--card,#eef2ff);color:var(--fg,#1f2937);border:1px solid var(--border,#e2e8f0);cursor:pointer}
 .vtable .vt-chip:hover{border-color:var(--red,#dc2626);color:var(--red,#dc2626)}
 .vtable .vt-scroll{overflow-x:auto}
-.vtable th.vt-sortable{cursor:pointer;user-select:none;white-space:nowrap}
-.vtable th.vt-sortable:hover{color:var(--green,#2563eb)}
+.vtable th.vt-col{position:relative}
+.vtable .vt-th-inner{display:flex;align-items:center;gap:6px;justify-content:space-between}
+.vtable th.align-right .vt-th-inner{flex-direction:row-reverse}
+.vtable th.vt-sortable .vt-th-label{cursor:pointer;user-select:none;white-space:nowrap}
+.vtable th.vt-sortable .vt-th-label:hover{color:var(--green,#2563eb)}
 .vtable .vt-sort-ind{font-size:10px;margin-left:4px}
-.vtable .vt-search-row th{padding-top:0;padding-bottom:8px}
-.vtable .vt-col-search{width:100%;box-sizing:border-box;padding:4px 6px;font-size:12px;font-weight:400;border:1px solid var(--border,#e2e8f0);border-radius:5px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
-.vtable tr.vt-group-head td{background:var(--panel,#f1f5f9);font-weight:700;color:var(--fg,#1f2937);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+.vtable .vt-filter-btn{flex:none;background:none;border:none;padding:2px;margin:0;cursor:pointer;color:var(--fg-dim,#94a3b8);opacity:.4;line-height:0;border-radius:4px}
+.vtable .vt-filter-btn:hover,.vtable .vt-filter-btn.on{opacity:1;color:var(--green,#2563eb)}
+.vtable .vt-col-pop{position:fixed;z-index:60;width:280px;max-width:calc(100vw - 16px);background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.24);font-weight:400;text-transform:none;letter-spacing:0}
+.vtable .vt-pop-search{width:100%;box-sizing:border-box;padding:5px 7px;font-size:12px;border:1px solid var(--border,#e2e8f0);border-radius:5px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.vtable .vt-pop-actions{display:flex;gap:8px;margin:6px 0}
+.vtable .vt-pop-actions button{flex:1;font-size:11px;padding:3px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:5px;cursor:pointer}
+.vtable .vt-pop-actions button:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
+.vtable .vt-pop-opts{max-height:240px;overflow:auto}
+.vtable .vt-pop-opts label{display:flex;align-items:center;gap:7px;font-size:13px;padding:3px 2px;color:var(--fg,#1f2937);white-space:nowrap;cursor:pointer;font-weight:400}
+.vtable .vt-pop-val{flex:1;overflow:hidden;text-overflow:ellipsis}
+.vtable .vt-pop-count{color:var(--fg-dim,#94a3b8);font-size:11px}
+.vtable tr.vt-group-head td{background:var(--panel,#f1f5f9);font-weight:700;color:var(--fg,#1f2937);font-size:12px;text-transform:uppercase;letter-spacing:.03em;cursor:pointer;user-select:none}
+.vtable tr.vt-group-head:hover td{color:var(--green,#2563eb)}
+.vtable tr.vt-group-head[data-depth="1"] td{font-size:11px;opacity:.94;text-transform:none;letter-spacing:0}
+.vtable tr.vt-group-head[data-depth="2"] td{font-size:11px;opacity:.85;text-transform:none;letter-spacing:0;font-weight:600}
+.vtable tr.vt-group-head[data-depth="3"] td,.vtable tr.vt-group-head[data-depth="4"] td{font-size:11px;opacity:.78;text-transform:none;letter-spacing:0;font-weight:600}
+.vtable .vt-gcaret{display:inline-block;width:.9em;color:var(--fg-dim,#94a3b8)}
 .vtable .vt-gcount{color:var(--fg-dim,#64748b);font-weight:600}
 .vtable tr.vt-empty td{text-align:center;color:var(--fg-dim,#64748b);padding:18px;font-style:italic}
-@media print{.vtable .vt-controls,.vtable .vt-chips,.vtable .vt-search-row{display:none!important}}
+.tray .vt-tray-section .vt-global-search,.tray .vt-tray-section .vt-group-add{width:100%;box-sizing:border-box;padding:7px 9px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.tray .vt-group-levels{display:flex;flex-direction:column;gap:4px;margin:6px 0}
+.tray .vt-group-levels:empty{display:none}
+.tray .vt-gl-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;padding:4px 9px;background:var(--card,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;color:var(--fg,#1f2937)}
+.tray .vt-gl-num{color:var(--fg-dim,#94a3b8);font-size:10px;margin-right:2px}
+.tray .vt-gl-rm{cursor:pointer;color:var(--fg-dim,#94a3b8);font-size:14px;line-height:1}
+.tray .vt-gl-rm:hover{color:var(--red,#dc2626)}
+.tray .vt-group-actions{display:flex;gap:8px;margin-top:8px}
+.tray .vt-group-actions button{flex:1;font-size:11px;padding:5px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:6px;cursor:pointer}
+.tray .vt-group-actions button:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
+.tray .vt-tray-section .vt-clear-all{width:100%;margin-top:12px;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;cursor:pointer}
+.tray .vt-tray-section .vt-clear-all:hover{color:var(--red,#dc2626);border-color:var(--red,#dc2626)}
+.tray .vt-tray-section .vt-count{display:block;margin-top:12px;font-size:12px;color:var(--fg-dim,#64748b)}
+@media print{.vtable .vt-chips,.vtable .vt-filter-btn{display:none!important}}
+`
+
+/** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
+ *  Se inyecta una vez por documento cuando hay gaveta (dashboard o tabla). Variables del theme
+ *  con fallback claro → sirve en arbol y default. */
+const TRAY_CSS = `
+.tray{display:flex;flex-direction:column}
+.tray-foot{margin-top:auto;padding-top:14px;text-align:center}
+.tray-version{font-size:10px;color:var(--fg-dim,#94a3b8);opacity:.6;letter-spacing:.03em}
+.tray-credit{border-top:none;padding-top:3px;font-size:9px;line-height:1.5;color:var(--fg-dim,#94a3b8);opacity:.32;word-break:break-word}
+.tray-tabin{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
+.tray-tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border,#e2e8f0)}
+.tray-tablabel{flex:1;text-align:center;font-size:12px;padding:7px 4px;cursor:pointer;color:var(--fg-dim,#94a3b8);border-bottom:2px solid transparent;margin-bottom:-1px;user-select:none}
+.tray-tablabel:hover{color:var(--fg,#1f2937)}
+#vergis-tt-controles:checked~.tray-tabs .tt-controles,#vergis-tt-guardados:checked~.tray-tabs .tt-guardados,#vergis-tt-config:checked~.tray-tabs .tt-config{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
+.tray-panel{display:none}
+#vergis-tt-controles:checked~.tray-panel-controles,#vergis-tt-guardados:checked~.tray-panel-guardados,#vergis-tt-config:checked~.tray-panel-config{display:block}
+.tray-saved .vt-save-new{display:flex;gap:6px;margin:6px 0 14px}
+.tray-saved .vt-save-name{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:6px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.tray-saved .vt-save-btn{padding:6px 10px;font-size:12px;background:var(--card,#fff);color:var(--fg,#1f2937);border:1px solid var(--border,#e2e8f0);border-radius:6px;cursor:pointer;white-space:nowrap}
+.tray-saved .vt-save-btn:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
+.tray-saved .vt-saved-row{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:5px}
+.tray-saved .vt-saved-row.pinned{border-color:var(--yellow,#d97706)}
+.tray-saved .vt-saved-pin{flex:none;background:none;border:none;cursor:pointer;color:var(--fg-dim,#94a3b8);font-size:14px;line-height:1;padding:0 2px}
+.tray-saved .vt-saved-pin:hover{color:var(--yellow,#d97706)}
+.tray-saved .vt-saved-row.pinned .vt-saved-pin{color:var(--yellow,#d97706)}
+.tray-saved .vt-saved-hint{font-size:10px;color:var(--fg-dim,#94a3b8);margin-top:8px}
+.tray-saved .vt-saved-name{flex:1;cursor:pointer;font-size:13px;color:var(--fg,#1f2937);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tray-saved .vt-saved-name:hover{color:var(--green,#2563eb)}
+.tray-saved .vt-saved-actions{display:flex;gap:4px}
+.tray-saved .vt-saved-actions button{background:none;border:none;cursor:pointer;color:var(--fg-dim,#94a3b8);font-size:14px;line-height:1;padding:2px 4px;border-radius:4px}
+.tray-saved .vt-saved-upd:hover{color:var(--green,#2563eb)}
+.tray-saved .vt-saved-del:hover{color:var(--red,#dc2626)}
+.tray-saved .vt-saved-empty{font-size:12px;color:var(--fg-dim,#94a3b8);font-style:italic;padding:6px 2px}
 `
 
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, meta, interactive } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive }
     let body = await renderNode(piece, opts)
+    const hasTable = body.includes('class="table vtable"')
+    // GAVETA COMÚN (un solo shell por documento) para cualquier PI interactivo: dashboard y/o tabla.
+    // 3 tabs: Controles · Guardados · Config. Dashboard → sus facetas van server-rendered en
+    // `.tray-sections` + script de recompute; Tabla → el runtime inyecta sus controles ahí.
+    const hasTray = !!interactive || hasTable
     if (interactive) {
-      // La bandeja (con su uña/pestaña) es overlay universal: no forma parte del dashboard.
-      body = renderFaceta(interactive, theme.palettes) + body + renderInteractiveScript(interactive)
+      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette) + body + renderInteractiveScript(interactive)
+    } else if (hasTable) {
+      body = renderTrayShell('', theme.palettes, palette) + body
     }
+    if (hasTray) body += `<style>${TRAY_CSS}</style>`
     // Tabla interactiva (orden/filtro/búsqueda/agrupar): CSS + runtime se inyectan UNA vez
     // por documento si hay al menos una `.vtable`. Cada tabla se autoarranca desde su JSON.
-    if (body.includes('class="table vtable"')) {
+    if (hasTable) {
       body += `<style>${TABLE_INTERACTIVE_CSS}</style><script>${TABLE_RUNTIME_SOURCE}</script>`
     }
-    return { html: theme.wrap({ title: title ?? 'Vergis', body, meta }) }
+    return { html: theme.wrap({ title: title ?? 'Vergis', body, meta, palette }) }
   },
 }
 
@@ -247,14 +321,66 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
 }
 
 /**
- * Bandeja de filtros (off-canvas, desde la derecha). Es el lugar donde viven los
- * filtros disponibles (cada uno una Faceta catalogo-selector). El CTA es una uña
- * /pestaña que sobresale del borde derecho — universal, ajena al dashboard. Al
- * abrir, el contenido se encoge a la izquierda (no se solapa) para ver el resultado
- * en vivo. Apertura/cierre por toggle CSS puro.
+ * Gaveta (off-canvas, desde la derecha) — **shell común a TODOS los PI** (dashboard y tabla).
+ * El CTA es una uña/pestaña que sobresale del borde derecho (overlay universal, ajeno al
+ * contenido). Al abrir, el contenido se encoge a la izquierda. Apertura/cierre por toggle CSS
+ * puro. `sections` es el contenido específico del PI (facetas de dashboard server-rendered, o
+ * vacío para que el runtime de tabla inyecte sus controles en `.tray-sections`). Apariencia,
+ * Imprimir y crédito son universales. Una sola implementación = comportamiento idéntico.
  */
-function renderFaceta(it: Interactive, palettes?: { id: string; label: string }[]): string {
-  const groups = it.filters
+function renderTrayShell(sections: string, palettes?: { id: string; label: string }[], activePalette?: string): string {
+  const active = activePalette || (palettes && palettes[0]?.id) || ''
+  let appearance = ''
+  if (palettes && palettes.length > 1) {
+    const radios = palettes
+      .map(
+        (p) =>
+          `<label><input type="radio" name="vergis-palette" value="${escapeHtml(p.id)}"${p.id === active ? ' checked' : ''} onchange="document.documentElement.dataset.palette=this.value;try{localStorage.setItem('vergis:palette:'+location.pathname,this.value)}catch(e){}"> ${escapeHtml(p.label)}</label>`,
+      )
+      .join('')
+    appearance =
+      `<div class="faceta faceta-appearance"><div class="faceta-title">Apariencia (Theme)</div>` +
+      `<div class="faceta-options">${radios}</div></div>`
+  }
+  // Restaura la paleta elegida por el usuario (persistida por reporte) sobre el default de plataforma.
+  const restore =
+    `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}})();</script>`
+  // Pie de la gaveta (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
+  const footer =
+    `<div class="tray-foot">` +
+    `<div class="tray-version">Mira v${escapeHtml(VERGIS_VERSION)}</div>` +
+    `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>` +
+    `</div>`
+  return (
+    `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
+    `<label for="vergis-tray-toggle" class="tray-tab" title="Controles" aria-label="Abrir controles">` +
+    `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 3.2h12l-4.6 5.5v3.4l-2.8 1.4V8.7z"/></svg>` +
+    `<span class="faceta-count" id="vergis-count"></span>` +
+    `</label>` +
+    `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Controles">` +
+    `<div class="tray-head"><strong>Reporte</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
+    // 3 tabs (radios CSS puros): Controles · Guardados · Config
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin" checked hidden>` +
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-guardados" class="tray-tabin" hidden>` +
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-config" class="tray-tabin" hidden>` +
+    `<div class="tray-tabs">` +
+    `<label for="vergis-tt-controles" class="tray-tablabel tt-controles">Controles</label>` +
+    `<label for="vergis-tt-guardados" class="tray-tablabel tt-guardados">Vistas</label>` +
+    `<label for="vergis-tt-config" class="tray-tablabel tt-config">Config</label>` +
+    `</div>` +
+    `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${sections}</div></div>` +
+    `<div class="tray-panel tray-panel-guardados"><div class="tray-saved"></div></div>` +
+    `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
+    // Pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible, pegado al fondo.
+    footer +
+    `</aside>` +
+    restore
+  )
+}
+
+/** Sección de la gaveta específica del dashboard: las facetas (catálogo-selector) por filtro. */
+function renderDashboardFacets(it: Interactive): string {
+  return it.filters
     .map((f) => {
       const rows = it.datasets[f.dataset] ?? []
       const values = [...new Set(rows.map((r) => String(r[f.field] ?? '')))].sort((a, b) => a.localeCompare(b))
@@ -269,33 +395,6 @@ function renderFaceta(it: Interactive, palettes?: { id: string; label: string }[
       )
     })
     .join('')
-  // Selector de apariencia (cambia la paleta del theme en vivo) — vive en la bandeja.
-  let appearance = ''
-  if (palettes && palettes.length > 1) {
-    const radios = palettes
-      .map(
-        (p, i) =>
-          `<label><input type="radio" name="vergis-palette" value="${escapeHtml(p.id)}"${i === 0 ? ' checked' : ''} onchange="document.documentElement.dataset.palette=this.value"> ${escapeHtml(p.label)}</label>`,
-      )
-      .join('')
-    appearance =
-      `<div class="faceta faceta-appearance"><div class="faceta-title">Apariencia</div>` +
-      `<div class="faceta-options">${radios}</div></div>`
-  }
-  return (
-    `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
-    `<label for="vergis-tray-toggle" class="tray-tab" title="Filtros" aria-label="Abrir filtros">` +
-    `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 3.2h12l-4.6 5.5v3.4l-2.8 1.4V8.7z"/></svg>` +
-    `<span class="faceta-count" id="vergis-count"></span>` +
-    `</label>` +
-    `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Filtros">` +
-    `<div class="tray-head"><strong>Filtros</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
-    groups +
-    appearance +
-    `<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div>` +
-    `<div class="tray-credit">Powered by <strong>Vergis</strong><br>© 2026 Gegolabs · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPL-3.0</a> · <a href="https://agencydomains.org" target="_blank" rel="noopener">código fuente</a></div>` +
-    `</aside>`
-  )
 }
 
 function renderInteractiveScript(it: Interactive): string {
@@ -460,44 +559,38 @@ function renderInteractiveTable(
     filter: c.filter,
     groupBy: c.groupBy,
   }))
-  const anySearchable = colMeta.some((c) => c.searchable)
-
+  // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
+  // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.
+  // Sin fila de búsqueda siempre visible.
   const headCells = colMeta
     .map((c) => {
       const sortAttr = c.sortable ? ' data-sortable="1"' : ''
       const sortCls = c.sortable ? ' vt-sortable' : ''
+      const filterCtrl =
+        c.filter !== false
+          ? `<button type="button" class="vt-filter-btn" data-field="${escapeHtml(c.field)}" aria-label="Filtrar y buscar en ${escapeHtml(c.label)}" title="Filtrar / buscar">` +
+            `<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M1.7 3h12.6l-5 6v4.1l-2.6 1.2V9z" fill="currentColor"/></svg></button>` +
+            `<div class="vt-col-pop" data-field="${escapeHtml(c.field)}" hidden></div>`
+          : ''
       return (
-        `<th class="align-${c.align}${sortCls}" data-field="${escapeHtml(c.field)}"${sortAttr} aria-sort="none">` +
-        `${escapeHtml(c.label)}<span class="vt-sort-ind"></span></th>`
+        `<th class="align-${c.align}${sortCls} vt-col" data-field="${escapeHtml(c.field)}"${sortAttr} aria-sort="none">` +
+        `<span class="vt-th-inner"><span class="vt-th-label">${escapeHtml(c.label)}<span class="vt-sort-ind"></span></span>${filterCtrl}</span></th>`
       )
     })
     .join('')
-  const searchCells = colMeta
-    .map((c) =>
-      c.searchable
-        ? `<th class="align-${c.align}"><input class="vt-col-search" data-field="${escapeHtml(c.field)}" type="text" placeholder="buscar…" aria-label="Buscar en ${escapeHtml(c.label)}"></th>`
-        : `<th class="align-${c.align}"></th>`,
-    )
-    .join('')
 
-  const controls =
-    `<div class="vt-controls">` +
-    (anySearchable
-      ? `<input class="vt-global-search" type="search" placeholder="Buscar en toda la tabla…" aria-label="Buscar en toda la tabla">`
-      : '') +
-    `<span class="vt-groupby-wrap"><label>Agrupar por <select class="vt-groupby"><option value="">(sin agrupar)</option></select></label></span>` +
-    `<span class="vt-count" role="status" aria-live="polite"></span>` +
-    `<div class="vt-filters"></div>` +
-    `</div>` +
-    `<div class="vt-chips"></div>`
+  // Los controles globales (búsqueda en toda la tabla, agrupar, limpiar, conteo) NO van inline:
+  // el runtime los inyecta en la GAVETA COMÚN (.tray-sections). Inline solo quedan los chips de
+  // filtros activos (feedback visible sin abrir la gaveta) y el ícono por columna en el header.
+  const chips = `<div class="vt-chips"></div>`
 
   // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
   const payload = JSON.stringify({ rows, cols: colMeta }).replace(/</g, '\\u003c')
 
   return (
-    `<section class="table vtable">${titleHtml}${controls}` +
-    `<div class="vt-scroll"><table><thead><tr class="vt-head-row">${headCells}</tr>` +
-    `<tr class="vt-search-row">${searchCells}</tr></thead><tbody>${tbody}</tbody></table></div>` +
+    `<section class="table vtable">${titleHtml}${chips}` +
+    `<div class="vt-scroll"><table><thead><tr class="vt-head-row">${headCells}</tr></thead>` +
+    `<tbody>${tbody}</tbody></table></div>` +
     `<script type="application/json" class="vtable-data">${payload}</script></section>`
   )
 }
