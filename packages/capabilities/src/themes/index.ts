@@ -39,8 +39,9 @@ export interface Theme {
   /** Paletas que el theme ofrece para conmutar en vivo (selector de apariencia en la bandeja). */
   palettes?: Palette[]
   /** Envuelve el body semántico en el documento HTML completo (head, css, cromo).
-   *  `controls` (opcional) es el disparador de interacción (Faceta), ubicado en el header. */
-  wrap(args: { title: string; body: string; meta?: DashboardMeta; controls?: string }): string
+   *  `controls` (opcional) es el disparador de interacción (Faceta), ubicado en el header.
+   *  `palette` (opcional) fija la paleta inicial del theme (default-theme por tipo de PI). */
+  wrap(args: { title: string; body: string; meta?: DashboardMeta; controls?: string; palette?: string }): string
 }
 
 import { defaultTheme } from './default'

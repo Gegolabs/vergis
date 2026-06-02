@@ -15,8 +15,9 @@ export {
   vtFormat,
   vtApply,
   vtGroup,
+  vtGroupTree,
 } from './table-runtime'
-export type { VtState } from './table-runtime'
+export type { VtState, VtTreeNode } from './table-runtime'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'
