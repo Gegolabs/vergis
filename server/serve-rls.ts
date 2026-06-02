@@ -288,13 +288,26 @@ function fail(res: ServerResponse, code: number, msg: string): void {
   res.end(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:40px"><h1>${code}</h1><p>${msg}</p></body>`)
 }
 
+// Branding del índice — parametrizado por instancia (genérico por defecto, no horneado al beta).
+const INDEX_TITLE = process.env['VERGIS_INDEX_TITLE'] ?? 'Productos de Información'
+const INDEX_LOGO = (() => {
+  const p = process.env['VERGIS_INDEX_LOGO']
+  if (!p) return ''
+  try {
+    const mime = p.endsWith('.svg') ? 'svg+xml' : 'png'
+    return `data:image/${mime};base64,${readFileSync(resolve(p)).toString('base64')}`
+  } catch { return '' }
+})()
+
 function indexHtml(reports: Report[]): string {
   const items = reports.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`).join('')
+  const logo = INDEX_LOGO ? `<img class="logo" src="${INDEX_LOGO}" alt="">` : ''
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vergis · Productos de Información</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
-h1{font-size:20px}ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:#3c3836;border:1px solid #504945;border-radius:10px;color:#ebdbb2;text-decoration:none}
-li a:hover{border-color:#b8bb26}.c{font-family:ui-monospace,Menlo,monospace;color:#b8bb26;font-weight:700}.f{margin-top:24px;color:#a89984;font-size:11px}</style></head>
-<body><h1>Productos de Información · Grupo Hijuelas</h1><ul>${items}</ul><div class="f">Powered by Vergis · seguridad por dato (RLS) · motor ${ENGINE}</div></body></html>`
+<title>${INDEX_TITLE}</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
+.head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700}
+ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:#3c3836;border:1px solid #504945;border-radius:10px;color:#ebdbb2;text-decoration:none}
+li a:hover{border-color:#b8bb26}.c{font-family:ui-monospace,Menlo,monospace;color:#b8bb26;font-weight:700}.f{margin-top:24px;color:#32302f;font-size:11px}</style></head>
+<body><div class="head">${logo}<h1>${INDEX_TITLE}</h1></div><ul>${items}</ul><div class="f">Powered by Vergis</div></body></html>`
 }
 
 const server = createServer((req, res) => {
