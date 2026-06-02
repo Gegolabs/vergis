@@ -144,32 +144,42 @@ describe('render-html-piece · tabla interactiva', () => {
     rows: ROWS,
   }
 
-  it('auto-on: emite controles, headers ordenables, búsqueda y datos embebidos', async () => {
+  it('auto-on: gaveta común + ícono/popover por columna + headers ordenables + datos embebidos', async () => {
     const { html } = (await renderHtmlPiece.execute({ piece, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
     expect(html).toContain('class="table vtable"')
-    expect(html).toContain('vt-controls')
-    expect(html).toContain('vt-global-search')
-    expect(html).toContain('class="vt-groupby"')
+    // gaveta común (shell) emitida también para PI tabular
+    expect(html).toContain('id="vergis-tray-toggle"')
+    expect(html).toContain('class="tray"')
+    expect(html).toContain('tray-sections')
+    expect(html).toContain('faceta-appearance') // apariencia universal (theme arbol con paletas)
+    // ícono + popover por columna (uno por columna)
+    expect(html).toContain('vt-filter-btn')
+    expect(html).toContain('vt-col-pop')
+    expect(html.match(/class="vt-filter-btn"/g)).toHaveLength(4)
+    // orden por header
     expect(html).toContain('data-sortable="1"')
-    expect(html).toContain('vt-col-search')
+    expect(html).toContain('vt-th-label')
     // datos embebidos + meta de columnas
     expect(html).toContain('class="vtable-data"')
     expect(html).toContain('"field":"area"')
     expect(html).toContain('Édgar Ñúñez')
     // runtime + CSS inyectados una sola vez
     expect(html).toContain('function vtBootstrap')
-    expect(html).toContain('.vtable .vt-controls')
+    expect(html).toContain('.vtable .vt-col-pop')
     expect(html.match(/function vtBootstrap/g)).toHaveLength(1)
+    // los controles globales NO van inline (los inyecta el runtime en la gaveta)
+    expect(html).not.toContain('class="vt-controls"')
   })
 
-  it('kill-switch: interactive:false → tabla estática, sin runtime', async () => {
+  it('kill-switch: interactive:false → tabla estática, sin runtime ni gaveta', async () => {
     const { html } = (await renderHtmlPiece.execute({
       piece: { ...piece, interactive: false },
       title: 'X',
       theme: 'arbol',
     }, { agent: 'test' })) as { html: string }
     expect(html).not.toContain('vtable')
-    expect(html).not.toContain('vt-controls')
+    expect(html).not.toContain('vt-filter-btn')
+    expect(html).not.toContain('tray-sections')
     expect(html).not.toContain('function vtBootstrap')
     expect(html).toContain('<table>') // sigue habiendo tabla
     expect(html).toContain('Ana Pérez')
@@ -184,9 +194,22 @@ describe('render-html-piece · tabla interactiva', () => {
       ],
     }
     const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
-    // el th de id no es ordenable; el de nombre sí
-    expect(html).toMatch(/data-field="id"(?![^>]*data-sortable)/)
-    expect(html).toMatch(/data-field="nombre"[^>]*data-sortable="1"/)
+    // el th de id no es ordenable (sin vt-sortable ni data-sortable); el de nombre sí
+    expect(html).toContain('<th class="align-left vt-col" data-field="id" aria-sort="none">')
+    expect(html).toMatch(/data-field="nombre" data-sortable="1"/)
+  })
+
+  it('override por columna: filter:false quita el ícono de filtro de esa columna', async () => {
+    const p: ResolvedNode = {
+      ...piece,
+      columnsSpec: [
+        { field: 'id', label: 'ID', filter: false },
+        { field: 'area', label: 'Área' },
+      ],
+    }
+    const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
+    expect(html.match(/class="vt-filter-btn"/g)).toHaveLength(1) // solo area
+    expect(html).toMatch(/data-field="area"[^]*?vt-filter-btn/)
   })
 
   it('payload escapa < para no romper el </script>', async () => {
