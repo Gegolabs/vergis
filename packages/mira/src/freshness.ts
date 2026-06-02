@@ -33,8 +33,29 @@ export function checkFreshness(
   const watermark = toDate(watermarkValue)
   if (!watermark) return { checked: true, stale: false }
 
-  const ageMs = now - watermark.getTime()
   const maxAgeMs = parseIsoDuration(maxAgeRaw)
+  const tz = typeof freshness['timezone'] === 'string' ? (freshness['timezone'] as string) : 'UTC'
+
+  // Watermark de GRANO DIARIO (solo fecha "YYYY-MM-DD"): la antigüedad se mide en DÍAS DE CALENDARIO
+  // en la zona de negocio (no en milisegundos UTC). Así un snapshot de HOY = 0 días = fresco —
+  // evita el falso positivo de la medianoche UTC + huso horario (doc 2 §5.3).
+  if (typeof watermarkValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(watermarkValue)) {
+    const today = businessDate(now, tz) // "YYYY-MM-DD" en la zona de negocio
+    const ageDays = daysBetween(watermarkValue, today)
+    const maxAgeDays = Math.round(maxAgeMs / 86400000)
+    return {
+      checked: true,
+      stale: ageDays > maxAgeDays,
+      watermark,
+      ageMs: ageDays * 86400000,
+      maxAgeMs,
+      ageHuman: ageDays <= 0 ? 'hoy' : `${ageDays} día${ageDays > 1 ? 's' : ''}`,
+      maxAgeRaw,
+    }
+  }
+
+  // Watermark con timestamp (tiene hora): comparación por milisegundos.
+  const ageMs = now - watermark.getTime()
   return {
     checked: true,
     stale: ageMs > maxAgeMs,
@@ -44,6 +65,21 @@ export function checkFreshness(
     ageHuman: humanizeMs(ageMs),
     maxAgeRaw,
   }
+}
+
+/** Fecha de calendario (YYYY-MM-DD) de un instante en una zona horaria IANA (DST-correcto vía Intl). */
+function businessDate(nowMs: number, tz: string): string {
+  try {
+    return new Date(nowMs).toLocaleDateString('en-CA', { timeZone: tz }) // en-CA → ISO YYYY-MM-DD
+  } catch {
+    return new Date(nowMs).toISOString().slice(0, 10) // tz inválida → UTC
+  }
+}
+
+/** Días de calendario entre dos fechas "YYYY-MM-DD" (b − a), neutral a huso (ambas a medianoche UTC). */
+function daysBetween(a: string, b: string): number {
+  const toUtc = (s: string) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d) }
+  return Math.round((toUtc(b) - toUtc(a)) / 86400000)
 }
 
 function toDate(v: unknown): Date | null {

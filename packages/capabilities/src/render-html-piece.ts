@@ -191,7 +191,9 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
     node.title || summaryHtml
       ? `<div class="semaforo-head">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : '<span></span>'}${summaryHtml}</div>`
       : ''
-  return `<section class="semaforo"${dataAttr}>${head}<div class="tl-grid">${cards}</div></section>`
+  // `columns` fuerza N columnas fijas (p.ej. 5 días en una línea); por defecto, auto-fill (CSS).
+  const gridStyle = node.columns ? ` style="grid-template-columns:repeat(${node.columns},minmax(0,1fr))"` : ''
+  return `<section class="semaforo"${dataAttr}>${head}<div class="tl-grid"${gridStyle}>${cards}</div></section>`
 }
 
 /**
