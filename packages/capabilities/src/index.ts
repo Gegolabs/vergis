@@ -6,6 +6,17 @@ import { staticData } from './static-data'
 export { staticData } from './static-data'
 export { renderHtmlPiece } from './render-html-piece'
 export type { ResolvedNode, TableColumn } from './render-html-piece'
+export {
+  TABLE_RUNTIME_SOURCE,
+  vtNorm,
+  vtIsNumericCol,
+  vtDistinct,
+  vtIsCategorical,
+  vtFormat,
+  vtApply,
+  vtGroup,
+} from './table-runtime'
+export type { VtState } from './table-runtime'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'
