@@ -141,6 +141,7 @@ export function composePiece(
       pct?: string
       thresholds?: { green?: number; yellow?: number }
       title?: string
+      columns?: number
       summary?: { agg?: Aggregation; label?: string; format?: string; accent?: string }
     }
     const dataset = stripData(String(s.data ?? '')).split('.')[0]
@@ -166,6 +167,7 @@ export function composePiece(
       pctField: s.pct,
       thresholds: s.thresholds,
       title: s.title,
+      columns: s.columns,
       summary,
     }
   }
