@@ -241,6 +241,22 @@ describe('render-html-piece · tabla interactiva', () => {
     expect(html).toMatch(/data-field="nombre" data-sortable="1"/)
   })
 
+  it('dashboard interactivo también cablea Vistas (vergisSavedViews, código compartido) + título Inspector', async () => {
+    const dashPiece: ResolvedNode = { type: 'kpi', value: 5, label: 'x', format: 'int_0', agg: { dataset: 'd', op: 'sum', field: 'v' } }
+    const interactive = { datasets: { d: [{ area: 'A', v: 1 }, { area: 'B', v: 2 }] }, filters: [{ dataset: 'd', field: 'area', label: 'Área' }] }
+    const { html } = (await renderHtmlPiece.execute(
+      { piece: dashPiece, title: 'X', theme: 'arbol', interactive } as never,
+      { agent: 'test' },
+    )) as { html: string }
+    expect(html).toContain('class="tray-saved"') // tab Vistas en la gaveta común
+    expect(html).toContain('vergisSavedViews(') // mismo snippet de Vistas que la tabla
+    expect(html).toContain('dashSnapshot') // snapshot propio del dashboard (selección de facetas)
+    expect(html).toContain('class="faceta"') // faceta del dashboard server-rendered
+    expect(html).toContain('<strong>Inspector</strong>') // título del panel
+    // dashboard (kpi, sin tabla) → no se fuerza paleta blanco (queda el default del theme)
+    expect(html).not.toContain('class="table vtable"')
+  })
+
   it('override por columna: filter:false quita el ícono de filtro de esa columna', async () => {
     const p: ResolvedNode = {
       ...piece,

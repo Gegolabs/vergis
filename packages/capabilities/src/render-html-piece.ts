@@ -6,7 +6,7 @@ import { compile, type TopLevelSpec } from 'vega-lite'
 import type { Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE } from './table-runtime'
+import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS } from './table-runtime'
 
 /** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
 const VERGIS_VERSION = (() => {
@@ -353,12 +353,12 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
     `</div>`
   return (
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
-    `<label for="vergis-tray-toggle" class="tray-tab" title="Controles" aria-label="Abrir controles">` +
+    `<label for="vergis-tray-toggle" class="tray-tab" title="Inspector" aria-label="Abrir inspector">` +
     `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 3.2h12l-4.6 5.5v3.4l-2.8 1.4V8.7z"/></svg>` +
     `<span class="faceta-count" id="vergis-count"></span>` +
     `</label>` +
-    `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Controles">` +
-    `<div class="tray-head"><strong>Reporte</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
+    `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Inspector">` +
+    `<div class="tray-head"><strong>Inspector</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
     // 3 tabs (radios CSS puros): Controles · Guardados · Config
     `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin" checked hidden>` +
     `<input type="radio" name="vergis-traytab" id="vergis-tt-guardados" class="tray-tabin" hidden>` +
@@ -465,6 +465,11 @@ function renderInteractiveScript(it: Interactive): string {
       update();
     });
   });
+  // Tab "Vistas" para el dashboard: una vista = las selecciones de faceta. Mismo snippet que la tabla.
+  ${SAVED_VIEWS_JS}
+  function dashSnapshot(){ var s={}; boxes.forEach(function(b){ if(b.checked){ var f=b.getAttribute('data-field'); (s[f]=s[f]||[]).push(b.value); } }); return { facets: s }; }
+  function dashApply(st){ var sel=(st&&st.facets)||{}; boxes.forEach(function(b){ var f=b.getAttribute('data-field'); b.checked = !!(sel[f] && sel[f].indexOf(b.value)!==-1); }); update(); }
+  vergisSavedViews({ snapshot: dashSnapshot, apply: dashApply });
 })();
 </script>`
 }
