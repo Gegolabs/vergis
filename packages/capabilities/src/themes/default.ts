@@ -6,6 +6,7 @@ export const defaultTheme: Theme = {
   name: 'default',
   tokens: { chartBar: '#2563eb', chartText: '#334155', chartAxis: '#e2e8f0' },
   wrap({ title, body, controls }) {
+    // El theme default es claro y sin paletas conmutables; `palette` no aplica.
     const header = controls ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">${controls}</div>` : ''
     return `<!DOCTYPE html>
 <html lang="es">

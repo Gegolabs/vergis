@@ -13,6 +13,7 @@ import {
   type ResolvedNode,
   type VtState,
 } from '@vergis/capabilities'
+import { classifyPiece, platformThemeDefault, resolveTheme } from '@vergis/mira'
 
 /**
  * Tabla interactiva (orden/filtro/búsqueda/agrupación). La lógica del navegador y la testeada
@@ -193,6 +194,23 @@ describe('render-html-piece · tabla interactiva', () => {
     expect(html.match(/function vtBootstrap/g)).toHaveLength(1)
     // los controles globales NO van inline (los inyecta el runtime en la gaveta)
     expect(html).not.toContain('class="vt-controls"')
+    // gaveta de 3 tabs: Controles · Guardados · Config
+    expect(html).toContain('id="vergis-tt-controles"')
+    expect(html).toContain('id="vergis-tt-guardados"')
+    expect(html).toContain('id="vergis-tt-config"')
+    expect(html).toContain('tray-panel-guardados')
+    expect(html).toContain('class="tray-saved"')
+    expect(html).toContain('Apariencia (Theme)')
+  })
+
+  it('paleta: se propaga a data-palette del html (theme arbol)', async () => {
+    const { html } = (await renderHtmlPiece.execute(
+      { piece, title: 'X', theme: 'arbol', palette: 'blanco' },
+      { agent: 'test' },
+    )) as { html: string }
+    expect(html).toContain('data-palette="blanco"')
+    // el radio de la paleta activa queda marcado
+    expect(html).toMatch(/value="blanco"[^>]*checked|checked[^>]*value="blanco"/)
   })
 
   it('kill-switch: interactive:false → tabla estática, sin runtime ni gaveta', async () => {
@@ -258,5 +276,30 @@ describe('table-runtime · runtime serializado', () => {
     for (const name of ['vtNorm', 'vtApply', 'vtGroup', 'vtIsCategorical', 'vtFormat']) {
       expect(TABLE_RUNTIME_SOURCE).toContain('function ' + name)
     }
+  })
+})
+
+describe('theme-config · default por tipo de PI', () => {
+  const tablePiece = { type: 'table' as const }
+  const dashPiece = { layout: 'rows', elements: [{ type: 'kpi' }, { type: 'semaforo' }] }
+  const mixedPiece = { layout: 'rows', elements: [{ type: 'table' }, { type: 'kpi' }] }
+
+  it('classifyPiece: tabla→report, kpi/semáforo→dashboard, mixto→dashboard', () => {
+    expect(classifyPiece(tablePiece)).toBe('report')
+    expect(classifyPiece(dashPiece)).toBe('dashboard')
+    expect(classifyPiece(mixedPiece)).toBe('dashboard')
+  })
+
+  it('platformThemeDefault: reportes → paleta blanco; dashboard → sin paleta forzada', () => {
+    expect(platformThemeDefault('report').palette).toBe('blanco')
+    expect(platformThemeDefault('dashboard').palette).toBeUndefined()
+  })
+
+  it('resolveTheme: un reporte hereda paleta blanco; el theme del spec gana sobre el default', () => {
+    const r = resolveTheme(tablePiece, 'arbol')
+    expect(r.theme).toBe('arbol') // spec gana en theme
+    expect(r.palette).toBe('blanco') // paleta del default de plataforma (report)
+    const d = resolveTheme(dashPiece, 'arbol')
+    expect(d.palette).toBeUndefined() // dashboard sin paleta forzada
   })
 })

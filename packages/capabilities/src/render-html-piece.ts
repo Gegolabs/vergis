@@ -29,6 +29,8 @@ interface RenderParams {
   piece: ResolvedNode
   title?: string
   theme?: string
+  /** Paleta inicial del theme (default por tipo de PI; el usuario la cambia en la gaveta). */
+  palette?: string
   meta?: DashboardMeta
   interactive?: Interactive
 }
@@ -146,29 +148,56 @@ const TABLE_INTERACTIVE_CSS = `
 @media print{.vtable .vt-chips,.vtable .vt-filter-btn{display:none!important}}
 `
 
+/** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
+ *  Se inyecta una vez por documento cuando hay gaveta (dashboard o tabla). Variables del theme
+ *  con fallback claro → sirve en arbol y default. */
+const TRAY_CSS = `
+.tray-tabin{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
+.tray-tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border,#e2e8f0)}
+.tray-tablabel{flex:1;text-align:center;font-size:12px;padding:7px 4px;cursor:pointer;color:var(--fg-dim,#94a3b8);border-bottom:2px solid transparent;margin-bottom:-1px;user-select:none}
+.tray-tablabel:hover{color:var(--fg,#1f2937)}
+#vergis-tt-controles:checked~.tray-tabs .tt-controles,#vergis-tt-guardados:checked~.tray-tabs .tt-guardados,#vergis-tt-config:checked~.tray-tabs .tt-config{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
+.tray-panel{display:none}
+#vergis-tt-controles:checked~.tray-panel-controles,#vergis-tt-guardados:checked~.tray-panel-guardados,#vergis-tt-config:checked~.tray-panel-config{display:block}
+.tray-saved .vt-save-new{display:flex;gap:6px;margin:6px 0 14px}
+.tray-saved .vt-save-name{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:6px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.tray-saved .vt-save-btn{padding:6px 10px;font-size:12px;background:var(--card,#fff);color:var(--fg,#1f2937);border:1px solid var(--border,#e2e8f0);border-radius:6px;cursor:pointer;white-space:nowrap}
+.tray-saved .vt-save-btn:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
+.tray-saved .vt-saved-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:5px}
+.tray-saved .vt-saved-name{flex:1;cursor:pointer;font-size:13px;color:var(--fg,#1f2937);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tray-saved .vt-saved-name:hover{color:var(--green,#2563eb)}
+.tray-saved .vt-saved-actions{display:flex;gap:4px}
+.tray-saved .vt-saved-actions button{background:none;border:none;cursor:pointer;color:var(--fg-dim,#94a3b8);font-size:14px;line-height:1;padding:2px 4px;border-radius:4px}
+.tray-saved .vt-saved-upd:hover{color:var(--green,#2563eb)}
+.tray-saved .vt-saved-del:hover{color:var(--red,#dc2626)}
+.tray-saved .vt-saved-empty{font-size:12px;color:var(--fg-dim,#94a3b8);font-style:italic;padding:6px 2px}
+`
+
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, meta, interactive } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive }
     let body = await renderNode(piece, opts)
     const hasTable = body.includes('class="table vtable"')
     // GAVETA COMÚN (un solo shell por documento) para cualquier PI interactivo: dashboard y/o tabla.
-    // Dashboard → sus facetas van server-rendered en la gaveta + script de recompute.
-    // Tabla → la gaveta sale vacía y el runtime de tabla inyecta sus controles en `.tray-sections`.
+    // 3 tabs: Controles · Guardados · Config. Dashboard → sus facetas van server-rendered en
+    // `.tray-sections` + script de recompute; Tabla → el runtime inyecta sus controles ahí.
+    const hasTray = !!interactive || hasTable
     if (interactive) {
-      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes) + body + renderInteractiveScript(interactive)
+      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette) + body + renderInteractiveScript(interactive)
     } else if (hasTable) {
-      body = renderTrayShell('', theme.palettes) + body
+      body = renderTrayShell('', theme.palettes, palette) + body
     }
+    if (hasTray) body += `<style>${TRAY_CSS}</style>`
     // Tabla interactiva (orden/filtro/búsqueda/agrupar): CSS + runtime se inyectan UNA vez
     // por documento si hay al menos una `.vtable`. Cada tabla se autoarranca desde su JSON.
     if (hasTable) {
       body += `<style>${TABLE_INTERACTIVE_CSS}</style><script>${TABLE_RUNTIME_SOURCE}</script>`
     }
-    return { html: theme.wrap({ title: title ?? 'Vergis', body, meta }) }
+    return { html: theme.wrap({ title: title ?? 'Vergis', body, meta, palette }) }
   },
 }
 
@@ -277,19 +306,25 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
  * vacío para que el runtime de tabla inyecte sus controles en `.tray-sections`). Apariencia,
  * Imprimir y crédito son universales. Una sola implementación = comportamiento idéntico.
  */
-function renderTrayShell(sections: string, palettes?: { id: string; label: string }[]): string {
+function renderTrayShell(sections: string, palettes?: { id: string; label: string }[], activePalette?: string): string {
+  const active = activePalette || (palettes && palettes[0]?.id) || ''
   let appearance = ''
   if (palettes && palettes.length > 1) {
     const radios = palettes
       .map(
-        (p, i) =>
-          `<label><input type="radio" name="vergis-palette" value="${escapeHtml(p.id)}"${i === 0 ? ' checked' : ''} onchange="document.documentElement.dataset.palette=this.value"> ${escapeHtml(p.label)}</label>`,
+        (p) =>
+          `<label><input type="radio" name="vergis-palette" value="${escapeHtml(p.id)}"${p.id === active ? ' checked' : ''} onchange="document.documentElement.dataset.palette=this.value;try{localStorage.setItem('vergis:palette:'+location.pathname,this.value)}catch(e){}"> ${escapeHtml(p.label)}</label>`,
       )
       .join('')
     appearance =
-      `<div class="faceta faceta-appearance"><div class="faceta-title">Apariencia</div>` +
+      `<div class="faceta faceta-appearance"><div class="faceta-title">Apariencia (Theme)</div>` +
       `<div class="faceta-options">${radios}</div></div>`
   }
+  // Restaura la paleta elegida por el usuario (persistida por reporte) sobre el default de plataforma.
+  const restore =
+    `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}})();</script>`
+  const credit =
+    `<div class="tray-credit">Powered by <strong>Vergis</strong><br>© 2026 Gegolabs · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPL-3.0</a> · <a href="https://agencydomains.org" target="_blank" rel="noopener">código fuente</a></div>`
   return (
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
     `<label for="vergis-tray-toggle" class="tray-tab" title="Controles" aria-label="Abrir controles">` +
@@ -297,12 +332,21 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
     `<span class="faceta-count" id="vergis-count"></span>` +
     `</label>` +
     `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Controles">` +
-    `<div class="tray-head"><strong>Controles</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
-    `<div class="tray-sections">${sections}</div>` +
-    appearance +
-    `<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div>` +
-    `<div class="tray-credit">Powered by <strong>Vergis</strong><br>© 2026 Gegolabs · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPL-3.0</a> · <a href="https://agencydomains.org" target="_blank" rel="noopener">código fuente</a></div>` +
-    `</aside>`
+    `<div class="tray-head"><strong>Reporte</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
+    // 3 tabs (radios CSS puros): Controles · Guardados · Config
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin" checked hidden>` +
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-guardados" class="tray-tabin" hidden>` +
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-config" class="tray-tabin" hidden>` +
+    `<div class="tray-tabs">` +
+    `<label for="vergis-tt-controles" class="tray-tablabel tt-controles">Controles</label>` +
+    `<label for="vergis-tt-guardados" class="tray-tablabel tt-guardados">Guardados</label>` +
+    `<label for="vergis-tt-config" class="tray-tablabel tt-config">Config</label>` +
+    `</div>` +
+    `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${sections}</div></div>` +
+    `<div class="tray-panel tray-panel-guardados"><div class="tray-saved"></div></div>` +
+    `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div>${credit}</div>` +
+    `</aside>` +
+    restore
   )
 }
 

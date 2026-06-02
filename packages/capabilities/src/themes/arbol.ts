@@ -57,9 +57,10 @@ export const arbolTheme: Theme = {
     { id: 'claro', label: 'Claro' },
     { id: 'blanco', label: 'Blanco' },
   ],
-  wrap({ title, body, meta, controls }: { title: string; body: string; meta?: DashboardMeta; controls?: string }) {
+  wrap({ title, body, meta, controls, palette }: { title: string; body: string; meta?: DashboardMeta; controls?: string; palette?: string }) {
     const dateLabel = formatDate(meta?.date)
     const genLabel = formatDateTime(meta?.generatedAt)
+    const initialPalette = palette && ['gruvbox', 'claro', 'blanco'].includes(palette) ? palette : 'gruvbox'
     const logo = LOGO_DATA_URI ? `<img class="logo" src="${LOGO_DATA_URI}" alt="A.R.B.O.L.">` : ''
     const metaBlock =
       `<div class="meta">` +
@@ -67,7 +68,7 @@ export const arbolTheme: Theme = {
       (genLabel ? `<div class="gen">Generado ${escapeHtml(genLabel)}</div>` : '') +
       `</div>`
     return `<!DOCTYPE html>
-<html lang="es" data-palette="gruvbox">
+<html lang="es" data-palette="${initialPalette}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

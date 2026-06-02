@@ -263,6 +263,45 @@ function vtBootstrap(root){
     renderGroupUI(); render();
   }
 
+  // ---- Tab "Guardados": presets de filtro persistidos por reporte (localStorage) ----
+  var savedWrap = document.querySelector('.tray-saved');
+  var SKEY = 'vergis:saved:'+((typeof location!=='undefined' && location.pathname) || 'pi');
+  function loadSaved(){ try{ return JSON.parse(localStorage.getItem(SKEY)||'[]'); }catch(e){ return []; } }
+  function storeSaved(a){ try{ localStorage.setItem(SKEY, JSON.stringify(a)); }catch(e){} }
+  function snapshot(){ return { facets: JSON.parse(JSON.stringify(state.facets)), globalSearch: state.globalSearch, groupLevels: state.groupLevels.slice(), sort: { field: state.sort.field, dir: state.sort.dir } }; }
+  function applySnapshot(s){
+    state.facets = s.facets ? JSON.parse(JSON.stringify(s.facets)) : {};
+    state.globalSearch = s.globalSearch || '';
+    state.groupLevels = (s.groupLevels||[]).slice();
+    state.sort = { field: (s.sort&&s.sort.field)||'', dir: (s.sort&&s.sort.dir)||'asc' };
+    state.collapsed = {};
+    if(gs) gs.value = state.globalSearch;
+    // popovers ya construidos → vaciarlos para que se reconstruyan reflejando las nuevas selecciones
+    Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p.innerHTML) p.innerHTML=''; });
+    renderGroupUI(); render();
+  }
+  function renderSavedList(){
+    if(!savedWrap) return;
+    var list=savedWrap.querySelector('.vt-saved-list'); if(!list) return;
+    var arr=loadSaved();
+    list.innerHTML = arr.length ? arr.map(function(p,i){ return '<div class="vt-saved-row"><span class="vt-saved-name" data-i="'+i+'" title="Aplicar">'+vtEsc(p.name)+'</span><span class="vt-saved-actions"><button type="button" class="vt-saved-upd" data-i="'+i+'" title="Actualizar con el filtro actual">↻</button><button type="button" class="vt-saved-del" data-i="'+i+'" title="Eliminar">×</button></span></div>'; }).join('') : '<div class="vt-saved-empty">Sin filtros guardados</div>';
+  }
+  if(savedWrap){
+    savedWrap.innerHTML = '<div class="faceta-title">Guardar el filtro actual</div><div class="vt-save-new"><input class="vt-save-name" type="text" placeholder="Nombre del preset…"><button type="button" class="vt-save-btn">Guardar</button></div><div class="vt-saved-list"></div>';
+    var nameInp=savedWrap.querySelector('.vt-save-name');
+    savedWrap.querySelector('.vt-save-btn').addEventListener('click', function(){
+      var arr=loadSaved(); var nm=(nameInp.value||'').trim()||('Filtro '+(arr.length+1));
+      arr.push({ name: nm, state: snapshot() }); storeSaved(arr); nameInp.value=''; renderSavedList();
+    });
+    savedWrap.querySelector('.vt-saved-list').addEventListener('click', function(e){
+      var del=e.target.closest('.vt-saved-del'), upd=e.target.closest('.vt-saved-upd'), nm=e.target.closest('.vt-saved-name');
+      if(del){ var a=loadSaved(); a.splice(+del.getAttribute('data-i'),1); storeSaved(a); renderSavedList(); }
+      else if(upd){ var a2=loadSaved(); var i2=+upd.getAttribute('data-i'); if(a2[i2]){ a2[i2].state=snapshot(); storeSaved(a2); } }
+      else if(nm){ var a3=loadSaved(); var i3=+nm.getAttribute('data-i'); if(a3[i3]) applySnapshot(a3[i3].state); }
+    });
+    renderSavedList();
+  }
+
   // ---- Popover por columna (ícono embudo en el header): buscador + selector de valores únicos ----
   function closeAllPops(except){ Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p!==except) p.hidden=true; }); }
   function buildPop(pop, field){
