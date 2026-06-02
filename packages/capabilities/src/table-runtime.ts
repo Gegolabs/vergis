@@ -187,6 +187,50 @@ export function vtGroupTree(rows: Record<string, unknown>[], fields: string[]): 
  */
 const PURE_FNS = [vtNorm, vtIsNumericCol, vtDistinct, vtIsCategorical, vtFormat, vtApply, vtGroup, vtGroupTree]
 
+/**
+ * Snippet COMPARTIDO del tab "Vistas" (presets) — lo usan TODOS los PI (tabla y dashboard).
+ * Genérico vía callbacks: `opts.snapshot()` captura el estado del PI, `opts.apply(state)` lo
+ * restituye. La UI (guardar/aplicar/actualizar/eliminar), persistencia por reporte en
+ * localStorage, pin de vista por defecto y confirmaciones viven acá, una sola vez. Cada runtime
+ * (table-runtime / renderInteractiveScript del dashboard) lo incluye y lo invoca con SUS callbacks.
+ */
+export const SAVED_VIEWS_JS = `
+function vergisSavedViews(opts){
+  var wrap = document.querySelector('.tray-saved'); if(!wrap) return;
+  var key = 'vergis:saved:'+((typeof location!=='undefined' && location.pathname) || 'pi');
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function load(){ try{ return JSON.parse(localStorage.getItem(key)||'[]'); }catch(e){ return []; } }
+  function store(a){ try{ localStorage.setItem(key, JSON.stringify(a)); }catch(e){} }
+  function ask(m){ try{ return (typeof window!=='undefined' && typeof window.confirm==='function') ? window.confirm(m) : true; }catch(e){ return true; } }
+  function renderList(){
+    var list=wrap.querySelector('.vt-saved-list'); if(!list) return;
+    var arr=load();
+    list.innerHTML = arr.length ? arr.map(function(p,i){
+      return '<div class="vt-saved-row'+(p.pinned?' pinned':'')+'">'+
+        '<button type="button" class="vt-saved-pin" data-i="'+i+'" title="'+(p.pinned?'Vista por defecto (quitar)':'Fijar como vista por defecto al entrar')+'">'+(p.pinned?'★':'☆')+'</button>'+
+        '<span class="vt-saved-name" data-i="'+i+'" title="Aplicar esta vista">'+esc(p.name)+'</span>'+
+        '<span class="vt-saved-actions"><button type="button" class="vt-saved-upd" data-i="'+i+'" title="Actualizar con la vista actual">↻</button><button type="button" class="vt-saved-del" data-i="'+i+'" title="Eliminar">×</button></span>'+
+        '</div>';
+    }).join('') : '<div class="vt-saved-empty">Sin vistas guardadas</div>';
+  }
+  wrap.innerHTML = '<div class="faceta-title">Guardar la vista actual</div><div class="vt-save-new"><input class="vt-save-name" type="text" placeholder="Nombre de la vista…"><button type="button" class="vt-save-btn">Guardar</button></div><div class="vt-saved-list"></div><div class="vt-saved-hint">★ = vista por defecto al entrar al reporte</div>';
+  var nameInp=wrap.querySelector('.vt-save-name');
+  wrap.querySelector('.vt-save-btn').addEventListener('click', function(){
+    var arr=load(); var nm=(nameInp.value||'').trim()||('Vista '+(arr.length+1));
+    arr.push({ name: nm, state: opts.snapshot() }); store(arr); nameInp.value=''; renderList();
+  });
+  wrap.querySelector('.vt-saved-list').addEventListener('click', function(e){
+    var pin=e.target.closest('.vt-saved-pin'), del=e.target.closest('.vt-saved-del'), upd=e.target.closest('.vt-saved-upd'), nm=e.target.closest('.vt-saved-name');
+    if(pin){ var ap=load(); var ip=+pin.getAttribute('data-i'); var was=ap[ip]&&ap[ip].pinned; ap.forEach(function(v){v.pinned=false;}); if(ap[ip]) ap[ip].pinned=!was; store(ap); renderList(); }
+    else if(del){ var a=load(); var idd=+del.getAttribute('data-i'); var vd=a[idd]; if(vd && ask('¿Eliminar la vista “'+vd.name+'”?')){ a.splice(idd,1); store(a); renderList(); } }
+    else if(upd){ var a2=load(); var i2=+upd.getAttribute('data-i'); if(a2[i2] && ask('¿Actualizar la vista “'+a2[i2].name+'” con la vista actual?')){ a2[i2].state=opts.snapshot(); store(a2); } }
+    else if(nm){ var a3=load(); var i3=+nm.getAttribute('data-i'); if(a3[i3]) opts.apply(a3[i3].state); }
+  });
+  renderList();
+  var def=load().filter(function(v){return v.pinned;})[0]; if(def) opts.apply(def.state);
+}
+`
+
 const DOM_GLUE = `
 function vtEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function vtColorBg(value, range){
@@ -263,12 +307,8 @@ function vtBootstrap(root){
     renderGroupUI(); render();
   }
 
-  // ---- Tab "Guardados": presets de filtro persistidos por reporte (localStorage) ----
-  var savedWrap = document.querySelector('.tray-saved');
-  var SKEY = 'vergis:saved:'+((typeof location!=='undefined' && location.pathname) || 'pi');
-  function loadSaved(){ try{ return JSON.parse(localStorage.getItem(SKEY)||'[]'); }catch(e){ return []; } }
-  function storeSaved(a){ try{ localStorage.setItem(SKEY, JSON.stringify(a)); }catch(e){} }
-  function askConfirm(msg){ try{ return (typeof window!=='undefined' && typeof window.confirm==='function') ? window.confirm(msg) : true; }catch(e){ return true; } }
+  // ---- Tab "Vistas": presets persistidos por reporte. La UI/persistencia/pin/confirmación viven
+  //      en el snippet COMPARTIDO vergisSavedViews; acá solo el snapshot/apply propios de la tabla. ----
   function snapshot(){ return { facets: JSON.parse(JSON.stringify(state.facets)), globalSearch: state.globalSearch, groupLevels: state.groupLevels.slice(), sort: { field: state.sort.field, dir: state.sort.dir } }; }
   function applySnapshot(s){
     state.facets = s.facets ? JSON.parse(JSON.stringify(s.facets)) : {};
@@ -281,36 +321,7 @@ function vtBootstrap(root){
     Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p.innerHTML) p.innerHTML=''; });
     renderGroupUI(); render();
   }
-  function renderSavedList(){
-    if(!savedWrap) return;
-    var list=savedWrap.querySelector('.vt-saved-list'); if(!list) return;
-    var arr=loadSaved();
-    list.innerHTML = arr.length ? arr.map(function(p,i){
-      return '<div class="vt-saved-row'+(p.pinned?' pinned':'')+'">'+
-        '<button type="button" class="vt-saved-pin" data-i="'+i+'" title="'+(p.pinned?'Vista por defecto (quitar)':'Fijar como vista por defecto al entrar')+'">'+(p.pinned?'★':'☆')+'</button>'+
-        '<span class="vt-saved-name" data-i="'+i+'" title="Aplicar esta vista">'+vtEsc(p.name)+'</span>'+
-        '<span class="vt-saved-actions"><button type="button" class="vt-saved-upd" data-i="'+i+'" title="Actualizar con la vista actual">↻</button><button type="button" class="vt-saved-del" data-i="'+i+'" title="Eliminar">×</button></span>'+
-        '</div>';
-    }).join('') : '<div class="vt-saved-empty">Sin vistas guardadas</div>';
-  }
-  if(savedWrap){
-    savedWrap.innerHTML = '<div class="faceta-title">Guardar la vista actual</div><div class="vt-save-new"><input class="vt-save-name" type="text" placeholder="Nombre de la vista…"><button type="button" class="vt-save-btn">Guardar</button></div><div class="vt-saved-list"></div><div class="vt-saved-hint">★ = vista por defecto al entrar al reporte</div>';
-    var nameInp=savedWrap.querySelector('.vt-save-name');
-    savedWrap.querySelector('.vt-save-btn').addEventListener('click', function(){
-      var arr=loadSaved(); var nm=(nameInp.value||'').trim()||('Vista '+(arr.length+1));
-      arr.push({ name: nm, state: snapshot() }); storeSaved(arr); nameInp.value=''; renderSavedList();
-    });
-    savedWrap.querySelector('.vt-saved-list').addEventListener('click', function(e){
-      var pin=e.target.closest('.vt-saved-pin'), del=e.target.closest('.vt-saved-del'), upd=e.target.closest('.vt-saved-upd'), nm=e.target.closest('.vt-saved-name');
-      if(pin){ var ap=loadSaved(); var ip=+pin.getAttribute('data-i'); var was=ap[ip]&&ap[ip].pinned; ap.forEach(function(v){v.pinned=false;}); if(ap[ip]) ap[ip].pinned=!was; storeSaved(ap); renderSavedList(); }
-      else if(del){ var a=loadSaved(); var idd=+del.getAttribute('data-i'); var vd=a[idd]; if(vd && askConfirm('¿Eliminar la vista “'+vd.name+'”?')){ a.splice(idd,1); storeSaved(a); renderSavedList(); } }
-      else if(upd){ var a2=loadSaved(); var i2=+upd.getAttribute('data-i'); if(a2[i2] && askConfirm('¿Actualizar la vista “'+a2[i2].name+'” con la vista actual (filtros, agrupación y orden)?')){ a2[i2].state=snapshot(); storeSaved(a2); } }
-      else if(nm){ var a3=loadSaved(); var i3=+nm.getAttribute('data-i'); if(a3[i3]) applySnapshot(a3[i3].state); }
-    });
-    renderSavedList();
-    // Vista por defecto (pineada) → se aplica automáticamente al entrar al reporte.
-    var def=loadSaved().filter(function(v){return v.pinned;})[0]; if(def) applySnapshot(def.state);
-  }
+  vergisSavedViews({ snapshot: snapshot, apply: applySnapshot });
 
   // ---- Popover por columna (ícono embudo en el header): buscador + selector de valores únicos ----
   function closeAllPops(except){ Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p!==except) p.hidden=true; }); }
@@ -421,4 +432,4 @@ Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
 `
 
 export const TABLE_RUNTIME_SOURCE: string =
-  '(function(){\n' + PURE_FNS.map((f) => f.toString()).join('\n') + '\n' + DOM_GLUE + '\n})();'
+  '(function(){\n' + PURE_FNS.map((f) => f.toString()).join('\n') + '\n' + SAVED_VIEWS_JS + '\n' + DOM_GLUE + '\n})();'
