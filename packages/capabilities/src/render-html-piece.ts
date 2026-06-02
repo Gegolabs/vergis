@@ -163,7 +163,12 @@ const TRAY_CSS = `
 .tray-saved .vt-save-name{flex:1;min-width:0;box-sizing:border-box;padding:6px 8px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:6px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
 .tray-saved .vt-save-btn{padding:6px 10px;font-size:12px;background:var(--card,#fff);color:var(--fg,#1f2937);border:1px solid var(--border,#e2e8f0);border-radius:6px;cursor:pointer;white-space:nowrap}
 .tray-saved .vt-save-btn:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
-.tray-saved .vt-saved-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:5px}
+.tray-saved .vt-saved-row{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:5px}
+.tray-saved .vt-saved-row.pinned{border-color:var(--yellow,#d97706)}
+.tray-saved .vt-saved-pin{flex:none;background:none;border:none;cursor:pointer;color:var(--fg-dim,#94a3b8);font-size:14px;line-height:1;padding:0 2px}
+.tray-saved .vt-saved-pin:hover{color:var(--yellow,#d97706)}
+.tray-saved .vt-saved-row.pinned .vt-saved-pin{color:var(--yellow,#d97706)}
+.tray-saved .vt-saved-hint{font-size:10px;color:var(--fg-dim,#94a3b8);margin-top:8px}
 .tray-saved .vt-saved-name{flex:1;cursor:pointer;font-size:13px;color:var(--fg,#1f2937);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tray-saved .vt-saved-name:hover{color:var(--green,#2563eb)}
 .tray-saved .vt-saved-actions{display:flex;gap:4px}
@@ -339,12 +344,14 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
     `<input type="radio" name="vergis-traytab" id="vergis-tt-config" class="tray-tabin" hidden>` +
     `<div class="tray-tabs">` +
     `<label for="vergis-tt-controles" class="tray-tablabel tt-controles">Controles</label>` +
-    `<label for="vergis-tt-guardados" class="tray-tablabel tt-guardados">Guardados</label>` +
+    `<label for="vergis-tt-guardados" class="tray-tablabel tt-guardados">Vistas</label>` +
     `<label for="vergis-tt-config" class="tray-tablabel tt-config">Config</label>` +
     `</div>` +
     `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${sections}</div></div>` +
     `<div class="tray-panel tray-panel-guardados"><div class="tray-saved"></div></div>` +
-    `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div>${credit}</div>` +
+    `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
+    // Crédito: pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible.
+    credit +
     `</aside>` +
     restore
   )
