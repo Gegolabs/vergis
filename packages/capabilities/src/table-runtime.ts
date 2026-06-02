@@ -244,7 +244,16 @@ function vtBootstrap(root){
       e.stopPropagation();
       var th=btn.closest('th'); var pop=th.querySelector('.vt-col-pop'); var willOpen=pop.hidden;
       closeAllPops(willOpen?pop:null);
-      if(willOpen){ if(!pop.innerHTML) buildPop(pop, btn.getAttribute('data-field')); pop.hidden=false; var ps=pop.querySelector('.vt-pop-search'); if(ps) ps.focus(); }
+      if(willOpen){
+        if(!pop.innerHTML) buildPop(pop, btn.getAttribute('data-field'));
+        pop.hidden=false;
+        // position:fixed anclado al botón → ningún contenedor con overflow lo recorta
+        // (la tabla vive en .vt-scroll, cuyo overflow recortaría un popover absoluto).
+        var r=btn.getBoundingClientRect(); var vw=window.innerWidth||1024;
+        pop.style.top=(r.bottom+4)+'px';
+        pop.style.left=Math.max(8, Math.min(r.left, vw-288))+'px';
+        var ps=pop.querySelector('.vt-pop-search'); if(ps) ps.focus();
+      }
       else pop.hidden=true;
     });
   });
