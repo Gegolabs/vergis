@@ -1,9 +1,22 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as vega from 'vega'
 import { compile, type TopLevelSpec } from 'vega-lite'
 import type { Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
+
+/** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
+const VERGIS_VERSION = (() => {
+  try {
+    const p = resolve(dirname(fileURLToPath(import.meta.url)), '../../../package.json')
+    return (JSON.parse(readFileSync(p, 'utf8')) as { version?: string }).version ?? '0.1.0'
+  } catch {
+    return '0.1.0'
+  }
+})()
 
 /**
  * `render-html-piece` — árbol de pieza resuelto (compuesto por Mira) → HTML estático
@@ -153,7 +166,9 @@ const TABLE_INTERACTIVE_CSS = `
  *  con fallback claro → sirve en arbol y default. */
 const TRAY_CSS = `
 .tray{display:flex;flex-direction:column}
-.tray-credit{margin-top:auto;border-top:none;padding-top:14px;font-size:9px;line-height:1.5;text-align:center;color:var(--fg-dim,#94a3b8);opacity:.35;word-break:break-word}
+.tray-foot{margin-top:auto;padding-top:14px;text-align:center}
+.tray-version{font-size:10px;color:var(--fg-dim,#94a3b8);opacity:.6;letter-spacing:.03em}
+.tray-credit{border-top:none;padding-top:3px;font-size:9px;line-height:1.5;color:var(--fg-dim,#94a3b8);opacity:.32;word-break:break-word}
 .tray-tabin{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
 .tray-tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border,#e2e8f0)}
 .tray-tablabel{flex:1;text-align:center;font-size:12px;padding:7px 4px;cursor:pointer;color:var(--fg-dim,#94a3b8);border-bottom:2px solid transparent;margin-bottom:-1px;user-select:none}
@@ -330,9 +345,12 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
   // Restaura la paleta elegida por el usuario (persistida por reporte) sobre el default de plataforma.
   const restore =
     `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}})();</script>`
-  // Crédito: pie discreto al fondo de la gaveta. Sin hipervínculos; el URL va como texto.
-  const credit =
-    `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>`
+  // Pie de la gaveta (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
+  const footer =
+    `<div class="tray-foot">` +
+    `<div class="tray-version">Mira v${escapeHtml(VERGIS_VERSION)}</div>` +
+    `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>` +
+    `</div>`
   return (
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
     `<label for="vergis-tray-toggle" class="tray-tab" title="Controles" aria-label="Abrir controles">` +
@@ -353,8 +371,8 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
     `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${sections}</div></div>` +
     `<div class="tray-panel tray-panel-guardados"><div class="tray-saved"></div></div>` +
     `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
-    // Crédito: pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible.
-    credit +
+    // Pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible, pegado al fondo.
+    footer +
     `</aside>` +
     restore
   )
