@@ -160,12 +160,32 @@ export function vtGroup(
     .map((key) => ({ key, rows: buckets[key] }))
 }
 
+/** Nodo del árbol de agrupación multinivel. Hoja = filas; interno = grupos por `field`. */
+export interface VtTreeNode {
+  leaf: boolean
+  rows?: Record<string, unknown>[]
+  field?: string
+  groups?: { key: string; count: number; child: VtTreeNode }[]
+}
+
+/** Agrupación JERÁRQUICA por varios campos en orden (Área › Empresa › Estado…). Recursivo:
+ *  agrupa por `fields[0]`, luego cada subgrupo por el resto. Sin campos → hoja con las filas. */
+export function vtGroupTree(rows: Record<string, unknown>[], fields: string[]): VtTreeNode {
+  if (!fields || fields.length === 0) return { leaf: true, rows }
+  const groups = vtGroup(rows, fields[0])
+  return {
+    leaf: false,
+    field: fields[0],
+    groups: groups.map((g) => ({ key: g.key, count: g.rows.length, child: vtGroupTree(g.rows, fields.slice(1)) })),
+  }
+}
+
 /**
  * Fuente JS que se inyecta en el navegador: las funciones puras de arriba (vía toString,
  * sin tipos tras la transpilación de esbuild) + el cableado del DOM. Se emite UNA vez por
  * documento; cada `.vtable` se autoarranca leyendo su JSON embebido.
  */
-const PURE_FNS = [vtNorm, vtIsNumericCol, vtDistinct, vtIsCategorical, vtFormat, vtApply, vtGroup]
+const PURE_FNS = [vtNorm, vtIsNumericCol, vtDistinct, vtIsCategorical, vtFormat, vtApply, vtGroup, vtGroupTree]
 
 const DOM_GLUE = `
 function vtEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -189,35 +209,58 @@ function vtBootstrap(root){
   var payload = JSON.parse(dataEl.textContent);
   var rows = payload.rows, cols = payload.cols, ncols = cols.length;
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
-  var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupBy:'' };
+  // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
+  var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
   var badge = document.getElementById('vergis-count'); // uña/pestaña de la gaveta común
+  var SEP = '~|~'; // separador de path de grupo (token improbable en datos reales)
   function colLabel(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?(c.label||c.field):field; }
 
-  // ---- Controles globales en la GAVETA COMÚN (.tray-sections): búsqueda global, agrupar, limpiar ----
-  var gs=null, groupSel=null, countEl=null;
+  // ---- Controles globales en la GAVETA COMÚN (.tray-sections): búsqueda global, agrupar (multinivel), limpiar ----
+  var gs=null, countEl=null, levelsEl=null, addSel=null, groupActions=null;
   var trayWrap = document.querySelector('.tray-sections');
   if(trayWrap){
     var sec=document.createElement('div'); sec.className='faceta vt-tray-section';
-    var gopts = groupFields.map(function(c){ return '<option value="'+vtEsc(c.field)+'">'+vtEsc(c.label||c.field)+'</option>'; }).join('');
     sec.innerHTML =
       '<div class="faceta-title">Buscar</div>' +
       '<input class="vt-global-search" type="search" placeholder="Buscar en toda la tabla…" aria-label="Buscar en toda la tabla">' +
-      (groupFields.length ? ('<div class="faceta-title" style="margin-top:14px">Agrupar por</div><select class="vt-groupby"><option value="">(sin agrupar)</option>'+gopts+'</select>') : '') +
+      (groupFields.length ? (
+        '<div class="faceta-title" style="margin-top:14px">Agrupar por</div>' +
+        '<div class="vt-group-levels"></div>' +
+        '<select class="vt-group-add"></select>' +
+        '<div class="vt-group-actions"><button type="button" class="vt-expand-all">Expandir todo</button><button type="button" class="vt-collapse-all">Colapsar todo</button></div>'
+      ) : '') +
       '<button type="button" class="vt-clear-all">Limpiar todo</button>' +
       '<span class="vt-count" role="status" aria-live="polite"></span>';
     trayWrap.appendChild(sec);
-    gs=sec.querySelector('.vt-global-search'); groupSel=sec.querySelector('.vt-groupby'); countEl=sec.querySelector('.vt-count');
+    gs=sec.querySelector('.vt-global-search'); countEl=sec.querySelector('.vt-count');
+    levelsEl=sec.querySelector('.vt-group-levels'); addSel=sec.querySelector('.vt-group-add'); groupActions=sec.querySelector('.vt-group-actions');
     gs.addEventListener('input', function(){ state.globalSearch=gs.value; render(); });
-    if(groupSel) groupSel.addEventListener('change', function(){ state.groupBy=groupSel.value; render(); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
+    if(addSel){
+      addSel.addEventListener('change', function(){ if(!addSel.value) return; state.groupLevels.push(addSel.value); state.collapsed={}; renderGroupUI(); render(); });
+      levelsEl.addEventListener('click', function(e){ var rm=e.target.closest('.vt-gl-rm'); if(!rm) return; var f=rm.getAttribute('data-field'); state.groupLevels=state.groupLevels.filter(function(x){return x!==f;}); state.collapsed={}; renderGroupUI(); render(); });
+      sec.querySelector('.vt-expand-all').addEventListener('click', function(){ state.collapsed={}; render(); });
+      sec.querySelector('.vt-collapse-all').addEventListener('click', function(){ collapseAll(); render(); });
+      renderGroupUI();
+    }
   }
+  function renderGroupUI(){
+    if(!levelsEl) return;
+    levelsEl.innerHTML = state.groupLevels.map(function(f,i){ return '<div class="vt-gl-chip"><span><span class="vt-gl-num">'+(i+1)+'.</span> '+vtEsc(colLabel(f))+'</span><span class="vt-gl-rm" data-field="'+vtEsc(f)+'" title="Quitar nivel">×</span></div>'; }).join('');
+    var avail=groupFields.filter(function(c){ return state.groupLevels.indexOf(c.field)===-1; });
+    addSel.innerHTML='<option value="">'+(state.groupLevels.length?'+ añadir nivel…':'+ agrupar por…')+'</option>'+avail.map(function(c){ return '<option value="'+vtEsc(c.field)+'">'+vtEsc(c.label||c.field)+'</option>'; }).join('');
+    addSel.style.display = avail.length ? '' : 'none';
+    if(groupActions) groupActions.style.display = state.groupLevels.length ? '' : 'none';
+  }
+  function collapseAll(){ var acc=[]; gatherPaths(vtGroupTree(vtApply(rows,state), state.groupLevels), '', acc); acc.forEach(function(p){ state.collapsed[p]=1; }); }
+  function gatherPaths(node, prefix, acc){ if(node.leaf) return; node.groups.forEach(function(g){ var p=prefix+node.field+SEP+g.key; acc.push(p); gatherPaths(g.child, p+SEP, acc); }); }
   function clearAll(){
-    state.facets={}; state.globalSearch=''; state.groupBy='';
-    if(gs) gs.value=''; if(groupSel) groupSel.value='';
+    state.facets={}; state.globalSearch=''; state.groupLevels=[]; state.collapsed={};
+    if(gs) gs.value='';
     Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop input[type=checkbox]'), function(b){ b.checked=false; });
-    render();
+    renderGroupUI(); render();
   }
 
   // ---- Popover por columna (ícono embudo en el header): buscador + selector de valores únicos ----
@@ -273,6 +316,14 @@ function vtBootstrap(root){
     });
   });
 
+  // ---- Colapsar/expandir un grupo: clic en su encabezado (delegado, sobrevive al re-render) ----
+  tbody.addEventListener('click', function(e){
+    var gh=e.target.closest('tr.vt-group-head'); if(!gh) return;
+    var path=gh.getAttribute('data-path');
+    if(state.collapsed[path]) delete state.collapsed[path]; else state.collapsed[path]=1;
+    render();
+  });
+
   // ---- Chips de filtros activos (sobre la tabla): clic = quitar ----
   if(chipsEl) chipsEl.addEventListener('click', function(e){
     var chip=e.target.closest('.vt-chip'); if(!chip) return;
@@ -281,13 +332,22 @@ function vtBootstrap(root){
     render();
   });
 
+  // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
+  // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
+  function renderNodeTree(node, depth, prefix){
+    if(node.leaf) return vtBodyRows(cols, node.rows);
+    return node.groups.map(function(g){
+      var path=prefix+node.field+SEP+g.key;
+      var collapsed=!!state.collapsed[path];
+      var caret=collapsed?'▸':'▾';
+      var head='<tr class="vt-group-head" data-depth="'+depth+'" data-path="'+vtEsc(path)+'"><td colspan="'+ncols+'" style="padding-left:'+(depth*18+12)+'px"><span class="vt-gcaret">'+caret+'</span> '+vtEsc(colLabel(node.field))+': '+vtEsc(g.key||'(vacío)')+' <span class="vt-gcount">('+g.count+')</span></td></tr>';
+      return head + (collapsed ? '' : renderNodeTree(g.child, depth+1, path+SEP));
+    }).join('');
+  }
   function render(){
     var view = vtApply(rows, state);
-    if(state.groupBy){
-      var groups = vtGroup(view, state.groupBy); var glabel=colLabel(state.groupBy);
-      tbody.innerHTML = groups.map(function(g){
-        return '<tr class="vt-group-head"><td colspan="'+ncols+'"><span class="vt-gcaret">▾</span> '+vtEsc(glabel)+': '+vtEsc(g.key||'(vacío)')+' <span class="vt-gcount">('+g.rows.length+')</span></td></tr>' + vtBodyRows(cols, g.rows);
-      }).join('') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+    if(state.groupLevels.length){
+      tbody.innerHTML = renderNodeTree(vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
       tbody.innerHTML = vtBodyRows(cols, view) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
@@ -304,7 +364,7 @@ function vtBootstrap(root){
       if(state.globalSearch) chips.push('<span class="vt-chip vt-chip-search" data-search="global">buscar: '+vtEsc(state.globalSearch)+' ×</span>');
       chipsEl.innerHTML = chips.join('');
     }
-    if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } if(state.globalSearch) n++; if(state.groupBy) n++; badge.textContent = n?String(n):''; }
+    if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
   }
   render();
 }

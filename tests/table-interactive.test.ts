@@ -9,6 +9,7 @@ import {
   vtFormat,
   vtApply,
   vtGroup,
+  vtGroupTree,
   type ResolvedNode,
   type VtState,
 } from '@vergis/capabilities'
@@ -128,6 +129,29 @@ describe('table-runtime · vtGroup (categorización)', () => {
     const groups = vtGroup(sorted, 'area')
     const log = groups.find((g) => g.key === 'Logística')!
     expect(log.rows.map((r) => r.id)).toEqual([3, 1]) // desc por id dentro del grupo
+  })
+
+  it('vtGroupTree: agrupación jerárquica multinivel (área › estado)', () => {
+    const tree = vtGroupTree(ROWS, ['area', 'estado'])
+    expect(tree.leaf).toBe(false)
+    expect(tree.field).toBe('area')
+    expect(tree.groups!.map((g) => g.key)).toEqual(['Finanzas', 'Logística'])
+    // nivel 2 dentro de Finanzas: Carla (Presente) + Édgar (Licencia) → 2 subgrupos
+    const fin = tree.groups!.find((g) => g.key === 'Finanzas')!
+    expect(fin.count).toBe(2)
+    expect(fin.child.leaf).toBe(false)
+    expect(fin.child.field).toBe('estado')
+    expect(fin.child.groups!.map((g) => g.key)).toEqual(['Licencia', 'Presente'])
+    // la hoja lleva las filas
+    const lic = fin.child.groups!.find((g) => g.key === 'Licencia')!
+    expect(lic.child.leaf).toBe(true)
+    expect(lic.child.rows!.map((r) => r.nombre)).toEqual(['Édgar Ñúñez'])
+  })
+
+  it('vtGroupTree: sin campos → hoja con todas las filas', () => {
+    const tree = vtGroupTree(ROWS, [])
+    expect(tree.leaf).toBe(true)
+    expect(tree.rows).toHaveLength(4)
   })
 })
 
