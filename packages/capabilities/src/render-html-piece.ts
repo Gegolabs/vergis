@@ -236,19 +236,24 @@ export const renderHtmlPiece: Capability = {
     // 3 tabs: Controles · Guardados · Config. Dashboard → sus facetas van server-rendered en
     // `.tray-sections` + script de recompute; Tabla → el runtime inyecta sus controles ahí.
     const hasTray = !!interactive || hasTable
+    let tail = '' // scripts al FINAL del body (DOM ya parseado)
     if (interactive) {
-      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette) + body + renderInteractiveScript(interactive)
+      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette) + body
+      tail += renderInteractiveScript(interactive)
     } else if (hasTable) {
       body = renderTrayShell('', theme.palettes, palette) + body
     }
-    if (hasTray) body += `<style>${TRAY_CSS}</style>`
-    // Tabla interactiva (orden/filtro/búsqueda/agrupar): CSS + runtime se inyectan UNA vez
-    // por documento si hay al menos una `.vtable`. Cada tabla se autoarranca desde su JSON.
-    if (hasTable) {
-      body += `<style>${TABLE_INTERACTIVE_CSS}</style><script>${TABLE_RUNTIME_SOURCE}</script>`
-    }
-    if (pages) body += `<style>${PAGES_NAV_CSS}</style>`
-    return { html: theme.wrap({ title: title ?? 'Vergis', body, meta, palette }) }
+    // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
+    // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
+    // aplicaba el CSS al llegar al `<style>` del final). Todo el CSS por-documento va junto, arriba.
+    let css = ''
+    if (hasTray) css += TRAY_CSS
+    if (hasTable) css += TABLE_INTERACTIVE_CSS
+    if (pages) css += PAGES_NAV_CSS
+    if (css) body = `<style>${css}</style>` + body
+    // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
+    if (hasTable) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
+    return { html: theme.wrap({ title: title ?? 'Vergis', body: body + tail, meta, palette }) }
   },
 }
 
