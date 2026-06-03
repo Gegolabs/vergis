@@ -280,6 +280,17 @@ describe('render-html-piece · tabla interactiva', () => {
     expect(html).not.toContain('"nombre":"<script>')
     expect(html).toContain('\\u003c')
   })
+
+  it('el CSS de la tabla va ANTES del markup, y el runtime DESPUÉS (anti-FOUC)', async () => {
+    const { html } = (await renderHtmlPiece.execute({ piece, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
+    const cssIdx = html.indexOf('.vtable .vt-chips') // regla de TABLE_INTERACTIVE_CSS
+    const tableIdx = html.indexOf('class="table vtable"')
+    const runtimeIdx = html.indexOf('var payload = JSON.parse') // marca del runtime serializado
+    expect(cssIdx).toBeGreaterThan(-1)
+    expect(tableIdx).toBeGreaterThan(-1)
+    expect(cssIdx).toBeLessThan(tableIdx) // CSS antes del markup → sin flash sin estilo
+    expect(runtimeIdx).toBeGreaterThan(tableIdx) // runtime después del DOM
+  })
 })
 
 describe('table-runtime · runtime serializado', () => {
