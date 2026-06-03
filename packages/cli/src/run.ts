@@ -39,6 +39,11 @@ export interface RunOptions {
   /** Contexto de anotaciones (enriquecimiento de la capa de viz). Si se pasa, Mira fusiona la
    *  columna editable en la primera tabla. Lo arma el server (store + firma del token). */
   annotations?: AnnotationContext
+  /** PI multi-vista: id de la página activa (default: la 1ª). Viene de la query `?page=`. */
+  page?: string
+  /** Contexto del drill-through (campo→valor). Viene de la query `?ctx.<campo>=`. Filtro adicional
+   *  bindeado dentro de las filas que la RLS ya autoriza (acota, nunca amplía). */
+  ctx?: Record<string, string>
 }
 
 export interface RunOutcome {
@@ -98,7 +103,12 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
   const result = await botler.invoke(mira.id, {
     identity,
     trigger: 'on-demand',
-    params: { baseDir: options.baseDir ?? process.cwd(), annotations: options.annotations },
+    params: {
+      baseDir: options.baseDir ?? process.cwd(),
+      annotations: options.annotations,
+      page: options.page,
+      ctx: options.ctx,
+    },
   })
   botler.stop()
 

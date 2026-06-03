@@ -38,6 +38,10 @@ interface Interactive {
   /** Los filtros disponibles que viven en la bandeja. */
   filters: FilterSpec[]
 }
+interface PagesNav {
+  items: { id: string; title: string }[]
+  active: string
+}
 interface RenderParams {
   piece: ResolvedNode
   title?: string
@@ -46,6 +50,8 @@ interface RenderParams {
   palette?: string
   meta?: DashboardMeta
   interactive?: Interactive
+  /** PI multi-vista: barra de navegación de páginas (links `?page=<id>`). */
+  pages?: PagesNav
 }
 
 export interface TableColumn {
@@ -106,6 +112,8 @@ export interface ResolvedNode {
   interactive?: boolean
   /** Tabla: meta de anotaciones (columna editable compartida). */
   annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
+  /** Tabla: drill-through (al clickear una fila hoja, navegar a la vista `to` pasando el campo `by`). */
+  drill?: { to: string; by: string }
 }
 
 interface RenderOpts {
@@ -173,7 +181,10 @@ const TABLE_INTERACTIVE_CSS = `
 .vtable td.vt-ann-cell:focus{box-shadow:inset 0 0 0 2px var(--green,#2563eb)}
 .vtable td.vt-ann-cell:empty::before{content:'+ nota';color:var(--fg-dim,#94a3b8);opacity:.55}
 .vtable td.vt-ann-cell.vt-ann-err{box-shadow:inset 0 0 0 2px var(--red,#dc2626)}
-@media print{.vtable .vt-chips,.vtable .vt-filter-btn,.vtable .vt-ann-hint{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
+.vtable tr.vt-drill-row{cursor:pointer}
+.vtable tr.vt-drill-row:hover td{background:var(--card,#eef2ff)}
+.vtable td.vt-drill-arrow{color:var(--green,#2563eb);font-weight:700;text-align:center;width:1.6em}
+@media print{.vtable .vt-chips,.vtable .vt-filter-btn,.vtable .vt-ann-hint,.vtable td.vt-drill-arrow{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
 `
 
 /** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
@@ -213,11 +224,13 @@ const TRAY_CSS = `
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive }
-    let body = await renderNode(piece, opts)
+    // PI multi-vista: barra de navegación de páginas, arriba de la pieza (links `?page=<id>`).
+    const nav = pages ? renderPagesNav(pages) : ''
+    let body = nav + (await renderNode(piece, opts))
     const hasTable = body.includes('class="table vtable"')
     // GAVETA COMÚN (un solo shell por documento) para cualquier PI interactivo: dashboard y/o tabla.
     // 3 tabs: Controles · Guardados · Config. Dashboard → sus facetas van server-rendered en
@@ -234,8 +247,28 @@ export const renderHtmlPiece: Capability = {
     if (hasTable) {
       body += `<style>${TABLE_INTERACTIVE_CSS}</style><script>${TABLE_RUNTIME_SOURCE}</script>`
     }
+    if (pages) body += `<style>${PAGES_NAV_CSS}</style>`
     return { html: theme.wrap({ title: title ?? 'Vergis', body, meta, palette }) }
   },
+}
+
+/** CSS de la barra de navegación de vistas (PI multi-vista). Variables del theme con fallback claro. */
+const PAGES_NAV_CSS = `
+.vpages{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 18px;border-bottom:1px solid var(--border,#e2e8f0)}
+.vpages a{font-size:13px;padding:8px 16px;text-decoration:none;color:var(--fg-dim,#64748b);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.vpages a:hover{color:var(--fg,#1f2937)}
+.vpages a.active{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
+`
+
+/** Barra de navegación de vistas: un link por página (`?page=<id>`), marcando la activa. */
+function renderPagesNav(pages: PagesNav): string {
+  const tabs = pages.items
+    .map(
+      (p) =>
+        `<a href="?page=${encodeURIComponent(p.id)}"${p.id === pages.active ? ' class="active" aria-current="page"' : ''}>${escapeHtml(p.title)}</a>`,
+    )
+    .join('')
+  return `<nav class="vpages" role="tablist">${tabs}</nav>`
 }
 
 async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string> {
@@ -531,9 +564,10 @@ function renderTable(node: ResolvedNode): string {
   // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
   if (node.interactive === false) {
     const head = cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('')
+    const staticBody = node.drill ? renderStaticDrillBody(cols, rows, ranges, node.drill) : tbody
     return (
       `<section class="table">${titleHtml}` +
-      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
+      `<table><thead><tr>${head}</tr></thead><tbody>${staticBody}</tbody></table></section>${node.drill ? `<style>${DRILL_CSS}</style>` : ''}`
     )
   }
   return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml)
@@ -609,7 +643,8 @@ function renderInteractiveTable(
 
   // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
   // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
-  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation }).replace(/</g, '\\u003c')
+  // `drill` (si la tabla la tiene): el runtime hace clickeable cada fila hoja → `?page=<to>&ctx.<by>=<val>`.
+  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drill: node.drill }).replace(/</g, '\\u003c')
 
   return (
     `<section class="table vtable">${titleHtml}${chips}` +
@@ -617,6 +652,31 @@ function renderInteractiveTable(
     `<tbody>${tbody}</tbody></table></div>` +
     `<script type="application/json" class="vtable-data">${payload}</script></section>`
   )
+}
+
+/** CSS de filas con drill-through (clickeables). Compartido por tabla estática e interactiva. */
+const DRILL_CSS = `tr.vt-drill-row{cursor:pointer}tr.vt-drill-row:hover td{background:var(--card,#eef2ff)}`
+
+/** Cuerpo de tabla ESTÁTICA con drill: cada fila navega a `?page=<to>&ctx.<by>=<valor>`. */
+function renderStaticDrillBody(
+  cols: TableColumn[],
+  rows: Record<string, unknown>[],
+  ranges: Record<string, { min: number; max: number }>,
+  drill: { to: string; by: string },
+): string {
+  return rows
+    .map((r) => {
+      const cells = cols
+        .map((c) => {
+          const raw = r[c.field]
+          const bg = c.colorscale ? colorscaleBg(Number(raw), ranges[c.field]) : ''
+          return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(formatValue(raw, c.format))}</td>`
+        })
+        .join('')
+      const href = `?page=${encodeURIComponent(drill.to)}&ctx.${encodeURIComponent(drill.by)}=${encodeURIComponent(String(r[drill.by] ?? ''))}`
+      return `<tr class="vt-drill-row" data-href="${escapeHtml(href)}" onclick="location.assign(this.getAttribute('data-href'))">${cells}</tr>`
+    })
+    .join('\n')
 }
 
 function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]): Record<string, { min: number; max: number }> {
