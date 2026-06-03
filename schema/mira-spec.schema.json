@@ -4,8 +4,9 @@
   "title": "Mira spec (DSL de configuración composicional v1.0)",
   "description": "Schema formal del DSL de Mira. Deriva del doc 3 del cluster 006. Valida la estructura de los 5 bloques canónicos antes de que el Botler acepte el Botlet.",
   "type": "object",
-  "required": ["mira_version", "identity", "piece", "data", "quality", "delivery"],
+  "required": ["mira_version", "identity", "data", "quality", "delivery"],
   "additionalProperties": true,
+  "comment": "Exactamente uno de `piece` (PI de una vista) o `pages` (PI multi-vista) — se valida en validateSpec.",
   "properties": {
     "mira_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" },
     "identity": {
@@ -22,6 +23,21 @@
       }
     },
     "piece": { "type": "object" },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "piece"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "title": { "type": "string", "minLength": 1 },
+          "piece": { "type": "object" },
+          "context": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
     "data": {
       "type": "object",
       "minProperties": 1,

@@ -286,7 +286,24 @@ function annSign(piId: string, email: string, key: string): string {
   return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
 }
 
-async function renderReport(report: Report, headers: GateHeaders): Promise<string> {
+/** Navegación multi-vista de la query: `?page=<id>` + `?ctx.<campo>=<valor>` (drill-through). */
+interface NavQuery {
+  page?: string
+  ctx?: Record<string, string>
+}
+/** Extrae page/ctx de la URL. El `ctx` se bindea como parámetro (injection-safe) aguas abajo. */
+function navFromUrl(rawUrl: string): NavQuery {
+  const u = new URL(rawUrl, 'http://localhost')
+  const page = u.searchParams.get('page') ?? undefined
+  const ctx: Record<string, string> = {}
+  for (const [k, v] of u.searchParams) {
+    const m = k.match(/^ctx\.(.+)$/)
+    if (m) ctx[m[1]] = v
+  }
+  return { page, ctx: Object.keys(ctx).length ? ctx : undefined }
+}
+
+async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery = {}): Promise<string> {
   const identity = identityFor(headers)
   const email = (identity.user ?? '').toLowerCase()
   // El contexto de anotaciones se pasa solo si el store está listo; Mira lo aplica a la 1ª tabla.
@@ -312,6 +329,8 @@ async function renderReport(report: Report, headers: GateHeaders): Promise<strin
     registerStarters: false,
     extraCapabilities: [servingCap, renderHtmlPiece, publicarArtefacto],
     annotations,
+    page: nav.page,
+    ctx: nav.ctx,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out.html ?? ''
@@ -405,7 +424,7 @@ const server = createServer((req, res) => {
   if (url === '/' || url === '') {
     const visible = visibleFor(all, claims) // índice PER-CONSUMIDOR: solo PIs a los que tiene acceso
     if (visible.length === 1) {
-      renderReport(visible[0], req.headers as GateHeaders).then((html) => {
+      renderReport(visible[0], req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then((html) => {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
         res.end(html)
       }).catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
@@ -418,7 +437,7 @@ const server = createServer((req, res) => {
   const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
   const report = all.find((r) => r.slug === slug)
   if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
-  renderReport(report, req.headers as GateHeaders)
+  renderReport(report, req.headers as GateHeaders, navFromUrl(req.url ?? '/'))
     .then((html) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       res.end(html)
