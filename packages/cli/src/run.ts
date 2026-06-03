@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Botler, type Capability, type IdentityContext, type LogEntry } from '@vergis/botler'
 import { starterCapabilities, createExecuteSqlDwh, type SqlConnectionProfile } from '@vergis/capabilities'
-import { createMiraBotlet } from '@vergis/mira'
+import { createMiraBotlet, type AnnotationContext } from '@vergis/mira'
 
 export interface RunOptions {
   specPath: string
@@ -36,6 +36,9 @@ export interface RunOptions {
    * vía `extraCapabilities`.
    */
   registerStarters?: boolean
+  /** Contexto de anotaciones (enriquecimiento de la capa de viz). Si se pasa, Mira fusiona la
+   *  columna editable en la primera tabla. Lo arma el server (store + firma del token). */
+  annotations?: AnnotationContext
 }
 
 export interface RunOutcome {
@@ -95,7 +98,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
   const result = await botler.invoke(mira.id, {
     identity,
     trigger: 'on-demand',
-    params: { baseDir: options.baseDir ?? process.cwd() },
+    params: { baseDir: options.baseDir ?? process.cwd(), annotations: options.annotations },
   })
   botler.stop()
 

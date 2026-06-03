@@ -34,6 +34,8 @@ export interface TableColumn {
   searchable?: boolean
   filter?: boolean
   groupBy?: boolean
+  /** Columna de anotación (editable, enriquecimiento de la capa de viz). */
+  annotation?: boolean
 }
 
 export interface ResolvedNode {
@@ -66,6 +68,8 @@ export interface ResolvedNode {
   dataset?: string
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
   interactive?: boolean
+  /** Meta de anotaciones inyectada por Mira (ver applyAnnotations). */
+  annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
 }
 
 /** Resuelve data.<dataset>.<field> a un valor (single_row → fila[0]; rows → columna o filas). */
