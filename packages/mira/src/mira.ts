@@ -6,7 +6,7 @@ import {
 } from '@vergis/botler'
 import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { parseSpec } from './dsl/parse'
-import { validateSpec, type MiraDataset, type MiraSpec } from './dsl/validate'
+import { collectDataRefs, validateSpec, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
 import { checkFreshness } from './freshness'
 import { resolveTheme } from './theme-config'
 
@@ -50,11 +50,44 @@ export class MiraBotlet implements Botlet {
     }
     const identity = ctx.identity
 
+    // 2·bis · VISTA ACTIVA (multi-vista) o pieza única. En multi-vista se elige la página por
+    // `params.page` (default: la 1ª) y se recuperan SOLO sus datasets. El drill-through pasa
+    // `params.ctx` (campo→valor), que se inyecta como PARÁMETRO BIND (`@ctx_<campo>`, injection-safe)
+    // en el `:ctx.<campo>` de la query — un filtro ADICIONAL dentro de las filas que la RLS ya
+    // autoriza (acota, nunca amplía: la query lee la misma tabla gobernada).
+    const isMulti = Array.isArray(spec.pages) && spec.pages.length > 0
+    const pageParam = ctx.params?.['page'] as string | undefined
+    const ctxValues = normalizeCtx(ctx.params?.['ctx'])
+    let activePiece: Record<string, unknown>
+    let pagesNav: { items: { id: string; title: string }[]; active: string } | undefined
+    let datasetNames: string[]
+    if (isMulti) {
+      const pages = spec.pages!
+      const active = pages.find((p) => p.id === pageParam) ?? pages[0]
+      pagesNav = { items: pages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
+      const missing = (active.context ?? []).filter((c) => !ctxValues[c])
+      if (missing.length > 0) {
+        // Vista de detalle sin contexto (acceso directo, no por drill) → no se consulta nada
+        // (evita volcar todo); se muestra una guía para elegir un registro.
+        activePiece = contextPrompt(active, missing)
+        datasetNames = []
+      } else {
+        activePiece = active.piece
+        datasetNames = uniqueDatasets(active.piece)
+      }
+    } else {
+      activePiece = spec.piece as Record<string, unknown>
+      datasetNames = Object.keys(spec.data)
+    }
+
     // 3 · Recuperación de datos (vía Botler.capability_call, nunca acceso directo)
     const results: Record<string, DatasetResult> = {}
-    for (const [name, ds] of Object.entries(spec.data)) {
+    for (const name of datasetNames) {
+      const ds = spec.data[name]
+      if (!ds) continue
+      const params = isMulti ? applyCtx(ds.params, ctxValues) : ds.params
       host.log({ type: 'mira-retrieve', botletId: this.id, dataset: name, capability: ds.capability })
-      const out = (await host.capabilityCall(ds.capability, ds.params, identity)) as { rows?: Record<string, unknown>[] }
+      const out = (await host.capabilityCall(ds.capability, params, identity)) as { rows?: Record<string, unknown>[] }
       results[name] = { rows: out?.rows ?? [] }
       // 4a · Calidad: chequeo de shape (freshness se evalúa tras recuperar todo)
       this.checkShape(name, ds, results[name], host)
@@ -96,7 +129,7 @@ export class MiraBotlet implements Botlet {
 
     // 5 · Composición + render
     host.log({ type: 'mira-compose', botletId: this.id })
-    const composed = composePiece(spec.piece, results, spec)
+    const composed = composePiece(activePiece, results, spec)
     const resolved: ResolvedNode = banner ? { layout: 'rows', elements: [banner, composed] } : composed
 
     // 5·bis · Anotaciones (enriquecimiento solo de la capa de viz): si el llamador pasa el
@@ -107,8 +140,9 @@ export class MiraBotlet implements Botlet {
     // 5a · Interacción declarada acotada (doc 2 §10): si hay filtro, se materializan
     // los datasets para que la Faceta filtre client-side, sin nuevas queries.
     let interactive: { datasets: Record<string, Record<string, unknown>[]>; filters: NonNullable<NonNullable<MiraSpec['interactions']>['filters']> } | undefined
-    const filters = spec.interactions?.filters
-    if (filters && filters.length > 0) {
+    // En multi-vista, un filtro solo aplica a la página cuyo dataset se recuperó.
+    const filters = (spec.interactions?.filters ?? []).filter((f) => !isMulti || f.dataset in results)
+    if (filters.length > 0) {
       const datasets: Record<string, Record<string, unknown>[]> = {}
       for (const [name, res] of Object.entries(results)) datasets[name] = res.rows
       interactive = { datasets, filters }
@@ -138,6 +172,7 @@ export class MiraBotlet implements Botlet {
             code: spec.identity.code,
           },
           interactive,
+          pages: pagesNav,
         },
         identity,
       )) as { html: string }
@@ -229,5 +264,53 @@ async function applyAnnotations(piece: ResolvedNode, ann: AnnotationContext): Pr
     keyField,
     endpoint: ann.endpoint,
     label: ann.label ?? 'Anotaciones',
+  }
+}
+
+// --- Multi-vista + drill-through (helpers) ----------------------------------
+
+/** Normaliza el contexto del drill (`params.ctx`) a un mapa campo→string. */
+function normalizeCtx(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (v != null && v !== '') out[k] = String(v)
+  }
+  return out
+}
+
+/** Datasets (sin repetir) que una pieza referencia vía `data.<dataset>...`. */
+function uniqueDatasets(piece: Record<string, unknown>): string[] {
+  return [...new Set(collectDataRefs(piece).map((r) => r.split('.')[0]))]
+}
+
+/**
+ * Sustituye `:ctx.<param>` en `params.sql` por un PARÁMETRO BIND `@ctx_<param>` y adjunta su valor
+ * en `params.params` (la Capability lo bindea — nunca concatena → injection-safe). Si no hay `:ctx.`
+ * o no hay sql, devuelve los params intactos.
+ */
+function applyCtx(params: Record<string, unknown> | undefined, ctxValues: Record<string, string>): Record<string, unknown> | undefined {
+  if (!params || typeof params['sql'] !== 'string') return params
+  const sql = params['sql'] as string
+  if (!sql.includes(':ctx.')) return params
+  const bound: Record<string, string> = {}
+  const rewritten = sql.replace(/:ctx\.([a-zA-Z0-9_]+)/g, (_m, param: string) => {
+    bound[`ctx_${param}`] = ctxValues[param] ?? ''
+    return `@ctx_${param}`
+  })
+  return { ...params, sql: rewritten, params: { ...((params['params'] as Record<string, unknown>) ?? {}), ...bound } }
+}
+
+/** Pieza-guía cuando se entra a una vista de detalle sin el contexto requerido (no por drill). */
+function contextPrompt(page: MiraPage, missing: string[]): Record<string, unknown> {
+  return {
+    layout: 'rows',
+    elements: [
+      {
+        markdown_block: {
+          content: `### ${page.title}\n\nSelecciona un registro en otra vista para ver su detalle (falta: ${missing.join(', ')}).`,
+        },
+      },
+    ],
   }
 }
