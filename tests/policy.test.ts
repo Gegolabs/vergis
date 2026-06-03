@@ -102,8 +102,10 @@ describe('Compilador de policy · codegen ClickHouse (la receta de Fase 0)', () 
     )
     expect(enf.injections).toEqual([{ setting: 'vergis_claim_groups', claim: 'groups' }])
   })
-  it('PI público → no genera policy (null)', () => {
-    expect(compilePolicyToClickHouse({ rls: 'public' }, TARGET, BIND)).toBeNull()
+  it('PI público (grant: all) → ROW POLICY allow-all (USING 1), no null', () => {
+    const enf = compilePolicyToClickHouse({ rls: 'public' }, TARGET, BIND)
+    expect(enf.rowPolicySQL).toContain('USING 1')
+    expect(enf.injections).toEqual([])
   })
   it('codegen rechaza identificadores inseguros (anti-inyección por nombre)', () => {
     const evil = parseAudience({ rls: [{ column: 'area; DROP TABLE x', claim: 'groups', op: 'in' }] })
@@ -241,8 +243,13 @@ describe('Compilador de policy · codegen Fabric (predicado TVF + SECURITY POLIC
     ])
     expect(enf.injections).toEqual([{ setting: 'vergis_claim_groups', claim: 'groups' }])
   })
-  it('PI público → no genera policy (null)', () => {
-    expect(compilePolicyToFabric({ rls: 'public' }, FAB_TARGET, BIND)).toBeNull()
+  it('PI público (grant: all) → SECURITY POLICY allow-all (función sin WHERE), no null', () => {
+    const enf = compilePolicyToFabric({ rls: 'public' }, { ...FAB_TARGET, bindColumn: 'area' }, BIND)
+    const setup = enf.setupSQL.join('\n')
+    expect(setup).toContain('SELECT 1 AS vergis_allowed;') // sin WHERE → allow-all
+    expect(setup).not.toMatch(/SELECT 1 AS vergis_allowed\s*\n\s*WHERE/)
+    expect(setup).toContain('WITH (STATE = ON)')
+    expect(enf.injections).toEqual([])
   })
   it('schema default dbo; override de schema/nombres respetado', () => {
     const enf = compileFabric(parseAudience(QW04_AUDIENCE), {

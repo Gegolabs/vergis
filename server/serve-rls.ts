@@ -212,7 +212,10 @@ if (ENGINE === 'clickhouse') {
     const needed = new Set<string>()
     for (const r of discover()) for (const t of r.tables) {
       const pol = store.get(t)
-      if (pol && !isPublic(pol)) needed.add(t) // schema.table que DEBE estar protegida
+      // INVARIANTE: toda tabla SERVIDA (gobernada O pública) debe tener artefacto nativo. Una pública
+      // se manifiesta con su SECURITY POLICY allow-all (doc 018) → "sin artefacto" = sin gobierno (fuga),
+      // no "público". Las que no tienen entrada en el store ya no se sirven (canServe → deny).
+      if (pol) needed.add(t)
     }
     const sysSql =
       `SELECT OBJECT_SCHEMA_NAME(pr.target_object_id) AS sch, OBJECT_NAME(pr.target_object_id) AS tbl ` +
@@ -225,8 +228,9 @@ if (ENGINE === 'clickhouse') {
     const missing = [...needed].filter((t) => !protectedTables.has(t))
     if (missing.length) {
       throw new Error(
-        `Fail-closed (engine=fabric): estas tablas gobernadas NO tienen RLS nativa en la fuente: ${missing.join(', ')}. ` +
-          `Aplica la SECURITY POLICY (deploy/fabric-pushdown/) antes de servir.`,
+        `Fail-closed (engine=fabric): estas tablas servidas NO tienen artefacto SECURITY POLICY en la fuente ` +
+          `(gobernada → predicado-filtro; pública → allow-all): ${missing.join(', ')}. ` +
+          `Aplica la SECURITY POLICY (deploy/fabric-pushdown/, regenerada desde la política) antes de servir.`,
       )
     }
     console.log(`[vergis-rls] push-down OK: ${[...needed].length} tabla(s) gobernada(s) con RLS nativa verificada.`)

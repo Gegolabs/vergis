@@ -53,7 +53,7 @@ export interface ClickHouseEnforcement {
   /** Qué setting se inyecta desde qué claim (request-time, por consumidor). */
   injections: { setting: string; claim: string }[]
   /** El IR compilado (para emulación/aserciones). */
-  policy: Policy
+  policy: PolicyDecl
 }
 
 function ident(kind: string, value: string): string {
@@ -95,14 +95,21 @@ function predicateExpr(pred: Predicate): string {
   return `(${get} != '' AND has(splitByChar(',', ${get}), ${col}))`
 }
 
-/** Compila el IR a enforcement de ClickHouse. `public` no genera policy. */
-export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget): ClickHouseEnforcement | null {
-  if (isPublic(policy)) return null // PI público: sin RLS de fila (solo gate)
-
+/** Compila el IR a enforcement de ClickHouse. `public` (grant: all) → ROW POLICY ALLOW-ALL
+ *  (`USING 1`): la policy EXISTE y permite toda fila — espejo del allow-all de Fabric. */
+export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget): ClickHouseEnforcement {
   const db = ident('database', target.database)
   const table = ident('table', target.table)
   const role = ident('role', target.role)
   const policyName = ident('policyName', target.policyName ?? `pol_${table}`)
+  const xml = `<clickhouse><custom_settings_prefixes>${SETTINGS_PREFIX.replace(/_$/, '')}_</custom_settings_prefixes></clickhouse>`
+  const rowPolicy = (using: string) =>
+    `CREATE ROW POLICY ${policyName} ON ${db}.${table}\n    FOR SELECT\n    USING ${using}\n    AS permissive\n    TO ${role};`
+
+  // PÚBLICO (grant: all) → ROW POLICY allow-all (`USING 1`); la policy existe y permite toda fila.
+  if (isPublic(policy)) {
+    return { prefix: SETTINGS_PREFIX, customSettingsPrefixesXml: xml, rowPolicySQL: rowPolicy('1'), injections: [], policy }
+  }
 
   const combiner = policy.combine === 'or' ? ' OR ' : ' AND '
   const using =
@@ -110,24 +117,11 @@ export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget):
       ? '0' // deny-all explícito (sin predicados)
       : policy.predicates.map(predicateExpr).join(combiner)
 
-  const rowPolicySQL =
-    `CREATE ROW POLICY ${policyName} ON ${db}.${table}\n` +
-    `    FOR SELECT\n` +
-    `    USING ${using}\n` +
-    `    AS permissive\n` +
-    `    TO ${role};`
-
   // Una inyección por claim distinto (varios predicados que usan el mismo claim comparten setting).
   const claims = [...new Set(policy.predicates.map((p) => p.claim))]
   const injections = claims.map((claim) => ({ setting: settingForClaim(claim), claim }))
 
-  return {
-    prefix: SETTINGS_PREFIX,
-    customSettingsPrefixesXml: `<clickhouse><custom_settings_prefixes>${SETTINGS_PREFIX.replace(/_$/, '')}_</custom_settings_prefixes></clickhouse>`,
-    rowPolicySQL,
-    injections,
-    policy,
-  }
+  return { prefix: SETTINGS_PREFIX, customSettingsPrefixesXml: xml, rowPolicySQL: rowPolicy(using), injections, policy }
 }
 
 /**
@@ -184,6 +178,7 @@ export function emulate(
   refs: ReferenceData = {},
 ): boolean {
   const { policy } = enforcement
+  if (isPublic(policy)) return true // allow-all: toda fila pasa
   if (policy.predicates.length === 0) return false
   const evalPred = (pred: Predicate): boolean => {
     const setting = settingForClaim(pred.claim)
