@@ -159,8 +159,10 @@ describe('Puerto de autorización · el provider trivial (Custos v0) implementa 
     const visibles = STORE.filter((r) => emulate(viaProvider, settings, r as unknown as Record<string, unknown>))
     expect(areas(visibles)).toEqual(['Producción'])
   })
-  it('PI público (sin rls) → compile devuelve null (sin RLS de fila)', () => {
-    expect(trivialClickHouseProvider.compile({}, TARGET)).toBeNull()
+  it('PI público (grant: all) → compile devuelve artefacto allow-all (USING 1), no null', () => {
+    const enf = trivialClickHouseProvider.compile({}, TARGET)
+    expect(enf).not.toBeNull()
+    expect(enf!.rowPolicySQL).toContain('USING 1')
   })
 })
 

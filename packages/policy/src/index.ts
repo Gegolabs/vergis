@@ -48,7 +48,7 @@ export {
 /**
  * Compila la declaración `audience` de un spec a enforcement de ClickHouse.
  * Orquesta el pipeline del doc 10 §2: front-end → binder → back-end.
- * Devuelve `null` si el PI es público (sin RLS de fila).
+ * Público (`grant: all`) → ROW POLICY ALLOW-ALL (`USING 1`), no null.
  *
  * Corre en **specialize-time** (una vez, al nacer el Botlet) — no por request (doc 10 §4).
  */
@@ -56,7 +56,7 @@ export function compilePolicyToClickHouse(
   audience: AudienceDecl | undefined,
   target: ClickHouseTarget,
   bindCtx: BindContext,
-): ClickHouseEnforcement | null {
+): ClickHouseEnforcement {
   const policy: PolicyDecl = parseAudience(audience) // front-end
   bindPolicy(policy, bindCtx) // binder (valida columna/claim; lanza si no resuelve)
   return compileClickHouse(policy, target) // back-end
@@ -67,13 +67,13 @@ export function compilePolicyToClickHouse(
  * Mismo pipeline (front-end → binder → back-end) que ClickHouse; cambia solo el back-end — la portabilidad
  * del compilador (doc 9 §7): misma política declarada, distinto enforcement nativo.
  *
- * Corre en **specialize-time** (una vez). Devuelve `null` si el PI es público (sin RLS de fila).
+ * Corre en **specialize-time** (una vez). Público (`grant: all`) → artefacto ALLOW-ALL (no null).
  */
 export function compilePolicyToFabric(
   audience: AudienceDecl | undefined,
   target: FabricTarget,
   bindCtx: BindContext,
-): FabricEnforcement | null {
+): FabricEnforcement {
   const policy: PolicyDecl = parseAudience(audience) // front-end (compartido)
   bindPolicy(policy, bindCtx) // binder (compartido)
   return compileFabric(policy, target) // back-end Fabric
