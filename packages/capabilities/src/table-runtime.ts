@@ -432,9 +432,19 @@ function vtBootstrap(root){
     render();
   });
 
+  // ---- Selección de registro: UN clic en una fila hoja la marca como seleccionada (feedback visual).
+  //      Selección única (limpia las demás). Ignora celda de anotación (editar) y encabezados de grupo. ----
+  tbody.addEventListener('click', function(e){
+    if(e.target.closest('.vt-ann-cell')) return;
+    var tr=e.target.closest('tbody > tr'); if(!tr) return;
+    if(tr.classList.contains('vt-group-head') || tr.classList.contains('vt-empty')) return;
+    Array.prototype.forEach.call(tbody.querySelectorAll('tr.vt-selected'), function(x){ x.classList.remove('vt-selected'); });
+    tr.classList.add('vt-selected');
+  });
+
   // ---- Drill-through: DOBLE clic en una fila hoja → navega a la vista destino con el contexto del
   //      registro. Doble clic (no simple) para no disparar la navegación con un clic casual; deja el
-  //      clic simple libre (seleccionar, etc.). Ignora la celda de anotación y los encabezados de grupo. ----
+  //      clic simple libre (seleccionar, arriba). Ignora la celda de anotación y los encabezados de grupo. ----
   if(drill) tbody.addEventListener('dblclick', function(e){
     if(e.target.closest('.vt-ann-cell')) return;
     if(e.target.closest('tr.vt-group-head')) return;
