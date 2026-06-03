@@ -26,7 +26,10 @@ describe('Policy store · la política vive atada al dato', () => {
     const m = parsePolicyStore({ policies: [{ dataset: 'vergis.areas', grant: 'all' }] })
     const policy = m.get('vergis.areas')!
     expect(isPublic(policy)).toBe(true)
-    expect(compileClickHouse(policy, TARGET)).toBeNull() // sin row policy → el consumidor (con SELECT) ve todo
+    // grant: all es una POLÍTICA → se manifiesta como artefacto ALLOW-ALL (USING 1), no ausencia.
+    const enf = compileClickHouse(policy, TARGET)
+    expect(enf.rowPolicySQL).toContain('USING 1')
+    expect(enf.injections).toEqual([])
   })
 
   it('`public` NO existe como política — se rechaza (abrir es grant: all)', () => {

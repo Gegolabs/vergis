@@ -51,6 +51,9 @@ export interface FabricTarget {
   functionName?: string
   /** Nombre de la security policy; default derivado de la tabla. */
   policyName?: string
+  /** Columna a la que bindear el predicado allow-all de una policy PÚBLICA (la función la ignora).
+   *  Requerida solo para `grant: all` (que no declara dimensión); para gobernadas se ignora. */
+  bindColumn?: string
 }
 
 export interface FabricEnforcement {
@@ -63,7 +66,7 @@ export interface FabricEnforcement {
   /** Qué setting se inyecta desde qué claim (request-time, por consumidor). */
   injections: { setting: string; claim: string }[]
   /** El IR compilado (para emulación/aserciones). */
-  policy: Policy
+  policy: PolicyDecl
 }
 
 function ident(kind: string, value: string): string {
@@ -137,15 +140,48 @@ function predicateClause(pred: Predicate, schema: string): string {
  * Compila el IR a enforcement de Fabric / Azure SQL (push-down). `public` no genera policy
  * (solo gatea el reporte; sin RLS de fila).
  */
-export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricEnforcement | null {
-  if (isPublic(policy)) return null
-
+export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricEnforcement {
   const schema = ident('schema', target.schema ?? 'dbo')
   const table = ident('table', target.table)
   const fnName = ident('functionName', target.functionName ?? `fn_pol_${table}`)
   const polName = ident('policyName', target.policyName ?? `secpol_${table}`)
   const q = (name: string) => `[${schema}].[${name}]`
   const qTable = `[${schema}].[${table}]`
+  const teardownSQL = [
+    `DROP SECURITY POLICY IF EXISTS ${q(polName)};`,
+    `DROP FUNCTION IF EXISTS ${q(fnName)};`,
+  ]
+
+  // PÚBLICO (grant: all) → artefacto ALLOW-ALL: la policy EXISTE y permite TODA fila (función
+  // SIN `WHERE`). Así "público" se manifiesta en el motor y "sin policy" = sin gobierno (no público).
+  // Necesita una columna para el bindeo sintáctico del FILTER PREDICATE — la función la ignora.
+  if (isPublic(policy)) {
+    if (!target.bindColumn) {
+      throw new VergisError({
+        error: 'policy/compile',
+        code: 'public-no-bindcolumn',
+        path: 'bindColumn',
+        message: `La policy pública de '${table}' necesita 'bindColumn' (columna existente) para el FILTER PREDICATE allow-all.`,
+        remediation: `Pasar target.bindColumn (cualquier columna de la tabla; la función la ignora).`,
+      })
+    }
+    const bindCol = ident('bindColumn', target.bindColumn)
+    const colType = columnType(target.columnTypes?.[bindCol] ?? DEFAULT_COLUMN_TYPE)
+    const createFunctionPub =
+      `CREATE FUNCTION ${q(fnName)}(@${bindCol} ${colType})\n` +
+      `    RETURNS TABLE\n    WITH SCHEMABINDING\n    AS RETURN\n` +
+      `        SELECT 1 AS vergis_allowed;` // SIN WHERE → allow-all (apertura explícita gobernada)
+    const createPolicyPub =
+      `CREATE SECURITY POLICY ${q(polName)}\n` +
+      `    ADD FILTER PREDICATE ${q(fnName)}(${bindCol}) ON ${qTable}\n    WITH (STATE = ON);`
+    return {
+      prefix: SETTINGS_PREFIX,
+      setupSQL: [...teardownSQL, createFunctionPub, createPolicyPub],
+      teardownSQL,
+      injections: [], // pública: sin claim que inyectar
+      policy,
+    }
+  }
 
   // Columnas DISTINTAS referenciadas → parámetros del predicado (en orden estable de aparición).
   const columns = [...new Set(policy.predicates.map((p) => ident('column', p.column)))]
@@ -170,11 +206,6 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
     `CREATE SECURITY POLICY ${q(polName)}\n` +
     `    ADD FILTER PREDICATE ${q(fnName)}(${predicateArgs}) ON ${qTable}\n` +
     `    WITH (STATE = ON);`
-
-  const teardownSQL = [
-    `DROP SECURITY POLICY IF EXISTS ${q(polName)};`,
-    `DROP FUNCTION IF EXISTS ${q(fnName)};`,
-  ]
 
   return {
     prefix: SETTINGS_PREFIX,
@@ -242,6 +273,7 @@ export function emulateFabric(
   refs: ReferenceData = {},
 ): boolean {
   const { policy } = enforcement
+  if (isPublic(policy)) return true // allow-all: toda fila pasa
   if (policy.predicates.length === 0) return false
   const evalPred = (pred: Predicate): boolean => {
     const s = settings[settingForClaim(pred.claim)] ?? '' // SESSION_CONTEXT ausente → NULL → CAST '' por el guard
