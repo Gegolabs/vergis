@@ -70,6 +70,8 @@ export interface ResolvedNode {
   interactive?: boolean
   /** Meta de anotaciones inyectada por Mira (ver applyAnnotations). */
   annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
+  /** Drill-through: al clickear una fila hoja, navegar a la vista `to` pasando el campo `by`. */
+  drill?: { to: string; by: string }
 }
 
 /** Resuelve data.<dataset>.<field> a un valor (single_row → fila[0]; rows → columna o filas). */
@@ -203,12 +205,20 @@ export function composePiece(
       limit?: number
       title?: string
       interactive?: boolean
+      drillthrough?: { to: string; by: string }
     }
     const dataset = stripData(String(t.data ?? '')).split('.')[0]
     let rows = [...(results[dataset]?.rows ?? [])]
     rows = sortRows(rows, t.sort)
     if (typeof t.limit === 'number') rows = rows.slice(0, t.limit)
-    return { type: 'table', rows, columnsSpec: t.columns ?? [], title: t.title, interactive: t.interactive }
+    return {
+      type: 'table',
+      rows,
+      columnsSpec: t.columns ?? [],
+      title: t.title,
+      interactive: t.interactive,
+      drill: t.drillthrough && t.drillthrough.to && t.drillthrough.by ? { to: t.drillthrough.to, by: t.drillthrough.by } : undefined,
+    }
   }
   const key = Object.keys(node)[0] ?? 'unknown'
   return { type: key }

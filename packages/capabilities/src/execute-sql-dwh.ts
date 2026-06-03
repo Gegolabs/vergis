@@ -19,6 +19,12 @@ export interface SqlConnectionProfile {
 interface SqlParams {
   database_ref: string
   sql: string
+  /**
+   * Parámetros BIND para la query (`@nombre` en el SQL). Los usa el drill-through multi-vista:
+   * el `:ctx.<campo>` del spec se reescribe a `@ctx_<campo>` y su valor llega acá — BINDEADO,
+   * nunca concatenado → injection-safe. Filtro ADICIONAL dentro de las filas que la RLS autoriza.
+   */
+  params?: Record<string, string | number>
 }
 
 /** Opciones de enforcing (motor C, push-down). */
@@ -91,6 +97,14 @@ export function createExecuteSqlDwh(
       if (!p.sql) throw new Error(`${name}: falta params.sql`)
       const pool = await getPool(p.database_ref)
       const request = pool.request()
+
+      // Parámetros BIND de la query (drill-through: `@ctx_<campo>`). Bindeados, nunca concatenados.
+      if (p.params) {
+        for (const [k, v] of Object.entries(p.params)) {
+          if (typeof v === 'number') request.input(k, sql.BigInt, v)
+          else request.input(k, sql.NVarChar, String(v))
+        }
+      }
 
       // Enforcing (push-down): prepende la inyección de claims request-scoped. Reinyectar el set
       // COMPLETO en cada request neutraliza la persistencia de SESSION_CONTEXT en el pool.
