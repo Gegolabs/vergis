@@ -64,7 +64,10 @@ export class MiraBotlet implements Botlet {
     if (isMulti) {
       const pages = spec.pages!
       const active = pages.find((p) => p.id === pageParam) ?? pages[0]
-      pagesNav = { items: pages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
+      // Las páginas-destino de drill (declaran `context`) NO van en la nav por defecto: solo tienen
+      // sentido alcanzadas por drill. Aparecen "bajo demanda" — únicamente cuando son la vista activa.
+      const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
+      pagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
       const missing = (active.context ?? []).filter((c) => !ctxValues[c])
       if (missing.length > 0) {
         // Vista de detalle sin contexto (acceso directo, no por drill) → no se consulta nada
