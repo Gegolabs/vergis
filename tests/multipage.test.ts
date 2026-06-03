@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { runSpec } from '@vergis/cli'
 import { parseSpec, validateSpec } from '@vergis/mira'
+import { TABLE_RUNTIME_SOURCE } from '@vergis/capabilities'
 import { VergisError, type Capability } from '@vergis/botler'
 
 /**
@@ -126,8 +127,9 @@ describe('multi-vista · render por vista + drill-through', () => {
     // Barra de navegación de vistas, con Clientes activa.
     expect(html).toContain('class="vpages"')
     expect(html).toContain('<a href="?page=clientes" class="active"')
-    expect(html).toContain('<a href="?page=detalle"')
-    // Drill embebido en el payload de la tabla → cada fila hoja navega a detalle por socio.
+    // El destino de drill (detalle, declara context) NO está en la nav por defecto — aparece bajo demanda.
+    expect(html).not.toContain('<a href="?page=detalle"')
+    // Drill embebido en el payload de la tabla → cada fila hoja navega a detalle por socio (doble clic).
     expect(html).toContain('"drill":{"to":"detalle","by":"socio"}')
     // Solo se consultó el dataset de la vista activa (clientes), no el de detalle.
     expect(calls.length).toBe(1)
@@ -148,6 +150,11 @@ describe('multi-vista · render por vista + drill-through', () => {
     expect(html).toContain('D1')
     expect(html).toContain('D2')
     expect(html).not.toContain('D3')
+  })
+
+  it('el drill se dispara por DOBLE clic (no clic simple)', () => {
+    // El handler de drill del runtime escucha 'dblclick'; no debe quedar un 'click' de drill.
+    expect(TABLE_RUNTIME_SOURCE).toContain("addEventListener('dblclick'")
   })
 
   it('page=detalle SIN ctx (acceso directo, no por drill): guía + cero consultas', async () => {

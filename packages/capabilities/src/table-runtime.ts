@@ -253,7 +253,7 @@ function vtCell(col, r, ann){
 function vtDrillHref(drill, r){ return '?page='+encodeURIComponent(drill.to)+'&ctx.'+encodeURIComponent(drill.by)+'='+encodeURIComponent(String(r[drill.by]==null?'':r[drill.by])); }
 function vtBodyRows(cols, rows, ann, drill){
   return rows.map(function(r){
-    var open = drill ? '<tr class="vt-drill-row" data-href="'+vtEsc(vtDrillHref(drill,r))+'">' : '<tr>';
+    var open = drill ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drill,r))+'">' : '<tr>';
     return open+cols.map(function(c){return vtCell(c,r,ann);}).join('')+'</tr>';
   }).join('');
 }
@@ -432,9 +432,10 @@ function vtBootstrap(root){
     render();
   });
 
-  // ---- Drill-through: clic en una fila hoja → navega a la vista destino con el contexto del registro.
-  //      Ignora la celda de anotación (editar) y los encabezados de grupo (colapsar). ----
-  if(drill) tbody.addEventListener('click', function(e){
+  // ---- Drill-through: DOBLE clic en una fila hoja → navega a la vista destino con el contexto del
+  //      registro. Doble clic (no simple) para no disparar la navegación con un clic casual; deja el
+  //      clic simple libre (seleccionar, etc.). Ignora la celda de anotación y los encabezados de grupo. ----
+  if(drill) tbody.addEventListener('dblclick', function(e){
     if(e.target.closest('.vt-ann-cell')) return;
     if(e.target.closest('tr.vt-group-head')) return;
     var tr=e.target.closest('tr.vt-drill-row'); if(!tr) return;
