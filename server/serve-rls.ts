@@ -393,12 +393,27 @@ const INDEX_LOGO = (() => {
 function indexHtml(reports: Report[]): string {
   const items = reports.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`).join('')
   const logo = INDEX_LOGO ? `<img class="logo" src="${INDEX_LOGO}" alt="">` : ''
+  // Theme oscuro (default, gruvbox) / blanco — vía CSS vars + data-theme; toggle persistido por
+  // navegador (mismo patrón que el selector de paleta de los PIs, que persiste por reporte).
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${INDEX_TITLE}</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#1d2021;color:#ebdbb2;margin:0;padding:40px}
-.head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700}
-ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:#3c3836;border:1px solid #504945;border-radius:10px;color:#ebdbb2;text-decoration:none}
-li a:hover{border-color:#b8bb26}.c{font-family:ui-monospace,Menlo,monospace;color:#b8bb26;font-weight:700}.f{margin-top:24px;color:#32302f;font-size:11px}</style></head>
-<body><div class="head">${logo}<h1>${INDEX_TITLE}</h1></div><ul>${items}</ul><div class="f">Powered by Vergis</div></body></html>`
+<title>${INDEX_TITLE}</title><style>
+:root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374}
+html[data-theme="blanco"]{--bg:#ffffff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8}
+body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:40px;transition:background .15s,color .15s}
+.head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700;flex:1}
+.tsw{display:flex;gap:2px;border:1px solid var(--border);border-radius:8px;padding:2px;flex:none}
+.tsw button{font:inherit;font-size:12px;padding:5px 12px;border:none;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.tsw button.on{background:var(--bg);color:var(--accent);font-weight:600}
+ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
+li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:24px;color:var(--muted);font-size:11px;opacity:.7}</style></head>
+<body><div class="head">${logo}<h1>${INDEX_TITLE}</h1>
+<div class="tsw" role="group" aria-label="Tema"><button type="button" data-theme="oscuro" onclick="vSetTheme('oscuro')">Oscuro</button><button type="button" data-theme="blanco" onclick="vSetTheme('blanco')">Blanco</button></div>
+</div><ul>${items}</ul><div class="f">Powered by Vergis</div>
+<script>
+function vMark(t){Array.prototype.forEach.call(document.querySelectorAll('.tsw button'),function(b){b.classList.toggle('on',b.getAttribute('data-theme')===t)})}
+function vSetTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}vMark(t)}
+(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t);vMark(t)})();
+</script></body></html>`
 }
 
 const server = createServer((req, res) => {
