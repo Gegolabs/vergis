@@ -279,24 +279,22 @@ function vtBootstrap(root){
   var trayWrap = document.querySelector('.tray-sections');
   if(trayWrap){
     var sec=document.createElement('div'); sec.className='faceta vt-tray-section';
+    // Cada control en su grupo lógico (label pegado a su campo; grupos separados entre sí).
     sec.innerHTML =
-      '<div class="faceta-title">Buscar</div>' +
-      '<input class="vt-global-search" type="search" placeholder="Buscar en toda la tabla…" aria-label="Buscar en toda la tabla">' +
+      '<div class="vt-ctl-grp"><div class="faceta-title">Buscar</div>' +
+      '<input class="vt-global-search" type="search" placeholder="Buscar en toda la tabla…" aria-label="Buscar en toda la tabla"></div>' +
       (groupFields.length ? (
-        '<div class="faceta-title" style="margin-top:14px">Agrupar por</div>' +
+        '<div class="vt-ctl-grp"><div class="faceta-title">Agrupar por</div>' +
         '<div class="vt-group-levels"></div>' +
         '<select class="vt-group-add"></select>' +
-        '<div class="vt-group-actions"><button type="button" class="vt-expand-all">Expandir todo</button><button type="button" class="vt-collapse-all">Colapsar todo</button></div>'
+        '<div class="vt-group-actions"><button type="button" class="vt-expand-all">Expandir todo</button><button type="button" class="vt-collapse-all">Colapsar todo</button></div></div>'
       ) : '') +
-      (ann ? '<label class="vt-ann-toggle"><input type="checkbox" class="vt-ann-show"'+(annShown?' checked':'')+'> Mostrar anotaciones</label>' : '') +
-      '<button type="button" class="vt-clear-all">Limpiar todo</button>' +
-      '<span class="vt-count" role="status" aria-live="polite"></span>';
+      '<div class="vt-ctl-grp"><button type="button" class="vt-clear-all">Limpiar todo</button>' +
+      '<span class="vt-count" role="status" aria-live="polite"></span></div>';
     trayWrap.appendChild(sec);
     gs=sec.querySelector('.vt-global-search'); countEl=sec.querySelector('.vt-count');
     levelsEl=sec.querySelector('.vt-group-levels'); addSel=sec.querySelector('.vt-group-add'); groupActions=sec.querySelector('.vt-group-actions');
     gs.addEventListener('input', function(){ state.globalSearch=gs.value; render(); });
-    var annToggle=sec.querySelector('.vt-ann-show');
-    if(annToggle) annToggle.addEventListener('change', function(){ annShown=annToggle.checked; try{ localStorage.setItem('vergis:anncol:'+location.pathname, annShown?'1':'0'); }catch(e){} render(); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
     if(addSel){
       addSel.addEventListener('change', function(){ if(!addSel.value) return; state.groupLevels.push(addSel.value); state.collapsed={}; renderGroupUI(); render(); });
@@ -304,6 +302,34 @@ function vtBootstrap(root){
       sec.querySelector('.vt-expand-all').addEventListener('click', function(){ state.collapsed={}; render(); });
       sec.querySelector('.vt-collapse-all').addEventListener('click', function(){ collapseAll(); render(); });
       renderGroupUI();
+    }
+  }
+  // ---- Anotaciones: el toggle "Mostrar" vive en CONFIG (es preferencia de vista, no control) ----
+  //      + AVISO si el reporte tiene anotaciones y la columna está oculta.
+  var annToggleEl=null, annHintEl=null;
+  var hasAnn = !!(ann && rows.some(function(r){ return r[ann.valueField]; }));
+  function setAnnShown(v){
+    annShown=v;
+    try{ localStorage.setItem('vergis:anncol:'+location.pathname, v?'1':'0'); }catch(e){}
+    if(annToggleEl) annToggleEl.checked=v;
+    if(annHintEl) annHintEl.style.display=(hasAnn && !v)?'':'none';
+    render();
+  }
+  if(ann){
+    var cfg=document.querySelector('.tray-panel-config');
+    if(cfg){
+      var grp=document.createElement('div'); grp.className='faceta';
+      grp.innerHTML='<div class="faceta-title">Anotaciones</div><label class="vt-ann-toggle"><input type="checkbox" class="vt-ann-show"'+(annShown?' checked':'')+'> Mostrar la columna</label>';
+      cfg.insertBefore(grp, cfg.firstChild);
+      annToggleEl=grp.querySelector('.vt-ann-show');
+      annToggleEl.addEventListener('change', function(){ setAnnShown(annToggleEl.checked); });
+    }
+    if(hasAnn){
+      annHintEl=document.createElement('div'); annHintEl.className='vt-ann-hint';
+      annHintEl.innerHTML='<span>📝 Este reporte tiene anotaciones.</span><button type="button" class="vt-ann-hint-show">Mostrar</button>';
+      var sc=root.querySelector('.vt-scroll'); if(sc) root.insertBefore(annHintEl, sc);
+      annHintEl.querySelector('.vt-ann-hint-show').addEventListener('click', function(){ setAnnShown(true); });
+      annHintEl.style.display = annShown ? 'none' : '';
     }
   }
   function renderGroupUI(){

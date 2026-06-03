@@ -149,7 +149,10 @@ const TABLE_INTERACTIVE_CSS = `
 .vtable .vt-gcaret{display:inline-block;width:.9em;color:var(--fg-dim,#94a3b8)}
 .vtable .vt-gcount{color:var(--fg-dim,#64748b);font-weight:600}
 .vtable tr.vt-empty td{text-align:center;color:var(--fg-dim,#64748b);padding:18px;font-style:italic}
+.tray .vt-tray-section .vt-ctl-grp{margin-bottom:18px}
+.tray .vt-tray-section .vt-ctl-grp:last-child{margin-bottom:0}
 .tray .vt-tray-section .vt-global-search,.tray .vt-tray-section .vt-group-add{width:100%;box-sizing:border-box;padding:7px 9px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
+.tray .vt-tray-section .vt-group-add{margin-top:6px}
 .tray .vt-group-levels{display:flex;flex-direction:column;gap:4px;margin:6px 0}
 .tray .vt-group-levels:empty{display:none}
 .tray .vt-gl-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;padding:4px 9px;background:var(--card,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;color:var(--fg,#1f2937)}
@@ -159,15 +162,18 @@ const TABLE_INTERACTIVE_CSS = `
 .tray .vt-group-actions{display:flex;gap:8px;margin-top:8px}
 .tray .vt-group-actions button{flex:1;font-size:11px;padding:5px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:6px;cursor:pointer}
 .tray .vt-group-actions button:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
-.tray .vt-tray-section .vt-clear-all{width:100%;margin-top:12px;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;cursor:pointer}
+.tray .vt-tray-section .vt-clear-all{width:100%;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;cursor:pointer}
 .tray .vt-tray-section .vt-clear-all:hover{color:var(--red,#dc2626);border-color:var(--red,#dc2626)}
-.tray .vt-tray-section .vt-count{display:block;margin-top:12px;font-size:12px;color:var(--fg-dim,#64748b)}
-.tray .vt-tray-section .vt-ann-toggle{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--fg,#1f2937);margin-top:12px;cursor:pointer}
+.tray .vt-tray-section .vt-count{display:block;margin-top:8px;font-size:12px;color:var(--fg-dim,#64748b)}
+.tray .vt-ann-toggle{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--fg,#1f2937);cursor:pointer}
+.vtable .vt-ann-hint{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;margin-bottom:10px;background:var(--card,#fffbeb);border:1px solid var(--yellow,#d97706);border-radius:8px;font-size:12px;color:var(--fg,#1f2937)}
+.vtable .vt-ann-hint button{flex:none;background:none;border:1px solid var(--yellow,#d97706);color:var(--yellow,#d97706);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer}
+.vtable .vt-ann-hint button:hover{background:var(--yellow,#d97706);color:var(--bg,#fff)}
 .vtable td.vt-ann-cell{background:var(--panel,#f8fafc);min-width:120px;cursor:text;outline:none}
 .vtable td.vt-ann-cell:focus{box-shadow:inset 0 0 0 2px var(--green,#2563eb)}
 .vtable td.vt-ann-cell:empty::before{content:'+ nota';color:var(--fg-dim,#94a3b8);opacity:.55}
 .vtable td.vt-ann-cell.vt-ann-err{box-shadow:inset 0 0 0 2px var(--red,#dc2626)}
-@media print{.vtable .vt-chips,.vtable .vt-filter-btn{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
+@media print{.vtable .vt-chips,.vtable .vt-filter-btn,.vtable .vt-ann-hint{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
 `
 
 /** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
