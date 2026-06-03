@@ -99,6 +99,11 @@ export class MiraBotlet implements Botlet {
     const composed = composePiece(spec.piece, results, spec)
     const resolved: ResolvedNode = banner ? { layout: 'rows', elements: [banner, composed] } : composed
 
+    // 5·bis · Anotaciones (enriquecimiento solo de la capa de viz): si el llamador pasa el
+    // contexto, se fusiona la columna de anotación en la primera tabla por su clave de registro.
+    const annCtx = ctx.params?.['annotations'] as AnnotationContext | undefined
+    if (annCtx) await applyAnnotations(resolved, annCtx)
+
     // 5a · Interacción declarada acotada (doc 2 §10): si hay filtro, se materializan
     // los datasets para que la Faceta filtre client-side, sin nuevas queries.
     let interactive: { datasets: Record<string, Record<string, unknown>[]>; filters: NonNullable<NonNullable<MiraSpec['interactions']>['filters']> } | undefined
@@ -172,4 +177,57 @@ export class MiraBotlet implements Botlet {
 export function createMiraBotlet(specText: string, opts: MiraOptions): MiraBotlet {
   const spec = parseSpec(specText) as MiraSpec
   return new MiraBotlet(spec, opts)
+}
+
+/**
+ * Contexto de anotaciones que el llamador (server) inyecta vía `params.annotations`. Mira solo
+ * fusiona la columna en la pieza; el origen del dato y la firma del token los provee `resolve`.
+ */
+export interface AnnotationContext {
+  /** Identificador del PI (clave de partición de las anotaciones). */
+  piId: string
+  /** Etiqueta de la columna. Default "Anotaciones". */
+  label?: string
+  /** Endpoint POST para escribir una anotación. */
+  endpoint: string
+  /** Campo-clave del registro. Default: la primera columna de la tabla. */
+  keyField?: string
+  /** Dadas las claves visibles, devuelve {clave → {valor compartido, token de escritura firmado}}. */
+  resolve(keys: string[]): Promise<Record<string, { value: string; token: string }>>
+}
+
+const ANN_VALUE_FIELD = '__ann'
+const ANN_TOKEN_FIELD = '__anntok'
+
+/** Encuentra la primera tabla en el árbol de pieza (DFS). */
+function findFirstTable(node: ResolvedNode): ResolvedNode | undefined {
+  if (node.type === 'table') return node
+  for (const c of node.elements ?? []) {
+    const f = findFirstTable(c)
+    if (f) return f
+  }
+  return undefined
+}
+
+/** Fusiona la columna de anotación en la primera tabla, por clave de registro. */
+async function applyAnnotations(piece: ResolvedNode, ann: AnnotationContext): Promise<void> {
+  const table = findFirstTable(piece)
+  if (!table || !table.columnsSpec || table.columnsSpec.length === 0) return
+  const rows = table.rows ?? []
+  const keyField = ann.keyField ?? table.columnsSpec[0].field
+  const keys = [...new Set(rows.map((r) => String(r[keyField] ?? '')))]
+  const map = await ann.resolve(keys)
+  for (const r of rows) {
+    const k = String(r[keyField] ?? '')
+    r[ANN_VALUE_FIELD] = map[k]?.value ?? ''
+    r[ANN_TOKEN_FIELD] = map[k]?.token ?? ''
+  }
+  table.columnsSpec.push({ field: ANN_VALUE_FIELD, label: ann.label ?? 'Anotaciones', annotation: true })
+  table.annotation = {
+    valueField: ANN_VALUE_FIELD,
+    tokenField: ANN_TOKEN_FIELD,
+    keyField,
+    endpoint: ann.endpoint,
+    label: ann.label ?? 'Anotaciones',
+  }
 }

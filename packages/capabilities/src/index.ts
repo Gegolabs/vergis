@@ -18,6 +18,8 @@ export {
   vtGroupTree,
 } from './table-runtime'
 export type { VtState, VtTreeNode } from './table-runtime'
+export { openAnnotationStore, SqliteAnnotationStore } from './annotation-store'
+export type { AnnotationStore, AnnotationRecord } from './annotation-store'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'

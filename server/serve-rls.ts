@@ -24,14 +24,15 @@
  *  - [clickhouse] VERGIS_DATASETS · VERGIS_CH_URL · VERGIS_CH_ADMIN_USER/_PASS · VERGIS_CH_CONSUMER_USER · VERGIS_CH_TARGET_ROLE · VERGIS_REFRESH_MS
  *  - PORT
  */
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
+import { createHmac, randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { identityFromHeaders, DEFAULT_GATE_MAPPING, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
-import { parseSpec } from '@vergis/mira'
+import { parseSpec, type AnnotationContext } from '@vergis/mira'
 import {
   bootstrapClickHouse,
   createIngestClickHouse,
@@ -39,6 +40,8 @@ import {
   createExecuteSqlDwh,
   renderHtmlPiece,
   publicarArtefacto,
+  openAnnotationStore,
+  type AnnotationStore,
   type ChStoreSchema,
   type ChColumnType,
   type SqlConnectionProfile,
@@ -273,18 +276,83 @@ function identityFor(headers: GateHeaders) {
   return { ...identity, claims }
 }
 
+// ANOTACIONES — enriquecimiento de la capa de viz. Store embebido (SQLite) reemplazable por externo.
+// Lectura: solo se fusionan anotaciones sobre las filas RLS-filtradas que el usuario ya ve.
+// Escritura: gateada por token HMAC firmado por-render — el token prueba que el server renderizó
+// ESA clave para ESA identidad (= era visible). Forjar una clave no-visible no produce token válido.
+let annStore: AnnotationStore | null = null
+const ANN_SECRET = process.env['VERGIS_ANNOTATION_SECRET'] ?? randomBytes(32).toString('hex')
+function annSign(piId: string, email: string, key: string): string {
+  return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
+}
+
 async function renderReport(report: Report, headers: GateHeaders): Promise<string> {
+  const identity = identityFor(headers)
+  const email = (identity.user ?? '').toLowerCase()
+  // El contexto de anotaciones se pasa solo si el store está listo; Mira lo aplica a la 1ª tabla.
+  const annotations: AnnotationContext | undefined = annStore
+    ? {
+        piId: report.slug,
+        label: 'Anotaciones',
+        endpoint: `/${report.slug}/annotations`,
+        resolve: async (keys: string[]) => {
+          const m = await annStore!.get(report.slug, keys)
+          const out: Record<string, { value: string; token: string }> = {}
+          for (const k of keys) out[k] = { value: m.get(k)?.value ?? '', token: annSign(report.slug, email, k) }
+          return out
+        },
+      }
+    : undefined
   const out = await runSpec({
     specPath: report.specPath,
-    identity: identityFor(headers),
+    identity,
     baseDir: process.env['VERGIS_OUT'] ?? tmpdir(),
     // HARDENING (charter §2b): catálogo de serving = solo el conector enforcing + render/publish.
     // SIN starters (no `static-data` ni vías crudas) → imposible servir dato no-gobernado.
     registerStarters: false,
     extraCapabilities: [servingCap, renderHtmlPiece, publicarArtefacto],
+    annotations,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out.html ?? ''
+}
+
+/** Lee el cuerpo JSON de un POST (límite defensivo). */
+function readJsonBody(req: IncomingMessage, limit = 64 * 1024): Promise<unknown> {
+  return new Promise((resolveBody, reject) => {
+    let data = ''
+    req.on('data', (c) => {
+      data += c
+      if (data.length > limit) reject(new Error('body demasiado grande'))
+    })
+    req.on('end', () => {
+      try {
+        resolveBody(data ? JSON.parse(data) : {})
+      } catch {
+        reject(new Error('JSON inválido'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+/** POST /<slug>/annotations — upsert de una anotación; gateado por token HMAC. */
+async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!annStore) return fail(res, 503, 'Anotaciones no disponibles')
+  const identity = identityFor(req.headers as GateHeaders)
+  const email = (identity.user ?? '').toLowerCase()
+  const body = (await readJsonBody(req)) as { key?: unknown; token?: unknown; value?: unknown }
+  const key = String(body.key ?? '')
+  const token = String(body.token ?? '')
+  const value = String(body.value ?? '')
+  if (!key || annSign(report.slug, email, key) !== token) {
+    res.writeHead(403, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: false, error: 'token inválido (registro no visible para esta identidad)' }))
+    return
+  }
+  await annStore.upsert(report.slug, key, value, email || undefined)
+  res.writeHead(200, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ ok: true }))
 }
 
 function fail(res: ServerResponse, code: number, msg: string): void {
@@ -322,8 +390,18 @@ const server = createServer((req, res) => {
     return
   }
   if (!ready) return fail(res, 503, 'Inicializando…')
-  const claims = identityFor(req.headers as GateHeaders).claims ?? {}
   const all = discover()
+  // POST /<slug>/annotations — escritura de anotación (único surface mutable; gateado por HMAC).
+  if (req.method === 'POST') {
+    const m = url.match(/^\/([^/]+)\/annotations\/?$/)
+    const report = m && all.find((r) => r.slug === m[1].toLowerCase())
+    if (!report) return fail(res, 404, 'Ruta no encontrada')
+    handleAnnotationWrite(report, req, res).catch((e) =>
+      fail(res, 500, `Error al guardar anotación: ${e instanceof Error ? e.message : String(e)}`),
+    )
+    return
+  }
+  const claims = identityFor(req.headers as GateHeaders).claims ?? {}
   if (url === '/' || url === '') {
     const visible = visibleFor(all, claims) // índice PER-CONSUMIDOR: solo PIs a los que tiene acceso
     if (visible.length === 1) {
@@ -349,6 +427,13 @@ const server = createServer((req, res) => {
 })
 
 await bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
+// Store de anotaciones (no-fatal: si falla, el feature queda inhabilitado, no rompe el serving).
+try {
+  annStore = await openAnnotationStore(process.env['VERGIS_OUT'] ?? tmpdir())
+  console.log('[vergis-rls] anotaciones: store embebido listo')
+} catch (e) {
+  console.error(`[vergis-rls] anotaciones deshabilitadas: ${e instanceof Error ? e.message : String(e)}`)
+}
 server.listen(PORT, () => {
   const r = discover()
   console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
