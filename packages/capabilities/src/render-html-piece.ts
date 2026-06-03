@@ -183,6 +183,8 @@ const TABLE_INTERACTIVE_CSS = `
 .vtable td.vt-ann-cell.vt-ann-err{box-shadow:inset 0 0 0 2px var(--red,#dc2626)}
 .vtable tr.vt-drill-row{cursor:pointer}
 .vtable tr.vt-drill-row:hover td{background:var(--card,#eef2ff)}
+.vtable tbody tr.vt-selected td{background:var(--card,#e0e7ff)}
+.vtable tbody tr.vt-selected td:first-child{box-shadow:inset 3px 0 0 var(--green,#2563eb)}
 .vtable td.vt-drill-arrow{color:var(--green,#2563eb);font-weight:700;text-align:center;width:1.6em}
 @media print{.vtable .vt-chips,.vtable .vt-filter-btn,.vtable .vt-ann-hint,.vtable td.vt-drill-arrow{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
 `

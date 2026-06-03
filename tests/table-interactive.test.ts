@@ -304,6 +304,12 @@ describe('table-runtime · runtime serializado', () => {
       expect(TABLE_RUNTIME_SOURCE).toContain('function ' + name)
     }
   })
+
+  it('selección de fila (un clic) y drill (doble clic) son handlers distintos', () => {
+    expect(TABLE_RUNTIME_SOURCE).toContain('vt-selected') // marca de fila seleccionada
+    expect(TABLE_RUNTIME_SOURCE).toContain("addEventListener('click'") // selección por clic simple
+    expect(TABLE_RUNTIME_SOURCE).toContain("addEventListener('dblclick'") // drill por doble clic
+  })
 })
 
 describe('theme-config · default por tipo de PI', () => {
