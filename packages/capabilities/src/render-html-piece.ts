@@ -679,7 +679,7 @@ function renderStaticDrillBody(
         })
         .join('')
       const href = `?page=${encodeURIComponent(drill.to)}&ctx.${encodeURIComponent(drill.by)}=${encodeURIComponent(String(r[drill.by] ?? ''))}`
-      return `<tr class="vt-drill-row" data-href="${escapeHtml(href)}" onclick="location.assign(this.getAttribute('data-href'))">${cells}</tr>`
+      return `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(href)}" ondblclick="location.assign(this.getAttribute('data-href'))">${cells}</tr>`
     })
     .join('\n')
 }
