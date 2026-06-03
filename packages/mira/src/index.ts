@@ -1,5 +1,5 @@
 export { MiraBotlet, createMiraBotlet } from './mira'
-export type { MiraOptions, MiraOutput } from './mira'
+export type { MiraOptions, MiraOutput, AnnotationContext } from './mira'
 export { parseSpec } from './dsl/parse'
 export { validateSpec, collectDataRefs } from './dsl/validate'
 export type { MiraSpec, MiraDataset } from './dsl/validate'

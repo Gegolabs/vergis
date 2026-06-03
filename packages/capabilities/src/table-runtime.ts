@@ -238,20 +238,33 @@ function vtColorBg(value, range){
   var t=(value-range.min)/(range.max-range.min); var light=Math.round(95 - t*45);
   return ' style="background:hsl(8,75%,'+light+'%)"';
 }
-function vtCell(col, r){
+function vtCell(col, r, ann){
+  // Columna de anotación: celda editable (contenteditable) con la clave + token del registro.
+  if(col.annotation && ann){
+    var v=vtEsc(r[ann.valueField]==null?'':r[ann.valueField]);
+    var key=vtEsc(r[ann.keyField]==null?'':r[ann.keyField]);
+    var tok=vtEsc(r[ann.tokenField]==null?'':r[ann.tokenField]);
+    return '<td class="align-left vt-ann-cell" contenteditable="true" data-key="'+key+'" data-token="'+tok+'" title="Anotación compartida — editable">'+v+'</td>';
+  }
   var raw=r[col.field]; var text=vtFormat(raw, col.format);
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
   return '<td class="align-'+(col.align||'left')+'"'+bg+'>'+vtEsc(text)+'</td>';
 }
-function vtBodyRows(cols, rows){
-  return rows.map(function(r){ return '<tr>'+cols.map(function(c){return vtCell(c,r);}).join('')+'</tr>'; }).join('');
+function vtBodyRows(cols, rows, ann){
+  return rows.map(function(r){ return '<tr>'+cols.map(function(c){return vtCell(c,r,ann);}).join('')+'</tr>'; }).join('');
 }
 function vtCounts(rows, field){ var m={}; for(var i=0;i<rows.length;i++){ var k=String(rows[i][field]==null?'':rows[i][field]); m[k]=(m[k]||0)+1; } return m; }
 function vtBootstrap(root){
   var dataEl = root.querySelector('script.vtable-data');
   if(!dataEl) return;
   var payload = JSON.parse(dataEl.textContent);
-  var rows = payload.rows, cols = payload.cols, ncols = cols.length;
+  var rows = payload.rows, cols = payload.cols;
+  // Anotaciones: columna editable compartida. Mostrar/ocultar es preferencia POR-USUARIO (localStorage).
+  var ann = payload.annotation || null;
+  var annShown = false;
+  try{ annShown = ann ? (localStorage.getItem('vergis:anncol:'+location.pathname)==='1') : false; }catch(e){}
+  // Columnas a renderizar: la columna de anotación se omite si está oculta (header + body juntos).
+  function renderCols(){ return ann && !annShown ? cols.filter(function(c){ return !c.annotation; }) : cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
   var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
@@ -275,12 +288,15 @@ function vtBootstrap(root){
         '<select class="vt-group-add"></select>' +
         '<div class="vt-group-actions"><button type="button" class="vt-expand-all">Expandir todo</button><button type="button" class="vt-collapse-all">Colapsar todo</button></div>'
       ) : '') +
+      (ann ? '<label class="vt-ann-toggle"><input type="checkbox" class="vt-ann-show"'+(annShown?' checked':'')+'> Mostrar anotaciones</label>' : '') +
       '<button type="button" class="vt-clear-all">Limpiar todo</button>' +
       '<span class="vt-count" role="status" aria-live="polite"></span>';
     trayWrap.appendChild(sec);
     gs=sec.querySelector('.vt-global-search'); countEl=sec.querySelector('.vt-count');
     levelsEl=sec.querySelector('.vt-group-levels'); addSel=sec.querySelector('.vt-group-add'); groupActions=sec.querySelector('.vt-group-actions');
     gs.addEventListener('input', function(){ state.globalSearch=gs.value; render(); });
+    var annToggle=sec.querySelector('.vt-ann-show');
+    if(annToggle) annToggle.addEventListener('change', function(){ annShown=annToggle.checked; try{ localStorage.setItem('vergis:anncol:'+location.pathname, annShown?'1':'0'); }catch(e){} render(); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
     if(addSel){
       addSel.addEventListener('change', function(){ if(!addSel.value) return; state.groupLevels.push(addSel.value); state.collapsed={}; renderGroupUI(); render(); });
@@ -384,6 +400,22 @@ function vtBootstrap(root){
     render();
   });
 
+  // ---- Edición de anotación: al salir de la celda (focusout, delegado) → upsert compartido ----
+  if(ann) tbody.addEventListener('focusout', function(e){
+    var cell=e.target && e.target.closest ? e.target.closest('.vt-ann-cell') : null; if(!cell) return;
+    var key=cell.getAttribute('data-key'), token=cell.getAttribute('data-token');
+    var value=(cell.textContent||'').trim();
+    var row=null; for(var i=0;i<rows.length;i++){ if(String(rows[i][ann.keyField]==null?'':rows[i][ann.keyField])===key){ row=rows[i]; break; } }
+    if(!row) return;
+    if(String(row[ann.valueField]==null?'':row[ann.valueField])===value) return; // sin cambio
+    row[ann.valueField]=value; // sobrevive al re-render
+    try{
+      fetch(ann.endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:key,token:token,value:value})})
+        .then(function(r){ if(r.ok) cell.classList.remove('vt-ann-err'); else cell.classList.add('vt-ann-err'); })
+        .catch(function(){ cell.classList.add('vt-ann-err'); });
+    }catch(e){}
+  });
+
   // ---- Chips de filtros activos (sobre la tabla): clic = quitar ----
   if(chipsEl) chipsEl.addEventListener('click', function(e){
     var chip=e.target.closest('.vt-chip'); if(!chip) return;
@@ -394,23 +426,26 @@ function vtBootstrap(root){
 
   // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
   // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
-  function renderNodeTree(node, depth, prefix){
-    if(node.leaf) return vtBodyRows(cols, node.rows);
+  function renderNodeTree(rc, ncols, node, depth, prefix){
+    if(node.leaf) return vtBodyRows(rc, node.rows, ann);
     return node.groups.map(function(g){
       var path=prefix+node.field+SEP+g.key;
       var collapsed=!!state.collapsed[path];
       var caret=collapsed?'▸':'▾';
       var head='<tr class="vt-group-head" data-depth="'+depth+'" data-path="'+vtEsc(path)+'"><td colspan="'+ncols+'" style="padding-left:'+(depth*18+12)+'px"><span class="vt-gcaret">'+caret+'</span> '+vtEsc(colLabel(node.field))+': '+vtEsc(g.key||'(vacío)')+' <span class="vt-gcount">('+g.count+')</span></td></tr>';
-      return head + (collapsed ? '' : renderNodeTree(g.child, depth+1, path+SEP));
+      return head + (collapsed ? '' : renderNodeTree(rc, ncols, g.child, depth+1, path+SEP));
     }).join('');
   }
   function render(){
+    var rc = renderCols(), ncols = rc.length;
     var view = vtApply(rows, state);
     if(state.groupLevels.length){
-      tbody.innerHTML = renderNodeTree(vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = renderNodeTree(rc, ncols, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
-      tbody.innerHTML = vtBodyRows(cols, view) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = vtBodyRows(rc, view, ann) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
+    // Mostrar/ocultar la columna de anotación (header th + body se mueven juntos).
+    if(ann){ var ath=root.querySelector('th[data-field="'+ann.valueField+'"]'); if(ath) ath.style.display = annShown ? '' : 'none'; }
     if(countEl) countEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){
       var f=th.getAttribute('data-field'); var ind=th.querySelector('.vt-sort-ind');

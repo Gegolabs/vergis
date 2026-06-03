@@ -62,6 +62,8 @@ export interface TableColumn {
   filter?: boolean
   /** Override de la heurística: disponible para agrupar (default: igual que filter). */
   groupBy?: boolean
+  /** Columna de anotación (editable; enriquecimiento de la capa de viz). */
+  annotation?: boolean
 }
 interface Aggregation {
   dataset?: string
@@ -102,6 +104,8 @@ export interface ResolvedNode {
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
   /** Tabla: `false` desactiva la interactividad (orden/filtro/búsqueda/agrupar) → tabla estática. */
   interactive?: boolean
+  /** Tabla: meta de anotaciones (columna editable compartida). */
+  annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
 }
 
 interface RenderOpts {
@@ -158,7 +162,12 @@ const TABLE_INTERACTIVE_CSS = `
 .tray .vt-tray-section .vt-clear-all{width:100%;margin-top:12px;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;cursor:pointer}
 .tray .vt-tray-section .vt-clear-all:hover{color:var(--red,#dc2626);border-color:var(--red,#dc2626)}
 .tray .vt-tray-section .vt-count{display:block;margin-top:12px;font-size:12px;color:var(--fg-dim,#64748b)}
-@media print{.vtable .vt-chips,.vtable .vt-filter-btn{display:none!important}}
+.tray .vt-tray-section .vt-ann-toggle{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--fg,#1f2937);margin-top:12px;cursor:pointer}
+.vtable td.vt-ann-cell{background:var(--panel,#f8fafc);min-width:120px;cursor:text;outline:none}
+.vtable td.vt-ann-cell:focus{box-shadow:inset 0 0 0 2px var(--green,#2563eb)}
+.vtable td.vt-ann-cell:empty::before{content:'+ nota';color:var(--fg-dim,#94a3b8);opacity:.55}
+.vtable td.vt-ann-cell.vt-ann-err{box-shadow:inset 0 0 0 2px var(--red,#dc2626)}
+@media print{.vtable .vt-chips,.vtable .vt-filter-btn{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
 `
 
 /** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
@@ -562,8 +571,10 @@ function renderInteractiveTable(
     ranges: c.colorscale ? ranges[c.field] : undefined,
     sortable: c.sortable !== false,
     searchable: c.searchable !== false,
-    filter: c.filter,
-    groupBy: c.groupBy,
+    // La columna de anotación: sin faceta ni agrupar (texto libre); editable lo maneja el runtime.
+    filter: c.annotation ? false : c.filter,
+    groupBy: c.annotation ? false : c.groupBy,
+    annotation: c.annotation || undefined,
   }))
   // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
   // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.
@@ -591,7 +602,8 @@ function renderInteractiveTable(
   const chips = `<div class="vt-chips"></div>`
 
   // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
-  const payload = JSON.stringify({ rows, cols: colMeta }).replace(/</g, '\\u003c')
+  // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
+  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation }).replace(/</g, '\\u003c')
 
   return (
     `<section class="table vtable">${titleHtml}${chips}` +
