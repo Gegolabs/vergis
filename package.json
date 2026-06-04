@@ -1,8 +1,8 @@
 {
   "name": "vergis",
   "private": true,
-  "version": "0.1.0",
-  "description": "Vergis — Meta-Cognitive Platform · implementación de referencia de AgencyDomains (walking skeleton v0.1)",
+  "version": "0.2.0",
+  "description": "Vergis — Meta-Cognitive Platform · implementación de referencia de AgencyDomains",
   "type": "module",
   "workspaces": [
     "packages/*"
