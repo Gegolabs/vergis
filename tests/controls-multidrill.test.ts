@@ -166,9 +166,12 @@ describe('render · control de cabecera default=max', () => {
     const { out, calls } = await render(YAML)
     expect(out.ok).toBe(true)
     const html = out.html ?? ''
-    // Barra de control con el selector de semana y W21 seleccionada.
-    expect(html).toContain('class="vctrls"')
+    // Control de semana en el INSPECTOR (gaveta), no en el cuerpo, con W21 seleccionada.
+    expect(html).toContain('vt-ctl-select')
     expect(html).toContain('<option value="W21" selected>W21</option>')
+    // Lineamiento: el <select> del control vive DENTRO de la gaveta (después de .tray-sections),
+    // NO en el cuerpo. (El primer 'vt-ctl-select' es la regla CSS; acá medimos el elemento.)
+    expect(html.indexOf('<select class="vt-ctl-select"')).toBeGreaterThan(html.indexOf('class="tray-sections"'))
     // La query de clientes se bindeó con @ctx_semana = 'W21' (injection-safe, sin :ctx.).
     const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
     expect(clientes.sql).toContain('@ctx_semana')

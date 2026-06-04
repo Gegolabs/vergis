@@ -251,21 +251,22 @@ export const renderHtmlPiece: Capability = {
     const theme = getTheme(themeName)
     const carry = carryCtx ?? {}
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry }
-    // Controles de cabecera (selectores server-side) + barra de navegación de páginas, arriba de la pieza.
-    const controlsBar = controls && controls.length ? renderControlsBar(controls, pages?.active, carry) : ''
+    // LINEAMIENTO: los controles NO van en el cuerpo del reporte — viven en el INSPECTOR (gaveta),
+    // tab Controles, junto a las facetas/búsqueda. El cuerpo es solo la pieza + la nav de vistas.
+    const controlsSection = controls && controls.length ? renderControlsSection(controls, pages?.active, carry) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
-    let body = controlsBar + nav + (await renderNode(piece, opts))
+    let body = nav + (await renderNode(piece, opts))
     const hasTable = body.includes('class="table vtable"')
-    // GAVETA COMÚN (un solo shell por documento) para cualquier PI interactivo: dashboard y/o tabla.
-    // 3 tabs: Controles · Guardados · Config. Dashboard → sus facetas van server-rendered en
-    // `.tray-sections` + script de recompute; Tabla → el runtime inyecta sus controles ahí.
-    const hasTray = !!interactive || hasTable
+    // GAVETA COMÚN (un solo shell por documento) para cualquier PI con controles o interactividad.
+    // 3 tabs: Controles · Guardados · Config. En el tab Controles van, de arriba a abajo: los
+    // controles de cabecera (server-side) + las facetas del dashboard / los controles del runtime de tabla.
+    const hasTray = !!interactive || hasTable || !!controlsSection
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
     if (interactive) {
-      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette) + body
+      body = renderTrayShell(controlsSection + renderDashboardFacets(interactive), theme.palettes, palette) + body
       tail += renderInteractiveScript(interactive)
-    } else if (hasTable) {
-      body = renderTrayShell('', theme.palettes, palette) + body
+    } else if (hasTray) {
+      body = renderTrayShell(controlsSection, theme.palettes, palette) + body
     }
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
@@ -274,7 +275,7 @@ export const renderHtmlPiece: Capability = {
     if (hasTray) css += TRAY_CSS
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (pages) css += PAGES_NAV_CSS
-    if (controlsBar) css += CONTROLS_BAR_CSS
+    if (controlsSection) css += CONTROLS_BAR_CSS
     if (body.includes('vt-actions')) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
@@ -312,23 +313,22 @@ function renderPagesNav(pages: PagesNav, carry: Record<string, string> = {}): st
   return `<nav class="vpages" role="tablist">${tabs}</nav>`
 }
 
-/** CSS de la barra de controles de cabecera (selectores server-side). */
+/** CSS de los controles de cabecera — viven en el INSPECTOR (gaveta), no en el cuerpo. */
 const CONTROLS_BAR_CSS = `
-.vctrls{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin:0 0 16px}
-.vctrls .vctrl{display:flex;flex-direction:column;gap:3px}
-.vctrls .vctrl-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--fg-dim,#64748b)}
-.vctrls select{font-size:13px;padding:6px 28px 6px 10px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937);min-width:120px;cursor:pointer}
-.vctrls select:hover{border-color:var(--green,#2563eb)}
-@media print{.vctrls select{border:none;padding-left:0;-webkit-appearance:none;appearance:none}}
+.tray .vt-ctl{margin-bottom:18px}
+.tray .vt-ctl .faceta-title{margin-bottom:6px}
+.tray .vt-ctl-select{width:100%;box-sizing:border-box;padding:7px 9px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937);cursor:pointer}
+.tray .vt-ctl-select:hover{border-color:var(--green,#2563eb)}
 `
 
 /**
- * Barra de controles de cabecera. Cada control es un `<select>` (single-select) cuyo cambio recarga
- * la página fijando `?ctx.<id>=<valor>` y preservando `page` + el resto del contexto (carry). Server-
- * side: el valor elegido reentra como `:ctx.<id>` en las queries → cambia el dato, no solo la vista.
+ * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Cada control es un `<select>`
+ * (single-select) cuyo cambio recarga la página fijando `?ctx.<id>=<valor>` y preservando `page` +
+ * el resto del contexto (carry). Server-side: el valor elegido reentra como `:ctx.<id>` en las
+ * queries → cambia el dato, no solo la vista. LINEAMIENTO: los controles NO van en el cuerpo.
  */
-function renderControlsBar(controls: ControlResolved[], activePage: string | undefined, carry: Record<string, string>): string {
-  const ctrls = controls
+function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: Record<string, string>): string {
+  return controls
     .map((c) => {
       // onchange: reconstruir el query con la página activa + el carry (menos este control) +
       // este control = this.value, y navegar. Robusto: no depende del estado previo de la URL.
@@ -344,12 +344,11 @@ function renderControlsBar(controls: ControlResolved[], activePage: string | und
         .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
         .join('')
       return (
-        `<label class="vctrl"><span class="vctrl-label">${escapeHtml(c.label)}</span>` +
-        `<select aria-label="${escapeHtml(c.label)}" onchange="${escapeHtml(onchange)}">${opts}</select></label>`
+        `<div class="faceta vt-ctl"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
+        `<select class="vt-ctl-select" aria-label="${escapeHtml(c.label)}" onchange="${escapeHtml(onchange)}">${opts}</select></div>`
       )
     })
     .join('')
-  return `<div class="vctrls">${ctrls}</div>`
 }
 
 /** CSS de la columna de acciones de drill (links por fila + menú cuando hay varias). */
