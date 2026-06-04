@@ -250,11 +250,18 @@ function vtCell(col, r, ann){
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
   return '<td class="align-'+(col.align||'left')+'"'+bg+'>'+vtEsc(text)+'</td>';
 }
-function vtDrillHref(drill, r){ return '?page='+encodeURIComponent(drill.to)+'&ctx.'+encodeURIComponent(drill.by)+'='+encodeURIComponent(String(r[drill.by]==null?'':r[drill.by])); }
-function vtBodyRows(cols, rows, ann, drill){
+function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ if(m[k]!=null&&m[k]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(m[k])); } return q; }
+function vtDrillHref(drill, r, carry){ var keys={}; for(var i=0;i<drill.by.length;i++){ var b=drill.by[i]; keys[b]=String(r[b]==null?'':r[b]); } return '?page='+encodeURIComponent(drill.to)+vtCtxQuery(carry,keys); }
+function vtDrillActions(drills, r, carry){
+  if(!drills||!drills.length) return '';
+  var links=drills.map(function(d){ var href=vtEsc(vtDrillHref(d,r,carry)); var label=d.label?vtEsc(d.label):'→'; var cls=d.label?'vt-drill-link':'vt-drill-link vt-drill-arrow'; var title=d.label?vtEsc(d.label):'Ver detalle'; return '<a class="'+cls+'" href="'+href+'" title="'+title+'">'+label+'</a>'; }).join('');
+  return '<td class="vt-actions">'+links+'</td>';
+}
+function vtBodyRows(cols, rows, ann, drills, carry){
+  var single = drills && drills.length===1;
   return rows.map(function(r){
-    var open = drill ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drill,r))+'">' : '<tr>';
-    return open+cols.map(function(c){return vtCell(c,r,ann);}).join('')+'</tr>';
+    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry))+'">' : '<tr>';
+    return open+cols.map(function(c){return vtCell(c,r,ann);}).join('')+vtDrillActions(drills,r,carry)+'</tr>';
   }).join('');
 }
 function vtCounts(rows, field){ var m={}; for(var i=0;i<rows.length;i++){ var k=String(rows[i][field]==null?'':rows[i][field]); m[k]=(m[k]||0)+1; } return m; }
@@ -265,8 +272,11 @@ function vtBootstrap(root){
   var rows = payload.rows, cols = payload.cols;
   // Anotaciones: columna editable compartida. Mostrar/ocultar es preferencia POR-USUARIO (localStorage).
   var ann = payload.annotation || null;
-  // Drill-through: si la tabla la declara, cada fila hoja navega a la vista destino con el contexto.
-  var drill = payload.drill || null;
+  // Drill-through: acciones por fila (1 link por drill). Con un solo drill, además doble-clic de fila.
+  // carry (ctx de cabecera, p.ej. la semana) se preserva en cada href de drill.
+  var drills = payload.drills || [];
+  var carry = payload.carryCtx || {};
+  var nactions = drills.length ? 1 : 0;
   var annShown = false;
   try{ annShown = ann ? (localStorage.getItem('vergis:anncol:'+location.pathname)==='1') : false; }catch(e){}
   // Columnas a renderizar: la columna de anotación se omite si está oculta (header + body juntos).
@@ -445,9 +455,10 @@ function vtBootstrap(root){
   // ---- Drill-through: DOBLE clic en una fila hoja → navega a la vista destino con el contexto del
   //      registro. Doble clic (no simple) para no disparar la navegación con un clic casual; deja el
   //      clic simple libre (seleccionar, arriba). Ignora la celda de anotación y los encabezados de grupo. ----
-  if(drill) tbody.addEventListener('dblclick', function(e){
+  if(drills.length===1) tbody.addEventListener('dblclick', function(e){
     if(e.target.closest('.vt-ann-cell')) return;
     if(e.target.closest('tr.vt-group-head')) return;
+    if(e.target.closest('.vt-drill-link')) return; // el link ya navega por sí mismo
     var tr=e.target.closest('tr.vt-drill-row'); if(!tr) return;
     var href=tr.getAttribute('data-href'); if(href) location.assign(href);
   });
@@ -479,7 +490,7 @@ function vtBootstrap(root){
   // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
   // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
   function renderNodeTree(rc, ncols, node, depth, prefix){
-    if(node.leaf) return vtBodyRows(rc, node.rows, ann, drill);
+    if(node.leaf) return vtBodyRows(rc, node.rows, ann, drills, carry);
     return node.groups.map(function(g){
       var path=prefix+node.field+SEP+g.key;
       var collapsed=!!state.collapsed[path];
@@ -489,12 +500,12 @@ function vtBootstrap(root){
     }).join('');
   }
   function render(){
-    var rc = renderCols(), ncols = rc.length;
+    var rc = renderCols(), ncols = rc.length + nactions;
     var view = vtApply(rows, state);
     if(state.groupLevels.length){
       tbody.innerHTML = renderNodeTree(rc, ncols, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
-      tbody.innerHTML = vtBodyRows(rc, view, ann, drill) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = vtBodyRows(rc, view, ann, drills, carry) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
     // Mostrar/ocultar la columna de anotación (header th + body se mueven juntos).
     if(ann){ var ath=root.querySelector('th[data-field="'+ann.valueField+'"]'); if(ath) ath.style.display = annShown ? '' : 'none'; }

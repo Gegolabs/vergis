@@ -129,8 +129,10 @@ describe('multi-vista · render por vista + drill-through', () => {
     expect(html).toContain('<a href="?page=clientes" class="active"')
     // El destino de drill (detalle, declara context) NO está en la nav por defecto — aparece bajo demanda.
     expect(html).not.toContain('<a href="?page=detalle"')
-    // Drill embebido en el payload de la tabla → cada fila hoja navega a detalle por socio (doble clic).
-    expect(html).toContain('"drill":{"to":"detalle","by":"socio"}')
+    // Drill embebido en el payload (normalizado a arreglo, `by` multi-clave) → columna de acciones
+    // + doble clic de fila (un solo drill). carryCtx vacío (no hay controles de cabecera aquí).
+    expect(html).toContain('"drills":[{"to":"detalle","by":["socio"]}]')
+    expect(html).toContain('"carryCtx":{}')
     // Solo se consultó el dataset de la vista activa (clientes), no el de detalle.
     expect(calls.length).toBe(1)
     expect(calls[0].sql).toContain('dbo.saldo')
