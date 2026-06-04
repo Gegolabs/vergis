@@ -200,6 +200,7 @@ export class MiraBotlet implements Botlet {
             org: spec.identity['org'] as string | undefined,
             classification: spec.identity.classification,
             code: spec.identity.code,
+            version: spec.identity['version'] as string | undefined,
           },
           interactive,
           pages: pagesNav,

@@ -261,12 +261,18 @@ export const renderHtmlPiece: Capability = {
     // 3 tabs: Controles · Guardados · Config. En el tab Controles van, de arriba a abajo: los
     // controles de cabecera (server-side) + las facetas del dashboard / los controles del runtime de tabla.
     const hasTray = !!interactive || hasTable || !!controlsSection
+    // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
+    const piLabel = meta?.code
+      ? `${meta.code}${meta.version ? ' · v' + meta.version : ''}`
+      : meta?.version
+        ? `v${meta.version}`
+        : ''
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
     if (interactive) {
-      body = renderTrayShell(controlsSection + renderDashboardFacets(interactive), theme.palettes, palette) + body
+      body = renderTrayShell(controlsSection + renderDashboardFacets(interactive), theme.palettes, palette, piLabel) + body
       tail += renderInteractiveScript(interactive)
     } else if (hasTray) {
-      body = renderTrayShell(controlsSection, theme.palettes, palette) + body
+      body = renderTrayShell(controlsSection, theme.palettes, palette, piLabel) + body
     }
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
@@ -465,7 +471,7 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
  * vacío para que el runtime de tabla inyecte sus controles en `.tray-sections`). Apariencia,
  * Imprimir y crédito son universales. Una sola implementación = comportamiento idéntico.
  */
-function renderTrayShell(sections: string, palettes?: { id: string; label: string }[], activePalette?: string): string {
+function renderTrayShell(sections: string, palettes?: { id: string; label: string }[], activePalette?: string, piLabel?: string): string {
   const active = activePalette || (palettes && palettes[0]?.id) || ''
   let appearance = ''
   if (palettes && palettes.length > 1) {
@@ -483,8 +489,10 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
   const restore =
     `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}})();</script>`
   // Pie de la gaveta (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
+  // Pie del inspector: versión del PI (instancia) + versión de Mira (motor) — pistas DISTINTAS.
   const footer =
     `<div class="tray-foot">` +
+    (piLabel ? `<div class="tray-version tray-piversion">${escapeHtml(piLabel)}</div>` : '') +
     `<div class="tray-version">Mira v${escapeHtml(VERGIS_VERSION)}</div>` +
     `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>` +
     `</div>`

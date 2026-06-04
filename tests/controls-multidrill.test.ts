@@ -24,7 +24,7 @@ const validate = (spec: unknown) => validateSpec(spec, { capabilities: CAPS, sch
 
 const YAML = `
 mira_version: "1.0"
-identity: { id: pi-ctrl-test, display_name: "Cartera Ctrl Test", classification: internal }
+identity: { id: pi-ctrl-test, display_name: "Cartera Ctrl Test", code: PI-CTRL, version: "1.0", classification: internal }
 controls:
   - { id: semana, label: "Semana", source: data.semanas.semana, default: max, single: true }
 pages:
@@ -182,6 +182,14 @@ describe('render · control de cabecera default=max', () => {
     // Multi-drill: el payload trae las 2 acciones con sus claves (una compuesta).
     expect(html).toContain('"drills":[{"to":"detalle-socio","by":["socio"],"label":"Ver socio en el grupo"},{"to":"detalle-es","by":["empresa","socio"],"label":"En esta empresa"}]')
     expect(html).toContain('"carryCtx":{"semana":"W21"}')
+  })
+
+  it('versión del PI (instancia) se muestra DISTINTA de la versión de Mira (motor) en el inspector', async () => {
+    const { out } = await render(YAML)
+    const html = out.html ?? ''
+    // Pie del inspector: la versión del PI (code · v) y la de Mira, por separado.
+    expect(html).toContain('PI-CTRL · v1.0')
+    expect(html).toMatch(/Mira v\d+\.\d+\.\d+/)
   })
 
   it('?ctx.semana=W20 override: el selector muestra W20 y la query usa W20', async () => {
