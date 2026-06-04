@@ -85,7 +85,34 @@ export class MiraBotlet implements Botlet {
 
     // 3 · Recuperación de datos (vía Botler.capability_call, nunca acceso directo)
     const results: Record<string, DatasetResult> = {}
+
+    // 2·ter · CONTROLES DE CABECERA — se resuelven ANTES de las queries de página: cada control fija
+    // un valor (de `ctx.<id>` en la URL, o el default computado sobre las opciones de su dataset
+    // fuente) que se inyecta en `ctxValues` → aparece como `:ctx.<id>` en las queries. El valor viaja
+    // en la navegación (carryCtx) para que "pegue" al cambiar de página o drillear.
+    const controlsResolved: { id: string; label: string; options: string[]; value: string }[] = []
+    const carryCtx: Record<string, string> = {}
+    for (const c of spec.controls ?? []) {
+      const [dsName, field] = stripCtrlSource(c.source)
+      if (!results[dsName]) {
+        const ds = spec.data[dsName]
+        if (ds) {
+          const out = (await host.capabilityCall(ds.capability, applyCtx(ds.params, ctxValues), identity)) as { rows?: Record<string, unknown>[] }
+          results[dsName] = { rows: out?.rows ?? [] }
+          host.log({ type: 'mira-control-source', botletId: this.id, control: c.id, dataset: dsName, rows: results[dsName].rows.length })
+        }
+      }
+      const options = [...new Set((results[dsName]?.rows ?? []).map((r) => String(r[field] ?? '')).filter((v) => v !== ''))]
+      const value = resolveControlValue(ctxValues[c.id], options, c.default)
+      if (value !== '') {
+        ctxValues[c.id] = value
+        carryCtx[c.id] = value
+      }
+      controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value })
+    }
+
     for (const name of datasetNames) {
+      if (results[name]) continue // ya recuperado (p.ej. fuente de un control)
       const ds = spec.data[name]
       if (!ds) continue
       const params = isMulti ? applyCtx(ds.params, ctxValues) : ds.params
@@ -176,6 +203,8 @@ export class MiraBotlet implements Botlet {
           },
           interactive,
           pages: pagesNav,
+          controls: controlsResolved,
+          carryCtx,
         },
         identity,
       )) as { html: string }
@@ -302,6 +331,34 @@ function applyCtx(params: Record<string, unknown> | undefined, ctxValues: Record
     return `@ctx_${param}`
   })
   return { ...params, sql: rewritten, params: { ...((params['params'] as Record<string, unknown>) ?? {}), ...bound } }
+}
+
+/** `data.<dataset>.<field>` (source de un control) → [dataset, field]. */
+function stripCtrlSource(source: string): [string, string] {
+  const ref = typeof source === 'string' && source.startsWith('data.') ? source.slice('data.'.length) : String(source ?? '')
+  const [ds, field] = ref.split('.')
+  return [ds ?? '', field ?? '']
+}
+
+/** Compara valores de opción: numérico si ambos parsean, si no orden natural (numeric-aware). */
+function cmpVals(a: string, b: string): number {
+  const an = Number(a)
+  const bn = Number(b)
+  if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn
+  return a.localeCompare(b, undefined, { numeric: true })
+}
+
+/**
+ * Valor de un control: si `current` (de la URL) es una opción válida, gana; si no, el default sobre
+ * las opciones (`max` = mayor/más reciente, `min` = menor, `first` = primera de aparición). Sin
+ * opciones, respeta lo pedido; sin nada, cadena vacía.
+ */
+export function resolveControlValue(current: string | undefined, options: string[], def?: 'max' | 'min' | 'first'): string {
+  if (current != null && current !== '' && (options.length === 0 || options.includes(current))) return current
+  if (options.length === 0) return ''
+  if (def === 'first') return options[0]
+  const sorted = [...options].sort(cmpVals)
+  return def === 'min' ? sorted[0] : sorted[sorted.length - 1]
 }
 
 /** Pieza-guía cuando se entra a una vista de detalle sin el contexto requerido (no por drill). */

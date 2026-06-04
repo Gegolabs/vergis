@@ -42,6 +42,13 @@ interface PagesNav {
   items: { id: string; title: string }[]
   active: string
 }
+/** Control de cabecera ya resuelto por Mira: opciones + valor seleccionado. */
+interface ControlResolved {
+  id: string
+  label: string
+  options: string[]
+  value: string
+}
 interface RenderParams {
   piece: ResolvedNode
   title?: string
@@ -52,6 +59,10 @@ interface RenderParams {
   interactive?: Interactive
   /** PI multi-vista: barra de navegación de páginas (links `?page=<id>`). */
   pages?: PagesNav
+  /** Controles de cabecera (server-side): selectores que fijan `:ctx.<id>` en las queries. */
+  controls?: ControlResolved[]
+  /** Contexto que toda navegación (nav de páginas, drills, selectores) debe preservar (p.ej. la semana). */
+  carryCtx?: Record<string, string>
 }
 
 export interface TableColumn {
@@ -112,13 +123,22 @@ export interface ResolvedNode {
   interactive?: boolean
   /** Tabla: meta de anotaciones (columna editable compartida). */
   annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
-  /** Tabla: drill-through (al clickear una fila hoja, navegar a la vista `to` pasando el campo `by`). */
-  drill?: { to: string; by: string }
+  /** Tabla: acciones de drill-through por fila (a la vista `to` pasando las claves `by`). */
+  drills?: Drill[]
+}
+
+/** Una acción de drill-through: a la vista `to`, pasando una o más claves de contexto `by`. */
+export interface Drill {
+  to: string
+  by: string[]
+  label?: string
 }
 
 interface RenderOpts {
   tokens: ThemeTokens
   interactive: boolean
+  /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
+  carry: Record<string, string>
 }
 
 /**
@@ -226,13 +246,15 @@ const TRAY_CSS = `
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive, pages } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
-    const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive }
-    // PI multi-vista: barra de navegación de páginas, arriba de la pieza (links `?page=<id>`).
-    const nav = pages ? renderPagesNav(pages) : ''
-    let body = nav + (await renderNode(piece, opts))
+    const carry = carryCtx ?? {}
+    const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry }
+    // Controles de cabecera (selectores server-side) + barra de navegación de páginas, arriba de la pieza.
+    const controlsBar = controls && controls.length ? renderControlsBar(controls, pages?.active, carry) : ''
+    const nav = pages ? renderPagesNav(pages, carry) : ''
+    let body = controlsBar + nav + (await renderNode(piece, opts))
     const hasTable = body.includes('class="table vtable"')
     // GAVETA COMÚN (un solo shell por documento) para cualquier PI interactivo: dashboard y/o tabla.
     // 3 tabs: Controles · Guardados · Config. Dashboard → sus facetas van server-rendered en
@@ -252,6 +274,8 @@ export const renderHtmlPiece: Capability = {
     if (hasTray) css += TRAY_CSS
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (pages) css += PAGES_NAV_CSS
+    if (controlsBar) css += CONTROLS_BAR_CSS
+    if (body.includes('vt-actions')) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
     if (hasTable) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
@@ -267,16 +291,75 @@ const PAGES_NAV_CSS = `
 .vpages a.active{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
 `
 
-/** Barra de navegación de vistas: un link por página (`?page=<id>`), marcando la activa. */
-function renderPagesNav(pages: PagesNav): string {
+/** `&ctx.k=v` por cada par de `carry` (más overrides), para preservar contexto en cualquier href. */
+function ctxQuery(carry: Record<string, string>, overrides: Record<string, string> = {}): string {
+  const merged = { ...carry, ...overrides }
+  return Object.entries(merged)
+    .filter(([, v]) => v != null && v !== '')
+    .map(([k, v]) => `&ctx.${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join('')
+}
+
+/** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */
+function renderPagesNav(pages: PagesNav, carry: Record<string, string> = {}): string {
+  const q = ctxQuery(carry)
   const tabs = pages.items
     .map(
       (p) =>
-        `<a href="?page=${encodeURIComponent(p.id)}"${p.id === pages.active ? ' class="active" aria-current="page"' : ''}>${escapeHtml(p.title)}</a>`,
+        `<a href="?page=${encodeURIComponent(p.id)}${q}"${p.id === pages.active ? ' class="active" aria-current="page"' : ''}>${escapeHtml(p.title)}</a>`,
     )
     .join('')
   return `<nav class="vpages" role="tablist">${tabs}</nav>`
 }
+
+/** CSS de la barra de controles de cabecera (selectores server-side). */
+const CONTROLS_BAR_CSS = `
+.vctrls{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin:0 0 16px}
+.vctrls .vctrl{display:flex;flex-direction:column;gap:3px}
+.vctrls .vctrl-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--fg-dim,#64748b)}
+.vctrls select{font-size:13px;padding:6px 28px 6px 10px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937);min-width:120px;cursor:pointer}
+.vctrls select:hover{border-color:var(--green,#2563eb)}
+@media print{.vctrls select{border:none;padding-left:0;-webkit-appearance:none;appearance:none}}
+`
+
+/**
+ * Barra de controles de cabecera. Cada control es un `<select>` (single-select) cuyo cambio recarga
+ * la página fijando `?ctx.<id>=<valor>` y preservando `page` + el resto del contexto (carry). Server-
+ * side: el valor elegido reentra como `:ctx.<id>` en las queries → cambia el dato, no solo la vista.
+ */
+function renderControlsBar(controls: ControlResolved[], activePage: string | undefined, carry: Record<string, string>): string {
+  const ctrls = controls
+    .map((c) => {
+      // onchange: reconstruir el query con la página activa + el carry (menos este control) +
+      // este control = this.value, y navegar. Robusto: no depende del estado previo de la URL.
+      const onchange =
+        `var u=new URL(location.href);u.search='';` +
+        (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
+        Object.entries(carry)
+          .filter(([k]) => k !== c.id)
+          .map(([k, v]) => `u.searchParams.set('ctx.${escapeHtml(k)}',${JSON.stringify(String(v))});`)
+          .join('') +
+        `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
+      const opts = c.options
+        .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
+        .join('')
+      return (
+        `<label class="vctrl"><span class="vctrl-label">${escapeHtml(c.label)}</span>` +
+        `<select aria-label="${escapeHtml(c.label)}" onchange="${escapeHtml(onchange)}">${opts}</select></label>`
+      )
+    })
+    .join('')
+  return `<div class="vctrls">${ctrls}</div>`
+}
+
+/** CSS de la columna de acciones de drill (links por fila + menú cuando hay varias). */
+const DRILL_ACTIONS_CSS = `
+.vtable td.vt-actions,.table td.vt-actions{white-space:nowrap;text-align:center;width:1px}
+.vt-drill-link{display:inline-block;padding:1px 7px;margin:0 1px;font-size:12px;text-decoration:none;color:var(--green,#2563eb);border:1px solid transparent;border-radius:6px;cursor:pointer}
+.vt-drill-link:hover{border-color:var(--green,#2563eb);background:var(--card,#eef2ff)}
+.vt-drill-arrow{font-weight:700}
+@media print{td.vt-actions{display:none!important}}
+`
 
 async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string> {
   if (node.layout) {
@@ -297,7 +380,7 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
     case 'distribution':
       return renderDistribution(node, opts.tokens)
     case 'table':
-      return renderTable(node)
+      return renderTable(node, opts.carry)
     case 'semaforo':
       return renderSemaforo(node, opts)
     default:
@@ -561,29 +644,55 @@ async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Prom
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
 }
 
-function renderTable(node: ResolvedNode): string {
+function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): string {
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
+  const drills = node.drills ?? []
   const ranges = colorscaleRanges(cols, rows)
-  const tbody = renderTableBody(cols, rows, ranges)
+  const tbody = renderTableBody(cols, rows, ranges, drills, carry)
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
 
   // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
   if (node.interactive === false) {
-    const head = cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('')
-    const staticBody = node.drill ? renderStaticDrillBody(cols, rows, ranges, node.drill) : tbody
+    const head =
+      cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
+      (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
     return (
       `<section class="table">${titleHtml}` +
-      `<table><thead><tr>${head}</tr></thead><tbody>${staticBody}</tbody></table></section>${node.drill ? `<style>${DRILL_CSS}</style>` : ''}`
+      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
     )
   }
-  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml)
+  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry)
+}
+
+/** href server-side de una acción de drill, preservando el carry (ctx) y agregando las claves `by`. */
+function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: Record<string, string>): string {
+  const keys: Record<string, string> = {}
+  for (const k of drill.by) keys[k] = String(row[k] ?? '')
+  return `?page=${encodeURIComponent(drill.to)}${ctxQuery(carry, keys)}`
+}
+
+/** Celda de acciones de una fila: un link por drill (etiqueta del drill, o "→" si no la tiene). */
+function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: Record<string, string>): string {
+  if (drills.length === 0) return ''
+  const links = drills
+    .map((d) => {
+      const href = escapeHtml(serverDrillHref(d, row, carry))
+      const label = d.label ? escapeHtml(d.label) : '→'
+      const cls = d.label ? 'vt-drill-link' : 'vt-drill-link vt-drill-arrow'
+      const title = d.label ? escapeHtml(d.label) : 'Ver detalle'
+      return `<a class="${cls}" href="${href}" title="${title}">${label}</a>`
+    })
+    .join('')
+  return `<td class="vt-actions">${links}</td>`
 }
 
 function renderTableBody(
   cols: TableColumn[],
   rows: Record<string, unknown>[],
   ranges: Record<string, { min: number; max: number }>,
+  drills: Drill[] = [],
+  carry: Record<string, string> = {},
 ): string {
   return rows
     .map((r) => {
@@ -595,7 +704,9 @@ function renderTableBody(
           return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
-      return `<tr>${cells}</tr>`
+      // Single-drill: la fila admite doble-clic (back-compat) además del link de acciones.
+      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}">` : '<tr>'
+      return `${open}${cells}${drillActionsCell(drills, r, carry)}</tr>`
     })
     .join('\n')
 }
@@ -607,6 +718,8 @@ function renderInteractiveTable(
   ranges: Record<string, { min: number; max: number }>,
   tbody: string,
   titleHtml: string,
+  drills: Drill[] = [],
+  carry: Record<string, string> = {},
 ): string {
   // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
   const colMeta = cols.map((c) => ({
@@ -641,7 +754,7 @@ function renderInteractiveTable(
         `<span class="vt-th-inner"><span class="vt-th-label">${escapeHtml(c.label)}<span class="vt-sort-ind"></span></span>${filterCtrl}</span></th>`
       )
     })
-    .join('')
+    .join('') + (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
 
   // Los controles globales (búsqueda en toda la tabla, agrupar, limpiar, conteo) NO van inline:
   // el runtime los inyecta en la GAVETA COMÚN (.tray-sections). Inline solo quedan los chips de
@@ -650,8 +763,9 @@ function renderInteractiveTable(
 
   // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
   // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
-  // `drill` (si la tabla la tiene): el runtime hace clickeable cada fila hoja → `?page=<to>&ctx.<by>=<val>`.
-  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drill: node.drill }).replace(/</g, '\\u003c')
+  // `drills` (si la tabla las tiene): el runtime renderiza la columna de acciones (1 link por drill);
+  //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
+  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry }).replace(/</g, '\\u003c')
 
   return (
     `<section class="table vtable">${titleHtml}${chips}` +
@@ -659,31 +773,6 @@ function renderInteractiveTable(
     `<tbody>${tbody}</tbody></table></div>` +
     `<script type="application/json" class="vtable-data">${payload}</script></section>`
   )
-}
-
-/** CSS de filas con drill-through (clickeables). Compartido por tabla estática e interactiva. */
-const DRILL_CSS = `tr.vt-drill-row{cursor:pointer}tr.vt-drill-row:hover td{background:var(--card,#eef2ff)}`
-
-/** Cuerpo de tabla ESTÁTICA con drill: cada fila navega a `?page=<to>&ctx.<by>=<valor>`. */
-function renderStaticDrillBody(
-  cols: TableColumn[],
-  rows: Record<string, unknown>[],
-  ranges: Record<string, { min: number; max: number }>,
-  drill: { to: string; by: string },
-): string {
-  return rows
-    .map((r) => {
-      const cells = cols
-        .map((c) => {
-          const raw = r[c.field]
-          const bg = c.colorscale ? colorscaleBg(Number(raw), ranges[c.field]) : ''
-          return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(formatValue(raw, c.format))}</td>`
-        })
-        .join('')
-      const href = `?page=${encodeURIComponent(drill.to)}&ctx.${encodeURIComponent(drill.by)}=${encodeURIComponent(String(r[drill.by] ?? ''))}`
-      return `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(href)}" ondblclick="location.assign(this.getAttribute('data-href'))">${cells}</tr>`
-    })
-    .join('\n')
 }
 
 function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]): Record<string, { min: number; max: number }> {

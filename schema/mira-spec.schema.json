@@ -38,6 +38,22 @@
         }
       }
     },
+    "controls": {
+      "type": "array",
+      "description": "Controles de cabecera (server-side): cada uno fija un valor que se inyecta como :ctx.<id> en las queries de las páginas.",
+      "items": {
+        "type": "object",
+        "required": ["id", "source"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
+          "label": { "type": "string" },
+          "source": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$" },
+          "default": { "enum": ["max", "min", "first"] },
+          "single": { "type": "boolean" }
+        }
+      }
+    },
     "data": {
       "type": "object",
       "minProperties": 1,

@@ -70,8 +70,38 @@ export interface ResolvedNode {
   interactive?: boolean
   /** Meta de anotaciones inyectada por Mira (ver applyAnnotations). */
   annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
-  /** Drill-through: al clickear una fila hoja, navegar a la vista `to` pasando el campo `by`. */
-  drill?: { to: string; by: string }
+  /**
+   * Drill-through: acciones de navegación por fila hoja. Cada acción lleva a la vista `to` pasando
+   * una o más claves `by` (multi-clave: p.ej. empresa+socio). Una tabla puede ofrecer VARIOS drills
+   * (p.ej. "ver el socio" y "ver la empresa"); con uno solo, además se habilita el doble-clic de fila.
+   */
+  drills?: Drill[]
+}
+
+/** Una acción de drill-through declarada en una tabla. `by` = claves de contexto que viajan al destino. */
+export interface Drill {
+  to: string
+  by: string[]
+  label?: string
+}
+
+/**
+ * Normaliza `drillthrough` (objeto único o arreglo; `by` string o string[]) a `Drill[]`.
+ * Filtra entradas sin `to` o sin `by`. Devuelve `[]` si no hay drills válidos.
+ */
+export function normalizeDrills(raw: unknown): Drill[] {
+  if (raw == null) return []
+  const items = Array.isArray(raw) ? raw : [raw]
+  const out: Drill[] = []
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue
+    const d = it as { to?: unknown; by?: unknown; label?: unknown }
+    if (typeof d.to !== 'string' || !d.to) continue
+    const by = (Array.isArray(d.by) ? d.by : [d.by]).filter((x): x is string => typeof x === 'string' && x.length > 0)
+    if (by.length === 0) continue
+    out.push({ to: d.to, by, label: typeof d.label === 'string' ? d.label : undefined })
+  }
+  return out
 }
 
 /** Resuelve data.<dataset>.<field> a un valor (single_row → fila[0]; rows → columna o filas). */
@@ -205,19 +235,20 @@ export function composePiece(
       limit?: number
       title?: string
       interactive?: boolean
-      drillthrough?: { to: string; by: string }
+      drillthrough?: unknown
     }
     const dataset = stripData(String(t.data ?? '')).split('.')[0]
     let rows = [...(results[dataset]?.rows ?? [])]
     rows = sortRows(rows, t.sort)
     if (typeof t.limit === 'number') rows = rows.slice(0, t.limit)
+    const drills = normalizeDrills(t.drillthrough)
     return {
       type: 'table',
       rows,
       columnsSpec: t.columns ?? [],
       title: t.title,
       interactive: t.interactive,
-      drill: t.drillthrough && t.drillthrough.to && t.drillthrough.by ? { to: t.drillthrough.to, by: t.drillthrough.by } : undefined,
+      drills: drills.length ? drills : undefined,
     }
   }
   const key = Object.keys(node)[0] ?? 'unknown'

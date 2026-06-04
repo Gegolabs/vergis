@@ -1,6 +1,7 @@
 import Ajv, { type ValidateFunction } from 'ajv'
 import addFormats from 'ajv-formats'
 import { VergisError } from '@vergis/botler'
+import { normalizeDrills } from '../compose'
 
 export interface MiraDataset {
   capability: string
@@ -34,6 +35,12 @@ export interface MiraSpec {
     /** Los filtros disponibles que viven en la bandeja de filtros. */
     filters?: { dataset: string; field: string; label?: string; multi?: boolean }[]
   }
+  /**
+   * Controles de cabecera (server-side): cada uno fija UN valor que se inyecta como `:ctx.<id>` en
+   * las queries de las páginas (a diferencia de `interactions.filters`, que son client-side sobre el
+   * dato ya recuperado). Pensados para parámetros que CAMBIAN la consulta — p.ej. la semana a analizar.
+   */
+  controls?: MiraControl[]
   data: Record<string, MiraDataset>
   quality: Record<string, unknown>
   delivery: {
@@ -91,6 +98,9 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // Páginas (multi-vista): validar ids únicos y aristas de drill-through.
   if (hasPages) validatePages(s.pages!)
 
+  // Controles de cabecera: id único, source existente, default conocido, single (no multi).
+  validateControls(s)
+
   // 2 · Referencias colgantes: cada data.<path> usada en alguna pieza existe en data.
   const pieces = hasPages ? s.pages!.map((p) => p.piece) : [s.piece as Record<string, unknown>]
   const refs = [...new Set(pieces.flatMap((pc) => collectDataRefs(pc)))]
@@ -145,10 +155,10 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   return s
 }
 
-/** Arista de drill-through declarada en una tabla: al clickear una fila, ir a la vista `to` pasando `by`. */
+/** Arista de drill-through declarada en una tabla: ir a la vista `to` pasando una o más claves `by`. */
 export interface Drillthrough {
   to: string
-  by: string
+  by: string[]
 }
 
 /** Recolecta las aristas de drill-through (tablas con `drillthrough`) en el subárbol de una pieza. */
@@ -159,11 +169,23 @@ export function collectDrills(node: unknown, acc: Drillthrough[] = []): Drillthr
     return acc
   }
   const obj = node as Record<string, unknown>
-  const table = obj['table'] as { drillthrough?: { to?: unknown; by?: unknown } } | undefined
-  const d = table?.drillthrough
-  if (d && typeof d.to === 'string' && typeof d.by === 'string') acc.push({ to: d.to, by: d.by })
+  const table = obj['table'] as { drillthrough?: unknown } | undefined
+  if (table?.drillthrough != null) for (const d of normalizeDrills(table.drillthrough)) acc.push({ to: d.to, by: d.by })
   for (const v of Object.values(obj)) collectDrills(v, acc)
   return acc
+}
+
+/** Un control de cabecera del PI. `source` provee las opciones; `default` el valor inicial. */
+export interface MiraControl {
+  /** Clave del contexto que fija: se inyecta como `:ctx.<id>` en las queries. */
+  id: string
+  label?: string
+  /** Origen de las opciones: `data.<dataset>.<field>`. Sus valores distintos pueblan el selector. */
+  source: string
+  /** Valor inicial cuando no llega `ctx.<id>` en la URL: el mayor / menor / primero de las opciones. */
+  default?: 'max' | 'min' | 'first'
+  /** Selección única. Por ahora SOLO single (true). Multi-select se reserva para más adelante. */
+  single?: boolean
 }
 
 /** Valida páginas: ids únicos + aristas de drill-through (destino existe, recibe el contexto). */
@@ -196,18 +218,87 @@ function validatePages(pages: MiraPage[]): void {
           remediation: `Crear la página '${d.to}' o corregir drillthrough.to.`,
         })
       }
-      if (!(target.context ?? []).includes(d.by)) {
+      const ctx = target.context ?? []
+      const missing = d.by.filter((k) => !ctx.includes(k))
+      if (missing.length > 0) {
         throw new VergisError({
           error: 'mira/spec-invalid',
           code: 'drill-context-mismatch',
           path: `pages[${d.to}].context`,
-          value: d.by,
-          message: `La vista '${p.id}' dríllea a '${d.to}' pasando '${d.by}', pero '${d.to}' no declara '${d.by}' en su context.`,
-          remediation: `Agregar '${d.by}' a context de la página '${d.to}' (y usar :ctx.${d.by} en su data).`,
+          value: missing.join(', '),
+          message: `La vista '${p.id}' dríllea a '${d.to}' pasando [${d.by.join(', ')}], pero '${d.to}' no declara [${missing.join(', ')}] en su context.`,
+          remediation: `Agregar [${missing.join(', ')}] a context de la página '${d.to}' (y usar :ctx.<clave> en su data).`,
         })
       }
     }
   }
+}
+
+/**
+ * Valida los controles de cabecera: id único, `source` apunta a un dataset existente, `default`
+ * conocido, y `single` no es false (multi-select aún no soportado — falla explícita, no silencio).
+ */
+function validateControls(spec: MiraSpec): void {
+  const controls = spec.controls ?? []
+  const ids = new Set<string>()
+  for (const c of controls) {
+    if (!c.id || typeof c.id !== 'string') {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-id-missing',
+        path: 'controls[].id',
+        message: 'Cada control de cabecera requiere un `id` (la clave de contexto que fija).',
+        remediation: 'Declarar `id` en cada entrada de `controls`.',
+      })
+    }
+    if (ids.has(c.id)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-id-duplicate',
+        path: 'controls[].id',
+        value: c.id,
+        message: `Control de cabecera duplicado: '${c.id}'.`,
+        remediation: 'Cada control debe tener un id único.',
+      })
+    }
+    ids.add(c.id)
+    const dataset = stripDataRef(c.source).split('.')[0]
+    if (!dataset || !(dataset in spec.data)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-source-dangling',
+        path: `controls[${c.id}].source`,
+        value: c.source,
+        message: `El control '${c.id}' toma opciones de '${c.source}' pero el dataset '${dataset}' no existe en data.`,
+        remediation: `Declarar el dataset fuente en data (p.ej. una query de valores distintos), o corregir source.`,
+      })
+    }
+    if (c.default != null && !['max', 'min', 'first'].includes(c.default)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-default-invalid',
+        path: `controls[${c.id}].default`,
+        value: c.default,
+        message: `default '${c.default}' inválido para el control '${c.id}'. Valores: max | min | first.`,
+        remediation: 'Usar max (más reciente), min o first, u omitir default.',
+      })
+    }
+    if (c.single === false) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-multi-unsupported',
+        path: `controls[${c.id}].single`,
+        value: c.single,
+        message: `El control '${c.id}' pide multi-select (single: false), aún no soportado.`,
+        remediation: 'Usar single: true (o omitirlo). El multi-select de cabecera se construirá más adelante.',
+      })
+    }
+  }
+}
+
+/** `data.<dataset>.<field>` → `<dataset>.<field>` (quita el prefijo data.). */
+function stripDataRef(ref: string): string {
+  return typeof ref === 'string' && ref.startsWith('data.') ? ref.slice('data.'.length) : String(ref ?? '')
 }
 
 /** Recolecta toda referencia data.<dataset>[.<field>...] presente en el subárbol de piece. */
