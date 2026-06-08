@@ -1,54 +1,54 @@
 # Vergis · Meta-Cognitive Platform
 
-**Vergis** es la *Meta-Cognitive Platform* — la implementación de referencia de **AgencyDomains**. Hospeda un **Botler** (runtime genérico de Capa 3) que ejecuta **Botlets**; **Mira** es el proto-Botlet de información que produce reportes y dashboards a partir de un spec declarativo.
+**Vergis** is the *Meta-Cognitive Platform* — the reference implementation of **AgencyDomains**. It hosts a **Botler** (generic Layer 3 runtime) that runs **Botlets**; **Mira** is the information proto-Botlet that produces reports and dashboards from a declarative spec.
 
-> Esquema de nombres: **Vergis** (plataforma) · **Botler** (runtime de Capa 3, genérico) · **Mira** (proto-Botlet de información).
+> Naming scheme: **Vergis** (platform) · **Botler** (Layer 3 runtime, generic) · **Mira** (information proto-Botlet).
 
-## Correr
+## Run
 
 ```sh
 npm install
-./bin/vergis run examples/hello.yaml      # escribe hello.html + vergis.log.jsonl
-npm test                                  # suite hermética (acceptance)
+./bin/vergis run examples/hello.yaml      # writes hello.html + vergis.log.jsonl
+npm test                                  # hermetic acceptance suite
 npm run typecheck                         # tsc --noEmit
 ```
 
-## Qué demuestra (Definition of Done · walking skeleton)
+## What it proves (Definition of Done · walking skeleton)
 
-1. `vergis run examples/hello.yaml` termina con código 0 y escribe `hello.html`.
-2. El HTML muestra la pieza compuesta y el conteo de agentes vivos.
-3. El log (`vergis.log.jsonl`) encadena por hash `invoke`, `capability-call` (×N), `render`, `publish`.
-4. Un spec con Capability no catalogada se **rechaza con error estructurado** (`examples/bad-capability.yaml`).
-5. Un fallo de Capability **dispara el fallback agéntico** (`examples/force-fail.yaml` → log `agentic-fallback`).
-6. **Reproducibilidad**: mismo spec ⇒ HTML byte-idéntico.
+1. `vergis run examples/hello.yaml` exits 0 and writes `hello.html`.
+2. The HTML shows the composed piece and the live-agent count.
+3. The log (`vergis.log.jsonl`) hash-chains `invoke`, `capability-call` (×N), `render`, `publish`.
+4. A spec with an uncatalogued Capability is **rejected with a structured error** (`examples/bad-capability.yaml`).
+5. A Capability failure **triggers the agentic fallback** (`examples/force-fail.yaml` → `agentic-fallback` log).
+6. **Reproducibility**: the same spec ⇒ byte-identical HTML.
 
-## Datos reales
+## Real data
 
-Más allá de los *mocks*, Mira consume datos reales vía Capabilities de acceso (p. ej. `execute-sql-dwh` contra un SQL endpoint, autenticando con Service Principal). El render produce KPIs, charts (Vega-Lite → SVG server-side) y tablas; el *freshness check* degrada según `quality.degradation` cuando los datos superan `max_age`. Las credenciales y los specs de cada instancia se proveen **desde afuera** (env `VERGIS_CONNECTIONS`, `VERGIS_SPEC`/`VERGIS_SPECS`) — nunca van en la imagen ni en el repo del producto.
+Beyond *mocks*, Mira consumes real data through access Capabilities (e.g. `execute-sql-dwh` against a SQL endpoint, authenticating with a Service Principal). The render produces KPIs, charts (Vega-Lite → server-side SVG) and tables; the *freshness check* degrades according to `quality.degradation` when data exceeds `max_age`. Each instance's credentials and specs are supplied **from the outside** (env `VERGIS_CONNECTIONS`, `VERGIS_SPEC`/`VERGIS_SPECS`) — never baked into the image or the product repo.
 
-## Servidor y despliegue
+## Server and deployment
 
-`server/serve-rls.ts` sirve uno o varios **Productos de Información** **por consumidor** (RLS data-anchored): descubre los specs (`VERGIS_SPECS_DIR`/`VERGIS_SPECS`), rutea por `identity.code` (índice per-consumidor en `/`), aplica la política del **policy store** (`VERGIS_POLICIES`) sobre el store ClickHouse (`VERGIS_DATASETS`), e inyecta los claims del gate. **No hay camino de servir sin RLS** (el server estático fue retirado). La imagen (`Dockerfile`) es **genérica y agnóstica de instancia**: specs, policies, datasets y conexiones se inyectan por entorno.
+`server/serve-rls.ts` serves one or more **Information Products** **per consumer** (data-anchored RLS): it discovers the specs (`VERGIS_SPECS_DIR`/`VERGIS_SPECS`), routes by `identity.code` (per-consumer index at `/`), applies the **policy store** policy (`VERGIS_POLICIES`) over the ClickHouse store (`VERGIS_DATASETS`), and injects the gate claims. **There is no path to serve without RLS** (the static server was retired). The image (`Dockerfile`) is **generic and instance-agnostic**: specs, policies, datasets and connections are injected via the environment.
 
 ## Layout
 
 ```
 vergis/
 ├── packages/
-│   ├── botler/         # runtime genérico de Capa 3
-│   ├── mira/           # proto-Botlet de información (parse + validar + pipeline)
+│   ├── botler/         # generic Layer 3 runtime
+│   ├── mira/           # information proto-Botlet (parse + validate + pipeline)
 │   ├── capabilities/   # static-data · execute-sql-dwh · render-html-piece · publicar-artefacto · themes
 │   └── cli/            # `vergis run <spec>`
-├── examples/           # hello.yaml + casos de validación y fallback (genéricos)
+├── examples/           # hello.yaml + validation & fallback cases (generic)
 ├── schema/             # mira-spec.schema.json
-├── server/             # servidor de despliegue (multi-reporte)
-└── tests/              # acceptance (suite hermética)
+├── server/             # deployment server (multi-report)
+└── tests/              # acceptance (hermetic suite)
 ```
 
-## Edición y licencia
+## Edition and license
 
-Núcleo **AGPL-3.0-or-later**, funcionalmente completo en single-node. La edición Enterprise (HA / Kubernetes / carrier-grade) es comercial. Las specs normativas del canon (contrato del Botler, spec de Mira, DSL, naming) se distribuyen con AgencyDomains; su migración a `docs/` de este repo está pendiente.
+Core **AGPL-3.0-or-later**, functionally complete on single-node. The Enterprise edition (HA / Kubernetes / carrier-grade) is commercial. The canon's normative specs (Botler contract, Mira spec, DSL, naming) ship with AgencyDomains; their migration to this repo's `docs/` is pending.
 
 ---
 
-Lenguaje: TypeScript (Node). · Producto de Grupo Ultra (Gegolabs) · *Generado con Wingworking*
+Language: TypeScript (Node). · A Gegolabs project · *Built with Wingworking*
