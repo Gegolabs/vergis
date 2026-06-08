@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agencydomains.org/schema/mira-spec-1.0.json",
+  "title": "Mira spec (DSL de configuración composicional v1.0)",
+  "description": "Schema formal del DSL de Mira. Deriva del doc 3 del cluster 006. Valida la estructura de los 5 bloques canónicos antes de que el Botler acepte el Botlet.",
+  "type": "object",
+  "required": ["mira_version", "identity", "data", "quality", "delivery"],
+  "additionalProperties": true,
+  "comment": "Exactamente uno de `piece` (PI de una vista) o `pages` (PI multi-vista) — se valida en validateSpec.",
+  "properties": {
+    "mira_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" },
+    "identity": {
+      "type": "object",
+      "required": ["id", "display_name", "classification"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "display_name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "owner": { "type": "string" },
+        "classification": { "enum": ["public", "internal", "confidential", "regulated"] },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "piece": { "type": "object" },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "piece"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "title": { "type": "string", "minLength": 1 },
+          "piece": { "type": "object" },
+          "context": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "controls": {
+      "type": "array",
+      "description": "Controles de cabecera (server-side): cada uno fija un valor que se inyecta como :ctx.<id> en las queries de las páginas.",
+      "items": {
+        "type": "object",
+        "required": ["id", "source"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
+          "label": { "type": "string" },
+          "source": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$" },
+          "default": { "enum": ["max", "min", "first"] },
+          "single": { "type": "boolean" }
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["capability"],
+        "additionalProperties": true,
+        "properties": {
+          "capability": { "type": "string", "minLength": 1 },
+          "params": { "type": "object" },
+          "shape": { "type": "object" },
+          "cache_key": { "type": "string" },
+          "watermark_field": { "type": "string" }
+        }
+      }
+    },
+    "quality": { "type": "object" },
+    "delivery": { "type": "object" }
+  }
+}
