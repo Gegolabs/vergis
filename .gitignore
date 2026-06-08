@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log.jsonl
+hello.html
+asistencia.html
+completa.html
+proyeccion.html
+out/
+.env
+.DS_Store
