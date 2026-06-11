@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import initSqlJs from 'sql.js'
 
@@ -55,8 +56,10 @@ export class SqliteAnnotationStore implements AnnotationStore {
 
   /** `file` null → DB en memoria (tests). Si el archivo existe, se carga. */
   static async open(file: string | null): Promise<SqliteAnnotationStore> {
+    // El WASM se localiza vía resolución de módulos (robusto en dev con tsx y en el bundle de dist/).
+    const sqlJsDist = dirname(createRequire(import.meta.url).resolve('sql.js'))
     const SQL = await initSqlJs({
-      locateFile: (f: string) => new URL(`../../../node_modules/sql.js/dist/${f}`, import.meta.url).pathname,
+      locateFile: (f: string) => `${sqlJsDist}/${f}`,
     })
     const bytes = file && existsSync(file) ? readFileSync(file) : undefined
     const db = new SQL.Database(bytes) as unknown as SqlDb

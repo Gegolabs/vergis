@@ -97,8 +97,10 @@ export class MiraBotlet implements Botlet {
       if (!results[dsName]) {
         const ds = spec.data[dsName]
         if (ds) {
-          const out = (await host.capabilityCall(ds.capability, applyCtx(ds.params, ctxValues), identity)) as { rows?: Record<string, unknown>[] }
-          results[dsName] = { rows: out?.rows ?? [] }
+          const missing: string[] = []
+          const out = await host.capabilityCall(ds.capability, applyCtx(ds.params, ctxValues, missing), identity)
+          if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: dsName, params: missing })
+          results[dsName] = { rows: expectRows(dsName, ds.capability, out) }
           host.log({ type: 'mira-control-source', botletId: this.id, control: c.id, dataset: dsName, rows: results[dsName].rows.length })
         }
       }
@@ -115,10 +117,12 @@ export class MiraBotlet implements Botlet {
       if (results[name]) continue // ya recuperado (p.ej. fuente de un control)
       const ds = spec.data[name]
       if (!ds) continue
-      const params = isMulti ? applyCtx(ds.params, ctxValues) : ds.params
+      const missing: string[] = []
+      const params = isMulti ? applyCtx(ds.params, ctxValues, missing) : ds.params
+      if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: name, params: missing })
       host.log({ type: 'mira-retrieve', botletId: this.id, dataset: name, capability: ds.capability })
-      const out = (await host.capabilityCall(ds.capability, params, identity)) as { rows?: Record<string, unknown>[] }
-      results[name] = { rows: out?.rows ?? [] }
+      const out = await host.capabilityCall(ds.capability, params, identity)
+      results[name] = { rows: expectRows(name, ds.capability, out) }
       // 4a · Calidad: chequeo de shape (freshness se evalúa tras recuperar todo)
       this.checkShape(name, ds, results[name], host)
     }
@@ -318,16 +322,36 @@ function uniqueDatasets(piece: Record<string, unknown>): string[] {
 }
 
 /**
+ * Valida el contrato de salida de una Capability de datos: `{ rows: [...] }`. Falla ruidoso y
+ * accionable en la frontera (en vez de un cast silencioso que revienta críptico aguas abajo).
+ */
+function expectRows(dataset: string, capability: string, out: unknown): Record<string, unknown>[] {
+  const rows = (out as { rows?: unknown } | null | undefined)?.rows
+  if (!Array.isArray(rows)) {
+    throw new VergisError({
+      error: 'mira/retrieve',
+      code: 'capability-output-invalid',
+      path: `data.${dataset}`,
+      message: `La Capability '${capability}' no devolvió '{ rows: [...] }' para el dataset '${dataset}'.`,
+      remediation: 'Toda Capability de datos debe devolver un objeto con un arreglo `rows`.',
+    })
+  }
+  return rows as Record<string, unknown>[]
+}
+
+/**
  * Sustituye `:ctx.<param>` en `params.sql` por un PARÁMETRO BIND `@ctx_<param>` y adjunta su valor
  * en `params.params` (la Capability lo bindea — nunca concatena → injection-safe). Si no hay `:ctx.`
- * o no hay sql, devuelve los params intactos.
+ * o no hay sql, devuelve los params intactos. Un param sin valor en `ctxValues` se bindea como `''`
+ * (acota igual) y se reporta en `missing` para que el llamador lo loguee.
  */
-function applyCtx(params: Record<string, unknown> | undefined, ctxValues: Record<string, string>): Record<string, unknown> | undefined {
+function applyCtx(params: Record<string, unknown> | undefined, ctxValues: Record<string, string>, missing?: string[]): Record<string, unknown> | undefined {
   if (!params || typeof params['sql'] !== 'string') return params
   const sql = params['sql'] as string
   if (!sql.includes(':ctx.')) return params
   const bound: Record<string, string> = {}
   const rewritten = sql.replace(/:ctx\.([a-zA-Z0-9_]+)/g, (_m, param: string) => {
+    if (!(param in ctxValues) && missing && !missing.includes(param)) missing.push(param)
     bound[`ctx_${param}`] = ctxValues[param] ?? ''
     return `@ctx_${param}`
   })

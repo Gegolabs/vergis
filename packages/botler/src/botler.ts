@@ -18,7 +18,11 @@ export interface BotlerConfig {
   agencyDomainId?: string
   /** Reloj inyectable para reproducibilidad en tests. */
   clock?: () => string
+  /** Timeout por capability-call en ms (una Capability colgada no cuelga la invocación). Default 120 000. */
+  capabilityTimeoutMs?: number
 }
+
+const DEFAULT_CAPABILITY_TIMEOUT_MS = 120_000
 
 export interface BotletInfo {
   id: BotletId
@@ -131,13 +135,33 @@ export class Botler {
     }
     // §4.7: política antes de ejecución (v0.1: passthrough mínimo, registrado).
     this.log.append({ type: 'policy-check', capability: ref, identity: identity.agent, decision: 'allow' })
+    const timeoutMs = this.config.capabilityTimeoutMs ?? DEFAULT_CAPABILITY_TIMEOUT_MS
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      const data = await cap.execute(params, identity)
+      const data = await Promise.race([
+        cap.execute(params, identity),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new VergisError({
+                error: 'botler/capability-call',
+                code: 'capability-timeout',
+                path: ref,
+                message: `Capability '${ref}' superó el timeout de ${timeoutMs} ms.`,
+                remediation: 'Revisar la Capability o ajustar capabilityTimeoutMs del Botler.',
+              }),
+            )
+          }, timeoutMs)
+          timer.unref?.()
+        }),
+      ])
       this.log.append({ type: 'capability-call', capability: ref, ok: true })
       return data
     } catch (e) {
       this.log.append({ type: 'capability-call', capability: ref, ok: false, error: String(e) })
       throw e
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 
