@@ -1,7 +1,7 @@
 {
   "name": "vergis",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Vergis — Meta-Cognitive Platform · implementación de referencia de AgencyDomains",
   "type": "module",
   "workspaces": [
@@ -10,12 +10,15 @@
   "scripts": {
     "vergis": "tsx packages/cli/src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "esbuild server/serve-rls.ts --bundle --platform=node --target=node22 --format=esm --external:canvas --external:mssql --external:tedious --external:sql.js --external:ajv --external:ajv-formats --external:yaml --outfile=dist/serve-rls.mjs && cp packages/capabilities/src/themes/arbol-logo.png dist/",
+    "start": "node dist/serve-rls.mjs"
   },
   "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "@types/mssql": "^12.3.0",
     "@types/node": "^22.10.0",
+    "esbuild": "^0.25.12",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

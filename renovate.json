@@ -1,0 +1,9 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "14 days",
+  "description": "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
+  "osvVulnerabilityAlerts": true,
+  "rangeStrategy": "bump",
+  "labels": ["dependencies"]
+}

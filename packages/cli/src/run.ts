@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Botler, type Capability, type IdentityContext, type LogEntry } from '@vergis/botler'
@@ -58,8 +58,12 @@ export interface RunOutcome {
 }
 
 function defaultSchemaPath(): string {
-  // packages/cli/src/run.ts → ../../../schema/mira-spec.schema.json
-  return resolve(dirname(fileURLToPath(import.meta.url)), '../../../schema/mira-spec.schema.json')
+  // Candidatos: relativo al fuente (dev con tsx) → relativo al cwd (dist/ bundleado, imagen Docker).
+  const candidates = [
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../schema/mira-spec.schema.json'),
+    resolve(process.cwd(), 'schema/mira-spec.schema.json'),
+  ]
+  return candidates.find((p) => existsSync(p)) ?? candidates[0]
 }
 
 /**

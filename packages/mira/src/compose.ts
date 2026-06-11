@@ -1,3 +1,4 @@
+import { VergisError } from '@vergis/botler'
 import type { MiraSpec } from './dsl/validate'
 
 export interface DatasetResult {
@@ -118,19 +119,31 @@ export function resolvePath(path: string, results: Record<string, DatasetResult>
   return res.rows.map((r) => r[field])
 }
 
+/** Profundidad máxima del árbol de pieza — guard contra specs patológicas (stack overflow). */
+const MAX_PIECE_DEPTH = 32
+
 /** Compone la pieza resolviendo referencias e interpolaciones; el render hace la presentación. */
 export function composePiece(
   node: Record<string, unknown>,
   results: Record<string, DatasetResult>,
   spec: MiraSpec,
+  depth = 0,
 ): ResolvedNode {
+  if (depth > MAX_PIECE_DEPTH) {
+    throw new VergisError({
+      error: 'mira/compose',
+      code: 'piece-depth-exceeded',
+      message: `La pieza supera la profundidad máxima de anidamiento (${MAX_PIECE_DEPTH}).`,
+      remediation: 'Aplanar el árbol de layouts del spec.',
+    })
+  }
   if (node['layout']) {
     const elements = (node['elements'] as Record<string, unknown>[] | undefined) ?? []
     return {
       layout: String(node['layout']),
       columns: node['columns'] as number | undefined,
       span: node['span'] as number | undefined,
-      elements: elements.map((e) => composePiece(e, results, spec)),
+      elements: elements.map((e) => composePiece(e, results, spec, depth + 1)),
     }
   }
   if (node['markdown_block']) {
