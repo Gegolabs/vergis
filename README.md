@@ -39,6 +39,7 @@ vergis/
 │   ├── mira/           # information proto-Botlet (parse + validate + pipeline)
 │   ├── capabilities/   # static-data · execute-sql-dwh · render-html-piece · publicar-artefacto · themes
 │   └── cli/            # `vergis run <spec>`
+├── docs/               # ADRs & engineering docs (language/supply-chain, improvement plan)
 ├── examples/           # hello.yaml + validation & fallback cases (generic)
 ├── schema/             # mira-spec.schema.json
 ├── server/             # deployment server (multi-report)
