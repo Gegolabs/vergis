@@ -118,6 +118,38 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     }
   }
 
+  // 2·bis · Ejes de `distribution`: el gráfico lee su dataset desde dimension/metric (ruta
+  // completa data.<dataset>.<campo>, como un kpi) e IGNORA cualquier clave `data:`. Un eje pelado
+  // (`dimension: local`) resuelve un dataset inexistente y el gráfico sale VACÍO sin error — el
+  // render no falla, solo no dibuja barras. Lo atajamos acá: exigir ruta completa y rechazar la
+  // clave `data:` colgante, que delata que la fuente quedó sin cablear. (La existencia del dataset
+  // y del campo la cubren los pasos 2 y 4 una vez que el eje es un data.<...> recolectable.)
+  for (const d of pieces.flatMap((pc) => collectDistributions(pc))) {
+    for (const axis of ['dimension', 'metric'] as const) {
+      const v = d[axis]
+      if (typeof v !== 'string' || !v.startsWith('data.') || stripDataRef(v).split('.').length < 2) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'distribution-axis-not-qualified',
+          path: `piece -> distribution.${axis}`,
+          value: (v ?? null) as never,
+          message: `El eje '${axis}' de un gráfico distribution debe ser una ruta completa data.<dataset>.<campo> (como un kpi); recibió ${JSON.stringify(v ?? null)}.`,
+          remediation: `Escribir '${axis}: data.<dataset>.<campo>'. El gráfico NO lee una clave 'data:' separada; su fuente sale de dimension/metric.`,
+        })
+      }
+    }
+    if ('data' in d) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'distribution-stray-data-key',
+        path: `piece -> distribution.data`,
+        value: (d['data'] ?? null) as never,
+        message: `Un gráfico distribution no lee la clave 'data:'; su dataset sale de dimension/metric. Su presencia indica que la fuente no quedó cableada y el gráfico saldría vacío.`,
+        remediation: `Quitar 'data:' y dejar dimension/metric como rutas completas data.<dataset>.<campo>.`,
+      })
+    }
+  }
+
   // 3 · Capabilities catalogadas
   for (const [name, ds] of Object.entries(s.data)) {
     if (!ctx.capabilities.includes(ds.capability)) {
@@ -313,4 +345,22 @@ export function collectDataRefs(node: unknown, acc: Set<string> = new Set()): st
     for (const v of Object.values(node as Record<string, unknown>)) collectDataRefs(v, acc)
   }
   return [...acc]
+}
+
+/** Recolecta todos los nodos `distribution` (su objeto de config) presentes en el subárbol de piece. */
+export function collectDistributions(
+  node: unknown,
+  acc: Record<string, unknown>[] = [],
+): Record<string, unknown>[] {
+  if (node == null) return acc
+  if (Array.isArray(node)) {
+    for (const child of node) collectDistributions(child, acc)
+  } else if (typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    if (obj['distribution'] && typeof obj['distribution'] === 'object') {
+      acc.push(obj['distribution'] as Record<string, unknown>)
+    }
+    for (const v of Object.values(obj)) collectDistributions(v, acc)
+  }
+  return acc
 }
