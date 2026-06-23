@@ -39,11 +39,12 @@ import {
   type MasterDataStore,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
-import { page, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
+import { shellNav, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { readMultipart } from './multipart'
 
-const adminPage = (deps: AdminDeps, title: string, body: string): string =>
-  page(`${deps.brandTitle ?? 'Vergis'} · Administración`, title, body)
+const brandOf = (deps: AdminDeps): string => `${deps.brandTitle ?? 'Vergis'} · Administración`
+const adminPage = (deps: AdminDeps, nav: string, title: string, body: string): string =>
+  shellNav(brandOf(deps), title, nav, body)
 
 /** Write-path del intake (a OneLake) + disparo del pipeline. Lo inyecta el wiring. */
 export interface IntakeRunner {
@@ -67,6 +68,8 @@ export interface AdminDeps {
   onWrite?: (entity: MasterDataEntity) => Promise<void>
   /** Mapa de ingestión derivado (frente B): cadencia requerida por proceso. Opcional. */
   ingestionMap?: () => Promise<IngestionMapRow[]>
+  /** Nº de PIs servidos (para el tile del dashboard). Opcional. */
+  piCount?: number
   /** Settings de plataforma (título del catálogo, etc.). Opcional. */
   settingStore?: PlatformSettingStore
   /** Identidad del consumidor desde las cabeceras del gate. */
@@ -99,20 +102,33 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     const manageable = manageableDomains(allDomains, email, isAdmin)
     if (!isAdmin && manageable.length === 0) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-      send(res, 403, adminPage(deps, 'Acceso restringido', `<p class="msg err">No gestionas ninguna plataforma ni dominio.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
+      send(res, 403, adminPage(deps, buildNav(deps, [], false, 'home'), 'Acceso restringido', `<p class="msg err">No gestionas ninguna plataforma ni dominio.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
       return true
     }
     const token = csrf(email)
     const url = new URL(req.url ?? '/', 'http://localhost')
+    // Navegación (menú lateral) activa según la ruta.
+    let active = 'home'
+    const dmActive = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)/)
+    if (dmActive) active = `dom:${dmActive[1]}`
+    else if (/^\/admin\/(plataforma|roles|groups|settings|sources)/.test(path)) active = 'plat'
+    else {
+      const emActive = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)/)
+      if (emActive) {
+        const e = entityById(emActive[1])
+        active = e?.domain ? `dom:${e.domain}` : 'home'
+      }
+    }
+    const nav = buildNav(deps, manageable, isAdmin, active)
     const denyPlatform = (): boolean => {
-      send(res, 403, adminPage(deps, 'Solo plataforma', `<p class="msg err">Esta sección es de gestión de plataforma (solo administradores).</p><p><a href="/admin">← Administración</a></p>`))
+      send(res, 403, adminPage(deps, nav, 'Solo plataforma', `<p class="msg err">Esta sección es de gestión de plataforma (solo administradores).</p>`))
       return true
     }
 
     try {
       // ── HOME · dashboard de salud ────────────────────────────────────────
       if (path === '/admin' && req.method === 'GET') {
-        send(res, 200, await dashboard(deps, email, isAdmin, manageable))
+        send(res, 200, await dashboard(deps, nav, email, isAdmin, manageable))
         return true
       }
 
@@ -121,22 +137,22 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       if (di) {
         const domain = domainById(di[1])
         if (!domain) {
-          send(res, 404, adminPage(deps, 'No encontrado', `<p class="msg err">Dominio desconocido: <code>${escapeHtml(di[1])}</code></p><p><a href="/admin">← Administración</a></p>`))
+          send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Dominio desconocido: <code>${escapeHtml(di[1])}</code></p>`))
           return true
         }
         if (!canManageDomain(domain, email, isAdmin)) {
           deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-          send(res, 403, adminPage(deps, 'Acceso restringido', `<p class="msg err">No gestionas el dominio <code>${escapeHtml(domain.id)}</code>.</p><p><a href="/admin">← Administración</a></p>`))
+          send(res, 403, adminPage(deps, nav, 'Acceso restringido', `<p class="msg err">No gestionas el dominio <code>${escapeHtml(domain.id)}</code>.</p>`))
           return true
         }
         const slotId = di[2]
         if (!slotId && req.method === 'GET') {
           const okFile = url.searchParams.get('ok') ?? undefined
-          send(res, 200, await domainPage(deps, domain, token, isAdmin, okFile ? { ok: `Archivo «${okFile}» recibido.` } : undefined))
+          send(res, 200, await domainPage(deps, nav, domain, token, isAdmin, okFile ? { ok: `Archivo «${okFile}» recibido.` } : undefined))
           return true
         }
         if (slotId && req.method === 'POST') {
-          await handleIntake(deps, domain, slotId, req, res, token, email)
+          await handleIntake(deps, nav, domain, slotId, req, res, token, email)
           return true
         }
       }
@@ -144,12 +160,12 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       // ── GESTIÓN DE PLATAFORMA (solo admin) ───────────────────────────────
       if (path === '/admin/plataforma' && req.method === 'GET') {
         if (!isAdmin) return denyPlatform()
-        send(res, 200, await platformPage(deps, token))
+        send(res, 200, await platformPage(deps, nav, token))
         return true
       }
       if (path === '/admin/roles' && req.method === 'GET') {
         if (!isAdmin) return denyPlatform()
-        send(res, 200, await rolesPage(deps, token))
+        send(res, 200, await rolesPage(deps, nav, token))
         return true
       }
       if (path === '/admin/roles/add' && req.method === 'POST') {
@@ -161,7 +177,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           if (added) deps.audit({ type: 'admin-roles-write', op: 'add', target: (f['email'] ?? '').toLowerCase(), by: email })
           redirect(res, '/admin/roles')
         } catch (e) {
-          send(res, 400, await rolesPage(deps, token, errMsg(e)))
+          send(res, 400, await rolesPage(deps, nav, token, errMsg(e)))
         }
         return true
       }
@@ -174,7 +190,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           deps.audit({ type: 'admin-roles-write', op: 'remove', target: (f['email'] ?? '').toLowerCase(), by: email })
           redirect(res, '/admin/roles')
         } catch (e) {
-          send(res, e instanceof AdminLockout ? 409 : 400, await rolesPage(deps, token, errMsg(e)))
+          send(res, e instanceof AdminLockout ? 409 : 400, await rolesPage(deps, nav, token, errMsg(e)))
         }
         return true
       }
@@ -192,12 +208,12 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       // Grupos de Mira
       if (deps.groupStore && (path === '/admin/groups' || path.startsWith('/admin/groups/'))) {
         if (!isAdmin) return denyPlatform()
-        if (await handleGroups(deps, deps.groupStore, path, req, res, token, email)) return true
+        if (await handleGroups(deps, nav, deps.groupStore, path, req, res, token, email)) return true
       }
       // Mapa de fuentes e ingestión (vista global; gestión de plataforma por ahora)
       if (deps.ingestionMap && path === '/admin/sources' && req.method === 'GET') {
         if (!isAdmin) return denyPlatform()
-        send(res, 200, await sourcesPage(deps))
+        send(res, 200, await sourcesPage(deps, nav))
         return true
       }
 
@@ -206,7 +222,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       if (m) {
         const entity = entityById(m[1])
         if (!entity) {
-          send(res, 404, adminPage(deps, 'No encontrado', `<p class="msg err">Entidad desconocida: <code>${escapeHtml(m[1])}</code></p>`))
+          send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Entidad desconocida: <code>${escapeHtml(m[1])}</code></p>`))
           return true
         }
         // Autz: admin O steward del dominio de la entidad (entidad sin dominio → solo admin).
@@ -214,13 +230,13 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         const canEdit = isAdmin || (entDomain ? canManageDomain(entDomain, email, isAdmin) : false)
         if (!canEdit) {
           deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-          send(res, 403, adminPage(deps, 'Acceso restringido', `<p class="msg err">No gestionas la entidad <code>${escapeHtml(entity.id)}</code>.</p><p><a href="/admin">← Administración</a></p>`))
+          send(res, 403, adminPage(deps, nav, 'Acceso restringido', `<p class="msg err">No gestionas la entidad <code>${escapeHtml(entity.id)}</code>.</p>`))
           return true
         }
         const op = m[2]
         if (!op && req.method === 'GET') {
           const editPk = url.searchParams.get('edit') ?? undefined
-          send(res, 200, await entityPage(deps, entity, token, editPk))
+          send(res, 200, await entityPage(deps, nav, entity, token, editPk))
           return true
         }
         if (op && req.method === 'POST') {
@@ -241,10 +257,10 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           return true
         }
       }
-      send(res, 404, adminPage(deps, 'No encontrado', `<p class="msg err">Ruta no encontrada.</p><p><a href="/admin">← Administración</a></p>`))
+      send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Ruta no encontrada.</p>`))
       return true
     } catch (e) {
-      send(res, statusForError(e), adminPage(deps, 'Error', `<p class="msg err">${escapeHtml(errMsg(e))}</p><p><a href="/admin">← Administración</a></p>`))
+      send(res, statusForError(e), adminPage(deps, nav, 'Error', `<p class="msg err">${escapeHtml(errMsg(e))}</p>`))
       return true
     }
   }
@@ -255,6 +271,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 // ─── Ingesta de archivos (gestión de dominio) ────────────────────────────────
 async function handleIntake(
   deps: AdminDeps,
+  nav: string,
   domain: DomainDecl,
   slotId: string,
   req: IncomingMessage,
@@ -264,20 +281,20 @@ async function handleIntake(
 ): Promise<void> {
   const slot = (deps.intakeSlots ?? []).find((s) => s.id === slotId && (s.domain ?? '') === domain.id)
   if (!slot || !deps.intake) {
-    send(res, deps.intake ? 404 : 503, adminPage(deps, 'Ingesta', `<p class="msg err">${deps.intake ? `Slot desconocido: <code>${escapeHtml(slotId)}</code>` : 'La ingesta no está habilitada en esta instancia.'}</p><p><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`))
+    send(res, deps.intake ? 404 : 503, adminPage(deps, nav, 'Ingesta', `<p class="msg err">${deps.intake ? `Slot desconocido: <code>${escapeHtml(slotId)}</code>` : 'La ingesta no está habilitada en esta instancia.'}</p>`))
     return
   }
   const { fields, files } = await readMultipart(req)
   requireCsrf(fields, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
   const file = files.find((f) => f.field === 'file') ?? files[0]
   if (!file || !file.filename) {
-    send(res, 400, await domainPage(deps, domain, token, true, { error: 'No se adjuntó ningún archivo.' }))
+    send(res, 400, await domainPage(deps, nav, domain, token, true, { error: 'No se adjuntó ningún archivo.' }))
     return
   }
   const v = validateUpload(slot, file.filename, file.bytes.length)
   if (!v.ok) {
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: file.filename, bytes: file.bytes.length, by, ok: false, error: v.error })
-    send(res, 400, await domainPage(deps, domain, token, true, { error: v.error }))
+    send(res, 400, await domainPage(deps, nav, domain, token, true, { error: v.error }))
     return
   }
   // Aterriza el crudo en la landing zone OneLake (staging). El pipeline existente lo transforma.
@@ -320,8 +337,28 @@ async function handleEntityWrite(
 
 // ─── Render (SSR, mismo lenguaje visual que el índice) ───────────────────────
 
-/** HOME · dashboard de salud: dominios que gestionas + (admin) entrada de Plataforma. */
-async function dashboard(deps: AdminDeps, email: string, isAdmin: boolean, manageable: DomainDecl[]): Promise<string> {
+/** Menú lateral de navegación (persistente en todas las páginas de Administración). */
+function buildNav(deps: AdminDeps, manageable: DomainDecl[], isAdmin: boolean, active: string): string {
+  const item = (href: string, label: string, on: boolean, mono?: string): string =>
+    `<a href="${href}" class="${on ? 'on' : ''}">${mono ? `<span class="c">${escapeHtml(mono)}</span> ` : ''}${escapeHtml(label)}</a>`
+  let s = `<span class="bca">${escapeHtml(deps.brandTitle ?? 'Vergis')} · Admin</span>`
+  s += item('/admin', 'Inicio', active === 'home')
+  if (manageable.length) {
+    s += `<div class="grp">Dominios</div>`
+    s += manageable.map((d) => item(`/admin/dominio/${d.id}`, d.label, active === `dom:${d.id}`, d.id)).join('')
+  }
+  if (isAdmin) {
+    s += `<div class="grp">Plataforma</div>`
+    s += item('/admin/plataforma', 'Gestión', active === 'plat')
+  }
+  return s
+}
+
+const tile = (n: string | number, label: string, warn = false): string =>
+  `<div class="tile${warn ? ' warn' : ''}"><div class="n">${escapeHtml(String(n))}</div><div class="l">${escapeHtml(label)}</div></div>`
+
+/** HOME · dashboard de salud: tiles + dominios que gestionas + (admin) entrada de Plataforma. */
+async function dashboard(deps: AdminDeps, nav: string, email: string, isAdmin: boolean, manageable: DomainDecl[]): Promise<string> {
   const entitiesOf = (domId: string) => deps.entities.filter((e) => (e.domain ?? '') === domId)
   const slotsOf = (domId: string) => (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domId)
   const domainCard = (d: DomainDecl): string => {
@@ -330,7 +367,7 @@ async function dashboard(deps: AdminDeps, email: string, isAdmin: boolean, manag
     const ns = slotsOf(d.id).length
     if (ns) inv.push(`${ns} slot${ns === 1 ? '' : 's'} de ingesta`)
     if (ne) inv.push(`${ne} ${ne === 1 ? 'entidad' : 'entidades'} de data maestra`)
-    return `<li><a href="/admin/dominio/${escapeHtml(d.id)}"><span class="c">${escapeHtml(d.id)}</span> ${escapeHtml(d.label)}</a><div class="sub">${escapeHtml(d.description ?? '')}${d.description && inv.length ? ' · ' : ''}${inv.join(' · ')}</div></li>`
+    return `<li><a href="/admin/dominio/${escapeHtml(d.id)}"><span class="c">${escapeHtml(d.id)}</span> ${escapeHtml(d.label)} →</a><div class="sub">${escapeHtml(d.description ?? '')}${d.description && inv.length ? ' · ' : ''}${inv.join(' · ')}</div></li>`
   }
   const domainsSection = manageable.length
     ? `<h2>Dominios</h2><ul class="cards">${manageable.map(domainCard).join('')}</ul>`
@@ -342,35 +379,36 @@ async function dashboard(deps: AdminDeps, email: string, isAdmin: boolean, manag
     ? `<h2>Data Maestra (sin dominio)</h2><ul class="cards">${orphans.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}"><span class="c">${escapeHtml(e.id)}</span> ${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
     : ''
 
-  // Tira de salud de ingestión (lo computable hoy: brecha de frescura). Solo admin.
-  let health = ''
+  // Tiles de salud. Slots = los de dominios gestionables; ingestión = brecha de frescura (admin).
+  const nslots = (deps.intakeSlots ?? []).filter((s) => manageable.some((d) => d.id === (s.domain ?? ''))).length
+  const tiles: string[] = [tile(manageable.length, 'Dominios')]
+  if (deps.piCount != null) tiles.push(tile(deps.piCount, 'PIs'))
+  tiles.push(tile(nslots, nslots === 1 ? 'Slot ingesta' : 'Slots ingesta'))
   if (isAdmin && deps.ingestionMap) {
     try {
       const map = await deps.ingestionMap()
       const unsat = map.filter((r) => r.unsatisfiable).length
-      health = `<p class="sub">Ingestión: ${map.length} proceso${map.length === 1 ? '' : 's'} con cadencia derivada${unsat ? ` · ⚠️ ${unsat} insatisfacible${unsat === 1 ? '' : 's'}` : ''}. <a href="/admin/sources">Ver mapa de fuentes →</a></p>`
+      tiles.push(unsat ? tile(`⚠️ ${unsat}`, 'Ingesta insatisf.', true) : tile(map.length ? '✓' : '—', 'Ingestión'))
     } catch {
-      /* no-fatal: el dashboard no depende de la frescura */
+      /* no-fatal */
     }
   }
 
-  const platformSection = isAdmin
-    ? `<h2>Plataforma</h2><ul class="cards"><li><a href="/admin/plataforma"><span class="c">plataforma</span> Gestión de Plataforma</a><div class="sub">Usuarios y Roles · Grupos de Mira · Settings.</div></li></ul>`
-    : ''
-
-  return adminPage(deps,
+  return adminPage(deps, nav,
     'Administración',
     `<p class="sub">Sesión: <code>${escapeHtml(email || '(anónima)')}</code>${isAdmin ? ' · <span class="tag">admin</span>' : ''}</p>
-     ${health}
+     <h2>Salud de la plataforma</h2>
+     <div class="tiles">${tiles.join('')}</div>
      ${domainsSection || (orphanSection ? '' : '<p class="sub">No gestionas ningún dominio.</p>')}
      ${orphanSection}
-     ${platformSection}`,
+     ${isAdmin ? `<h2>Plataforma</h2><ul class="cards"><li><a href="/admin/plataforma"><span class="c">plataforma</span> Gestión de Plataforma →</a><div class="sub">Usuarios y Roles · Grupos de Mira · Settings.</div></li></ul>` : ''}`,
   )
 }
 
 /** Área de un DOMINIO: Ingesta · Data Maestra · Fuentes & Frescura · (próximamente) las demás facetas. */
 async function domainPage(
   deps: AdminDeps,
+  nav: string,
   domain: DomainDecl,
   token: string,
   isAdmin: boolean,
@@ -410,9 +448,9 @@ async function domainPage(
     ['pis', 'Catálogo de PIs del dominio'],
   ].map(([c, l]) => `<li class="ro"><span class="c">${c}</span> ${escapeHtml(l)}</li>`).join('')}</ul>`
 
-  return adminPage(deps,
+  return adminPage(deps, nav,
     domain.label,
-    `<p><a href="/admin">← Administración</a> · <span class="c">${escapeHtml(domain.id)}</span></p>
+    `<p class="sub"><span class="c">${escapeHtml(domain.id)}</span></p>
      ${feedback?.ok ? `<p class="msg ok">${escapeHtml(feedback.ok)}</p>` : ''}
      ${feedback?.error ? `<p class="msg err">${escapeHtml(feedback.error)}</p>` : ''}
      ${domain.description ? `<p class="sub">${escapeHtml(domain.description)}</p>` : ''}
@@ -424,7 +462,7 @@ async function domainPage(
 }
 
 /** Gestión de PLATAFORMA: Usuarios y Roles · Grupos · Settings (una entrada que despliega todo). */
-async function platformPage(deps: AdminDeps, token: string): Promise<string> {
+async function platformPage(deps: AdminDeps, nav: string, token: string): Promise<string> {
   const curTitle = deps.settingStore ? (await deps.settingStore.getSetting('index_title')) ?? '' : ''
   const settings = deps.settingStore
     ? `<h2>Catálogo</h2>
@@ -435,27 +473,25 @@ async function platformPage(deps: AdminDeps, token: string): Promise<string> {
        </form>
        <p class="sub">El título que se muestra en el índice de PIs. Vacío = el default de la instancia.</p>`
     : ''
-  return adminPage(deps,
+  return adminPage(deps, nav,
     'Gestión de Plataforma',
-    `<p><a href="/admin">← Administración</a></p>
-     <h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles"><span class="c">roles</span> Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
+    `<h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles"><span class="c">roles</span> Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
        deps.groupStore ? `<li><a href="/admin/groups"><span class="c">grupos</span> Grupos de Mira</a><div class="sub">Grupos para compartir PIs (no grupos AAD).</div></li>` : ''
      }</ul>
      ${settings}`,
   )
 }
 
-async function sourcesPage(deps: AdminDeps): Promise<string> {
+async function sourcesPage(deps: AdminDeps, nav: string): Promise<string> {
   const map = await deps.ingestionMap!()
   const rows = map
     .map(
       (r) => `<tr${r.unsatisfiable ? ' style="color:var(--err)"' : ''}><td><span class="c">${escapeHtml(r.processId)}</span> ${escapeHtml(r.label)}</td><td>${escapeHtml(r.oferta)}</td><td><b>${escapeHtml(r.requiredCadence)}</b>${r.unsatisfiable ? ' ⚠️' : ''}</td><td>${r.dependentPis.map((p) => escapeHtml(p)).join(', ') || '<span class="sub">—</span>'}</td></tr>`,
     )
     .join('')
-  return adminPage(deps,
+  return adminPage(deps, nav,
     'Mapa de Fuentes e Ingestión',
-    `<p><a href="/admin">← Administración</a></p>
-     <p class="sub">Cadencia requerida = el PI más exigente que depende del proceso marca el paso, con piso en la oferta. ⚠️ = alguna demanda exige más fresco que la oferta (insatisfacible).</p>
+    `<p class="sub">Cadencia requerida = el PI más exigente que depende del proceso marca el paso, con piso en la oferta. ⚠️ = alguna demanda exige más fresco que la oferta (insatisfacible).</p>
      <table><thead><tr><th>Proceso</th><th>Oferta (fuente)</th><th>Cadencia requerida</th><th>PIs que dependen</th></tr></thead>
      <tbody>${rows || '<tr><td colspan="4" class="sub">Sin procesos de ingestión registrados.</td></tr>'}</tbody></table>`,
   )
@@ -464,6 +500,7 @@ async function sourcesPage(deps: AdminDeps): Promise<string> {
 // ─── Grupos de Mira ──────────────────────────────────────────────────────────
 async function handleGroups(
   deps: AdminDeps,
+  nav: string,
   groups: GroupStore,
   path: string,
   req: IncomingMessage,
@@ -472,7 +509,7 @@ async function handleGroups(
   by: string,
 ): Promise<boolean> {
   if (path === '/admin/groups' && req.method === 'GET') {
-    send(res, 200, await groupsPage(deps, groups, token))
+    send(res, 200, await groupsPage(deps, nav, groups, token))
     return true
   }
   if (path === '/admin/groups/create' && req.method === 'POST') {
@@ -483,7 +520,7 @@ async function handleGroups(
       deps.audit({ type: 'admin-groups-write', op: 'create', group: (f['id'] ?? '').toLowerCase(), by })
       redirect(res, '/admin/groups')
     } catch (e) {
-      send(res, e instanceof GovernanceConflict ? 409 : 400, await groupsPage(deps, groups, token, errMsg(e)))
+      send(res, e instanceof GovernanceConflict ? 409 : 400, await groupsPage(deps, nav, groups, token, errMsg(e)))
     }
     return true
   }
@@ -500,7 +537,7 @@ async function handleGroups(
     const gid = gm[1]
     const op = gm[2]
     if (!op && req.method === 'GET') {
-      send(res, 200, await groupMembersPage(deps, groups, gid, token))
+      send(res, 200, await groupMembersPage(deps, nav, groups, gid, token))
       return true
     }
     if (op && req.method === 'POST') {
@@ -516,7 +553,7 @@ async function handleGroups(
         }
         redirect(res, `/admin/groups/${gid}`)
       } catch (e) {
-        send(res, 400, await groupMembersPage(deps, groups, gid, token, errMsg(e)))
+        send(res, 400, await groupMembersPage(deps, nav, groups, gid, token, errMsg(e)))
       }
       return true
     }
@@ -524,7 +561,7 @@ async function handleGroups(
   return false
 }
 
-async function groupsPage(deps: AdminDeps, groups: GroupStore, token: string, msg?: string): Promise<string> {
+async function groupsPage(deps: AdminDeps, nav: string, groups: GroupStore, token: string, msg?: string): Promise<string> {
   const list = await groups.listGroups()
   const rows = list
     .map(
@@ -535,9 +572,9 @@ async function groupsPage(deps: AdminDeps, groups: GroupStore, token: string, ms
       }</td></tr>`,
     )
     .join('')
-  return adminPage(deps,
+  return adminPage(deps, nav,
     'Grupos de Mira',
-    `<p><a href="/admin/plataforma">← Plataforma</a></p>
+    `<p class="sub"><a href="/admin/plataforma">← Plataforma</a></p>
      ${msg ? `<p class="msg err">${escapeHtml(msg)}</p>` : ''}
      <table><thead><tr><th>Id</th><th>Nombre</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="sub">Sin grupos.</td></tr>'}</tbody></table>
      <h2>Crear grupo</h2>
@@ -550,19 +587,19 @@ async function groupsPage(deps: AdminDeps, groups: GroupStore, token: string, ms
   )
 }
 
-async function groupMembersPage(deps: AdminDeps, groups: GroupStore, gid: string, token: string, msg?: string): Promise<string> {
+async function groupMembersPage(deps: AdminDeps, nav: string, groups: GroupStore, gid: string, token: string, msg?: string): Promise<string> {
   const list = await groups.listGroups()
   const g = list.find((x) => x.id === gid.toLowerCase())
-  if (!g) return adminPage(deps, 'No encontrado', `<p class="msg err">Grupo desconocido: <code>${escapeHtml(gid)}</code></p><p><a href="/admin/groups">← Grupos</a></p>`)
+  if (!g) return adminPage(deps, nav, 'No encontrado', `<p class="msg err">Grupo desconocido: <code>${escapeHtml(gid)}</code></p><p><a href="/admin/groups">← Grupos</a></p>`)
   const members = await groups.listMembers(gid)
   const rows = members
     .map(
       (m) => `<tr><td>${escapeHtml(m.email)}</td><td class="r"><form method="post" action="/admin/groups/${escapeHtml(gid)}/remove"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="email" value="${escapeHtml(m.email)}"><button class="del">Quitar</button></form></td></tr>`,
     )
     .join('')
-  return adminPage(deps,
+  return adminPage(deps, nav,
     `Grupo · ${g.label}`,
-    `<p><a href="/admin/groups">← Grupos</a> · <span class="c">${escapeHtml(g.id)}</span>${g.seed ? ' <span class="tag">semilla</span>' : ''}</p>
+    `<p class="sub"><a href="/admin/groups">← Grupos</a> · <span class="c">${escapeHtml(g.id)}</span>${g.seed ? ' <span class="tag">semilla</span>' : ''}</p>
      ${msg ? `<p class="msg err">${escapeHtml(msg)}</p>` : ''}
      <table><thead><tr><th>Miembro</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="2" class="sub">Sin miembros.</td></tr>'}</tbody></table>
      <h2>Agregar miembro</h2>
@@ -574,7 +611,7 @@ async function groupMembersPage(deps: AdminDeps, groups: GroupStore, gid: string
   )
 }
 
-async function rolesPage(deps: AdminDeps, token: string, msg?: string): Promise<string> {
+async function rolesPage(deps: AdminDeps, nav: string, token: string, msg?: string): Promise<string> {
   const admins = await deps.adminStore.list()
   const rows = admins
     .map(
@@ -585,9 +622,9 @@ async function rolesPage(deps: AdminDeps, token: string, msg?: string): Promise<
       }</td></tr>`,
     )
     .join('')
-  return adminPage(deps,
+  return adminPage(deps, nav,
     'Usuarios y Roles',
-    `<p><a href="/admin/plataforma">← Plataforma</a></p>
+    `<p class="sub"><a href="/admin/plataforma">← Plataforma</a></p>
      ${msg ? `<p class="msg err">${escapeHtml(msg)}</p>` : ''}
      <table><thead><tr><th>Correo</th><th>Origen</th><th></th></tr></thead><tbody>${rows}</tbody></table>
      <h2>Agregar administrador</h2>
@@ -599,7 +636,7 @@ async function rolesPage(deps: AdminDeps, token: string, msg?: string): Promise<
   )
 }
 
-async function entityPage(deps: AdminDeps, entity: MasterDataEntity, token: string, editPk?: string): Promise<string> {
+async function entityPage(deps: AdminDeps, nav: string, entity: MasterDataEntity, token: string, editPk?: string): Promise<string> {
   const pk = pkColumn(entity)
   const rows = await deps.mdStore.list(entity)
   const editing = editPk != null ? rows.find((r) => String(r[pk.name]) === editPk) : undefined
@@ -633,9 +670,9 @@ async function entityPage(deps: AdminDeps, entity: MasterDataEntity, token: stri
     })
     .join('')
 
-  return adminPage(deps,
+  return adminPage(deps, nav,
     entity.label,
-    `<p><a href="${back}">← ${escapeHtml(entity.domain ?? 'Administración')}</a></p>
+    `<p class="sub"><a href="${back}">← ${escapeHtml(entity.domain ?? 'Administración')}</a></p>
      <table><thead><tr>${thead}</tr></thead><tbody>${tbody || `<tr><td colspan="${entity.columns.length + 1}" class="sub">Sin registros.</td></tr>`}</tbody></table>
      <h2>${formTitle}</h2>
      <form method="post" action="${action}" class="grid">
