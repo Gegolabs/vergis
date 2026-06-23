@@ -37,6 +37,8 @@ export interface MasterDataEntity {
   /** Nombre legible para la UI (p.ej. `Empresas Relacionadas`). */
   label: string
   description?: string
+  /** Dominio al que pertenece (tag; deriva la gestión de dominio en Administración). */
+  domain?: string
   /** Perfil de conexión (motor Fabric) donde vive la AUTORÍA física. Opcional en local. */
   database_ref?: string
   /** Tabla física de la AUTORÍA `schema.tabla` (p.ej. `dbo.md_empresas_relacionadas`). Opcional en local. */
@@ -73,6 +75,7 @@ function parseEntity(e: unknown, i: number, seen: Set<string>): MasterDataEntity
   if (pks.length !== 1) throw new Error(`master-data: entidad '${id}' debe tener exactamente 1 columna pk (tiene ${pks.length}).`)
   const out: MasterDataEntity = { id, label, columns }
   if (o['description'] != null) out.description = String(o['description'])
+  if (o['domain'] != null) out.domain = String(o['domain'])
   if (o['database_ref'] != null) out.database_ref = String(o['database_ref'])
   if (o['table'] != null) {
     const t = String(o['table'])

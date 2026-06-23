@@ -42,6 +42,11 @@ import {
   publicarArtefacto,
   openAnnotationStore,
   parseMasterDataConfig,
+  parseDomainsConfig,
+  parseIntakeConfig,
+  createTokenProvider,
+  createOneLakeIntake,
+  createFabricJobs,
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   createDwhPublisher,
@@ -49,6 +54,8 @@ import {
   canOpen,
   deriveIngestionMap,
   type GroupSeed,
+  type DomainDecl,
+  type IntakeSlot,
   type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
@@ -56,7 +63,7 @@ import {
   type ChColumnType,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
-import { createAdmin, type AdminHandler } from './admin'
+import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
 import {
   claimValues,
@@ -546,6 +553,13 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     const groupSeeds: GroupSeed[] = process.env['VERGIS_GROUPS']
       ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_GROUPS']), 'utf8')) as { groups?: GroupSeed[] }).groups ?? [])
       : []
+    // Gestión de DOMINIO: dominios declarados (etiqueta + stewards) y slots de ingesta de la instancia.
+    const domains: DomainDecl[] = process.env['VERGIS_DOMAINS']
+      ? parseDomainsConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_DOMAINS']), 'utf8')))
+      : []
+    const intakeSlots: IntakeSlot[] = process.env['VERGIS_INTAKE']
+      ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8')))
+      : []
     const govStore = await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, {
       admins: ADMIN_SEED,
       groups: groupSeeds,
@@ -563,10 +577,30 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       ? createDwhMasterDataStore(connections)
       : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
     const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`)
+    // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline. Usa las creds del SP de
+    // una conexión (VERGIS_INTAKE_SP, o la única si hay una sola) — token AAD para storage/Fabric REST,
+    // no para SQL. Sin slots o sin conexiones, la ingesta no se ofrece.
+    const intakeRunner = ((): IntakeRunner | undefined => {
+      if (!intakeSlots.length || !connections) return undefined
+      const refs = Object.keys(connections)
+      const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
+      const sp = ref ? connections[ref] : undefined
+      if (!sp) {
+        console.error('[vergis-rls] ingesta deshabilitada: define VERGIS_INTAKE_SP (hay varias conexiones).')
+        return undefined
+      }
+      const tokens = createTokenProvider({ tenantId: sp.tenantId, clientId: sp.clientId, clientSecret: sp.clientSecret })
+      const onelake = createOneLakeIntake(tokens)
+      const jobs = createFabricJobs(tokens)
+      return { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) }
+    })()
     admin = createAdmin({
       entities,
       mdStore,
       adminStore,
+      domains,
+      intakeSlots,
+      intake: intakeRunner,
       groupStore: govStore,
       settingStore: govStore,
       onWrite: connections
