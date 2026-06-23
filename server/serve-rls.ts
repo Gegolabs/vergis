@@ -31,7 +31,7 @@ import { resolve, join } from 'node:path'
 import { createHmac, randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { identityFromHeaders, DEFAULT_GATE_MAPPING, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
+import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
 import { parseSpec, type AnnotationContext } from '@vergis/mira'
 import {
   bootstrapClickHouse,
@@ -41,11 +41,21 @@ import {
   renderHtmlPiece,
   publicarArtefacto,
   openAnnotationStore,
+  parseMasterDataConfig,
+  SqliteMasterDataStore,
+  createDwhMasterDataStore,
+  SqliteGovernanceStore,
+  canOpen,
+  deriveIngestionMap,
+  type GroupSeed,
+  type PiRole,
   type AnnotationStore,
   type ChStoreSchema,
   type ChColumnType,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
+import { createAdmin, type AdminHandler } from './admin'
+import { createPiConfig, type PiConfigHandler } from './pi-config'
 import {
   claimValues,
   compileClickHouse,
@@ -281,6 +291,14 @@ function identityFor(headers: GateHeaders) {
 // Escritura: gateada por token HMAC firmado por-render — el token prueba que el server renderizó
 // ESA clave para ESA identidad (= era visible). Forjar una clave no-visible no produce token válido.
 let annStore: AnnotationStore | null = null
+// Gobierno de PI (autorización de ARTEFACTO, frente A). FLAG-GUARDED: con VERGIS_PI_ACL apagado el
+// índice/apertura siguen por acceso-a-datos (comportamiento vivo); encendido, gatean por la ACL del
+// PI (rol owner/collaborator/viewer) compuesta con la RLS de datos (que NUNCA se salta).
+let governance: SqliteGovernanceStore | null = null
+let piConfig: PiConfigHandler | null = null
+let piAclEnabled = false
+let piOwners: Record<string, string> = {}
+let defaultCollabGroups: string[] = []
 const ANN_SECRET = process.env['VERGIS_ANNOTATION_SECRET'] ?? randomBytes(32).toString('hex')
 function annSign(piId: string, email: string, key: string): string {
   return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
@@ -334,6 +352,21 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out.html ?? ''
+}
+
+/**
+ * Rol efectivo de gestión de una identidad sobre un PI (autz de ARTEFACTO). Bootstrapea el registro
+ * de gobierno on-demand (dueño inicial del mapa de instancia — el dueño del ticket Jira — + grupos
+ * colaboradores-default). El admin de plataforma es override (puede gestionar cualquier PI). null =
+ * sin acceso al artefacto. La RLS de datos es independiente y siempre aplica al renderizar.
+ */
+async function piManagementRole(code: string, email: string | undefined): Promise<PiRole | null> {
+  if (!governance) return 'owner' // sin store → no se gatea
+  if (!(await governance.getPiGovernance(code))) {
+    await governance.bootstrapPi(code, piOwners[code] ?? '', defaultCollabGroups)
+  }
+  if (await governance.isAdmin(email)) return 'owner' // override de plataforma (gestión)
+  return governance.roleFor(code, email)
 }
 
 /** Lee el cuerpo JSON de un POST (límite defensivo). */
@@ -423,6 +456,19 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ ok: ready, engine: ENGINE, lastErr, pi: discover().map((r) => r.slug) }))
     return
   }
+  // ADMINISTRACIÓN — superficie de escritura, gateada por rol admin DENTRO del handler. Va antes del
+  // gate `ready` (no depende del motor de serving): editar data maestra no es servir dato gobernado.
+  if (admin && (url === '/admin' || url.startsWith('/admin/'))) {
+    admin.tryHandle(req, res).catch((e) => fail(res, 500, `Error en Administración: ${e instanceof Error ? e.message : String(e)}`))
+    return
+  }
+  // Configuración por-PI (compartir/visibilidad/demanda) — gateada por rol de PI dentro del handler.
+  if (piConfig && /^\/[^/]+\/config(?:\/|$)/.test(url)) {
+    piConfig.tryHandle(req, res).then((handled) => {
+      if (!handled) fail(res, 404, 'Ruta no encontrada')
+    }).catch((e) => fail(res, 500, `Error en configuración del PI: ${e instanceof Error ? e.message : String(e)}`))
+    return
+  }
   if (!ready) return fail(res, 503, 'Inicializando…')
   const all = discover()
   // POST /<slug>/annotations — escritura de anotación (único surface mutable; gateado por HMAC).
@@ -435,32 +481,44 @@ const server = createServer((req, res) => {
     )
     return
   }
-  const claims = identityFor(req.headers as GateHeaders).claims ?? {}
-  if (url === '/' || url === '') {
-    const visible = visibleFor(all, claims) // índice PER-CONSUMIDOR: solo PIs a los que tiene acceso
-    if (visible.length === 1) {
-      renderReport(visible[0], req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then((html) => {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(html)
-      }).catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
-      return
-    }
+  const identity = identityFor(req.headers as GateHeaders)
+  const email = identity.user
+  const claims = identity.claims ?? {}
+  const sendHtml = (html: string) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(indexHtml(visible))
+    res.end(html)
+  }
+  // Índice PER-CONSUMIDOR: con ACL encendida, los PIs que la identidad puede ABRIR (autz de artefacto);
+  // sin ACL, los PIs a cuyo DATO tiene acceso (comportamiento vivo). La RLS filtra filas en ambos casos.
+  if (url === '/' || url === '') {
+    const indexFor = async (): Promise<Report[]> => {
+      if (!(piAclEnabled && governance)) return visibleFor(all, claims)
+      const roles = await Promise.all(all.map((r) => piManagementRole(r.code, email)))
+      return all.filter((_, i) => canOpen(roles[i]))
+    }
+    indexFor()
+      .then((visible) => {
+        if (visible.length === 1) {
+          return renderReport(visible[0], req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
+        }
+        sendHtml(indexHtml(visible))
+      })
+      .catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
     return
   }
   const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
   const report = all.find((r) => r.slug === slug)
   if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
-  renderReport(report, req.headers as GateHeaders, navFromUrl(req.url ?? '/'))
-    .then((html) => {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(html)
+  // Gate de ARTEFACTO (si ACL encendida): ¿puede abrir este PI? La RLS de datos aplica igual al render.
+  const openGate = piAclEnabled && governance ? piManagementRole(report.code, email).then(canOpen) : Promise.resolve(true)
+  openGate
+    .then((allowed) => {
+      if (!allowed) return fail(res, 403, `No tienes acceso a este Producto de Información. <a href="/">Ver disponibles</a>`)
+      return renderReport(report, req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
     })
     .catch((e) => fail(res, 500, `Error al render por-consumidor: ${e instanceof Error ? e.message : String(e)}`))
 })
 
-await bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
 // Store de anotaciones (no-fatal: si falla, el feature queda inhabilitado, no rompe el serving).
 try {
   annStore = await openAnnotationStore(process.env['VERGIS_OUT'] ?? tmpdir())
@@ -468,7 +526,96 @@ try {
 } catch (e) {
   console.error(`[vergis-rls] anotaciones deshabilitadas: ${e instanceof Error ? e.message : String(e)}`)
 }
+
+// ADMINISTRACIÓN (no-fatal): data maestra + usuarios y roles — única superficie de ESCRITURA
+// gobernada. Independiente del motor de serving. Se habilita si la instancia declara entidades
+// (VERGIS_MASTER_DATA) o admins semilla (VERGIS_ADMIN_SEED). El store de data maestra es Fabric en
+// engine=fabric (la fuente única que el PI lee por JOIN) y SQLite embebido en local/clickhouse.
+let admin: AdminHandler | null = null
+const ADMIN_SEED = (process.env['VERGIS_ADMIN_SEED'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+const OUT = (process.env['VERGIS_OUT'] ?? tmpdir()).replace(/\/$/, '')
+if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
+  try {
+    const entities = process.env['VERGIS_MASTER_DATA']
+      ? parseMasterDataConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_MASTER_DATA']), 'utf8')))
+      : []
+    const groupSeeds: GroupSeed[] = process.env['VERGIS_GROUPS']
+      ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_GROUPS']), 'utf8')) as { groups?: GroupSeed[] }).groups ?? [])
+      : []
+    const govStore = await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, {
+      admins: ADMIN_SEED,
+      groups: groupSeeds,
+    })
+    const adminStore = govStore
+    // Gobierno de PI (frente A): expone el store al gate de artefacto + config de ACL (flag-guarded).
+    governance = govStore
+    piAclEnabled = ['1', 'true', 'on'].includes((process.env['VERGIS_PI_ACL'] ?? '').toLowerCase())
+    defaultCollabGroups = (process.env['VERGIS_DEFAULT_COLLABORATOR_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    piOwners = process.env['VERGIS_PI_OWNERS']
+      ? (parseYaml(readFileSync(resolve(process.env['VERGIS_PI_OWNERS']), 'utf8')) as { owners?: Record<string, string> }).owners ?? {}
+      : {}
+    const useFabricStore = ENGINE === 'fabric' && connections
+    const mdStore = useFabricStore
+      ? createDwhMasterDataStore(connections)
+      : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
+    const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`)
+    admin = createAdmin({
+      entities,
+      mdStore,
+      adminStore,
+      groupStore: govStore,
+      ingestionMap: async () => {
+        const [procs, outputs, sources] = await Promise.all([govStore.listProcesses(), govStore.listProcessOutputs(), govStore.listSources()])
+        const reports = discover()
+        const piTables = reports.map((r) => ({ piCode: r.code, tables: r.tables }))
+        const piDemandas = (
+          await Promise.all(
+            reports.map(async (r) => {
+              const d = await govStore.getDemanda(r.code)
+              return d ? { piCode: r.code, maxAge: d.maxAge } : null
+            }),
+          )
+        ).filter((x): x is { piCode: string; maxAge: string } => !!x)
+        return deriveIngestionMap({
+          sources: sources.map((s) => ({ id: s.id, oferta: s.oferta })),
+          processes: procs,
+          processOutputs: outputs,
+          piTables,
+          piDemandas,
+        })
+      },
+      identityOf: (h) => identityFor(h as GateHeaders),
+      audit: (e) => auditLog.append(e),
+      secret: ANN_SECRET,
+      brandTitle: INDEX_TITLE,
+    })
+    // Configuración por-PI (gateada por rol de PI, no admin): compartir/visibilidad/demanda.
+    piConfig = createPiConfig({
+      gov: govStore,
+      resolve: (slug) => {
+        const r = discover().find((x) => x.slug === slug)
+        return r ? { code: r.code, name: r.name } : undefined
+      },
+      identityOf: (h) => identityFor(h as GateHeaders),
+      roleOf: piManagementRole,
+      ceilingFor: async (code) => {
+        const r = discover().find((x) => x.code === code)
+        return r ? govStore.ofertasForTables(r.tables) : []
+      },
+      audit: (e) => auditLog.append(e),
+      secret: ANN_SECRET,
+      brandTitle: INDEX_TITLE,
+    })
+    console.log(`[vergis-rls] administración: ${entities.length} entidad(es) · ${ADMIN_SEED.length} admin semilla · ACL PI ${piAclEnabled ? 'ON' : 'off'} · store=${useFabricStore ? 'fabric' : 'sqlite'}`)
+  } catch (e) {
+    console.error(`[vergis-rls] administración deshabilitada: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
 server.listen(PORT, () => {
   const r = discover()
   console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
 })
+
+// Bootstrap del motor de serving EN SEGUNDO PLANO: el server ya escucha. `healthz` responde 503 hasta
+// `ready`; la Administración (escritura de data maestra) queda disponible sin esperar al motor.
+void bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
