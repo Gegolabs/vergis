@@ -345,7 +345,7 @@ function buildNav(deps: AdminDeps, manageable: DomainDecl[], isAdmin: boolean, a
   s += item('/admin', 'Inicio', active === 'home')
   if (manageable.length) {
     s += `<div class="grp">Dominios</div>`
-    s += manageable.map((d) => item(`/admin/dominio/${d.id}`, d.label, active === `dom:${d.id}`, d.id)).join('')
+    s += manageable.map((d) => item(`/admin/dominio/${d.id}`, d.label, active === `dom:${d.id}`)).join('')
   }
   if (isAdmin) {
     s += `<div class="grp">Plataforma</div>`
@@ -367,7 +367,7 @@ async function dashboard(deps: AdminDeps, nav: string, email: string, isAdmin: b
     const ns = slotsOf(d.id).length
     if (ns) inv.push(`${ns} slot${ns === 1 ? '' : 's'} de ingesta`)
     if (ne) inv.push(`${ne} ${ne === 1 ? 'entidad' : 'entidades'} de data maestra`)
-    return `<li><a href="/admin/dominio/${escapeHtml(d.id)}"><span class="c">${escapeHtml(d.id)}</span> ${escapeHtml(d.label)} →</a><div class="sub">${escapeHtml(d.description ?? '')}${d.description && inv.length ? ' · ' : ''}${inv.join(' · ')}</div></li>`
+    return `<li><a href="/admin/dominio/${escapeHtml(d.id)}">${escapeHtml(d.label)} →</a><div class="sub">${escapeHtml(d.description ?? '')}${d.description && inv.length ? ' · ' : ''}${inv.join(' · ')}</div></li>`
   }
   const domainsSection = manageable.length
     ? `<h2>Dominios</h2><ul class="cards">${manageable.map(domainCard).join('')}</ul>`
@@ -376,7 +376,7 @@ async function dashboard(deps: AdminDeps, nav: string, email: string, isAdmin: b
   // Fallback de plataforma: entidades sin dominio declarado (solo admin).
   const orphans = isAdmin ? deps.entities.filter((e) => !e.domain || !manageable.concat(deps.domains ?? []).some((d) => d.id === e.domain)) : []
   const orphanSection = orphans.length
-    ? `<h2>Data Maestra (sin dominio)</h2><ul class="cards">${orphans.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}"><span class="c">${escapeHtml(e.id)}</span> ${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
+    ? `<h2>Data Maestra (sin dominio)</h2><ul class="cards">${orphans.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}">${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
     : ''
 
   // Tiles de salud. Slots = los de dominios gestionables; ingestión = brecha de frescura (admin).
@@ -401,7 +401,7 @@ async function dashboard(deps: AdminDeps, nav: string, email: string, isAdmin: b
      <div class="tiles">${tiles.join('')}</div>
      ${domainsSection || (orphanSection ? '' : '<p class="sub">No gestionas ningún dominio.</p>')}
      ${orphanSection}
-     ${isAdmin ? `<h2>Plataforma</h2><ul class="cards"><li><a href="/admin/plataforma"><span class="c">plataforma</span> Gestión de Plataforma →</a><div class="sub">Usuarios y Roles · Grupos de Mira · Settings.</div></li></ul>` : ''}`,
+     ${isAdmin ? `<h2>Plataforma</h2><ul class="cards"><li><a href="/admin/plataforma">Gestión de Plataforma →</a><div class="sub">Usuarios y Roles · Grupos de Mira · Settings.</div></li></ul>` : ''}`,
   )
 }
 
@@ -431,7 +431,7 @@ async function domainPage(
     : (deps.intake ? '' : '')
 
   const maestra = entities.length
-    ? `<h2>Data Maestra</h2><ul class="cards">${entities.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}"><span class="c">${escapeHtml(e.id)}</span> ${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
+    ? `<h2>Data Maestra</h2><ul class="cards">${entities.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}">${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
     : ''
 
   const fuentes = deps.ingestionMap && isAdmin
@@ -450,8 +450,7 @@ async function domainPage(
 
   return adminPage(deps, nav,
     domain.label,
-    `<p class="sub"><span class="c">${escapeHtml(domain.id)}</span></p>
-     ${feedback?.ok ? `<p class="msg ok">${escapeHtml(feedback.ok)}</p>` : ''}
+    `${feedback?.ok ? `<p class="msg ok">${escapeHtml(feedback.ok)}</p>` : ''}
      ${feedback?.error ? `<p class="msg err">${escapeHtml(feedback.error)}</p>` : ''}
      ${domain.description ? `<p class="sub">${escapeHtml(domain.description)}</p>` : ''}
      ${ingesta}
@@ -475,8 +474,8 @@ async function platformPage(deps: AdminDeps, nav: string, token: string): Promis
     : ''
   return adminPage(deps, nav,
     'Gestión de Plataforma',
-    `<h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles"><span class="c">roles</span> Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
-       deps.groupStore ? `<li><a href="/admin/groups"><span class="c">grupos</span> Grupos de Mira</a><div class="sub">Grupos para compartir PIs (no grupos AAD).</div></li>` : ''
+    `<h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles">Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
+       deps.groupStore ? `<li><a href="/admin/groups">Grupos de Mira</a><div class="sub">Grupos para compartir PIs (no grupos AAD).</div></li>` : ''
      }</ul>
      ${settings}`,
   )
