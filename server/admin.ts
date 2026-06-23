@@ -40,6 +40,8 @@ export interface AdminDeps {
   adminStore: AdminStore
   /** Grupos gestionados por Mira (sección «Grupos»). Opcional. */
   groupStore?: GroupStore
+  /** Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional. */
+  onWrite?: (entity: MasterDataEntity) => Promise<void>
   /** Mapa de ingestión derivado (frente B): cadencia requerida por proceso. Opcional. */
   ingestionMap?: () => Promise<IngestionMapRow[]>
   /** Identidad del consumidor desde las cabeceras del gate. */
@@ -136,6 +138,16 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           const f = await readForm(req)
           requireCsrf(f, token)
           await handleEntityWrite(deps, entity, op, f, email)
+          // publish-on-write: publica las proyecciones tras la edición (no-fatal: la autoría ya se
+          // escribió; si la publicación falla, el dato queda en Mira y se republica luego).
+          if (deps.onWrite) {
+            try {
+              await deps.onWrite(entity)
+              deps.audit({ type: 'master-data-publish', entity: entity.id, by: email, ok: true })
+            } catch (e) {
+              deps.audit({ type: 'master-data-publish', entity: entity.id, by: email, ok: false, error: e instanceof Error ? e.message : String(e) })
+            }
+          }
           redirect(res, `/admin/e/${entity.id}`)
           return true
         }
