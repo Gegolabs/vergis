@@ -88,7 +88,9 @@ maestra.
 | Registro de fuentes (oferta, tabla→fuente, proceso→tablas) | ✅ `GovernanceStore` |
 | Validación de techo en la edición de demanda | ✅ |
 | Mapa de fuentes en Administración | ✅ |
-| **Observabilidad** (leer run-history del motor + log + alertas) | 🔧 diseñado, por construir |
-| **Reconciliador** (empujar schedule al motor por API) | 🔧 diseñado, por construir |
+| Observabilidad — **lógica** (clasificar fallidas/faltantes) | ✅ `ingestion-observability.ts` (unit-tested) |
+| Observabilidad — cliente del motor (leer run-history Fabric) + alertas Slack | 🔧 interfaz lista; impl. HTTP + pipelines Fabric pendientes |
+| Reconciliador — **lógica** (deseado→real, plan set/noop) | ✅ `ingestion-observability.ts` (unit-tested) |
+| Reconciliador — push del schedule al motor (API) | 🔧 interfaz lista; impl. HTTP pendiente |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/038`.

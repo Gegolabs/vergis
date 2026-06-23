@@ -63,6 +63,8 @@ export {
   deriveIngestionMap,
 } from './freshness'
 export type { SourceInfo, ProcessInfo, IngestionMapRow, DeriveMapInput } from './freshness'
+export { classifyProcess, alertReason, reconcilePlan } from './ingestion-observability'
+export type { RunStatus, RunRecord, ProcessHealth, ReconcilePlan, IngestionEngineClient } from './ingestion-observability'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'
