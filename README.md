@@ -46,6 +46,13 @@ vergis/
 └── tests/              # acceptance (hermetic suite)
 ```
 
+## Docs
+
+Canonical product docs live in `docs/`:
+
+- [`data-maestra-y-publicacion.md`](docs/data-maestra-y-publicacion.md) — Master data management: authoring, the **universal publication model** (`md_<entity>__replica` projections, not Fabric shortcuts), freshness via oferta/demanda, and the **contract for agents** operating the Botlet.
+- [`adr-001-lenguaje-y-supply-chain.md`](docs/adr-001-lenguaje-y-supply-chain.md) — language & supply-chain ADR.
+
 ## Edition and license
 
 Core **AGPL-3.0-or-later**, functionally complete on single-node. The Enterprise edition (HA / Kubernetes / carrier-grade) is commercial. The canon's normative specs (Botler contract, Mira spec, DSL, naming) ship with AgencyDomains; their migration to this repo's `docs/` is pending.
