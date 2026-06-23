@@ -28,13 +28,15 @@ export {
   coerceValue,
   coerceRow,
 } from './master-data'
-export type { MasterDataEntity, MasterDataColumn, MasterDataColumnType, CoerceResult } from './master-data'
+export type { MasterDataEntity, MasterDataColumn, MasterDataColumnType, CoerceResult, PublicationTargetDecl } from './master-data'
 export {
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   MasterDataConflict,
 } from './master-data-store'
 export type { MasterDataStore, MasterDataRow } from './master-data-store'
+export { createDwhPublisher, replicaTable } from './master-data-publish'
+export type { Publisher, PublisherTarget } from './master-data-publish'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
 export { SqliteGovernanceStore, GovernanceConflict } from './governance-store'

@@ -44,10 +44,12 @@ import {
   parseMasterDataConfig,
   SqliteMasterDataStore,
   createDwhMasterDataStore,
+  createDwhPublisher,
   SqliteGovernanceStore,
   canOpen,
   deriveIngestionMap,
   type GroupSeed,
+  type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
   type ChStoreSchema,
@@ -564,6 +566,16 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       mdStore,
       adminStore,
       groupStore: govStore,
+      onWrite: connections
+        ? (() => {
+            const publisher = createDwhPublisher(connections)
+            return async (entity: MasterDataEntity) => {
+              if (!entity.targets?.length) return
+              const rows = await mdStore.list(entity)
+              for (const t of entity.targets) await publisher.publish(entity, rows, { database_ref: t.database_ref })
+            }
+          })()
+        : undefined,
       ingestionMap: async () => {
         const [procs, outputs, sources] = await Promise.all([govStore.listProcesses(), govStore.listProcessOutputs(), govStore.listSources()])
         const reports = discover()

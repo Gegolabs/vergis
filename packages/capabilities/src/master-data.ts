@@ -26,16 +26,23 @@ export interface MasterDataColumn {
   required?: boolean
 }
 
+export interface PublicationTargetDecl {
+  /** database_ref del store consumidor donde se publica la proyección `__replica`. */
+  database_ref: string
+}
+
 export interface MasterDataEntity {
   /** Slug estable, usado en rutas y como id lógico (p.ej. `empresas_relacionadas`). */
   id: string
   /** Nombre legible para la UI (p.ej. `Empresas Relacionadas`). */
   label: string
   description?: string
-  /** Perfil de conexión (motor Fabric) donde vive la tabla física. Opcional en local. */
+  /** Perfil de conexión (motor Fabric) donde vive la AUTORÍA física. Opcional en local. */
   database_ref?: string
-  /** Tabla física `schema.tabla` (p.ej. `dbo.md_empresas_relacionadas`). Opcional en local. */
+  /** Tabla física de la AUTORÍA `schema.tabla` (p.ej. `dbo.md_empresas_relacionadas`). Opcional en local. */
   table?: string
+  /** Destinos de PUBLICACIÓN: stores consumidores donde se materializa `md_<id>__replica` (modelo pull). */
+  targets?: PublicationTargetDecl[]
   columns: MasterDataColumn[]
 }
 
@@ -71,6 +78,14 @@ function parseEntity(e: unknown, i: number, seen: Set<string>): MasterDataEntity
     const t = String(o['table'])
     if (!/^[A-Za-z_][\w]*\.[A-Za-z_][\w]*$/.test(t)) throw new Error(`master-data: entidad '${id}' con table inválida '${t}' (esperado schema.tabla).`)
     out.table = t
+  }
+  if (o['targets'] != null) {
+    if (!Array.isArray(o['targets'])) throw new Error(`master-data: '${id}'.targets debe ser una lista.`)
+    out.targets = o['targets'].map((t) => {
+      const ref = String((t as Record<string, unknown>)?.['database_ref'] ?? '')
+      if (!ref) throw new Error(`master-data: '${id}' target sin database_ref.`)
+      return { database_ref: ref }
+    })
   }
   return out
 }
