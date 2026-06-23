@@ -39,6 +39,7 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .side a:hover{background:var(--bg);text-decoration:none}
 .side a.on{background:var(--accent);color:#1d2021;font-weight:600}.side a.on .c{color:#1d2021}
 .side .grp{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 5px 10px}
+.side .catlink{color:var(--muted);font-size:12px;border-bottom:1px solid var(--border);border-radius:0;margin:0 0 8px;padding:0 10px 10px}.side .catlink:hover{color:var(--accent);background:none}
 .main{flex:1;padding:32px 44px;max-width:880px;box-sizing:border-box}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
 .tile{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 18px;min-width:96px}

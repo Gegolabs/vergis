@@ -359,6 +359,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
   const item = (href: string, label: string, on: boolean): string =>
     `<a href="${href}" class="${on ? 'on' : ''}">${escapeHtml(label)}</a>`
   let s = `<span class="bca">${escapeHtml(deps.brandTitle ?? 'Vergis')} · Admin</span>`
+  s += `<a href="/" class="catlink">↩ Catálogo de PIs</a>`
   if (scope === 'config') {
     s += item('/admin/plataforma', 'Resumen', active === 'plat')
     s += `<div class="grp">Configuración</div>`
@@ -381,6 +382,8 @@ function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomain
   const initials = (local.split(/[._-]/).filter(Boolean).slice(0, 2).map((s) => s[0]).join('') || local[0] || '?').toUpperCase()
   const it = (href: string, label: string): string => `<a href="${href}">${escapeHtml(label)}</a>`
   let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? ' · admin' : ''}</div>`
+  m += it('/', 'Catálogo de PIs')
+  m += `<div class="sep"></div>`
   m += it('/admin/perfil', 'Perfil')
   if (hasDomains) m += it('/admin', 'Gestión')
   if (isAdmin) m += it('/admin/plataforma', 'Configuración')
