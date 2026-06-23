@@ -601,6 +601,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       domains,
       intakeSlots,
       intake: intakeRunner,
+      piCount: discover().length,
       groupStore: govStore,
       settingStore: govStore,
       onWrite: connections

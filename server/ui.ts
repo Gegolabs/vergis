@@ -31,7 +31,19 @@ button{cursor:pointer;border:none;border-radius:7px;padding:9px 15px;font-size:1
 .msg.ok{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);border:1px solid var(--accent)}
 code{font-family:ui-monospace,Menlo,monospace;font-size:.92em}
 .tsw{position:fixed;top:18px;right:18px;background:none;border:none;color:var(--muted);cursor:pointer;opacity:.6}.tsw:hover{opacity:1;color:var(--accent)}
-.ro{opacity:.55}`
+.ro{opacity:.55}
+body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
+.side{width:214px;flex:none;background:var(--card);border-right:1px solid var(--border);padding:22px 14px;box-sizing:border-box}
+.side .bca{font-size:11px;color:var(--muted);margin-bottom:16px;display:block;padding:0 6px}
+.side a{display:block;padding:7px 10px;border-radius:7px;color:var(--fg);font-size:13px;margin:2px 0}
+.side a:hover{background:var(--bg);text-decoration:none}
+.side a.on{background:var(--accent);color:#1d2021;font-weight:600}.side a.on .c{color:#1d2021}
+.side .grp{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 5px 10px}
+.main{flex:1;padding:32px 44px;max-width:880px;box-sizing:border-box}
+.tiles{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 18px;min-width:96px}
+.tile .n{font-size:26px;font-weight:700;line-height:1.1}.tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
+.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. */
 export function page(brand: string, title: string, body: string): string {
@@ -40,6 +52,20 @@ export function page(brand: string, title: string, body: string): string {
 <div class="bc">${escapeHtml(brand)}</div>
 <h1>${escapeHtml(title)}</h1>
 ${body}
+<script>(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();</script>
+</body></html>`
+}
+
+/** Shell SSR con MENÚ LATERAL (apps de administración): sidebar de navegación + main con header. */
+export function shellNav(brand: string, title: string, sidebar: string, body: string): string {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${PAGE_CSS}</style></head><body class="adm">
+<button type="button" class="tsw" title="Tema" onclick="(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()">◐</button>
+<aside class="side">${sidebar}</aside>
+<main class="main">
+<div class="bc">${escapeHtml(brand)}</div>
+<h1>${escapeHtml(title)}</h1>
+${body}
+</main>
 <script>(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();</script>
 </body></html>`
 }
