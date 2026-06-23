@@ -43,7 +43,15 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
 .tile{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 18px;min-width:96px}
 .tile .n{font-size:26px;font-weight:700;line-height:1.1}.tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
-.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}`
+.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}
+.avm{position:fixed;top:16px;right:18px;z-index:20}
+.av{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--accent);color:#1d2021;font-weight:700;font-size:12px;cursor:pointer;list-style:none;user-select:none}
+.av::-webkit-details-marker{display:none}.av::marker{content:""}
+.avmenu{position:absolute;right:0;top:42px;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:6px;min-width:188px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.avmenu a,.avmenu button{display:block;width:100%;text-align:left;padding:8px 11px;border-radius:7px;color:var(--fg);font-size:13px;background:none;border:none;cursor:pointer;font-family:inherit}
+.avmenu a:hover,.avmenu button:hover{background:var(--bg);text-decoration:none}
+.avhead{font-size:11px;color:var(--muted);padding:6px 11px 8px;border-bottom:1px solid var(--border);margin-bottom:4px;word-break:break-all}
+.avmenu .sep{border-top:1px solid var(--border);margin:4px 0}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. */
 export function page(brand: string, title: string, body: string): string {
@@ -56,19 +64,23 @@ ${body}
 </body></html>`
 }
 
-/** Shell SSR con MENÚ LATERAL (apps de administración): sidebar de navegación + main con header. */
-export function shellNav(brand: string, title: string, sidebar: string, body: string): string {
+/** Shell SSR con MENÚ LATERAL + AVATAR (apps de administración). `avatar` = el menú de identidad. */
+export function shellNav(brand: string, title: string, sidebar: string, avatar: string, body: string): string {
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${PAGE_CSS}</style></head><body class="adm">
-<button type="button" class="tsw" title="Tema" onclick="(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()">◐</button>
+${avatar}
 <aside class="side">${sidebar}</aside>
 <main class="main">
 <div class="bc">${escapeHtml(brand)}</div>
 <h1>${escapeHtml(title)}</h1>
 ${body}
 </main>
-<script>(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();</script>
+<script>(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();
+document.addEventListener('click',function(e){var d=document.querySelector('details.avm[open]');if(d&&!d.contains(e.target))d.removeAttribute('open')});</script>
 </body></html>`
 }
+
+/** Toggle de tema reutilizable (item del menú de avatar). */
+export const THEME_TOGGLE_JS = "(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()"
 
 export class CsrfError extends Error {}
 

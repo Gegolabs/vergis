@@ -39,12 +39,18 @@ import {
   type MasterDataStore,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
-import { shellNav, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
+import { shellNav, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { readMultipart } from './multipart'
 
+/** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
+interface Chrome {
+  sidebar: string
+  avatar: string
+}
+
 const brandOf = (deps: AdminDeps): string => `${deps.brandTitle ?? 'Vergis'} · Administración`
-const adminPage = (deps: AdminDeps, nav: string, title: string, body: string): string =>
-  shellNav(brandOf(deps), title, nav, body)
+const adminPage = (deps: AdminDeps, chrome: Chrome, title: string, body: string): string =>
+  shellNav(brandOf(deps), title, chrome.sidebar, chrome.avatar, body)
 
 /** Write-path del intake (a OneLake) + disparo del pipeline. Lo inyecta el wiring. */
 export interface IntakeRunner {
@@ -102,16 +108,22 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     const manageable = manageableDomains(allDomains, email, isAdmin)
     if (!isAdmin && manageable.length === 0) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-      send(res, 403, adminPage(deps, buildNav(deps, [], false, 'home'), 'Acceso restringido', `<p class="msg err">No gestionas ninguna plataforma ni dominio.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
+      const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home'), avatar: buildAvatar(deps, email, false, false) }
+      send(res, 403, adminPage(deps, bare, 'Acceso restringido', `<p class="msg err">No gestionas ninguna plataforma ni dominio.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
       return true
     }
     const token = csrf(email)
     const url = new URL(req.url ?? '/', 'http://localhost')
-    // Navegación (menú lateral) activa según la ruta.
+    // Scope (Gestión de dominios · Configuración de plataforma · Perfil) + item activo, según la ruta.
+    let scope = 'gestion'
     let active = 'home'
     const dmActive = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)/)
-    if (dmActive) active = `dom:${dmActive[1]}`
-    else if (/^\/admin\/(plataforma|roles|groups|settings|sources)/.test(path)) active = 'plat'
+    if (path === '/admin/perfil') { scope = 'perfil'; active = '' }
+    else if (path === '/admin/plataforma' || path.startsWith('/admin/settings')) { scope = 'config'; active = 'plat' }
+    else if (path.startsWith('/admin/roles')) { scope = 'config'; active = 'roles' }
+    else if (path.startsWith('/admin/groups')) { scope = 'config'; active = 'groups' }
+    else if (path.startsWith('/admin/sources')) { scope = 'config'; active = 'sources' }
+    else if (dmActive) active = `dom:${dmActive[1]}`
     else {
       const emActive = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)/)
       if (emActive) {
@@ -119,7 +131,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         active = e?.domain ? `dom:${e.domain}` : 'home'
       }
     }
-    const nav = buildNav(deps, manageable, isAdmin, active)
+    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active), avatar: buildAvatar(deps, email, isAdmin, manageable.length > 0) }
     const denyPlatform = (): boolean => {
       send(res, 403, adminPage(deps, nav, 'Solo plataforma', `<p class="msg err">Esta sección es de gestión de plataforma (solo administradores).</p>`))
       return true
@@ -129,6 +141,11 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       // ── HOME · dashboard de salud ────────────────────────────────────────
       if (path === '/admin' && req.method === 'GET') {
         send(res, 200, await dashboard(deps, nav, email, isAdmin, manageable))
+        return true
+      }
+      // ── Perfil (personal · siempre accesible) ────────────────────────────
+      if (path === '/admin/perfil' && req.method === 'GET') {
+        send(res, 200, perfilPage(deps, nav, email, isAdmin, manageable))
         return true
       }
 
@@ -271,7 +288,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 // ─── Ingesta de archivos (gestión de dominio) ────────────────────────────────
 async function handleIntake(
   deps: AdminDeps,
-  nav: string,
+  nav: Chrome,
   domain: DomainDecl,
   slotId: string,
   req: IncomingMessage,
@@ -337,28 +354,47 @@ async function handleEntityWrite(
 
 // ─── Render (SSR, mismo lenguaje visual que el índice) ───────────────────────
 
-/** Menú lateral de navegación (persistente en todas las páginas de Administración). */
-function buildNav(deps: AdminDeps, manageable: DomainDecl[], isAdmin: boolean, active: string): string {
-  const item = (href: string, label: string, on: boolean, mono?: string): string =>
-    `<a href="${href}" class="${on ? 'on' : ''}">${mono ? `<span class="c">${escapeHtml(mono)}</span> ` : ''}${escapeHtml(label)}</a>`
+/** Menú lateral — navegación del SCOPE activo (Gestión de dominios · Configuración de plataforma). */
+function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, active: string): string {
+  const item = (href: string, label: string, on: boolean): string =>
+    `<a href="${href}" class="${on ? 'on' : ''}">${escapeHtml(label)}</a>`
   let s = `<span class="bca">${escapeHtml(deps.brandTitle ?? 'Vergis')} · Admin</span>`
-  s += item('/admin', 'Inicio', active === 'home')
-  if (manageable.length) {
-    s += `<div class="grp">Dominios</div>`
-    s += manageable.map((d) => item(`/admin/dominio/${d.id}`, d.label, active === `dom:${d.id}`)).join('')
-  }
-  if (isAdmin) {
-    s += `<div class="grp">Plataforma</div>`
-    s += item('/admin/plataforma', 'Gestión', active === 'plat')
+  if (scope === 'config') {
+    s += item('/admin/plataforma', 'Resumen', active === 'plat')
+    s += `<div class="grp">Configuración</div>`
+    s += item('/admin/roles', 'Usuarios y Roles', active === 'roles')
+    if (deps.groupStore) s += item('/admin/groups', 'Grupos de Mira', active === 'groups')
+    if (deps.ingestionMap) s += item('/admin/sources', 'Mapa de Fuentes', active === 'sources')
+  } else {
+    s += item('/admin', 'Inicio', active === 'home')
+    if (manageable.length) {
+      s += `<div class="grp">Dominios</div>`
+      s += manageable.map((d) => item(`/admin/dominio/${d.id}`, d.label, active === `dom:${d.id}`)).join('')
+    }
   }
   return s
+}
+
+/** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir. */
+function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
+  const local = (email.split('@')[0] || '?')
+  const initials = (local.split(/[._-]/).filter(Boolean).slice(0, 2).map((s) => s[0]).join('') || local[0] || '?').toUpperCase()
+  const it = (href: string, label: string): string => `<a href="${href}">${escapeHtml(label)}</a>`
+  let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? ' · admin' : ''}</div>`
+  m += it('/admin/perfil', 'Perfil')
+  if (hasDomains) m += it('/admin', 'Gestión')
+  if (isAdmin) m += it('/admin/plataforma', 'Configuración')
+  m += `<div class="sep"></div>`
+  m += `<button type="button" onclick="${THEME_TOGGLE_JS}">◐ Cambiar tema</button>`
+  m += `<a href="/oauth2/sign_out?rd=%2Fadmin">Cerrar sesión</a>`
+  return `<details class="avm"><summary class="av" title="${escapeHtml(email)}">${escapeHtml(initials)}</summary><div class="avmenu">${m}</div></details>`
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>
   `<div class="tile${warn ? ' warn' : ''}"><div class="n">${escapeHtml(String(n))}</div><div class="l">${escapeHtml(label)}</div></div>`
 
 /** HOME · dashboard de salud: tiles + dominios que gestionas + (admin) entrada de Plataforma. */
-async function dashboard(deps: AdminDeps, nav: string, email: string, isAdmin: boolean, manageable: DomainDecl[]): Promise<string> {
+async function dashboard(deps: AdminDeps, nav: Chrome, email: string, isAdmin: boolean, manageable: DomainDecl[]): Promise<string> {
   const entitiesOf = (domId: string) => deps.entities.filter((e) => (e.domain ?? '') === domId)
   const slotsOf = (domId: string) => (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domId)
   const domainCard = (d: DomainDecl): string => {
@@ -400,15 +436,32 @@ async function dashboard(deps: AdminDeps, nav: string, email: string, isAdmin: b
      <h2>Salud de la plataforma</h2>
      <div class="tiles">${tiles.join('')}</div>
      ${domainsSection || (orphanSection ? '' : '<p class="sub">No gestionas ningún dominio.</p>')}
-     ${orphanSection}
-     ${isAdmin ? `<h2>Plataforma</h2><ul class="cards"><li><a href="/admin/plataforma">Gestión de Plataforma →</a><div class="sub">Usuarios y Roles · Grupos de Mira · Settings.</div></li></ul>` : ''}`,
+     ${orphanSection}`,
+  )
+}
+
+/** Perfil (personal): quién eres, qué puedes (admin / steward de qué dominios), tema, salir. */
+function perfilPage(deps: AdminDeps, nav: Chrome, email: string, isAdmin: boolean, manageable: DomainDecl[]): string {
+  const roles: string[] = []
+  if (isAdmin) roles.push('Administrador de plataforma')
+  if (manageable.length) roles.push(`Steward de: ${manageable.map((d) => escapeHtml(d.label)).join(' · ')}`)
+  return adminPage(deps, nav,
+    'Perfil',
+    `<table>
+       <tr><th>Sesión</th><td><code>${escapeHtml(email || '(anónima)')}</code></td></tr>
+       <tr><th>Permisos</th><td>${roles.length ? roles.join('<br>') : '<span class="sub">sin permisos de gestión</span>'}</td></tr>
+     </table>
+     <h2>Preferencias</h2>
+     <p><button type="button" class="add" onclick="${THEME_TOGGLE_JS}">◐ Cambiar tema (claro/oscuro)</button></p>
+     <h2>Sesión</h2>
+     <p><a href="/oauth2/sign_out?rd=%2Fadmin">Cerrar sesión</a></p>`,
   )
 }
 
 /** Área de un DOMINIO: Ingesta · Data Maestra · Fuentes & Frescura · (próximamente) las demás facetas. */
 async function domainPage(
   deps: AdminDeps,
-  nav: string,
+  nav: Chrome,
   domain: DomainDecl,
   token: string,
   isAdmin: boolean,
@@ -461,7 +514,7 @@ async function domainPage(
 }
 
 /** Gestión de PLATAFORMA: Usuarios y Roles · Grupos · Settings (una entrada que despliega todo). */
-async function platformPage(deps: AdminDeps, nav: string, token: string): Promise<string> {
+async function platformPage(deps: AdminDeps, nav: Chrome, token: string): Promise<string> {
   const curTitle = deps.settingStore ? (await deps.settingStore.getSetting('index_title')) ?? '' : ''
   const settings = deps.settingStore
     ? `<h2>Catálogo</h2>
@@ -481,7 +534,7 @@ async function platformPage(deps: AdminDeps, nav: string, token: string): Promis
   )
 }
 
-async function sourcesPage(deps: AdminDeps, nav: string): Promise<string> {
+async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
   const map = await deps.ingestionMap!()
   const rows = map
     .map(
@@ -499,7 +552,7 @@ async function sourcesPage(deps: AdminDeps, nav: string): Promise<string> {
 // ─── Grupos de Mira ──────────────────────────────────────────────────────────
 async function handleGroups(
   deps: AdminDeps,
-  nav: string,
+  nav: Chrome,
   groups: GroupStore,
   path: string,
   req: IncomingMessage,
@@ -560,7 +613,7 @@ async function handleGroups(
   return false
 }
 
-async function groupsPage(deps: AdminDeps, nav: string, groups: GroupStore, token: string, msg?: string): Promise<string> {
+async function groupsPage(deps: AdminDeps, nav: Chrome, groups: GroupStore, token: string, msg?: string): Promise<string> {
   const list = await groups.listGroups()
   const rows = list
     .map(
@@ -586,7 +639,7 @@ async function groupsPage(deps: AdminDeps, nav: string, groups: GroupStore, toke
   )
 }
 
-async function groupMembersPage(deps: AdminDeps, nav: string, groups: GroupStore, gid: string, token: string, msg?: string): Promise<string> {
+async function groupMembersPage(deps: AdminDeps, nav: Chrome, groups: GroupStore, gid: string, token: string, msg?: string): Promise<string> {
   const list = await groups.listGroups()
   const g = list.find((x) => x.id === gid.toLowerCase())
   if (!g) return adminPage(deps, nav, 'No encontrado', `<p class="msg err">Grupo desconocido: <code>${escapeHtml(gid)}</code></p><p><a href="/admin/groups">← Grupos</a></p>`)
@@ -610,7 +663,7 @@ async function groupMembersPage(deps: AdminDeps, nav: string, groups: GroupStore
   )
 }
 
-async function rolesPage(deps: AdminDeps, nav: string, token: string, msg?: string): Promise<string> {
+async function rolesPage(deps: AdminDeps, nav: Chrome, token: string, msg?: string): Promise<string> {
   const admins = await deps.adminStore.list()
   const rows = admins
     .map(
@@ -635,7 +688,7 @@ async function rolesPage(deps: AdminDeps, nav: string, token: string, msg?: stri
   )
 }
 
-async function entityPage(deps: AdminDeps, nav: string, entity: MasterDataEntity, token: string, editPk?: string): Promise<string> {
+async function entityPage(deps: AdminDeps, nav: Chrome, entity: MasterDataEntity, token: string, editPk?: string): Promise<string> {
   const pk = pkColumn(entity)
   const rows = await deps.mdStore.list(entity)
   const editing = editPk != null ? rows.find((r) => String(r[pk.name]) === editPk) : undefined

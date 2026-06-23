@@ -88,18 +88,18 @@ describe('admin · gestión de dominio + ingesta', () => {
   }
   const tokenFrom = (html: string): string => html.match(/name="_csrf" value="([0-9a-f]+)"/)![1]
 
-  it('dashboard: admin ve el dominio y la entrada de Plataforma', async () => {
+  it('dashboard: admin ve el dominio y, en el avatar, Configuración', async () => {
     const res = await go(mockReq('GET', '/admin', ADMIN))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('Cartera / Finanzas')
-    expect(res.body).toContain('Gestión de Plataforma')
+    expect(res.body).toContain('Configuración') // entrada de plataforma en el menú de avatar
   })
 
-  it('steward (no-admin) entra y ve su dominio; NO ve Plataforma', async () => {
+  it('steward (no-admin) entra y ve su dominio; NO ve Configuración', async () => {
     const dash = await go(mockReq('GET', '/admin', STEWARD))
     expect(dash.statusCode).toBe(200)
     expect(dash.body).toContain('Cartera / Finanzas')
-    expect(dash.body).not.toContain('Gestión de Plataforma')
+    expect(dash.body).not.toContain('Configuración')
     // /admin/plataforma y /admin/roles → 403 para el steward
     expect((await go(mockReq('GET', '/admin/plataforma', STEWARD))).statusCode).toBe(403)
     expect((await go(mockReq('GET', '/admin/roles', STEWARD))).statusCode).toBe(403)
