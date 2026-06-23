@@ -61,7 +61,7 @@ export function createPiConfig(deps: PiConfigDeps): PiConfigHandler {
     const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
     const role = await deps.roleOf(target.code, email)
     if (!canOpen(role)) {
-      send(res, 403, pg('Acceso restringido', `<p class="msg err">No tienes acceso a la configuración de <code>${escapeHtml(target.code)}</code>.</p><p><a href="/">← Volver</a></p>`))
+      send(res, 403, pg('Acceso restringido', `<p class="msg err">No tienes acceso a la configuración de <code>${escapeHtml(target.code)}</code>.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2F">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
       return true
     }
     const token = csrf(email)

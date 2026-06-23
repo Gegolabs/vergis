@@ -444,7 +444,7 @@ ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-it
 li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:auto;padding-top:24px;color:var(--muted);font-size:11px;opacity:.7}</style></head>
 <body><div class="head">${logo}<h1>${INDEX_TITLE}</h1>
 <button type="button" class="tsw" aria-label="Cambiar tema" title="Cambiar tema (oscuro/blanco)" onclick="vToggle()"><svg class="t-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="t-moon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
-</div><ul>${items}</ul><div class="f">Powered by Vergis</div>
+</div><ul>${items}</ul><div class="f">Powered by Vergis · <a href="/admin" style="color:inherit;text-decoration:underline">Administración</a></div>
 <script>
 function vToggle(){var t=(document.documentElement.getAttribute('data-theme')==='blanco')?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}}
 (function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();

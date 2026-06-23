@@ -70,7 +70,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
     if (!(await deps.adminStore.isAdmin(email))) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-      send(res, 403, adminPage(deps, 'Acceso restringido', `<p class="msg err">No tienes rol de administrador. Identidad: <code>${escapeHtml(email || '(anónima)')}</code></p><p><a href="/">← Volver</a></p>`))
+      send(res, 403, adminPage(deps, 'Acceso restringido', `<p class="msg err">No tienes rol de administrador.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
       return true
     }
     const token = csrf(email)
