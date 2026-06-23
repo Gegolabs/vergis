@@ -46,6 +46,15 @@ vergis/
 └── tests/              # acceptance (hermetic suite)
 ```
 
+## Docs
+
+Canonical product docs live in `docs/`:
+
+- [`gobierno-permisos.md`](docs/gobierno-permisos.md) — Governance: the **three-state model**, the `GovernanceStore`, **PI permissions** (owner/collaborator/viewer, Mira-managed groups, public/private), the two orthogonal authz layers (artifact vs RLS, no bypass), and how RLS is applied. Includes the **contract for agents**.
+- [`data-maestra-y-publicacion.md`](docs/data-maestra-y-publicacion.md) — Master data management: authoring, the **universal publication model** (`md_<entity>__replica` projections, not Fabric shortcuts), freshness via oferta/demanda, and the **contract for agents**.
+- [`frescura-oferta-demanda.md`](docs/frescura-oferta-demanda.md) — Freshness: **oferta vs demanda**, demand ceiling, required-cadence derivation, observability, and the reconciler (delegate to the engine's scheduler).
+- [`adr-001-lenguaje-y-supply-chain.md`](docs/adr-001-lenguaje-y-supply-chain.md) — language & supply-chain ADR.
+
 ## Edition and license
 
 Core **AGPL-3.0-or-later**, functionally complete on single-node. The Enterprise edition (HA / Kubernetes / carrier-grade) is commercial. The canon's normative specs (Botler contract, Mira spec, DSL, naming) ship with AgencyDomains; their migration to this repo's `docs/` is pending.

@@ -20,6 +20,51 @@ export {
 export type { VtState, VtTreeNode } from './table-runtime'
 export { openAnnotationStore, SqliteAnnotationStore } from './annotation-store'
 export type { AnnotationStore, AnnotationRecord } from './annotation-store'
+export { openSqliteDb, persistSqliteDb, selectAll } from './sqlite'
+export type { SqlDb, SqlStmt } from './sqlite'
+export {
+  parseMasterDataConfig,
+  pkColumn,
+  coerceValue,
+  coerceRow,
+} from './master-data'
+export type { MasterDataEntity, MasterDataColumn, MasterDataColumnType, CoerceResult, PublicationTargetDecl } from './master-data'
+export {
+  SqliteMasterDataStore,
+  createDwhMasterDataStore,
+  MasterDataConflict,
+} from './master-data-store'
+export type { MasterDataStore, MasterDataRow } from './master-data-store'
+export { createDwhPublisher, replicaTable } from './master-data-publish'
+export type { Publisher, PublisherTarget } from './master-data-publish'
+export { SqliteAdminStore, AdminLockout } from './admin-roles'
+export type { AdminStore, AdminEntry } from './admin-roles'
+export { SqliteGovernanceStore, GovernanceConflict } from './governance-store'
+export type {
+  GovernanceStore,
+  GroupStore,
+  PiGovStore,
+  MiraGroup,
+  GroupMember,
+  GroupSeed,
+  GovernanceSeed,
+  PiGovernance,
+  PiDemanda,
+} from './governance-store'
+export { effectiveRole, canOpen, canCollaborate, canGovern, rankOf, higher } from './pi-authz'
+export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } from './pi-authz'
+export type { SourceRow, ProcessRow, SourceRegistryStore } from './governance-store'
+export {
+  durationToSeconds,
+  secondsToDuration,
+  demandaCeilingSeconds,
+  isDemandaWithinCeiling,
+  requiredCadenceSeconds,
+  deriveIngestionMap,
+} from './freshness'
+export type { SourceInfo, ProcessInfo, IngestionMapRow, DeriveMapInput } from './freshness'
+export { classifyProcess, alertReason, reconcilePlan } from './ingestion-observability'
+export type { RunStatus, RunRecord, ProcessHealth, ReconcilePlan, IngestionEngineClient } from './ingestion-observability'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'
