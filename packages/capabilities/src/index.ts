@@ -44,6 +44,7 @@ export type {
   GovernanceStore,
   GroupStore,
   PiGovStore,
+  PlatformSettingStore,
   MiraGroup,
   GroupMember,
   GroupSeed,

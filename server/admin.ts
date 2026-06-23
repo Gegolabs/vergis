@@ -23,6 +23,7 @@ import {
   GovernanceConflict,
   type AdminStore,
   type GroupStore,
+  type PlatformSettingStore,
   type IngestionMapRow,
   type MasterDataEntity,
   type MasterDataRow,
@@ -44,6 +45,8 @@ export interface AdminDeps {
   onWrite?: (entity: MasterDataEntity) => Promise<void>
   /** Mapa de ingestión derivado (frente B): cadencia requerida por proceso. Opcional. */
   ingestionMap?: () => Promise<IngestionMapRow[]>
+  /** Settings de plataforma (título del catálogo, etc.). Opcional. */
+  settingStore?: PlatformSettingStore
   /** Identidad del consumidor desde las cabeceras del gate. */
   identityOf: (headers: IncomingMessage['headers']) => { user?: string }
   /** Sumidero de auditoría (append-only log del nodo). */
@@ -79,7 +82,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     try {
       // ── GET landing ──────────────────────────────────────────────────────
       if (path === '/admin' && req.method === 'GET') {
-        send(res, 200, landing(deps))
+        send(res, 200, await landing(deps, token))
         return true
       }
       // ── Usuarios y Roles ─────────────────────────────────────────────────
@@ -109,6 +112,16 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         } catch (e) {
           send(res, e instanceof AdminLockout ? 409 : 400, await rolesPage(deps, token, errMsg(e)))
         }
+        return true
+      }
+      // ── Settings de plataforma (título del catálogo) ─────────────────────
+      if (deps.settingStore && path === '/admin/settings' && req.method === 'POST') {
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        const val = (f['index_title'] ?? '').trim()
+        await deps.settingStore.setSetting('index_title', val, email)
+        deps.audit({ type: 'platform-setting', key: 'index_title', value: val, by: email })
+        redirect(res, '/admin')
         return true
       }
       // ── Grupos de Mira ───────────────────────────────────────────────────
@@ -191,13 +204,24 @@ async function handleEntityWrite(
 }
 
 // ─── Render (SSR, mismo lenguaje visual que el índice) ───────────────────────
-function landing(deps: AdminDeps): string {
+async function landing(deps: AdminDeps, token: string): Promise<string> {
   const items = deps.entities
     .map((e) => `<li><a href="/admin/e/${e.id}"><span class="c">${escapeHtml(e.id)}</span> ${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`)
     .join('')
+  const curTitle = deps.settingStore ? (await deps.settingStore.getSetting('index_title')) ?? '' : ''
+  const catalogo = deps.settingStore
+    ? `<h2>Catálogo</h2>
+       <form method="post" action="/admin/settings" class="row">
+         <input type="hidden" name="_csrf" value="${token}">
+         <input name="index_title" value="${escapeHtml(curTitle)}" placeholder="Título del catálogo (p. ej. Productos de Información)" style="min-width:320px">
+         <button class="add">Guardar</button>
+       </form>
+       <p class="sub">El título que se muestra en el índice de PIs. Vacío = el default de la instancia.</p>`
+    : ''
   return adminPage(deps,
     'Administración',
     `<h2>Gestión de Data Maestra</h2><ul class="cards">${items || '<li class="sub">No hay entidades declaradas.</li>'}</ul>
+     ${catalogo}
      <h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles"><span class="c">roles</span> Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
        deps.groupStore ? `<li><a href="/admin/groups"><span class="c">grupos</span> Grupos de Mira</a><div class="sub">Grupos para compartir PIs (no grupos AAD).</div></li>` : ''
      }${
