@@ -123,7 +123,13 @@ export interface SourceRegistryStore {
   listProcessOutputs(): Promise<{ processId: string; tableRef: string }[]>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore {
+/** Settings de plataforma (clave→valor): branding del catálogo, etc. Editables in-app. */
+export interface PlatformSettingStore {
+  getSetting(key: string): Promise<string | null>
+  setSetting(key: string, value: string, updatedBy?: string): Promise<void>
+}
+
+export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore {
   close(): Promise<void>
 }
 
@@ -162,6 +168,9 @@ const PI_DEMANDA_DDL = `CREATE TABLE IF NOT EXISTS pi_demanda (
   updated_by TEXT,
   updated_at TEXT
 );`
+const SETTING_DDL = `CREATE TABLE IF NOT EXISTS platform_setting (
+  skey TEXT PRIMARY KEY, svalue TEXT, updated_by TEXT, updated_at TEXT
+);`
 const SOURCE_DDL = `CREATE TABLE IF NOT EXISTS source (
   source_id TEXT PRIMARY KEY, label TEXT NOT NULL, oferta TEXT NOT NULL, connected_by TEXT
 );`
@@ -199,6 +208,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(PI_GOV_DDL)
     db.run(PI_GRANT_DDL)
     db.run(PI_DEMANDA_DDL)
+    db.run(SETTING_DDL)
     db.run(SOURCE_DDL)
     db.run(TABLE_SOURCE_DDL)
     db.run(PROCESS_DDL)
@@ -524,6 +534,23 @@ export class SqliteGovernanceStore implements GovernanceStore {
       processId: String(r['process_id']),
       tableRef: String(r['table_ref']),
     }))
+  }
+
+  // ── PlatformSettingStore ──
+  async getSetting(key: string): Promise<string | null> {
+    const stmt = this.db.prepare(`SELECT svalue FROM platform_setting WHERE skey = ?`)
+    stmt.bind([key])
+    const v = stmt.step() ? String((stmt.getAsObject() as { svalue: string }).svalue) : null
+    stmt.free()
+    return v
+  }
+  async setSetting(key: string, value: string, updatedBy?: string): Promise<void> {
+    this.db.run(
+      `INSERT INTO platform_setting (skey, svalue, updated_by, updated_at) VALUES (?,?,?,?)
+       ON CONFLICT(skey) DO UPDATE SET svalue=excluded.svalue, updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
+      [key, value, normEmail(updatedBy) || null, now()],
+    )
+    this.persist()
   }
 
   async close(): Promise<void> {
