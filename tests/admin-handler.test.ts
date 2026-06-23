@@ -98,11 +98,14 @@ describe('admin handler · gobierno de escritura', () => {
     expect(audit.find((e) => e.type === 'admin-access-denied')?.user).toBe('intruso@x.com')
   })
 
-  it('admin ve el landing con la entidad', async () => {
+  it('admin ve el landing con la entidad + avatar con Configuración', async () => {
     const { res } = await go(mockReq('GET', '/admin', 'cesar@ultrabase.com'))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('Empresas Relacionadas')
-    expect(res.body).toContain('Usuarios y Roles')
+    expect(res.body).toContain('Configuración') // plataforma vive ahora en el menú de avatar
+    // Usuarios y Roles vive en la sección de Configuración (Plataforma), no en el home
+    const plat = await go(mockReq('GET', '/admin/plataforma', 'cesar@ultrabase.com'))
+    expect(plat.res.body).toContain('Usuarios y Roles')
   })
 
   it('insert válido crea fila y audita; CSRF inválido la rechaza', async () => {
