@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { renderHtmlPiece } from '../packages/capabilities/src/render-html-piece'
 
+// render-html-piece no usa la identidad; se pasa vacía para satisfacer la firma Capability.execute.
 const render = async (params: Record<string, unknown>): Promise<string> =>
-  ((await renderHtmlPiece.execute(params)) as { html: string }).html
+  ((await renderHtmlPiece.execute(params, {} as never)) as { html: string }).html
 
 describe('render · barra de contexto activo (#1 — semana siempre visible)', () => {
   it('muestra el valor vigente de cada control (Semana · W24) en una barra sticky', async () => {
