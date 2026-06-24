@@ -47,6 +47,7 @@ import {
   createTokenProvider,
   createOneLakeIntake,
   createFabricJobs,
+  createFabricJobStatus,
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   createDwhPublisher,
@@ -56,6 +57,7 @@ import {
   type GroupSeed,
   type DomainDecl,
   type IntakeSlot,
+  type RunRecord,
   type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
@@ -578,22 +580,26 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       ? createDwhMasterDataStore(connections)
       : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
     const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`)
-    // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline. Usa las creds del SP de
-    // una conexión (VERGIS_INTAKE_SP, o la única si hay una sola) — token AAD para storage/Fabric REST,
-    // no para SQL. Sin slots o sin conexiones, la ingesta no se ofrece.
-    const intakeRunner = ((): IntakeRunner | undefined => {
-      if (!intakeSlots.length || !connections) return undefined
+    // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
+    // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
+    // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
+    const intakeWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]> } => {
+      if (!intakeSlots.length || !connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
       const sp = ref ? connections[ref] : undefined
       if (!sp) {
         console.error('[vergis-rls] ingesta deshabilitada: define VERGIS_INTAKE_SP (hay varias conexiones).')
-        return undefined
+        return {}
       }
       const tokens = createTokenProvider({ tenantId: sp.tenantId, clientId: sp.clientId, clientSecret: sp.clientSecret })
       const onelake = createOneLakeIntake(tokens)
       const jobs = createFabricJobs(tokens)
-      return { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) }
+      const jobStatus = createFabricJobStatus(tokens)
+      return {
+        runner: { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) },
+        status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
+      }
     })()
     admin = createAdmin({
       entities,
@@ -602,7 +608,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       domains,
       domainStewardGroups: defaultStewardGroups,
       intakeSlots,
-      intake: intakeRunner,
+      intake: intakeWiring.runner,
+      intakeStatus: intakeWiring.status,
       piCount: discover().length,
       groupStore: govStore,
       settingStore: govStore,

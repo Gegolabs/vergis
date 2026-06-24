@@ -37,6 +37,8 @@ import {
   type MasterDataEntity,
   type MasterDataRow,
   type MasterDataStore,
+  type RunRecord,
+  type RunStatus,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
@@ -70,6 +72,8 @@ export interface AdminDeps {
   intakeSlots?: IntakeSlot[]
   /** Ejecutor del intake (write a OneLake + run-now). Opcional (sin él, la Ingesta no se ofrece). */
   intake?: IntakeRunner
+  /** Estado de las últimas corridas de conversión de un slot (frente B · observabilidad). Opcional. */
+  intakeStatus?: (slot: IntakeSlot) => Promise<RunRecord[]>
   /** Grupos gestionados por Mira (sección «Grupos»). Opcional. */
   groupStore?: GroupStore
   /** Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional. */
@@ -173,8 +177,13 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         const slotId = di[2]
         if (!slotId && req.method === 'GET') {
-          const okFile = url.searchParams.get('ok') ?? undefined
-          send(res, 200, await domainPage(deps, nav, domain, token, isAdmin, okFile ? { ok: `Archivo «${okFile}» recibido.` } : undefined))
+          const okN = url.searchParams.get('ok')
+          const ran = url.searchParams.get('run') === '1'
+          const n = okN ? Math.max(1, parseInt(okN, 10) || 1) : 0
+          const feedback = okN
+            ? { ok: `${n} ${n === 1 ? 'archivo recibido' : 'archivos recibidos'}.${ran ? ' La conversión está corriendo — seguila abajo en «Últimas cargas».' : ''}` }
+            : undefined
+          send(res, 200, await domainPage(deps, nav, domain, token, isAdmin, feedback))
           return true
         }
         if (slotId && req.method === 'POST') {
@@ -310,28 +319,32 @@ async function handleIntake(
     send(res, deps.intake ? 404 : 503, adminPage(deps, nav, 'Ingesta', `<p class="msg err">${deps.intake ? `Slot desconocido: <code>${escapeHtml(slotId)}</code>` : 'La ingesta no está habilitada en esta instancia.'}</p>`))
     return
   }
-  const { fields, files } = await readMultipart(req)
+  const { fields, files } = await readMultipart(req, 60 * 1024 * 1024) // headroom para lotes
   requireCsrf(fields, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
-  const file = files.find((f) => f.field === 'file') ?? files[0]
-  if (!file || !file.filename) {
+  const uploads = files.filter((f) => f.field === 'file' && f.filename)
+  if (uploads.length === 0) {
     send(res, 400, await domainPage(deps, nav, domain, token, true, { error: 'No se adjuntó ningún archivo.' }))
     return
   }
-  const v = validateUpload(slot, file.filename, file.bytes.length)
-  if (!v.ok) {
-    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: file.filename, bytes: file.bytes.length, by, ok: false, error: v.error })
-    send(res, 400, await domainPage(deps, nav, domain, token, true, { error: v.error }))
-    return
+  // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
+  // dejar la semana a medio cargar). El SJD failure-safe espera el set consistente, no archivos sueltos.
+  for (const u of uploads) {
+    const v = validateUpload(slot, u.filename, u.bytes.length)
+    if (!v.ok) {
+      deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
+      send(res, 400, await domainPage(deps, nav, domain, token, true, { error: v.error }))
+      return
+    }
   }
-  // Aterriza el crudo en la landing zone OneLake (staging). El pipeline existente lo transforma.
-  await deps.intake.put(slot.target, file.filename, file.bytes)
-  let triggered = false
-  if (slot.trigger && deps.intake.runNow) {
-    await deps.intake.runNow(slot.trigger, slot.target)
-    triggered = true
+  // UN SOLO disparo por LOTE (no uno por archivo: N triggers = N corridas = throttling de capacidad).
+  const willTrigger = !!(slot.trigger && deps.intake.runNow)
+  // Aterriza cada crudo en la landing zone OneLake (staging). El pipeline/SJD lee de ahí y transforma.
+  for (const u of uploads) {
+    await deps.intake.put(slot.target, u.filename, u.bytes)
+    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger })
   }
-  deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: file.filename, bytes: file.bytes.length, by, ok: true, triggered })
-  redirect(res, `/admin/dominio/${domain.id}?ok=${encodeURIComponent(file.filename)}`)
+  if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
+  redirect(res, `/admin/dominio/${domain.id}?ok=${uploads.length}${willTrigger ? '&run=1' : ''}`)
 }
 
 async function handleEntityWrite(
@@ -470,6 +483,50 @@ function perfilPage(deps: AdminDeps, nav: Chrome, email: string, isAdmin: boolea
   )
 }
 
+// ─── Estado de conversión (render) ───────────────────────────────────────────
+/** Etiqueta legible + símbolo (sin CSS extra) para un estado de corrida. */
+function statusBadge(s: RunStatus): string {
+  switch (s) {
+    case 'Completed': return '✓ Listo'
+    case 'Failed': return '✕ Falló'
+    case 'InProgress': return '⏳ Procesando'
+    case 'NotStarted': return '⏳ En cola'
+    case 'Cancelled': return '⊘ Cancelada'
+    case 'Deduped': return '⊘ Omitida (duplicada)'
+    default: return s
+  }
+}
+/** Antigüedad legible de una corrida ('hace 2 min', o la fecha si es vieja). */
+function fmtWhen(iso: string): string {
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return '—'
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (s < 60) return `hace ${s}s`
+  if (s < 3600) return `hace ${Math.round(s / 60)} min`
+  if (s < 86400) return `hace ${Math.round(s / 3600)} h`
+  return new Date(t).toISOString().slice(0, 10)
+}
+/** Duración de una corrida terminada (vacío si sigue corriendo o sin datos). */
+function fmtDuration(r: RunRecord): string {
+  if (!r.endedAt) return ''
+  const a = Date.parse(r.startedAt)
+  const b = Date.parse(r.endedAt)
+  if (Number.isNaN(a) || Number.isNaN(b)) return ''
+  const s = Math.max(0, Math.round((b - a) / 1000))
+  return s < 60 ? `${s}s` : `${Math.round(s / 60)} min`
+}
+function runLine(r: RunRecord): string {
+  const dur = fmtDuration(r)
+  return `<li><span class="c">${statusBadge(r.status)}</span> ${fmtWhen(r.startedAt)}${dur ? ` <span class="sub">· ${dur}</span>` : ''}${r.error ? `<div class="sub">${escapeHtml(r.error)}</div>` : ''}</li>`
+}
+/** Panel «Últimas cargas» de un slot con trigger (vacío si el slot no dispara conversión). */
+function renderCargas(slot: IntakeSlot, st: RunRecord[] | 'error' | undefined): string {
+  if (!slot.trigger || st === undefined) return ''
+  if (st === 'error') return '<p class="sub">No se pudo consultar el estado de la conversión (reintentá refrescando).</p>'
+  if (st.length === 0) return '<p class="sub">Sin cargas todavía.</p>'
+  return `<div class="cargas"><b class="sub">Últimas cargas</b><ul class="cards">${st.map(runLine).join('')}</ul></div>`
+}
+
 /** Área de un DOMINIO: Ingesta · Data Maestra · Fuentes & Frescura · (próximamente) las demás facetas. */
 async function domainPage(
   deps: AdminDeps,
@@ -482,18 +539,38 @@ async function domainPage(
   const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
   const entities = deps.entities.filter((e) => (e.domain ?? '') === domain.id)
 
+  // Estado de conversión (frente B · observabilidad): últimas corridas del SJD/pipeline por slot con
+  // trigger. Tolerante a fallos: si Fabric no responde, la pantalla sigue sirviendo (avisa, no se cae).
+  const statusBySlot = new Map<string, RunRecord[] | 'error'>()
+  if (deps.intakeStatus) {
+    await Promise.all(slots.filter((s) => s.trigger).map(async (s) => {
+      try { statusBySlot.set(s.id, await deps.intakeStatus!(s)) } catch { statusBySlot.set(s.id, 'error') }
+    }))
+  }
+
+  const guia = `<details class="guia"><summary>¿Cómo cargar? (orden recomendado)</summary>
+       <ol class="sub">
+         <li>Seleccioná los archivos de la <b>misma semana</b> — podés subir clientes y proveedores juntos (selección múltiple).</li>
+         <li>Verificá que cada nombre siga el patrón indicado en el slot.</li>
+         <li>Subí. La conversión corre sola; su estado aparece abajo en «Últimas cargas» (Procesando → Listo).</li>
+       </ol>
+       <p class="sub">No mezcles semanas en una misma carga: subí una semana, esperá «Listo» y recién la siguiente.</p>
+     </details>`
+
   const ingesta = deps.intake && slots.length
     ? `<h2>Ingesta de archivos</h2>
-       <p class="sub">Subí el archivo acá y Mira lo ubica en su destino (staging). El pipeline de ingestión lo procesa.</p>
+       <p class="sub">Subí los archivos acá y Mira los ubica en su destino (staging). La conversión los procesa.</p>
+       ${guia}
        ${slots.map((s) => `
          <form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/intake/${escapeHtml(s.id)}" enctype="multipart/form-data" class="grid">
            <input type="hidden" name="_csrf" value="${token}">
            <div class="fld"><span>${escapeHtml(s.label)}${s.accept ? ` · patrón: <code>${escapeHtml(s.accept)}</code>` : ''}</span>
-             <input type="file" name="file" required></div>
-           <div class="sub">${escapeHtml(s.description ?? '')}${s.description ? ' · ' : ''}Máx. ${Math.round(slotMaxBytes(s) / (1024 * 1024))} MB${s.trigger ? ' · dispara el pipeline al subir' : ' · el pipeline lo toma en su próxima corrida'}</div>
+             <input type="file" name="file" multiple required></div>
+           <div class="sub">${escapeHtml(s.description ?? '')}${s.description ? ' · ' : ''}Podés subir varios · Máx. ${Math.round(slotMaxBytes(s) / (1024 * 1024))} MB c/u${s.trigger ? ' · dispara la conversión al subir' : ' · el pipeline lo toma en su próxima corrida'}</div>
            <div class="actions"><button class="add">Subir</button></div>
-         </form>`).join('')}`
-    : (deps.intake ? '' : '')
+         </form>
+         ${renderCargas(s, statusBySlot.get(s.id))}`).join('')}`
+    : ''
 
   const maestra = entities.length
     ? `<h2>Data Maestra</h2><ul class="cards">${entities.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}">${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
