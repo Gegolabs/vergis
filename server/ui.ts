@@ -7,6 +7,18 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHmac } from 'node:crypto'
 import { escapeHtml } from '@vergis/capabilities'
 
+/** CSS del avatar de identidad (menú arriba-derecha). Compartido por las superficies de admin y el
+ * catálogo, para que ambas usen el mismo marco. Referencia las mismas CSS vars (--card/--accent/…). */
+export const AVATAR_CSS = `
+.avm{position:fixed;top:16px;right:18px;z-index:20}
+.av{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--accent);color:#1d2021;font-weight:700;font-size:12px;cursor:pointer;list-style:none;user-select:none}
+.av::-webkit-details-marker{display:none}.av::marker{content:""}
+.avmenu{position:absolute;right:0;top:42px;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:6px;min-width:188px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.avmenu a,.avmenu button{display:block;width:100%;text-align:left;padding:8px 11px;border-radius:7px;color:var(--fg);font-size:13px;background:none;border:none;cursor:pointer;font-family:inherit;text-decoration:none}
+.avmenu a:hover,.avmenu button:hover{background:var(--bg);text-decoration:none}
+.avhead{font-size:11px;color:var(--muted);padding:6px 11px 8px;border-bottom:1px solid var(--border);margin-bottom:4px;word-break:break-all}
+.avmenu .sep{border-top:1px solid var(--border);margin:4px 0}`
+
 export const PAGE_CSS = `
 :root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374;--err:#fb4934}
 html[data-theme="blanco"]{--bg:#fff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8;--err:#dc2626}
@@ -40,19 +52,13 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .side a.on{background:var(--accent);color:#1d2021;font-weight:600}.side a.on .c{color:#1d2021}
 .side .grp{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 5px 10px}
 .side .catlink{color:var(--muted);font-size:12px;border-bottom:1px solid var(--border);border-radius:0;margin:0 0 8px;padding:0 10px 10px}.side .catlink:hover{color:var(--accent);background:none}
+.side a.l2{padding-left:24px;font-size:12.5px}.side a.l3{padding-left:38px;font-size:12px;color:var(--muted)}
+.side a.l2.on,.side a.l3.on{color:#1d2021}html[data-theme="blanco"] .side a.l2.on,html[data-theme="blanco"] .side a.l3.on{color:#fff}
 .main{flex:1;padding:32px 44px;max-width:880px;box-sizing:border-box}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
 .tile{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 18px;min-width:96px}
 .tile .n{font-size:26px;font-weight:700;line-height:1.1}.tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
-.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}
-.avm{position:fixed;top:16px;right:18px;z-index:20}
-.av{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--accent);color:#1d2021;font-weight:700;font-size:12px;cursor:pointer;list-style:none;user-select:none}
-.av::-webkit-details-marker{display:none}.av::marker{content:""}
-.avmenu{position:absolute;right:0;top:42px;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:6px;min-width:188px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
-.avmenu a,.avmenu button{display:block;width:100%;text-align:left;padding:8px 11px;border-radius:7px;color:var(--fg);font-size:13px;background:none;border:none;cursor:pointer;font-family:inherit}
-.avmenu a:hover,.avmenu button:hover{background:var(--bg);text-decoration:none}
-.avhead{font-size:11px;color:var(--muted);padding:6px 11px 8px;border-bottom:1px solid var(--border);margin-bottom:4px;word-break:break-all}
-.avmenu .sep{border-top:1px solid var(--border);margin:4px 0}`
+.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}${AVATAR_CSS}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. */
 export function page(brand: string, title: string, body: string): string {
@@ -82,6 +88,32 @@ document.addEventListener('click',function(e){var d=document.querySelector('deta
 
 /** Toggle de tema reutilizable (item del menú de avatar). */
 export const THEME_TOGGLE_JS = "(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()"
+
+/** Avatar de identidad (menú arriba-derecha) — COMPARTIDO por admin y el catálogo. `<details>` puro,
+ * sin JS. El menú gradúa según el rol: Perfil siempre · Gestión si gestiona dominios · Configuración si
+ * admin. `signoutRd` = a dónde volver tras cerrar sesión. Requiere AVATAR_CSS en la página. */
+export function avatarMenu(opts: {
+  email: string
+  isAdmin: boolean
+  hasDomains: boolean
+  signoutRd?: string
+}): string {
+  const { email, isAdmin, hasDomains } = opts
+  const local = email.split('@')[0] || '?'
+  const initials = (local.split(/[._-]/).filter(Boolean).slice(0, 2).map((s) => s[0]).join('') || local[0] || '?').toUpperCase()
+  const it = (href: string, label: string): string => `<a href="${href}">${escapeHtml(label)}</a>`
+  const rd = encodeURIComponent(opts.signoutRd ?? '/admin')
+  let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? ' · admin' : ''}</div>`
+  m += it('/', 'Catálogo de PIs')
+  m += `<div class="sep"></div>`
+  m += it('/admin/perfil', 'Perfil')
+  if (hasDomains) m += it('/admin', 'Gestión')
+  if (isAdmin) m += it('/admin/plataforma', 'Configuración')
+  m += `<div class="sep"></div>`
+  m += `<button type="button" onclick="${THEME_TOGGLE_JS}">◐ Cambiar tema</button>`
+  m += `<a href="/oauth2/sign_out?rd=${rd}">Cerrar sesión</a>`
+  return `<details class="avm"><summary class="av" title="${escapeHtml(email)}">${escapeHtml(initials)}</summary><div class="avmenu">${m}</div></details>`
+}
 
 export class CsrfError extends Error {}
 
