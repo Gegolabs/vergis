@@ -91,6 +91,9 @@ export interface AdminDeps {
   /** Secreto para el token CSRF (mismo origen que el de anotaciones del nodo). */
   secret: string
   brandTitle?: string
+  /** Destino del «Cerrar sesión» (rd del sign_out). La instancia lo apunta al logout del IdP para un
+   * logout completo. Default: `/admin` (logout solo de oauth2-proxy). */
+  signoutRd?: string
 }
 
 export interface AdminHandler {
@@ -427,8 +430,8 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
 
 /** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir.
  * Usa el componente compartido (`avatarMenu`) — el mismo marco del catálogo. */
-function buildAvatar(_deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
-  return avatarMenu({ email, isAdmin, hasDomains, signoutRd: '/admin' })
+function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
+  return avatarMenu({ email, isAdmin, hasDomains, signoutRd: deps.signoutRd ?? '/admin' })
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>
