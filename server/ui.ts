@@ -17,6 +17,7 @@ export const AVATAR_CSS = `
 .avmenu a,.avmenu button{display:block;width:100%;text-align:left;padding:8px 11px;border-radius:7px;color:var(--fg);font-size:13px;background:none;border:none;cursor:pointer;font-family:inherit;text-decoration:none}
 .avmenu a:hover,.avmenu button:hover{background:var(--bg);text-decoration:none}
 .avhead{font-size:11px;color:var(--muted);padding:6px 11px 8px;border-bottom:1px solid var(--border);margin-bottom:4px;word-break:break-all}
+.avhead .avrole{display:block;margin-top:4px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);opacity:.9;word-break:normal}
 .avmenu .sep{border-top:1px solid var(--border);margin:4px 0}`
 
 export const PAGE_CSS = `
@@ -103,7 +104,7 @@ export function avatarMenu(opts: {
   const initials = (local.split(/[._-]/).filter(Boolean).slice(0, 2).map((s) => s[0]).join('') || local[0] || '?').toUpperCase()
   const it = (href: string, label: string): string => `<a href="${href}">${escapeHtml(label)}</a>`
   const rd = encodeURIComponent(opts.signoutRd ?? '/admin')
-  let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? ' · admin' : ''}</div>`
+  let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? '<span class="avrole">admin</span>' : ''}</div>`
   m += it('/', 'Catálogo de PIs')
   m += `<div class="sep"></div>`
   m += it('/admin/perfil', 'Perfil')

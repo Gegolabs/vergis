@@ -385,6 +385,31 @@ async function piManagementRole(code: string, email: string | undefined): Promis
   return governance.roleFor(code, email)
 }
 
+/** Resumen de gobierno de un PI para el CATÁLOGO: dueño + colaboradores (el líder técnico es un
+ * colaborador más), resueltos a etiqueta legible. NO bootstrappea con dueño vacío (evita grants
+ * basura): si no hay gobierno ni semilla de dueño, devuelve vacíos → el catálogo muestra «sin asignar».
+ * Separa los colaboradores ESPECÍFICOS (se listan) de los grupos DEFAULT transversales (p.ej. Centro de
+ * Excelencia, colabora en todos los PIs): éstos no se repiten por PI, solo se anotan en un tooltip. */
+async function piGovSummary(code: string, glabel: Map<string, string>): Promise<{ owner: string; collaborators: string[]; defaultCollaborators: string[] }> {
+  const empty = { owner: '', collaborators: [], defaultCollaborators: [] }
+  if (!governance) return empty
+  if (!(await governance.getPiGovernance(code))) {
+    if (!piOwners[code]) return empty
+    await governance.bootstrapPi(code, piOwners[code], defaultCollabGroups)
+  }
+  const grants = await governance.listGrants(code)
+  const nameOf = (g: { principalType: string; principal: string }): string =>
+    g.principalType === 'group' ? glabel.get(g.principal) ?? g.principal : g.principal
+  const isDefaultGroup = (g: { principalType: string; principal: string }): boolean =>
+    g.principalType === 'group' && defaultCollabGroups.includes(g.principal)
+  const collab = grants.filter((g) => g.role === 'collaborator')
+  return {
+    owner: grants.filter((g) => g.role === 'owner').map(nameOf).join(', '),
+    collaborators: collab.filter((g) => !isDefaultGroup(g)).map(nameOf),
+    defaultCollaborators: collab.filter(isDefaultGroup).map(nameOf),
+  }
+}
+
 /** Lee el cuerpo JSON de un POST (límite defensivo). */
 function readJsonBody(req: IncomingMessage, limit = 64 * 1024): Promise<unknown> {
   return new Promise((resolveBody, reject) => {
@@ -430,6 +455,9 @@ function fail(res: ServerResponse, code: number, msg: string): void {
 
 // Branding del índice — parametrizado por instancia (genérico por defecto, no horneado al beta).
 const INDEX_TITLE = process.env['VERGIS_INDEX_TITLE'] ?? 'Productos de Información'
+// Destino del «Cerrar sesión» tras el sign_out de oauth2-proxy. La instancia lo apunta al endpoint de
+// logout del IdP (AAD) para un logout COMPLETO (cierra también la sesión de Microsoft). Vacío = interno.
+const SIGNOUT_RD = process.env['VERGIS_SIGNOUT_RD'] ?? ''
 const INDEX_LOGO = (() => {
   const p = process.env['VERGIS_INDEX_LOGO']
   if (!p) return ''
@@ -439,8 +467,16 @@ const INDEX_LOGO = (() => {
   } catch { return '' }
 })()
 
-const indexHtml = (reports: Report[], title: string, avatar = ''): string =>
-  renderCatalog(reports, title, { logoUrl: INDEX_LOGO || undefined, avatar })
+type GovByCode = Map<string, { owner: string; collaborators: string[]; defaultCollaborators: string[] }>
+const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCode): string =>
+  renderCatalog(
+    reports.map((r) => {
+      const g = gov?.get(r.code)
+      return { code: r.code, slug: r.slug, name: r.name, owner: g?.owner ?? '', collaborators: g?.collaborators ?? [], defaultCollaborators: g?.defaultCollaborators ?? [] }
+    }),
+    title,
+    { logoUrl: INDEX_LOGO || undefined, avatar },
+  )
 
 const server = createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
@@ -505,8 +541,16 @@ const server = createServer((req, res) => {
           const ug = await governance.groupsOf(emailLc)
           hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
         }
-        const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: '/' })
-        sendHtml(indexHtml(visible, idxTitle, avatar))
+        const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: SIGNOUT_RD || '/' })
+        // Gobierno por PI para el catálogo: dueño + colaboradores específicos (líder técnico), con los
+        // grupos default (Centro de Excelencia) anotados aparte (tooltip), no repetidos por fila.
+        const govByCode: GovByCode = new Map()
+        if (governance) {
+          const groups = await governance.listGroups()
+          const glabel = new Map(groups.map((g) => [g.id, g.label]))
+          await Promise.all(visible.map(async (r) => { govByCode.set(r.code, await piGovSummary(r.code, glabel)) }))
+        }
+        sendHtml(indexHtml(visible, idxTitle, avatar, govByCode))
       })
       .catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
     return
@@ -604,6 +648,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       intakeSlots,
       intake: intakeWiring.runner,
       intakeStatus: intakeWiring.status,
+      signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
       groupStore: govStore,
       settingStore: govStore,
