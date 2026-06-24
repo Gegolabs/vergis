@@ -162,8 +162,9 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         return true
       }
 
-      // ── GESTIÓN DE DOMINIO · /admin/dominio/<id>[/intake/<slot>] ──────────
-      const di = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)(?:\/intake\/([a-z][a-z0-9_]*))?$/)
+      // ── GESTIÓN DE DOMINIO · /admin/dominio/<id> = MENÚ; /<id>/ingesta y /<id>/intake/<slot> ──
+      // El home del dominio es un menú de facetas (tarjetas); cada operación vive en su propia página.
+      const di = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)(?:\/([a-z]+)(?:\/([a-z][a-z0-9_]*))?)?$/)
       if (di) {
         const domain = domainById(di[1])
         if (!domain) {
@@ -175,18 +176,23 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           send(res, 403, adminPage(deps, nav, 'Acceso restringido', `<p class="msg err">No gestionas el dominio <code>${escapeHtml(domain.id)}</code>.</p>`))
           return true
         }
-        const slotId = di[2]
-        if (!slotId && req.method === 'GET') {
+        const section = di[2]
+        const slotId = di[3]
+        if (!section && req.method === 'GET') {
+          send(res, 200, await domainPage(deps, nav, domain, isAdmin))
+          return true
+        }
+        if (section === 'ingesta' && req.method === 'GET') {
           const okN = url.searchParams.get('ok')
           const ran = url.searchParams.get('run') === '1'
           const n = okN ? Math.max(1, parseInt(okN, 10) || 1) : 0
           const feedback = okN
             ? { ok: `${n} ${n === 1 ? 'archivo recibido' : 'archivos recibidos'}.${ran ? ' La conversión está corriendo — seguila abajo en «Últimas cargas».' : ''}` }
             : undefined
-          send(res, 200, await domainPage(deps, nav, domain, token, isAdmin, feedback))
+          send(res, 200, await ingestaPage(deps, nav, domain, token, feedback))
           return true
         }
-        if (slotId && req.method === 'POST') {
+        if (section === 'intake' && slotId && req.method === 'POST') {
           await handleIntake(deps, nav, domain, slotId, req, res, token, email)
           return true
         }
@@ -323,7 +329,7 @@ async function handleIntake(
   requireCsrf(fields, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
   const uploads = files.filter((f) => f.field === 'file' && f.filename)
   if (uploads.length === 0) {
-    send(res, 400, await domainPage(deps, nav, domain, token, true, { error: 'No se adjuntó ningún archivo.' }))
+    send(res, 400, await ingestaPage(deps, nav, domain, token, { error: 'No se adjuntó ningún archivo.' }))
     return
   }
   // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
@@ -332,7 +338,7 @@ async function handleIntake(
     const v = validateUpload(slot, u.filename, u.bytes.length)
     if (!v.ok) {
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
-      send(res, 400, await domainPage(deps, nav, domain, token, true, { error: v.error }))
+      send(res, 400, await ingestaPage(deps, nav, domain, token, { error: v.error }))
       return
     }
   }
@@ -344,7 +350,7 @@ async function handleIntake(
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
-  redirect(res, `/admin/dominio/${domain.id}?ok=${uploads.length}${willTrigger ? '&run=1' : ''}`)
+  redirect(res, `/admin/dominio/${domain.id}/ingesta?ok=${uploads.length}${willTrigger ? '&run=1' : ''}`)
 }
 
 async function handleEntityWrite(
@@ -527,58 +533,25 @@ function renderCargas(slot: IntakeSlot, st: RunRecord[] | 'error' | undefined): 
   return `<div class="cargas"><b class="sub">Últimas cargas</b><ul class="cards">${st.map(runLine).join('')}</ul></div>`
 }
 
-/** Área de un DOMINIO: Ingesta · Data Maestra · Fuentes & Frescura · (próximamente) las demás facetas. */
-async function domainPage(
-  deps: AdminDeps,
-  nav: Chrome,
-  domain: DomainDecl,
-  token: string,
-  isAdmin: boolean,
-  feedback?: { ok?: string; error?: string },
-): Promise<string> {
+/** Home de un DOMINIO: MENÚ de facetas (una tarjeta por operación). Cada operación vive en su propia
+ * página — el home no expande formularios, solo enruta (mismo patrón que la Gestión de Plataforma). */
+async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, isAdmin: boolean): Promise<string> {
   const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
   const entities = deps.entities.filter((e) => (e.domain ?? '') === domain.id)
 
-  // Estado de conversión (frente B · observabilidad): últimas corridas del SJD/pipeline por slot con
-  // trigger. Tolerante a fallos: si Fabric no responde, la pantalla sigue sirviendo (avisa, no se cae).
-  const statusBySlot = new Map<string, RunRecord[] | 'error'>()
-  if (deps.intakeStatus) {
-    await Promise.all(slots.filter((s) => s.trigger).map(async (s) => {
-      try { statusBySlot.set(s.id, await deps.intakeStatus!(s)) } catch { statusBySlot.set(s.id, 'error') }
-    }))
-  }
-
-  const guia = `<details class="guia"><summary>¿Cómo cargar? (orden recomendado)</summary>
-       <ol class="sub">
-         <li>Seleccioná los archivos de la <b>misma semana</b> — podés subir clientes y proveedores juntos (selección múltiple).</li>
-         <li>Verificá que cada nombre siga el patrón indicado en el slot.</li>
-         <li>Subí. La conversión corre sola; su estado aparece abajo en «Últimas cargas» (Procesando → Listo).</li>
-       </ol>
-       <p class="sub">No mezcles semanas en una misma carga: subí una semana, esperá «Listo» y recién la siguiente.</p>
-     </details>`
-
   const ingesta = deps.intake && slots.length
-    ? `<h2>Ingesta de archivos</h2>
-       <p class="sub">Subí los archivos acá y Mira los ubica en su destino (staging). La conversión los procesa.</p>
-       ${guia}
-       ${slots.map((s) => `
-         <form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/intake/${escapeHtml(s.id)}" enctype="multipart/form-data" class="grid">
-           <input type="hidden" name="_csrf" value="${token}">
-           <div class="fld"><span>${escapeHtml(s.label)}${s.accept ? ` · patrón: <code>${escapeHtml(s.accept)}</code>` : ''}</span>
-             <input type="file" name="file" multiple required></div>
-           <div class="sub">${escapeHtml(s.description ?? '')}${s.description ? ' · ' : ''}Podés subir varios · Máx. ${Math.round(slotMaxBytes(s) / (1024 * 1024))} MB c/u${s.trigger ? ' · dispara la conversión al subir' : ' · el pipeline lo toma en su próxima corrida'}</div>
-           <div class="actions"><button class="add">Subir</button></div>
-         </form>
-         ${renderCargas(s, statusBySlot.get(s.id))}`).join('')}`
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/ingesta"><span class="c">ingesta</span> Ingesta de archivos</a><div class="sub">Subí los archivos del dominio y seguí el estado de la conversión.</div></li>`
     : ''
-
-  const maestra = entities.length
-    ? `<h2>Data Maestra</h2><ul class="cards">${entities.map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}">${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`).join('')}</ul>`
-    : ''
-
+  const maestra = entities
+    .map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}"><span class="c">maestra</span> ${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`)
+    .join('')
   const fuentes = deps.ingestionMap && isAdmin
-    ? `<h2>Fuentes & Frescura</h2><ul class="cards"><li><a href="/admin/sources"><span class="c">fuentes</span> Mapa de Fuentes e Ingestión</a><div class="sub">Oferta de cada fuente y cadencia requerida derivada de las demandas.</div></li></ul>`
+    ? `<li><a href="/admin/sources"><span class="c">fuentes</span> Mapa de Fuentes e Ingestión</a><div class="sub">Oferta de cada fuente y cadencia requerida derivada de las demandas.</div></li>`
     : ''
+
+  const gestion = ingesta || maestra || fuentes
+    ? `<h2>Gestión del dominio</h2><ul class="cards">${ingesta}${maestra}${fuentes}</ul>`
+    : '<p class="sub">Este dominio aún no tiene facetas habilitadas.</p>'
 
   // Facetas previstas del dominio (roadmap visible, deshabilitadas) — ver work/041 §4.
   const proximamente = `<h2>Próximamente</h2><ul class="cards">${[
@@ -592,13 +565,63 @@ async function domainPage(
 
   return adminPage(deps, nav,
     domain.label,
+    `${domain.description ? `<p class="sub">${escapeHtml(domain.description)}</p>` : ''}
+     ${gestion}
+     ${proximamente}`,
+  )
+}
+
+/** Faceta INGESTA de un dominio (página propia): guía de carga + forms por slot + estado «Últimas cargas». */
+async function ingestaPage(
+  deps: AdminDeps,
+  nav: Chrome,
+  domain: DomainDecl,
+  token: string,
+  feedback?: { ok?: string; error?: string },
+): Promise<string> {
+  const title = `${domain.label} · Ingesta`
+  const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
+  const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
+  if (!deps.intake || slots.length === 0) {
+    return adminPage(deps, nav, title, `${back}<p class="msg err">La ingesta no está habilitada para este dominio.</p>`)
+  }
+
+  // Estado de conversión (frente B · observabilidad): últimas corridas del SJD/pipeline por slot con
+  // trigger. Tolerante a fallos: si Fabric no responde, la página sigue sirviendo (avisa, no se cae).
+  const statusBySlot = new Map<string, RunRecord[] | 'error'>()
+  if (deps.intakeStatus) {
+    await Promise.all(slots.filter((s) => s.trigger).map(async (s) => {
+      try { statusBySlot.set(s.id, await deps.intakeStatus!(s)) } catch { statusBySlot.set(s.id, 'error') }
+    }))
+  }
+
+  const guia = `<details class="guia"><summary>¿Cómo cargar? (orden recomendado)</summary>
+       <ol class="sub">
+         <li>Seleccioná los archivos de la <b>misma semana</b> — podés subir clientes y proveedores juntos (selección múltiple).</li>
+         <li>Verificá que cada nombre siga el patrón indicado en el slot.</li>
+         <li>Subí. La conversión corre sola; su estado aparece en «Últimas cargas» (Procesando → Listo).</li>
+       </ol>
+       <p class="sub">No mezcles semanas en una misma carga: subí una semana, esperá «Listo» y recién la siguiente.</p>
+     </details>`
+
+  const forms = slots.map((s) => `
+       <form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/intake/${escapeHtml(s.id)}" enctype="multipart/form-data" class="grid">
+         <input type="hidden" name="_csrf" value="${token}">
+         <div class="fld"><span>${escapeHtml(s.label)}${s.accept ? ` · patrón: <code>${escapeHtml(s.accept)}</code>` : ''}</span>
+           <input type="file" name="file" multiple required></div>
+         <div class="sub">${escapeHtml(s.description ?? '')}${s.description ? ' · ' : ''}Podés subir varios · Máx. ${Math.round(slotMaxBytes(s) / (1024 * 1024))} MB c/u${s.trigger ? ' · dispara la conversión al subir' : ' · el pipeline lo toma en su próxima corrida'}</div>
+         <div class="actions"><button class="add">Subir</button></div>
+       </form>
+       ${renderCargas(s, statusBySlot.get(s.id))}`).join('')
+
+  return adminPage(deps, nav, title,
     `${feedback?.ok ? `<p class="msg ok">${escapeHtml(feedback.ok)}</p>` : ''}
      ${feedback?.error ? `<p class="msg err">${escapeHtml(feedback.error)}</p>` : ''}
-     ${domain.description ? `<p class="sub">${escapeHtml(domain.description)}</p>` : ''}
-     ${ingesta}
-     ${maestra}
-     ${fuentes}
-     ${proximamente}`,
+     ${back}
+     <h2>Ingesta de archivos</h2>
+     <p class="sub">Subí los archivos acá y Mira los ubica en su destino (staging). La conversión los procesa.</p>
+     ${guia}
+     ${forms}`,
   )
 }
 

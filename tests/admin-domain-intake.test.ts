@@ -126,19 +126,30 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(audit.find((e) => e.type === 'admin-access-denied')?.user).toBe('nadie@x.com')
   })
 
-  it('página de dominio muestra el form de ingesta', async () => {
+  it('home del dominio = MENÚ: tarjeta de Ingesta (no el form expandido)', async () => {
     const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Gestión del dominio')
+    expect(res.body).toContain('Ingesta de archivos')
+    expect(res.body).toContain('href="/admin/dominio/cartera/ingesta"')
+    // el home NO expande el form de carga (eso vive en su propia página)
+    expect(res.body).not.toContain('enctype="multipart/form-data"')
+  })
+
+  it('página de ingesta muestra el form', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('Antigüedad de saldos')
     expect(res.body).toContain('enctype="multipart/form-data"')
+    expect(res.body).toContain('← Cartera / Finanzas') // navegación de regreso al home del dominio
   })
 
   it('ingesta válida (steward): 303 + put a OneLake + run-now + auditoría', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos w24.xlsx', bytes: Buffer.from('contenido ok') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/admin/dominio/cartera?ok=')
+    expect(res.headers['location']).toContain('/admin/dominio/cartera/ingesta?ok=')
     expect(puts).toHaveLength(1)
     expect(puts[0].filename).toBe('saldos w24.xlsx')
     expect(puts[0].target.path).toBe('Files/intake/saldos')
@@ -149,7 +160,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('nombre que no matchea el patrón → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'otra-cosa.csv', bytes: Buffer.from('x') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(400)
@@ -158,7 +169,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('archivo que excede maxBytes → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos big.xlsx', bytes: Buffer.alloc(2048, 7) })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(400)
@@ -173,21 +184,21 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('multi-archivo: N archivos → N puts + UN SOLO run-now por lote', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipartFiles({ _csrf: token }, [
       { filename: 'saldos clientes w24.xlsx', bytes: Buffer.from('clientes') },
       { filename: 'saldos proveedores w24.xlsx', bytes: Buffer.from('proveedores') },
     ])
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/admin/dominio/cartera?ok=2&run=1')
+    expect(res.headers['location']).toContain('/admin/dominio/cartera/ingesta?ok=2&run=1')
     expect(puts).toHaveLength(2)
     expect(runs).toEqual(['PIPE']) // UN trigger, no dos
     expect(audit.filter((e) => e.type === 'intake' && e.ok)).toHaveLength(2)
   })
 
   it('multi-archivo atómico: si un archivo del lote es inválido → 400 y NINGÚN put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipartFiles({ _csrf: token }, [
       { filename: 'saldos clientes w24.xlsx', bytes: Buffer.from('ok') },
       { filename: 'otra-cosa.csv', bytes: Buffer.from('mal') }, // no matchea el patrón
@@ -199,7 +210,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('input de archivo acepta selección múltiple', async () => {
-    const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
     expect(res.body).toMatch(/<input type="file" name="file" multiple required>/)
   })
 
@@ -209,7 +220,7 @@ describe('admin · gestión de dominio + ingesta', () => {
       { startedAt: '2026-06-24T09:00:00Z', endedAt: '2026-06-24T09:02:00Z', status: 'Completed' },
       { startedAt: '2026-06-24T08:00:00Z', endedAt: '2026-06-24T08:01:00Z', status: 'Failed', error: 'mezcla de semanas' },
     ]
-    const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('Últimas cargas')
     expect(res.body).toContain('Procesando')
@@ -220,7 +231,7 @@ describe('admin · gestión de dominio + ingesta', () => {
 
   it('sin corridas todavía → el panel lo dice (no se cae)', async () => {
     statusRuns = []
-    const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
     expect(res.body).toContain('Sin cargas todavía')
   })
 
@@ -251,7 +262,7 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(dash.body).toContain('Cartera / Finanzas')
     const dom = await run(mockReq('GET', '/admin/dominio/cartera', 'consultor@teams.ratio.cl'))
     expect(dom.statusCode).toBe(200)
-    expect(dom.body).toContain('Antigüedad de saldos')
+    expect(dom.body).toContain('Ingesta de archivos') // home = menú; el slug del slot vive en la página de ingesta
     // ajeno (ni admin, ni steward, ni en el grupo) → 403
     const ajeno = await run(mockReq('GET', '/admin', 'nadie@x.com'))
     expect(ajeno.statusCode).toBe(403)
