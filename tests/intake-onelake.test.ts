@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createOneLakeIntake, createFabricJobs, type TokenProvider } from '@vergis/capabilities'
+import { createOneLakeIntake, createFabricJobs, createFabricJobStatus, type TokenProvider } from '@vergis/capabilities'
 
 const tokens: TokenProvider = { getToken: async () => 'BEARER123' }
 
@@ -57,5 +57,56 @@ describe('intake-onelake · write DFS + run-now', () => {
   it('runNow: sin workspace (ni en trigger ni en target) → throw', async () => {
     const jobs = createFabricJobs(tokens, { fetch: recorder([]) })
     await expect(jobs.runNow({ processRef: 'X' })).rejects.toThrow(/workspaceId/)
+  })
+})
+
+// Recorder que además sirve un body JSON (el estado consume `res.json()`).
+function jsonFetch(value: unknown, status = 200): typeof fetch {
+  return (async (url: string, init?: { headers?: Record<string, string> }) => ({
+    ok: status < 400,
+    status,
+    text: async () => JSON.stringify(value),
+    json: async () => value,
+    _url: String(url),
+    _auth: init?.headers?.['authorization'],
+  })) as unknown as typeof fetch
+}
+
+describe('intake-onelake · estado de corridas (jobs/instances)', () => {
+  it('listInstances: mapea status/tiempos/error, ordena por más reciente y recorta a top', async () => {
+    const value = [
+      { status: 'InProgress', startTimeUtc: '2026-06-24T10:00:00Z' },
+      { status: 'Completed', startTimeUtc: '2026-06-24T09:00:00Z', endTimeUtc: '2026-06-24T09:02:00Z' },
+      { status: 'Failed', startTimeUtc: '2026-06-24T08:00:00Z', endTimeUtc: '2026-06-24T08:01:00Z', failureReason: { message: 'boom' } },
+    ]
+    const status = createFabricJobStatus(tokens, { fetch: jsonFetch({ value }) })
+    const runs = await status.listInstances('WS', 'SJD', 2)
+    expect(runs).toHaveLength(2) // recortado a top=2
+    expect(runs[0].status).toBe('InProgress') // más reciente primero
+    expect(runs[0].endedAt).toBeUndefined()
+    expect(runs[1].status).toBe('Completed')
+    expect(runs[1].endedAt).toBe('2026-06-24T09:02:00Z')
+  })
+
+  it('listInstances: status desconocido → NotStarted; failureReason se propaga como error', async () => {
+    const value = [
+      { status: 'Weird', startTimeUtc: '2026-06-24T10:00:00Z' },
+      { status: 'Failed', startTimeUtc: '2026-06-24T07:00:00Z', endTimeUtc: '2026-06-24T07:00:30Z', failureReason: { message: 'mezcla de semanas' } },
+    ]
+    const status = createFabricJobStatus(tokens, { fetch: jsonFetch({ value }) })
+    const runs = await status.listInstances('WS', 'SJD')
+    expect(runs[0].status).toBe('NotStarted')
+    const failed = runs.find((r) => r.status === 'Failed')!
+    expect(failed.error).toBe('mezcla de semanas')
+  })
+
+  it('listInstances: sin corridas (value vacío) → []', async () => {
+    const status = createFabricJobStatus(tokens, { fetch: jsonFetch({}) })
+    expect(await status.listInstances('WS', 'SJD')).toEqual([])
+  })
+
+  it('listInstances: error HTTP → throw', async () => {
+    const status = createFabricJobStatus(tokens, { fetch: jsonFetch({}, 403) })
+    await expect(status.listInstances('WS', 'SJD')).rejects.toThrow(/listInstances falló \(403\)/)
   })
 })
