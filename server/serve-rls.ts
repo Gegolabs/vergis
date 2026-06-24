@@ -398,8 +398,11 @@ async function piGovSummary(code: string, glabel: Map<string, string>): Promise<
     await governance.bootstrapPi(code, piOwners[code], defaultCollabGroups)
   }
   const grants = await governance.listGrants(code)
+  // Los dueños sembrados por NOMBRE (sin correo aún) entran en minúscula (normEmail); se muestran
+  // title-cased. Un principal con '@' es un correo real → se respeta tal cual.
+  const titleCase = (s: string): string => s.split(' ').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ')
   const nameOf = (g: { principalType: string; principal: string }): string =>
-    g.principalType === 'group' ? glabel.get(g.principal) ?? g.principal : g.principal
+    g.principalType === 'group' ? glabel.get(g.principal) ?? g.principal : g.principal.includes('@') ? g.principal : titleCase(g.principal)
   const isDefaultGroup = (g: { principalType: string; principal: string }): boolean =>
     g.principalType === 'group' && defaultCollabGroups.includes(g.principal)
   const collab = grants.filter((g) => g.role === 'collaborator')
