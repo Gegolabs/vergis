@@ -19,15 +19,16 @@ export interface CatalogItem {
   defaultCollaborators?: string[]
 }
 
-/** Línea de gobierno bajo cada PI: dueño + colaboradores específicos, con un ⓘ que explicita los
- * colaboradores default (transversales) que ese PI tiene vigentes pero que no se listan por fila. */
+/** Columna de gobierno (derecha de la tarjeta): 2 líneas justificadas a la derecha — Dueño y
+ * Colaboradores específicos, con un ⓘ que explicita los colaboradores default (transversales,
+ * p.ej. Centro de Excelencia) que ese PI tiene vigentes pero que no se listan por fila. */
 function govLine(it: CatalogItem): string {
   const owner = it.owner ? escapeHtml(it.owner) : '<span class="na">— sin asignar</span>'
   const collabs = it.collaborators && it.collaborators.length ? it.collaborators.map(escapeHtml).join(', ') : '<span class="na">—</span>'
   const info = it.defaultCollaborators && it.defaultCollaborators.length
     ? ` <span class="ginfo" title="También colabora por default (acceso transversal a todos los PIs, quitable por PI): ${escapeHtml(it.defaultCollaborators.join(', '))}">ⓘ</span>`
     : ''
-  return `<div class="gov"><span class="gk">Dueño</span> ${owner} <span class="gsep">·</span> <span class="gk">Colaboradores</span> ${collabs}${info}</div>`
+  return `<div class="gov"><div class="gl"><span class="gk">Dueño ·</span> ${owner}</div><div class="gl"><span class="gk">Colaboradores ·</span> ${collabs}${info}</div></div>`
 }
 
 export function indexHtml(
@@ -35,7 +36,7 @@ export function indexHtml(
   title: string,
   opts: { logoUrl?: string; avatar?: string } = {},
 ): string {
-  const lis = items.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a>${govLine(r)}</li>`).join('')
+  const lis = items.map((r) => `<li><a href="/${r.slug}"><div class="pi-id"><span class="c">${r.code}</span> ${r.name}</div>${govLine(r)}</a></li>`).join('')
   const logo = opts.logoUrl ? `<img class="logo" src="${opts.logoUrl}" alt="">` : ''
   const avatar = opts.avatar ?? ''
   // Theme oscuro (default, gruvbox) / blanco — vía CSS vars + data-theme; el toggle vive en el avatar.
@@ -45,9 +46,10 @@ export function indexHtml(
 html[data-theme="blanco"]{--bg:#ffffff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8}
 body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:40px;transition:background .15s,color .15s;min-height:100vh;box-sizing:border-box;display:flex;flex-direction:column}
 .head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700;flex:1}
-ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
+ul{list-style:none;padding:0;max-width:680px}li a{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:13px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
 li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:auto;padding-top:24px;color:var(--muted);font-size:11px;opacity:.7}
-.gov{font-size:11px;color:var(--muted);margin-top:8px;padding-left:2px}.gov .gk{text-transform:uppercase;letter-spacing:.04em;opacity:.75;font-size:10px}.gov .gsep{opacity:.5;margin:0 4px}.gov .na{font-style:italic;opacity:.7}
+.pi-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gov{flex:none;text-align:right;font-size:11px;color:var(--muted);line-height:1.5;white-space:nowrap}.gov .gk{text-transform:uppercase;letter-spacing:.04em;font-size:9px;opacity:.7}.gov .na{font-style:italic;opacity:.7}.gov .ginfo{cursor:help;opacity:.6;margin-left:2px}
 ${AVATAR_CSS}</style></head>
 <body>${avatar}<div class="head">${logo}<h1>${title}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis</div>
 <script>
