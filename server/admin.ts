@@ -64,6 +64,8 @@ export interface AdminDeps {
   adminStore: AdminStore
   /** Dominios declarados (gestión de dominio). Opcional. */
   domains?: DomainDecl[]
+  /** Grupos de Mira cuyos miembros son STEWARDS de TODOS los dominios (default-steward-groups). */
+  domainStewardGroups?: string[]
   /** Slots de ingesta declarados (instancia). Opcional. */
   intakeSlots?: IntakeSlot[]
   /** Ejecutor del intake (write a OneLake + run-now). Opcional (sin él, la Ingesta no se ofrece). */
@@ -105,7 +107,14 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 
     const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
     const isAdmin = await deps.adminStore.isAdmin(email)
-    const manageable = manageableDomains(allDomains, email, isAdmin)
+    // Steward de TODOS los dominios si pertenece a un default-steward-group (p.ej. Centro de Excelencia).
+    let stewardAll = false
+    if (deps.domainStewardGroups?.length && deps.groupStore && email) {
+      const ug = await deps.groupStore.groupsOf(email)
+      stewardAll = ug.some((g) => deps.domainStewardGroups!.includes(g))
+    }
+    const canMng = (d: DomainDecl): boolean => isAdmin || stewardAll || canManageDomain(d, email, false)
+    const manageable = isAdmin || stewardAll ? allDomains : manageableDomains(allDomains, email, isAdmin)
     if (!isAdmin && manageable.length === 0) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
       const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home'), avatar: buildAvatar(deps, email, false, false) }
@@ -157,7 +166,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Dominio desconocido: <code>${escapeHtml(di[1])}</code></p>`))
           return true
         }
-        if (!canManageDomain(domain, email, isAdmin)) {
+        if (!canMng(domain)) {
           deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
           send(res, 403, adminPage(deps, nav, 'Acceso restringido', `<p class="msg err">No gestionas el dominio <code>${escapeHtml(domain.id)}</code>.</p>`))
           return true
@@ -244,7 +253,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         // Autz: admin O steward del dominio de la entidad (entidad sin dominio → solo admin).
         const entDomain = entity.domain ? domainById(entity.domain) : undefined
-        const canEdit = isAdmin || (entDomain ? canManageDomain(entDomain, email, isAdmin) : false)
+        const canEdit = entDomain ? canMng(entDomain) : isAdmin
         if (!canEdit) {
           deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
           send(res, 403, adminPage(deps, nav, 'Acceso restringido', `<p class="msg err">No gestionas la entidad <code>${escapeHtml(entity.id)}</code>.</p>`))

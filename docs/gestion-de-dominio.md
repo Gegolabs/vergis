@@ -34,8 +34,10 @@ mantener un registro central que driftee:
   (quién lo gestiona). El dominio es un objeto real para **autorizar y agrupar**.
 
 ### Autorización
-- **`canManageDomain(dominio, email, isAdmin)` = admin O steward declarado.** Stewards = correos
-  (grupos de Mira como stewards = extensión futura).
+- **`canManageDomain(dominio, email, isAdmin)` = admin O steward declarado.** Stewards = correos en
+  el dominio **o** miembros de un **default-steward-group** (`VERGIS_DEFAULT_STEWARD_GROUPS`): un grupo
+  de Mira cuyos miembros son stewards de **todos** los dominios — simétrico al default-collaborator-group
+  de los PIs. Pensado para un equipo transversal (p. ej. el centro de excelencia que construye todo).
 - El **gate de `/admin`** es **«admin O steward de algún dominio»** — quien no gestiona nada, no entra.
 - Una entidad de data maestra con `domain` se gestiona por el steward de ese dominio (o admin); sin
   `domain`, solo admin.
