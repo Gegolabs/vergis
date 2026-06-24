@@ -126,14 +126,44 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(audit.find((e) => e.type === 'admin-access-denied')?.user).toBe('nadie@x.com')
   })
 
-  it('home del dominio = MENÚ: tarjeta de Ingesta (no el form expandido)', async () => {
+  it('home del dominio = MENÚ de FACETAS (no ítems ni forms)', async () => {
     const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('Gestión del dominio')
+    // facetas (categorías), cada una a su página
     expect(res.body).toContain('Ingesta de archivos')
     expect(res.body).toContain('href="/admin/dominio/cartera/ingesta"')
+    expect(res.body).toContain('Data Maestra')
+    expect(res.body).toContain('href="/admin/dominio/cartera/maestra"')
+    // los ÍTEMS de data maestra NO cuelgan del home (viven dentro de la faceta)
+    expect(res.body).not.toContain('Empresas Relacionadas')
+    expect(res.body).not.toContain('href="/admin/e/empresas_relacionadas"')
     // el home NO expande el form de carga (eso vive en su propia página)
     expect(res.body).not.toContain('enctype="multipart/form-data"')
+  })
+
+  it('sidebar = ÁRBOL: el dominio activo se expande a sus facetas', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    const side = res.body.slice(0, res.body.indexOf('class="main"')) // el sidebar va antes del main
+    expect(side).toContain('class="l2"') // facetas indentadas bajo el dominio
+    expect(side).toContain('/admin/dominio/cartera/ingesta')
+    expect(side).toContain('/admin/dominio/cartera/maestra')
+  })
+
+  it('sidebar: parado en una entidad → expande dominio → Data Maestra → la entidad activa', async () => {
+    const res = await go(mockReq('GET', '/admin/e/empresas_relacionadas', STEWARD))
+    const side = res.body.slice(0, res.body.indexOf('class="main"'))
+    expect(side).toContain('/admin/dominio/cartera/maestra') // la faceta padre se muestra
+    expect(side).toMatch(/<a href="\/admin\/e\/empresas_relacionadas" class="l3 on">/) // hoja activa, nivel 3
+  })
+
+  it('faceta Data Maestra = página propia con las entidades adentro', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/maestra', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Data Maestra')
+    expect(res.body).toContain('Empresas Relacionadas')
+    expect(res.body).toContain('href="/admin/e/empresas_relacionadas"')
+    expect(res.body).toContain('← Cartera / Finanzas') // navegación de regreso al home del dominio
   })
 
   it('página de ingesta muestra el form', async () => {

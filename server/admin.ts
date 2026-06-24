@@ -41,7 +41,7 @@ import {
   type RunStatus,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
-import { shellNav, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
+import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { readMultipart } from './multipart'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -121,7 +121,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     const manageable = isAdmin || stewardAll ? allDomains : manageableDomains(allDomains, email, isAdmin)
     if (!isAdmin && manageable.length === 0) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-      const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home'), avatar: buildAvatar(deps, email, false, false) }
+      const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home', false), avatar: buildAvatar(deps, email, false, false) }
       send(res, 403, adminPage(deps, bare, 'Acceso restringido', `<p class="msg err">No gestionas ninguna plataforma ni dominio.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
       return true
     }
@@ -130,21 +130,22 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     // Scope (Gestión de dominios · Configuración de plataforma · Perfil) + item activo, según la ruta.
     let scope = 'gestion'
     let active = 'home'
-    const dmActive = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)/)
+    // `active` codifica el nodo del árbol: home · dom:<id> · dom:<id>/<faceta> · dom:<id>/maestra/<entidad>.
+    const dmActive = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)(?:\/([a-z]+))?$/)
     if (path === '/admin/perfil') { scope = 'perfil'; active = '' }
     else if (path === '/admin/plataforma' || path.startsWith('/admin/settings')) { scope = 'config'; active = 'plat' }
     else if (path.startsWith('/admin/roles')) { scope = 'config'; active = 'roles' }
     else if (path.startsWith('/admin/groups')) { scope = 'config'; active = 'groups' }
     else if (path.startsWith('/admin/sources')) { scope = 'config'; active = 'sources' }
-    else if (dmActive) active = `dom:${dmActive[1]}`
+    else if (dmActive) active = dmActive[2] ? `dom:${dmActive[1]}/${dmActive[2]}` : `dom:${dmActive[1]}`
     else {
       const emActive = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)/)
       if (emActive) {
         const e = entityById(emActive[1])
-        active = e?.domain ? `dom:${e.domain}` : 'home'
+        active = e?.domain ? `dom:${e.domain}/maestra/${e.id}` : 'home'
       }
     }
-    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active), avatar: buildAvatar(deps, email, isAdmin, manageable.length > 0) }
+    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active, isAdmin), avatar: buildAvatar(deps, email, isAdmin, manageable.length > 0) }
     const denyPlatform = (): boolean => {
       send(res, 403, adminPage(deps, nav, 'Solo plataforma', `<p class="msg err">Esta sección es de gestión de plataforma (solo administradores).</p>`))
       return true
@@ -180,6 +181,10 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         const slotId = di[3]
         if (!section && req.method === 'GET') {
           send(res, 200, await domainPage(deps, nav, domain, isAdmin))
+          return true
+        }
+        if (section === 'maestra' && req.method === 'GET') {
+          send(res, 200, maestraPage(deps, nav, domain))
           return true
         }
         if (section === 'ingesta' && req.method === 'GET') {
@@ -382,43 +387,48 @@ async function handleEntityWrite(
 
 // ─── Render (SSR, mismo lenguaje visual que el índice) ───────────────────────
 
-/** Menú lateral — navegación del SCOPE activo (Gestión de dominios · Configuración de plataforma). */
-function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, active: string): string {
-  const item = (href: string, label: string, on: boolean): string =>
-    `<a href="${href}" class="${on ? 'on' : ''}">${escapeHtml(label)}</a>`
+/** Menú lateral — ÁRBOL de navegación del SCOPE activo. En Gestión, el dominio activo se expande a sus
+ * facetas (Ingesta · Data Maestra → entidades · Fuentes); en Configuración, las opciones de plataforma. */
+function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, active: string, isAdmin: boolean): string {
+  const lvl = (href: string, label: string, on: boolean, cls = ''): string =>
+    `<a href="${href}" class="${[cls, on ? 'on' : ''].filter(Boolean).join(' ')}">${escapeHtml(label)}</a>`
   let s = `<span class="bca">${escapeHtml(deps.brandTitle ?? 'Vergis')} · Admin</span>`
   s += `<a href="/" class="catlink">↩ Catálogo de PIs</a>`
   if (scope === 'config') {
-    s += item('/admin/plataforma', 'Resumen', active === 'plat')
+    s += lvl('/admin/plataforma', 'Resumen', active === 'plat')
     s += `<div class="grp">Configuración</div>`
-    s += item('/admin/roles', 'Usuarios y Roles', active === 'roles')
-    if (deps.groupStore) s += item('/admin/groups', 'Grupos de Mira', active === 'groups')
-    if (deps.ingestionMap) s += item('/admin/sources', 'Mapa de Fuentes', active === 'sources')
+    s += lvl('/admin/roles', 'Usuarios y Roles', active === 'roles')
+    if (deps.groupStore) s += lvl('/admin/groups', 'Grupos de Mira', active === 'groups')
+    if (deps.ingestionMap) s += lvl('/admin/sources', 'Mapa de Fuentes', active === 'sources')
   } else {
-    s += item('/admin', 'Inicio', active === 'home')
+    s += lvl('/admin', 'Inicio', active === 'home')
     if (manageable.length) {
       s += `<div class="grp">Dominios</div>`
-      s += manageable.map((d) => item(`/admin/dominio/${d.id}`, d.label, active === `dom:${d.id}`)).join('')
+      for (const d of manageable) {
+        const base = `dom:${d.id}`
+        const inDomain = active === base || active.startsWith(`${base}/`)
+        s += lvl(`/admin/dominio/${d.id}`, d.label, active === base) // nodo dominio
+        if (!inDomain) continue
+        // Sub-árbol del dominio ACTIVO: sus facetas. Cada faceta abre su página (y el cuerpo repite las opciones).
+        const slots = (deps.intakeSlots ?? []).filter((x) => (x.domain ?? '') === d.id)
+        const ents = deps.entities.filter((e) => (e.domain ?? '') === d.id)
+        if (deps.intake && slots.length) s += lvl(`/admin/dominio/${d.id}/ingesta`, 'Ingesta de archivos', active === `${base}/ingesta`, 'l2')
+        if (ents.length) {
+          const inMaestra = active === `${base}/maestra` || active.startsWith(`${base}/maestra/`)
+          s += lvl(`/admin/dominio/${d.id}/maestra`, 'Data Maestra', active === `${base}/maestra`, 'l2')
+          if (inMaestra) s += ents.map((e) => lvl(`/admin/e/${e.id}`, e.label, active === `${base}/maestra/${e.id}`, 'l3')).join('')
+        }
+        if (deps.ingestionMap && isAdmin) s += lvl('/admin/sources', 'Fuentes & Frescura', false, 'l2')
+      }
     }
   }
   return s
 }
 
-/** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir. */
-function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
-  const local = (email.split('@')[0] || '?')
-  const initials = (local.split(/[._-]/).filter(Boolean).slice(0, 2).map((s) => s[0]).join('') || local[0] || '?').toUpperCase()
-  const it = (href: string, label: string): string => `<a href="${href}">${escapeHtml(label)}</a>`
-  let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? ' · admin' : ''}</div>`
-  m += it('/', 'Catálogo de PIs')
-  m += `<div class="sep"></div>`
-  m += it('/admin/perfil', 'Perfil')
-  if (hasDomains) m += it('/admin', 'Gestión')
-  if (isAdmin) m += it('/admin/plataforma', 'Configuración')
-  m += `<div class="sep"></div>`
-  m += `<button type="button" onclick="${THEME_TOGGLE_JS}">◐ Cambiar tema</button>`
-  m += `<a href="/oauth2/sign_out?rd=%2Fadmin">Cerrar sesión</a>`
-  return `<details class="avm"><summary class="av" title="${escapeHtml(email)}">${escapeHtml(initials)}</summary><div class="avmenu">${m}</div></details>`
+/** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir.
+ * Usa el componente compartido (`avatarMenu`) — el mismo marco del catálogo. */
+function buildAvatar(_deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
+  return avatarMenu({ email, isAdmin, hasDomains, signoutRd: '/admin' })
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>
@@ -463,8 +473,7 @@ async function dashboard(deps: AdminDeps, nav: Chrome, email: string, isAdmin: b
 
   return adminPage(deps, nav,
     'Administración',
-    `<p class="sub">Sesión: <code>${escapeHtml(email || '(anónima)')}</code>${isAdmin ? ' · <span class="tag">admin</span>' : ''}</p>
-     <h2>Salud de la plataforma</h2>
+    `<h2>Salud de la plataforma</h2>
      <div class="tiles">${tiles.join('')}</div>
      ${domainsSection || (orphanSection ? '' : '<p class="sub">No gestionas ningún dominio.</p>')}
      ${orphanSection}`,
@@ -539,14 +548,16 @@ async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, isAd
   const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
   const entities = deps.entities.filter((e) => (e.domain ?? '') === domain.id)
 
+  // El home lista FACETAS (categorías), nunca ítems. Cada faceta abre su propia página y adentro
+  // viven sus ítems (p.ej. Data Maestra → sus entidades). Una tarjeta por faceta.
   const ingesta = deps.intake && slots.length
-    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/ingesta"><span class="c">ingesta</span> Ingesta de archivos</a><div class="sub">Subí los archivos del dominio y seguí el estado de la conversión.</div></li>`
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/ingesta">Ingesta de archivos</a><div class="sub">Subí los archivos del dominio y seguí el estado de la conversión.</div></li>`
     : ''
-  const maestra = entities
-    .map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}"><span class="c">maestra</span> ${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`)
-    .join('')
+  const maestra = entities.length
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/maestra">Data Maestra</a><div class="sub">Entidades gobernadas del dominio (${entities.length}).</div></li>`
+    : ''
   const fuentes = deps.ingestionMap && isAdmin
-    ? `<li><a href="/admin/sources"><span class="c">fuentes</span> Mapa de Fuentes e Ingestión</a><div class="sub">Oferta de cada fuente y cadencia requerida derivada de las demandas.</div></li>`
+    ? `<li><a href="/admin/sources">Fuentes & Frescura</a><div class="sub">Oferta de cada fuente y cadencia requerida derivada de las demandas.</div></li>`
     : ''
 
   const gestion = ingesta || maestra || fuentes
@@ -555,13 +566,13 @@ async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, isAd
 
   // Facetas previstas del dominio (roadmap visible, deshabilitadas) — ver work/041 §4.
   const proximamente = `<h2>Próximamente</h2><ul class="cards">${[
-    ['catálogo', 'Catálogo / diccionario del dominio'],
-    ['linaje', 'Linaje fuente→tabla→proceso→PI'],
-    ['calidad', 'Calidad de datos (validaciones)'],
-    ['rls', 'Política de autorización / RLS del dominio'],
-    ['identidad', 'Mapa de identidad del dominio'],
-    ['pis', 'Catálogo de PIs del dominio'],
-  ].map(([c, l]) => `<li class="ro"><span class="c">${c}</span> ${escapeHtml(l)}</li>`).join('')}</ul>`
+    'Catálogo / diccionario del dominio',
+    'Linaje fuente→tabla→proceso→PI',
+    'Calidad de datos (validaciones)',
+    'Política de autorización / RLS del dominio',
+    'Mapa de identidad del dominio',
+    'Catálogo de PIs del dominio',
+  ].map((l) => `<li class="ro">${escapeHtml(l)}</li>`).join('')}</ul>`
 
   return adminPage(deps, nav,
     domain.label,
@@ -569,6 +580,20 @@ async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, isAd
      ${gestion}
      ${proximamente}`,
   )
+}
+
+/** Faceta DATA MAESTRA de un dominio (página propia): lista de entidades gobernadas → su editor. */
+function maestraPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): string {
+  const title = `${domain.label} · Data Maestra`
+  const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
+  const entities = deps.entities.filter((e) => (e.domain ?? '') === domain.id)
+  if (entities.length === 0) {
+    return adminPage(deps, nav, title, `${back}<p class="sub">Este dominio no tiene entidades de data maestra.</p>`)
+  }
+  const cards = entities
+    .map((e) => `<li><a href="/admin/e/${escapeHtml(e.id)}">${escapeHtml(e.label)}</a>${e.description ? `<div class="sub">${escapeHtml(e.description)}</div>` : ''}</li>`)
+    .join('')
+  return adminPage(deps, nav, title, `${back}<h2>Data Maestra</h2><ul class="cards">${cards}</ul>`)
 }
 
 /** Faceta INGESTA de un dominio (página propia): guía de carga + forms por slot + estado «Últimas cargas». */
