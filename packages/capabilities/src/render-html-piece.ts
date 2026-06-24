@@ -151,8 +151,9 @@ const TABLE_INTERACTIVE_CSS = `
 .vtable .vt-chips:empty{display:none}
 .vtable .vt-chip{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--card,#eef2ff);color:var(--fg,#1f2937);border:1px solid var(--border,#e2e8f0);cursor:pointer}
 .vtable .vt-chip:hover{border-color:var(--red,#dc2626);color:var(--red,#dc2626)}
-.vtable .vt-scroll{overflow-x:auto}
-.vtable th.vt-col{position:relative}
+.vtable .vt-scroll{overflow:auto;max-height:70vh}
+.vtable thead th,.vtable th.vt-col{position:sticky;top:0;z-index:3;background:var(--bg,#fff)}
+.vtable thead th::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--border,#e2e8f0)}
 .vtable .vt-th-inner{display:flex;align-items:center;gap:6px;justify-content:space-between}
 .vtable th.align-right .vt-th-inner{flex-direction:row-reverse}
 .vtable th.vt-sortable .vt-th-label{cursor:pointer;user-select:none;white-space:nowrap}
@@ -254,8 +255,11 @@ export const renderHtmlPiece: Capability = {
     // LINEAMIENTO: los controles NO van en el cuerpo del reporte — viven en el INSPECTOR (gaveta),
     // tab Controles, junto a las facetas/búsqueda. El cuerpo es solo la pieza + la nav de vistas.
     const controlsSection = controls && controls.length ? renderControlsSection(controls, pages?.active, carry) : ''
+    // Barra de CONTEXTO ACTIVO (sticky arriba): el valor vigente de cada control (p.ej. la semana)
+    // visible en todo momento. El control editable sigue en la gaveta; esto es solo lectura.
+    const contextStrip = controls && controls.length ? renderContextStrip(controls) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
-    let body = nav + (await renderNode(piece, opts))
+    let body = contextStrip + nav + (await renderNode(piece, opts))
     const hasTable = body.includes('class="table vtable"')
     // GAVETA COMÚN (un solo shell por documento) para cualquier PI con controles o interactividad.
     // 3 tabs: Controles · Guardados · Config. En el tab Controles van, de arriba a abajo: los
@@ -282,6 +286,7 @@ export const renderHtmlPiece: Capability = {
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (pages) css += PAGES_NAV_CSS
     if (controlsSection) css += CONTROLS_BAR_CSS
+    if (contextStrip) css += CONTEXT_BAR_CSS
     if (body.includes('vt-actions')) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
@@ -355,6 +360,24 @@ function renderControlsSection(controls: ControlResolved[], activePage: string |
       )
     })
     .join('')
+}
+
+/** CSS de la barra de CONTEXTO ACTIVO (sticky arriba): muestra el valor vigente de cada control
+ * (p.ej. «Semana · W24») en todo momento, incluso al hacer scroll. Read-only; cambiar el valor sigue
+ * siendo el control de la gaveta. */
+const CONTEXT_BAR_CSS = `
+.vctxbar{position:sticky;top:0;z-index:8;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:8px 14px;margin:0 0 16px;background:var(--panel,var(--bg,#fff));border:1px solid var(--border,#e2e8f0);border-radius:8px;font-size:12px}
+.vctxbar .vctx-k{color:var(--fg-dim,#64748b);text-transform:uppercase;letter-spacing:.04em;font-size:10px;margin-right:4px}
+.vctxbar .vctx-v{color:var(--fg,#1f2937);font-weight:700}
+`
+
+/** Barra de contexto activo: un chip read-only por control con su valor vigente (de `carry`/control). */
+function renderContextStrip(controls: ControlResolved[]): string {
+  const items = controls
+    .filter((c) => c.value != null && c.value !== '')
+    .map((c) => `<span class="vctx-item"><span class="vctx-k">${escapeHtml(c.label)}</span><span class="vctx-v">${escapeHtml(String(c.value))}</span></span>`)
+    .join('')
+  return items ? `<div class="vctxbar">${items}</div>` : ''
 }
 
 /** CSS de la columna de acciones de drill (links por fila + menú cuando hay varias). */
