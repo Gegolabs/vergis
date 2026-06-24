@@ -11,6 +11,7 @@ import {
   SqliteGovernanceStore,
   type IntakeTarget,
   type IntakeTrigger,
+  type RunRecord,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
@@ -50,6 +51,16 @@ function multipart(fields: Record<string, string>, file?: { filename: string; by
   parts.push(Buffer.from(`--${BOUNDARY}--\r\n`))
   return { body: Buffer.concat(parts), ct: `multipart/form-data; boundary=${BOUNDARY}` }
 }
+function multipartFiles(fields: Record<string, string>, files: { filename: string; bytes: Buffer }[]): { body: Buffer; ct: string } {
+  const parts: Buffer[] = []
+  for (const [k, v] of Object.entries(fields)) parts.push(Buffer.from(`--${BOUNDARY}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`))
+  for (const f of files) {
+    parts.push(Buffer.from(`--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="${f.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+    parts.push(f.bytes, Buffer.from('\r\n'))
+  }
+  parts.push(Buffer.from(`--${BOUNDARY}--\r\n`))
+  return { body: Buffer.concat(parts), ct: `multipart/form-data; boundary=${BOUNDARY}` }
+}
 interface MockRes { statusCode: number; headers: Record<string, string>; body: string; writeHead(c: number, h?: Record<string, string>): MockRes; end(chunk?: string): void }
 function mockRes(): MockRes {
   return { statusCode: 0, headers: {}, body: '', writeHead(c, h) { this.statusCode = c; Object.assign(this.headers, h ?? {}); return this }, end(chunk) { if (chunk) this.body += chunk } }
@@ -60,11 +71,13 @@ describe('admin · gestión de dominio + ingesta', () => {
   let audit: LogEventInput[]
   let puts: { filename: string; len: number; target: IntakeTarget }[]
   let runs: string[]
+  let statusRuns: RunRecord[]
 
   beforeEach(async () => {
     audit = []
     puts = []
     runs = []
+    statusRuns = []
     const intake: IntakeRunner = {
       put: async (target: IntakeTarget, filename: string, bytes: Buffer) => { puts.push({ filename, len: bytes.length, target }) },
       runNow: async (trigger: IntakeTrigger) => { runs.push(trigger.processRef) },
@@ -76,6 +89,7 @@ describe('admin · gestión de dominio + ingesta', () => {
       domains: DOMAINS,
       intakeSlots: SLOTS,
       intake,
+      intakeStatus: async () => statusRuns,
       identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
       audit: (e) => audit.push(e),
       secret: SECRET,
@@ -112,19 +126,60 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(audit.find((e) => e.type === 'admin-access-denied')?.user).toBe('nadie@x.com')
   })
 
-  it('página de dominio muestra el form de ingesta', async () => {
+  it('home del dominio = MENÚ de FACETAS (no ítems ni forms)', async () => {
     const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Gestión del dominio')
+    // facetas (categorías), cada una a su página
+    expect(res.body).toContain('Ingesta de archivos')
+    expect(res.body).toContain('href="/admin/dominio/cartera/ingesta"')
+    expect(res.body).toContain('Data Maestra')
+    expect(res.body).toContain('href="/admin/dominio/cartera/maestra"')
+    // los ÍTEMS de data maestra NO cuelgan del home (viven dentro de la faceta)
+    expect(res.body).not.toContain('Empresas Relacionadas')
+    expect(res.body).not.toContain('href="/admin/e/empresas_relacionadas"')
+    // el home NO expande el form de carga (eso vive en su propia página)
+    expect(res.body).not.toContain('enctype="multipart/form-data"')
+  })
+
+  it('sidebar = ÁRBOL: el dominio activo se expande a sus facetas', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))
+    const side = res.body.slice(0, res.body.indexOf('class="main"')) // el sidebar va antes del main
+    expect(side).toContain('class="l2"') // facetas indentadas bajo el dominio
+    expect(side).toContain('/admin/dominio/cartera/ingesta')
+    expect(side).toContain('/admin/dominio/cartera/maestra')
+  })
+
+  it('sidebar: parado en una entidad → expande dominio → Data Maestra → la entidad activa', async () => {
+    const res = await go(mockReq('GET', '/admin/e/empresas_relacionadas', STEWARD))
+    const side = res.body.slice(0, res.body.indexOf('class="main"'))
+    expect(side).toContain('/admin/dominio/cartera/maestra') // la faceta padre se muestra
+    expect(side).toMatch(/<a href="\/admin\/e\/empresas_relacionadas" class="l3 on">/) // hoja activa, nivel 3
+  })
+
+  it('faceta Data Maestra = página propia con las entidades adentro', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/maestra', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Data Maestra')
+    expect(res.body).toContain('Empresas Relacionadas')
+    expect(res.body).toContain('href="/admin/e/empresas_relacionadas"')
+    expect(res.body).toContain('← Cartera / Finanzas') // navegación de regreso al home del dominio
+  })
+
+  it('página de ingesta muestra el form', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('Antigüedad de saldos')
     expect(res.body).toContain('enctype="multipart/form-data"')
+    expect(res.body).toContain('← Cartera / Finanzas') // navegación de regreso al home del dominio
   })
 
   it('ingesta válida (steward): 303 + put a OneLake + run-now + auditoría', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos w24.xlsx', bytes: Buffer.from('contenido ok') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/admin/dominio/cartera?ok=')
+    expect(res.headers['location']).toContain('/admin/dominio/cartera/ingesta?ok=')
     expect(puts).toHaveLength(1)
     expect(puts[0].filename).toBe('saldos w24.xlsx')
     expect(puts[0].target.path).toBe('Files/intake/saldos')
@@ -135,7 +190,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('nombre que no matchea el patrón → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'otra-cosa.csv', bytes: Buffer.from('x') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(400)
@@ -144,7 +199,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('archivo que excede maxBytes → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos big.xlsx', bytes: Buffer.alloc(2048, 7) })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(400)
@@ -156,6 +211,58 @@ describe('admin · gestión de dominio + ingesta', () => {
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(403)
     expect(puts).toHaveLength(0)
+  })
+
+  it('multi-archivo: N archivos → N puts + UN SOLO run-now por lote', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
+    const mp = multipartFiles({ _csrf: token }, [
+      { filename: 'saldos clientes w24.xlsx', bytes: Buffer.from('clientes') },
+      { filename: 'saldos proveedores w24.xlsx', bytes: Buffer.from('proveedores') },
+    ])
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(res.headers['location']).toContain('/admin/dominio/cartera/ingesta?ok=2&run=1')
+    expect(puts).toHaveLength(2)
+    expect(runs).toEqual(['PIPE']) // UN trigger, no dos
+    expect(audit.filter((e) => e.type === 'intake' && e.ok)).toHaveLength(2)
+  })
+
+  it('multi-archivo atómico: si un archivo del lote es inválido → 400 y NINGÚN put', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))).body)
+    const mp = multipartFiles({ _csrf: token }, [
+      { filename: 'saldos clientes w24.xlsx', bytes: Buffer.from('ok') },
+      { filename: 'otra-cosa.csv', bytes: Buffer.from('mal') }, // no matchea el patrón
+    ])
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(400)
+    expect(puts).toHaveLength(0) // o entra el lote completo o ninguno
+    expect(runs).toHaveLength(0)
+  })
+
+  it('input de archivo acepta selección múltiple', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
+    expect(res.body).toMatch(/<input type="file" name="file" multiple required>/)
+  })
+
+  it('panel «Últimas cargas» refleja el estado del SJD por slot', async () => {
+    statusRuns = [
+      { startedAt: '2026-06-24T10:00:00Z', status: 'InProgress' },
+      { startedAt: '2026-06-24T09:00:00Z', endedAt: '2026-06-24T09:02:00Z', status: 'Completed' },
+      { startedAt: '2026-06-24T08:00:00Z', endedAt: '2026-06-24T08:01:00Z', status: 'Failed', error: 'mezcla de semanas' },
+    ]
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Últimas cargas')
+    expect(res.body).toContain('Procesando')
+    expect(res.body).toContain('Listo')
+    expect(res.body).toContain('Falló')
+    expect(res.body).toContain('mezcla de semanas') // el motivo del fallo se muestra
+  })
+
+  it('sin corridas todavía → el panel lo dice (no se cae)', async () => {
+    statusRuns = []
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/ingesta', STEWARD))
+    expect(res.body).toContain('Sin cargas todavía')
   })
 
   it('steward de cartera NO puede ingestar a un dominio que no gestiona', async () => {
@@ -185,7 +292,7 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(dash.body).toContain('Cartera / Finanzas')
     const dom = await run(mockReq('GET', '/admin/dominio/cartera', 'consultor@teams.ratio.cl'))
     expect(dom.statusCode).toBe(200)
-    expect(dom.body).toContain('Antigüedad de saldos')
+    expect(dom.body).toContain('Ingesta de archivos') // home = menú; el slug del slot vive en la página de ingesta
     // ajeno (ni admin, ni steward, ni en el grupo) → 403
     const ajeno = await run(mockReq('GET', '/admin', 'nadie@x.com'))
     expect(ajeno.statusCode).toBe(403)

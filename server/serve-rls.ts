@@ -43,10 +43,12 @@ import {
   openAnnotationStore,
   parseMasterDataConfig,
   parseDomainsConfig,
+  manageableDomains,
   parseIntakeConfig,
   createTokenProvider,
   createOneLakeIntake,
   createFabricJobs,
+  createFabricJobStatus,
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   createDwhPublisher,
@@ -56,6 +58,7 @@ import {
   type GroupSeed,
   type DomainDecl,
   type IntakeSlot,
+  type RunRecord,
   type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
@@ -64,6 +67,8 @@ import {
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
+import { avatarMenu } from './ui'
+import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
 import {
   claimValues,
@@ -304,6 +309,8 @@ let annStore: AnnotationStore | null = null
 // índice/apertura siguen por acceso-a-datos (comportamiento vivo); encendido, gatean por la ACL del
 // PI (rol owner/collaborator/viewer) compuesta con la RLS de datos (que NUNCA se salta).
 let governance: SqliteGovernanceStore | null = null
+let domainsCfg: DomainDecl[] = [] // dominios declarados (para gatear «Gestión» en el avatar del catálogo)
+let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
 let piAclEnabled = false
 let piOwners: Record<string, string> = {}
@@ -432,31 +439,8 @@ const INDEX_LOGO = (() => {
   } catch { return '' }
 })()
 
-function indexHtml(reports: Report[], title: string): string {
-  const items = reports.map((r) => `<li><a href="/${r.slug}"><span class="c">${r.code}</span> ${r.name}</a></li>`).join('')
-  const logo = INDEX_LOGO ? `<img class="logo" src="${INDEX_LOGO}" alt="">` : ''
-  // Theme oscuro (default, gruvbox) / blanco — vía CSS vars + data-theme; toggle persistido por
-  // navegador (mismo patrón que el selector de paleta de los PIs, que persiste por reporte).
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title><style>
-:root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374}
-html[data-theme="blanco"]{--bg:#ffffff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8}
-body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:40px;transition:background .15s,color .15s;min-height:100vh;box-sizing:border-box;display:flex;flex-direction:column}
-.head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700;flex:1}
-.tsw{flex:none;background:none;border:none;padding:6px;margin:0;cursor:pointer;color:var(--muted);opacity:.5;line-height:0;border-radius:6px}
-.tsw:hover{opacity:1;color:var(--accent)}
-.tsw .t-sun,.tsw .t-moon{display:none}
-html[data-theme="oscuro"] .tsw .t-sun{display:inline}html[data-theme="blanco"] .tsw .t-moon{display:inline}
-ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
-li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:auto;padding-top:24px;color:var(--muted);font-size:11px;opacity:.7}</style></head>
-<body><div class="head">${logo}<h1>${title}</h1>
-<button type="button" class="tsw" aria-label="Cambiar tema" title="Cambiar tema (oscuro/blanco)" onclick="vToggle()"><svg class="t-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="t-moon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
-</div><ul>${items}</ul><div class="f">Powered by Vergis · <a href="/admin" style="color:inherit;text-decoration:underline">Administración</a></div>
-<script>
-function vToggle(){var t=(document.documentElement.getAttribute('data-theme')==='blanco')?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}}
-(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();
-</script></body></html>`
-}
+const indexHtml = (reports: Report[], title: string, avatar = ''): string =>
+  renderCatalog(reports, title, { logoUrl: INDEX_LOGO || undefined, avatar })
 
 const server = createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
@@ -512,7 +496,17 @@ const server = createServer((req, res) => {
         }
         // Título del catálogo: editable in-app (governance setting) con fallback al env.
         const idxTitle = (governance ? await governance.getSetting('index_title') : null) || INDEX_TITLE
-        sendHtml(indexHtml(visible, idxTitle))
+        // Marco de identidad: el avatar (mismo componente que la administración). «Gestión» se muestra si
+        // el usuario gestiona algún dominio (admin · default-steward-group · steward directo); «Configuración» si es admin.
+        const emailLc = (email ?? '').toLowerCase()
+        const isAdmin = governance ? await governance.isAdmin(emailLc) : false
+        let hasDomains = isAdmin
+        if (!hasDomains && governance && domainsCfg.length) {
+          const ug = await governance.groupsOf(emailLc)
+          hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
+        }
+        const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: '/' })
+        sendHtml(indexHtml(visible, idxTitle, avatar))
       })
       .catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
     return
@@ -557,6 +551,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     const domains: DomainDecl[] = process.env['VERGIS_DOMAINS']
       ? parseDomainsConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_DOMAINS']), 'utf8')))
       : []
+    domainsCfg = domains // expuesto a module-level para el avatar del catálogo (¿gestiona dominios?)
     const intakeSlots: IntakeSlot[] = process.env['VERGIS_INTAKE']
       ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8')))
       : []
@@ -570,6 +565,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     piAclEnabled = ['1', 'true', 'on'].includes((process.env['VERGIS_PI_ACL'] ?? '').toLowerCase())
     defaultCollabGroups = (process.env['VERGIS_DEFAULT_COLLABORATOR_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     const defaultStewardGroups = (process.env['VERGIS_DEFAULT_STEWARD_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    stewardGroups = defaultStewardGroups // idem: el avatar del catálogo decide si mostrar «Gestión»
     piOwners = process.env['VERGIS_PI_OWNERS']
       ? (parseYaml(readFileSync(resolve(process.env['VERGIS_PI_OWNERS']), 'utf8')) as { owners?: Record<string, string> }).owners ?? {}
       : {}
@@ -578,22 +574,26 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       ? createDwhMasterDataStore(connections)
       : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
     const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`)
-    // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline. Usa las creds del SP de
-    // una conexión (VERGIS_INTAKE_SP, o la única si hay una sola) — token AAD para storage/Fabric REST,
-    // no para SQL. Sin slots o sin conexiones, la ingesta no se ofrece.
-    const intakeRunner = ((): IntakeRunner | undefined => {
-      if (!intakeSlots.length || !connections) return undefined
+    // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
+    // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
+    // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
+    const intakeWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]> } => {
+      if (!intakeSlots.length || !connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
       const sp = ref ? connections[ref] : undefined
       if (!sp) {
         console.error('[vergis-rls] ingesta deshabilitada: define VERGIS_INTAKE_SP (hay varias conexiones).')
-        return undefined
+        return {}
       }
       const tokens = createTokenProvider({ tenantId: sp.tenantId, clientId: sp.clientId, clientSecret: sp.clientSecret })
       const onelake = createOneLakeIntake(tokens)
       const jobs = createFabricJobs(tokens)
-      return { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) }
+      const jobStatus = createFabricJobStatus(tokens)
+      return {
+        runner: { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) },
+        status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
+      }
     })()
     admin = createAdmin({
       entities,
@@ -602,7 +602,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       domains,
       domainStewardGroups: defaultStewardGroups,
       intakeSlots,
-      intake: intakeRunner,
+      intake: intakeWiring.runner,
+      intakeStatus: intakeWiring.status,
       piCount: discover().length,
       groupStore: govStore,
       settingStore: govStore,

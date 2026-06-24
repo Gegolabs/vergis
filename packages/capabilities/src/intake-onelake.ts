@@ -10,6 +10,7 @@
  */
 import { SCOPE_ONELAKE, SCOPE_FABRIC, type TokenProvider } from './aad-token'
 import type { IntakeTarget, IntakeTrigger } from './intake'
+import type { RunRecord, RunStatus } from './ingestion-observability'
 
 type FetchLike = typeof fetch
 
@@ -83,6 +84,54 @@ export function createFabricJobs(tokens: TokenProvider, opts: { fetch?: FetchLik
         const text = await res.text().catch(() => '')
         throw new Error(`fabric-jobs: run-now falló (${res.status}) para item '${trigger.processRef}': ${text.slice(0, 300)}`)
       }
+    },
+  }
+}
+
+/**
+ * Lado de LECTURA del mismo endpoint `jobs/instances` que `runNow` dispara: el historial de corridas
+ * de un item Fabric (un SJD/pipeline). Mapea la respuesta nativa al `RunRecord` agnóstico de la
+ * observabilidad, para que la UI muestre «Procesando → Listo/Falló» sin conocer la forma de Fabric.
+ */
+export interface FabricJobStatus {
+  /** Últimas corridas del item (más reciente primero), recortadas a `top`. */
+  listInstances(workspaceId: string, itemId: string, top?: number): Promise<RunRecord[]>
+}
+
+/** Forma (parcial) de un *job instance* de Fabric — solo los campos que consumimos. */
+interface FabricJobInstance {
+  status?: string
+  startTimeUtc?: string
+  endTimeUtc?: string | null
+  failureReason?: { message?: string; errorCode?: string } | null
+}
+
+const RUN_STATUSES: ReadonlySet<string> = new Set<RunStatus>([
+  'Completed', 'Failed', 'InProgress', 'NotStarted', 'Cancelled', 'Deduped',
+])
+const toRunStatus = (s: string | undefined): RunStatus => (s && RUN_STATUSES.has(s) ? (s as RunStatus) : 'NotStarted')
+
+export function createFabricJobStatus(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): FabricJobStatus {
+  const doFetch = opts.fetch ?? fetch
+  return {
+    async listInstances(workspaceId, itemId, top = 5): Promise<RunRecord[]> {
+      const token = await tokens.getToken(SCOPE_FABRIC)
+      const url = `${FABRIC_API}/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}/jobs/instances`
+      const res = await doFetch(url, { headers: { authorization: `Bearer ${token}` } })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`fabric-job-status: listInstances falló (${res.status}) para item '${itemId}': ${text.slice(0, 300)}`)
+      }
+      const body = (await res.json().catch(() => ({}))) as { value?: FabricJobInstance[] }
+      const runs: RunRecord[] = (body.value ?? []).map((j) => {
+        const rec: RunRecord = { startedAt: j.startTimeUtc ?? '', status: toRunStatus(j.status) }
+        if (j.endTimeUtc) rec.endedAt = j.endTimeUtc
+        if (j.failureReason?.message) rec.error = j.failureReason.message
+        return rec
+      })
+      // Orden defensivo (no asumimos el orden del backend): más reciente primero.
+      runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+      return runs.slice(0, Math.max(0, top))
     },
   }
 }
