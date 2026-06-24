@@ -8,6 +8,7 @@ import {
   parseIntakeConfig,
   SqliteMasterDataStore,
   SqliteAdminStore,
+  SqliteGovernanceStore,
   type IntakeTarget,
   type IntakeTrigger,
 } from '@vergis/capabilities'
@@ -160,5 +161,33 @@ describe('admin · gestión de dominio + ingesta', () => {
   it('steward de cartera NO puede ingestar a un dominio que no gestiona', async () => {
     const res = await go(mockReq('GET', '/admin/dominio/personas', STEWARD))
     expect(res.statusCode).toBe(404) // dominio no declarado → 404 (no se filtra su existencia con 403)
+  })
+
+  it('miembro de un default-steward-group gestiona TODOS los dominios (sin ser admin ni steward directo)', async () => {
+    const gov = await SqliteGovernanceStore.open(null, { admins: [ADMIN], groups: [{ id: 'ce', label: 'Centro de Excelencia', members: ['consultor@teams.ratio.cl'] }] })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: gov,
+      groupStore: gov,
+      domains: DOMAINS,
+      domainStewardGroups: ['ce'],
+      intakeSlots: SLOTS,
+      intake: { put: async () => {}, runNow: async () => {} },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const run = async (req: IncomingMessage) => { const res = mockRes(); await a.tryHandle(req, res as unknown as ServerResponse); return res }
+    // consultor@teams.ratio.cl: NO admin, NO steward directo de cartera (stewards=[STEWARD]), pero está en 'ce'
+    const dash = await run(mockReq('GET', '/admin', 'consultor@teams.ratio.cl'))
+    expect(dash.statusCode).toBe(200)
+    expect(dash.body).toContain('Cartera / Finanzas')
+    const dom = await run(mockReq('GET', '/admin/dominio/cartera', 'consultor@teams.ratio.cl'))
+    expect(dom.statusCode).toBe(200)
+    expect(dom.body).toContain('Antigüedad de saldos')
+    // ajeno (ni admin, ni steward, ni en el grupo) → 403
+    const ajeno = await run(mockReq('GET', '/admin', 'nadie@x.com'))
+    expect(ajeno.statusCode).toBe(403)
   })
 })

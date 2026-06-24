@@ -569,6 +569,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     governance = govStore
     piAclEnabled = ['1', 'true', 'on'].includes((process.env['VERGIS_PI_ACL'] ?? '').toLowerCase())
     defaultCollabGroups = (process.env['VERGIS_DEFAULT_COLLABORATOR_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    const defaultStewardGroups = (process.env['VERGIS_DEFAULT_STEWARD_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     piOwners = process.env['VERGIS_PI_OWNERS']
       ? (parseYaml(readFileSync(resolve(process.env['VERGIS_PI_OWNERS']), 'utf8')) as { owners?: Record<string, string> }).owners ?? {}
       : {}
@@ -599,6 +600,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       mdStore,
       adminStore,
       domains,
+      domainStewardGroups: defaultStewardGroups,
       intakeSlots,
       intake: intakeRunner,
       piCount: discover().length,
