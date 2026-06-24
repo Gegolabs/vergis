@@ -29,7 +29,7 @@ body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:v
 ul{list-style:none;padding:0;max-width:560px}li a{display:flex;gap:12px;align-items:baseline;padding:14px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
 li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:auto;padding-top:24px;color:var(--muted);font-size:11px;opacity:.7}
 ${AVATAR_CSS}</style></head>
-<body>${avatar}<div class="head">${logo}<h1>${title}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis · <a href="/admin" style="color:inherit;text-decoration:underline">Administración</a></div>
+<body>${avatar}<div class="head">${logo}<h1>${title}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis</div>
 <script>
 (function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();
 </script></body></html>`
