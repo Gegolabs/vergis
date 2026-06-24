@@ -113,7 +113,9 @@ export function avatarMenu(opts: {
   m += `<div class="sep"></div>`
   m += `<button type="button" onclick="${THEME_TOGGLE_JS}">◐ Cambiar tema</button>`
   m += `<a href="/oauth2/sign_out?rd=${rd}">Cerrar sesión</a>`
-  return `<details class="avm"><summary class="av" title="${escapeHtml(email)}">${escapeHtml(initials)}</summary><div class="avmenu">${m}</div></details>`
+  // Cierre por clic-afuera (el <details> nativo solo cierra al reclicar el summary).
+  const closeJs = `<script>(function(){var d=document.querySelector('details.avm');if(!d)return;document.addEventListener('click',function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener('keydown',function(e){if(e.key==='Escape')d.open=false})})()</script>`
+  return `<details class="avm"><summary class="av" title="${escapeHtml(email)}">${escapeHtml(initials)}</summary><div class="avmenu">${m}</div></details>${closeJs}`
 }
 
 export class CsrfError extends Error {}
