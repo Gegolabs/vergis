@@ -72,6 +72,8 @@ export interface DomainEntityFreshness extends EntityFreshnessRow {
   engine: boolean
   /** Tipo de job del motor que ejecuta el proceso (Fabric: 'RunNotebook' | 'sparkjob' | 'Pipeline'…). */
   engineJobType?: string
+  /** Item id del motor (para casar la entidad con su slot de ingesta: slot.trigger.processRef === este). */
+  engineItemId?: string
   /** Últimas corridas del proceso (más reciente primero), o 'error' si el motor no respondió. */
   runs?: RunRecord[] | 'error'
   /** Salud derivada (fallida / faltante) a partir de las corridas y la cadencia requerida. */
@@ -216,14 +218,9 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           send(res, 200, maestraPage(deps, nav, domain))
           return true
         }
+        // La carga de archivos se plegó dentro de Frescura (refresco manual). Redirige para no romper enlaces.
         if (section === 'ingesta' && req.method === 'GET') {
-          const okN = url.searchParams.get('ok')
-          const ran = url.searchParams.get('run') === '1'
-          const n = okN ? Math.max(1, parseInt(okN, 10) || 1) : 0
-          const feedback = okN
-            ? { ok: `${n} ${n === 1 ? 'archivo recibido' : 'archivos recibidos'}.${ran ? ' La conversión está corriendo — seguila abajo en «Últimas cargas».' : ''}` }
-            : undefined
-          send(res, 200, await ingestaPage(deps, nav, domain, token, feedback))
+          redirect(res, `/admin/dominio/${domain.id}/frescura`)
           return true
         }
         if (section === 'intake' && slotId && req.method === 'POST') {
@@ -381,7 +378,7 @@ async function handleIntake(
   requireCsrf(fields, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
   const uploads = files.filter((f) => f.field === 'file' && f.filename)
   if (uploads.length === 0) {
-    send(res, 400, await ingestaPage(deps, nav, domain, token, { error: 'No se adjuntó ningún archivo.' }))
+    redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: no se adjuntó ningún archivo.')}`)
     return
   }
   // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
@@ -390,7 +387,7 @@ async function handleIntake(
     const v = validateUpload(slot, u.filename, u.bytes.length)
     if (!v.ok) {
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
-      send(res, 400, await ingestaPage(deps, nav, domain, token, { error: v.error }))
+      redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + v.error)}`)
       return
     }
   }
@@ -402,7 +399,7 @@ async function handleIntake(
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
-  redirect(res, `/admin/dominio/${domain.id}/ingesta?ok=${uploads.length}${willTrigger ? '&run=1' : ''}`)
+  redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent(`${uploads.length} archivo(s) recibido(s).${willTrigger ? ' La carga está corriendo — seguila en «Última corrida».' : ''}`)}`)
 }
 
 async function handleEntityWrite(
@@ -456,10 +453,8 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
         const inDomain = active === base || active.startsWith(`${base}/`)
         s += lvl(`/admin/dominio/${d.id}`, d.label, active === base) // nodo dominio
         if (!inDomain) continue
-        // Sub-árbol del dominio ACTIVO: sus facetas. Cada faceta abre su página (y el cuerpo repite las opciones).
-        const slots = (deps.intakeSlots ?? []).filter((x) => (x.domain ?? '') === d.id)
+        // Sub-árbol del dominio ACTIVO: sus facetas. La carga de archivos se pliega dentro de Frescura.
         const ents = deps.entities.filter((e) => (e.domain ?? '') === d.id)
-        if (deps.intake && slots.length) s += lvl(`/admin/dominio/${d.id}/ingesta`, 'Ingesta de archivos', active === `${base}/ingesta`, 'l2')
         if (ents.length) {
           const inMaestra = active === `${base}/maestra` || active.startsWith(`${base}/maestra/`)
           s += lvl(`/admin/dominio/${d.id}/maestra`, 'Data Maestra', active === `${base}/maestra`, 'l2')
@@ -568,47 +563,22 @@ function fmtWhen(iso: string): string {
   if (s < 86400) return `hace ${Math.round(s / 3600)} h`
   return new Date(t).toISOString().slice(0, 10)
 }
-/** Duración de una corrida terminada (vacío si sigue corriendo o sin datos). */
-function fmtDuration(r: RunRecord): string {
-  if (!r.endedAt) return ''
-  const a = Date.parse(r.startedAt)
-  const b = Date.parse(r.endedAt)
-  if (Number.isNaN(a) || Number.isNaN(b)) return ''
-  const s = Math.max(0, Math.round((b - a) / 1000))
-  return s < 60 ? `${s}s` : `${Math.round(s / 60)} min`
-}
-function runLine(r: RunRecord): string {
-  const dur = fmtDuration(r)
-  return `<li><span class="c">${statusBadge(r.status)}</span> ${fmtWhen(r.startedAt)}${dur ? ` <span class="sub">· ${dur}</span>` : ''}${r.error ? `<div class="sub">${escapeHtml(r.error)}</div>` : ''}</li>`
-}
-/** Panel «Últimas cargas» de un slot con trigger (vacío si el slot no dispara conversión). */
-function renderCargas(slot: IntakeSlot, st: RunRecord[] | 'error' | undefined): string {
-  if (!slot.trigger || st === undefined) return ''
-  if (st === 'error') return '<p class="sub">No se pudo consultar el estado de la conversión (reintentá refrescando).</p>'
-  if (st.length === 0) return '<p class="sub">Sin cargas todavía.</p>'
-  return `<div class="cargas"><b class="sub">Últimas cargas</b><ul class="cards">${st.map(runLine).join('')}</ul></div>`
-}
-
 /** Home de un DOMINIO: MENÚ de facetas (una tarjeta por operación). Cada operación vive en su propia
  * página — el home no expande formularios, solo enruta (mismo patrón que la Gestión de Plataforma). */
 async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): Promise<string> {
-  const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
   const entities = deps.entities.filter((e) => (e.domain ?? '') === domain.id)
 
   // El home lista FACETAS (categorías), nunca ítems. Cada faceta abre su propia página y adentro
   // viven sus ítems (p.ej. Data Maestra → sus entidades). Una tarjeta por faceta.
-  const ingesta = deps.intake && slots.length
-    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/ingesta">Ingesta de archivos</a><div class="sub">Subí los archivos del dominio y seguí el estado de la conversión.</div></li>`
-    : ''
   const maestra = entities.length
     ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/maestra">Data Maestra</a><div class="sub">Entidades gobernadas del dominio (${entities.length}).</div></li>`
     : ''
   const frescura = deps.domainFreshness
-    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/frescura">Frescura</a><div class="sub">Por entidad: qué tan fresca está vs. lo que demandan sus PIs, sus corridas y su cadencia.</div></li>`
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/frescura">Frescura</a><div class="sub">Por entidad: qué tan fresca está vs. lo que demandan sus PIs, sus corridas y su cadencia — y <b>alimentarla</b> (subir archivo) o aplicar su cadencia.</div></li>`
     : ''
 
-  const gestion = ingesta || maestra || frescura
-    ? `<h2>Gestión del dominio</h2><ul class="cards">${ingesta}${maestra}${frescura}</ul>`
+  const gestion = maestra || frescura
+    ? `<h2>Gestión del dominio</h2><ul class="cards">${maestra}${frescura}</ul>`
     : '<p class="sub">Este dominio aún no tiene facetas habilitadas.</p>'
 
   // Facetas previstas del dominio (roadmap visible, deshabilitadas) — ver work/041 §4.
@@ -643,59 +613,6 @@ function maestraPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): string {
   return adminPage(deps, nav, title, `${back}<h2>Data Maestra</h2><ul class="cards">${cards}</ul>`)
 }
 
-/** Faceta INGESTA de un dominio (página propia): guía de carga + forms por slot + estado «Últimas cargas». */
-async function ingestaPage(
-  deps: AdminDeps,
-  nav: Chrome,
-  domain: DomainDecl,
-  token: string,
-  feedback?: { ok?: string; error?: string },
-): Promise<string> {
-  const title = `${domain.label} · Ingesta`
-  const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
-  const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
-  if (!deps.intake || slots.length === 0) {
-    return adminPage(deps, nav, title, `${back}<p class="msg err">La ingesta no está habilitada para este dominio.</p>`)
-  }
-
-  // Estado de conversión (frente B · observabilidad): últimas corridas del SJD/pipeline por slot con
-  // trigger. Tolerante a fallos: si Fabric no responde, la página sigue sirviendo (avisa, no se cae).
-  const statusBySlot = new Map<string, RunRecord[] | 'error'>()
-  if (deps.intakeStatus) {
-    await Promise.all(slots.filter((s) => s.trigger).map(async (s) => {
-      try { statusBySlot.set(s.id, await deps.intakeStatus!(s)) } catch { statusBySlot.set(s.id, 'error') }
-    }))
-  }
-
-  const guia = `<details class="guia"><summary>¿Cómo cargar? (orden recomendado)</summary>
-       <ol class="sub">
-         <li>Seleccioná los archivos de la <b>misma semana</b> — podés subir clientes y proveedores juntos (selección múltiple).</li>
-         <li>Verificá que cada nombre siga el patrón indicado en el slot.</li>
-         <li>Subí. La conversión corre sola; su estado aparece en «Últimas cargas» (Procesando → Listo).</li>
-       </ol>
-       <p class="sub">No mezcles semanas en una misma carga: subí una semana, esperá «Listo» y recién la siguiente.</p>
-     </details>`
-
-  const forms = slots.map((s) => `
-       <form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/intake/${escapeHtml(s.id)}" enctype="multipart/form-data" class="grid">
-         <input type="hidden" name="_csrf" value="${token}">
-         <div class="fld"><span>${escapeHtml(s.label)}${s.accept ? ` · patrón: <code>${escapeHtml(s.accept)}</code>` : ''}</span>
-           <input type="file" name="file" multiple required></div>
-         <div class="sub">${escapeHtml(s.description ?? '')}${s.description ? ' · ' : ''}Podés subir varios · Máx. ${Math.round(slotMaxBytes(s) / (1024 * 1024))} MB c/u${s.trigger ? ' · dispara la conversión al subir' : ' · el pipeline lo toma en su próxima corrida'}</div>
-         <div class="actions"><button class="add">Subir</button></div>
-       </form>
-       ${renderCargas(s, statusBySlot.get(s.id))}`).join('')
-
-  return adminPage(deps, nav, title,
-    `${feedback?.ok ? `<p class="msg ok">${escapeHtml(feedback.ok)}</p>` : ''}
-     ${feedback?.error ? `<p class="msg err">${escapeHtml(feedback.error)}</p>` : ''}
-     ${back}
-     <h2>Ingesta de archivos</h2>
-     <p class="sub">Subí los archivos acá y Mira los ubica en su destino (staging). La conversión los procesa.</p>
-     ${guia}
-     ${forms}`,
-  )
-}
 
 /** Gestión de PLATAFORMA: Usuarios y Roles · Grupos · Settings (una entrada que despliega todo). */
 async function platformPage(deps: AdminDeps, nav: Chrome, token: string): Promise<string> {
@@ -766,8 +683,19 @@ function freshnessHealthCell(r: DomainEntityFreshness): string {
   return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>`
 }
 
-/** Faceta FRESCURA de un dominio (página propia): brecha demanda↔oferta por entidad + corridas + schedule
- * + «aplicar cadencia» (reconciliador). Es la vista entity-anchored del contrato de frescura del dominio. */
+/** Formulario compacto de carga manual de un slot (mismo write-path que el intake). */
+function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
+  return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:inline-flex;gap:.3rem;align-items:center;flex-wrap:wrap">
+       <input type="hidden" name="_csrf" value="${token}">
+       <input type="file" name="file" multiple required>
+       <button class="add">Subir</button>
+       ${slot.accept ? `<div class="sub" style="flex-basis:100%">patrón: <code>${escapeHtml(slot.accept)}</code> · máx. ${Math.round(slotMaxBytes(slot) / (1024 * 1024))} MB c/u</div>` : ''}
+     </form>`
+}
+
+/** Faceta FRESCURA de un dominio (página propia): el contrato de frescura entity-anchored — brecha
+ * demanda↔oferta · corridas · schedule + «aplicar cadencia» (refresco AUTOMÁTICO) · **carga de archivo**
+ * (refresco MANUAL, plegado acá). Las dos caras de mantener la entidad fresca, en un solo lugar. */
 async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, msg?: string): Promise<string> {
   const title = `${domain.label} · Frescura`
   const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
@@ -777,9 +705,15 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   const migAlert = notebooks.length
     ? `<p class="msg err">⚠ ${notebooks.length === 1 ? 'Un proceso corre' : `${notebooks.length} procesos corren`} como <b>Notebook</b> (${escapeHtml([...new Set(notebooks)].join(', '))}). Debe migrar a <b>Spark Job</b> (Fabric-native, failure-safe) — ver el patrón de Finanzas.</p>`
     : ''
-  if (!rows.length) {
+  // Slots de ingesta del dominio: la carga manual se pliega acá. Una entidad casa con su slot por el item
+  // del motor (slot.trigger.processRef === engine_ref.itemId del proceso que la produce).
+  const domSlots = deps.intake ? (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id) : []
+  const slotFor = (r: DomainEntityFreshness): IntakeSlot | undefined =>
+    r.engineItemId ? domSlots.find((s) => s.trigger?.processRef && s.trigger.processRef === r.engineItemId) : undefined
+  if (!rows.length && !domSlots.length) {
     return adminPage(deps, nav, title, `${feedback}${back}<p class="sub">Este dominio aún no tiene entidades con fuente registrada. Conectá sus fuentes en <a href="/admin/sources">Fuentes</a> (plataforma) y asignales este dominio.</p>`)
   }
+  const matched = new Set<string>()
   const body = rows
     .map((r) => {
       const warn = r.unsatisfiable || r.health?.failed || r.health?.missed
@@ -795,20 +729,40 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
       const aplicar = drift && deps.applyCadence && r.processId
         ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
         : ''
-      const pis = r.dependentPis.map((p) => escapeHtml(p)).join(', ') || '<span class="sub">—</span>'
+      const slot = slotFor(r)
+      if (slot) matched.add(slot.id)
+      const alimentar = slot ? uploadForm(domain.id, slot, token) : '<span class="sub">automática</span>'
+      const pis = r.dependentPis.map((p) => escapeHtml(p)).join(', ')
       return `<tr${warn ? ' style="color:var(--err)"' : ''}>
-        <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}</td>
+        <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}${pis ? `<div class="sub">PIs: ${pis}</div>` : ''}</td>
         <td>${demanda}</td><td>${oferta}</td><td>${req}</td>
         <td>${sched}${aplicar ? `<div>${aplicar}</div>` : ''}</td>
         <td>${freshnessHealthCell(r)}</td>
-        <td class="sub">${pis}</td></tr>`
+        <td>${alimentar}</td></tr>`
     })
     .join('')
+  // Slots del dominio sin entidad registrada (land-only, o cuya fuente/proceso aún no está en el registro):
+  // su carga manual igual debe tener dónde — no se pierde.
+  const orphanSlots = domSlots.filter((s) => !matched.has(s.id))
+  const orphanSection = orphanSlots.length
+    ? `<h2>Otras cargas</h2><p class="sub">Slots de ingesta del dominio sin entidad registrada en Frescura todavía (registrá su fuente/proceso en <a href="/admin/sources">Fuentes</a> para verlas por entidad).</p>
+       <ul class="cards">${orphanSlots.map((s) => `<li><b>${escapeHtml(s.label)}</b>${s.description ? `<div class="sub">${escapeHtml(s.description)}</div>` : ''}${uploadForm(domain.id, s, token)}</li>`).join('')}</ul>`
+    : ''
+  const guia = domSlots.length
+    ? `<details class="guia"><summary>¿Cómo alimentar manualmente?</summary>
+         <p class="sub">Subí el/los archivo(s) en la fila de la entidad (columna «Alimentar»). Mira los aterriza en staging y dispara la conversión; el resultado aparece en «Última corrida». Respetá el patrón de nombre del slot. La carga manual es el gemelo del schedule automático: las dos producen una corrida fresca.</p>
+       </details>`
+    : ''
+  const table = rows.length
+    ? `<table><thead><tr><th>Entidad</th><th>Demanda</th><th>Oferta</th><th>Cadencia req.</th><th>Schedule motor</th><th>Última corrida</th><th>Alimentar</th></tr></thead>
+       <tbody>${body}</tbody></table>`
+    : ''
   return adminPage(deps, nav, title,
     `${feedback}${migAlert}${back}
-     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El <b>schedule motor</b> es lo que corre hoy; «Aplicar» lo alinea a la cadencia requerida. La columna «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
-     <table><thead><tr><th>Entidad</th><th>Demanda</th><th>Oferta</th><th>Cadencia req.</th><th>Schedule motor</th><th>Última corrida</th><th>PIs</th></tr></thead>
-     <tbody>${body}</tbody></table>`,
+     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El refresco es de dos formas: <b>automático</b> (el «schedule motor»; «Aplicar» lo alinea a la cadencia requerida) y <b>manual</b> (subir archivo en «Alimentar»). «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
+     ${guia}
+     ${table}
+     ${orphanSection}`,
   )
 }
 
