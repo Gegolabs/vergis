@@ -136,3 +136,66 @@ export function deriveIngestionMap(input: DeriveMapInput): IngestionMapRow[] {
     }
   })
 }
+
+// ─── Proyección por ENTIDAD (la unidad de demanda; la vista de Frescura del dominio) ─────────────────
+export interface EntityFreshnessRow {
+  /** Entidad = tabla de salida silver que un PI consume. */
+  entity: string
+  /** Proceso que la produce (su unidad de ejecución/schedule); null si ninguno la declara. */
+  processId: string | null
+  processLabel: string | null
+  /** Oferta de la fuente que alimenta el proceso productor (ISO); null si desconocida. */
+  oferta: string | null
+  /** PIs que consumen esta entidad. */
+  dependentPis: string[]
+  /** Demanda más exigente sobre la entidad = mín de las demandas de sus PIs (ISO); null si nadie demanda. */
+  tightestDemand: string | null
+  /** Cadencia requerida de la entidad = max(mín(demanda), oferta) (ISO); null si no hay ni demanda ni oferta. */
+  requiredCadence: string | null
+  requiredCadenceSeconds: number | null
+  /** true si alguna demanda exige más fresco que la oferta (bajo el piso) → insatisfacible. */
+  unsatisfiable: boolean
+}
+
+/**
+ * Deriva, por ENTIDAD (tabla de salida), su frescura requerida = el PI más exigente que la consume marca
+ * el paso, con piso en la oferta de la fuente de su proceso productor. PURA. Es la proyección que la
+ * vista de Frescura del dominio ancla en la entidad (mientras `deriveIngestionMap` queda por proceso para
+ * el reconciliador, que agenda procesos enteros).
+ */
+export function deriveEntityFreshness(input: DeriveMapInput): EntityFreshnessRow[] {
+  const ofertaOf = new Map(input.sources.map((s) => [s.id, s.oferta]))
+  const demandaOf = new Map(input.piDemandas.map((d) => [d.piCode, d.maxAge]))
+  const sourceOfProcess = new Map(input.processes.map((p) => [p.id, p.sourceId]))
+  const labelOfProcess = new Map(input.processes.map((p) => [p.id, p.label]))
+  // entidad → proceso productor (el primero que la declara como salida)
+  const producerOf = new Map<string, string>()
+  const entities = new Set<string>()
+  for (const po of input.processOutputs) {
+    entities.add(po.tableRef)
+    if (!producerOf.has(po.tableRef)) producerOf.set(po.tableRef, po.processId)
+  }
+  return [...entities].sort().map((entity) => {
+    const processId = producerOf.get(entity) ?? null
+    const sourceId = processId ? sourceOfProcess.get(processId) : undefined
+    const oferta = sourceId != null ? ofertaOf.get(sourceId) ?? null : null
+    const dependentPis = input.piTables.filter((pt) => pt.tables.includes(entity)).map((pt) => pt.piCode)
+    const demandas = dependentPis.map((pi) => demandaOf.get(pi)).filter((d): d is string => !!d)
+    const tightestSec = demandas.reduce((mn, d) => Math.min(mn, durationToSeconds(d)), Infinity)
+    const tightestDemand = demandas.length ? secondsToDuration(tightestSec) : null
+    const reqSec = oferta != null ? requiredCadenceSeconds(demandas, oferta) : demandas.length ? tightestSec : null
+    const ofertaSec = oferta != null ? durationToSeconds(oferta) : null
+    const unsatisfiable = ofertaSec != null && demandas.some((d) => durationToSeconds(d) < ofertaSec)
+    return {
+      entity,
+      processId,
+      processLabel: processId != null ? labelOfProcess.get(processId) ?? null : null,
+      oferta,
+      dependentPis,
+      tightestDemand,
+      requiredCadence: reqSec != null ? secondsToDuration(reqSec) : null,
+      requiredCadenceSeconds: reqSec,
+      unsatisfiable,
+    }
+  })
+}

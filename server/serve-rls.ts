@@ -50,16 +50,27 @@ import {
   createOneLakeIntake,
   createFabricJobs,
   createFabricJobStatus,
+  createFabricEngineClient,
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   createDwhPublisher,
   SqliteGovernanceStore,
   canOpen,
   deriveIngestionMap,
+  deriveEntityFreshness,
+  classifyProcess,
+  reconcilePlan,
+  freshnessAlerts,
+  diffAlertState,
   type GroupSeed,
   type DomainDecl,
   type IntakeSlot,
   type RunRecord,
+  type ProcessRow,
+  type SourceRow,
+  type EntityFreshnessRow,
+  type ProcessHealth,
+  type IngestionEngineClient,
   type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
@@ -615,9 +626,24 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     const intakeSlots: IntakeSlot[] = process.env['VERGIS_INTAKE']
       ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8')))
       : []
+    // Registro de fuentes de la instancia (frente B · frescura): fuentes (oferta + dominio), mapeos
+    // tabla→fuente, procesos (con engine_ref al item del motor) y proceso→salidas. Declarativo: se
+    // re-siembra en cada arranque (idempotente). Sin el archivo, el registro queda vacío (no hay frescura).
+    const sourceReg = process.env['VERGIS_SOURCES']
+      ? (parseYaml(readFileSync(resolve(process.env['VERGIS_SOURCES']), 'utf8')) as {
+          sources?: { id: string; label: string; oferta: string; domain?: string; connectedBy?: string }[]
+          tableSources?: { tableRef: string; sourceId: string }[]
+          processes?: { id: string; label: string; sourceId: string; engine?: { workspaceId: string; itemId: string; jobType: string } }[]
+          processOutputs?: { processId: string; tableRef: string }[]
+        })
+      : {}
     const govStore = await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, {
       admins: ADMIN_SEED,
       groups: groupSeeds,
+      sources: sourceReg.sources,
+      tableSources: sourceReg.tableSources,
+      processes: sourceReg.processes,
+      processOutputs: sourceReg.processOutputs,
     })
     const adminStore = govStore
     // Gobierno de PI (frente A): expone el store al gate de artefacto + config de ACL (flag-guarded).
@@ -637,24 +663,85 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const intakeWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]> } => {
-      if (!intakeSlots.length || !connections) return {}
+    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; engine?: IngestionEngineClient } => {
+      if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
       const sp = ref ? connections[ref] : undefined
       if (!sp) {
-        console.error('[vergis-rls] ingesta deshabilitada: define VERGIS_INTAKE_SP (hay varias conexiones).')
+        if (intakeSlots.length) console.error('[vergis-rls] ingesta/frescura deshabilitadas: define VERGIS_INTAKE_SP (hay varias conexiones).')
         return {}
       }
       const tokens = createTokenProvider({ tenantId: sp.tenantId, clientId: sp.clientId, clientSecret: sp.clientSecret })
+      const jobStatus = createFabricJobStatus(tokens)
+      // Engine client (frente B · frescura): resuelve processRef → engine_ref con el registro de procesos.
+      const engine = createFabricEngineClient(tokens, async (processRef) => (await govStore.listProcesses()).find((p) => p.id === processRef)?.engine)
+      if (!intakeSlots.length) return { engine }
       const onelake = createOneLakeIntake(tokens)
       const jobs = createFabricJobs(tokens)
-      const jobStatus = createFabricJobStatus(tokens)
       return {
         runner: { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) },
         status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
+        engine,
       }
     })()
+    // Insumos compartidos del cálculo de frescura (registro de fuentes + specs + demandas). Reusado por
+    // el mapa por proceso (reconciliador), la proyección por entidad (vista) y el «aplicar cadencia».
+    const freshnessInputs = async () => {
+      const [procs, outputs, sources] = await Promise.all([govStore.listProcesses(), govStore.listProcessOutputs(), govStore.listSources()])
+      const reports = discover()
+      const piTables = reports.map((r) => ({ piCode: r.code, tables: r.tables }))
+      const piDemandas = (
+        await Promise.all(
+          reports.map(async (r) => {
+            const d = await govStore.getDemanda(r.code)
+            return d ? { piCode: r.code, maxAge: d.maxAge } : null
+          }),
+        )
+      ).filter((x): x is { piCode: string; maxAge: string } => !!x)
+      const mapInput = { sources: sources.map((s) => ({ id: s.id, oferta: s.oferta })), processes: procs, processOutputs: outputs, piTables, piDemandas }
+      return { sources, procs, outputs, mapInput }
+    }
+    // Monitor de frescura (alerta autónoma): cada `VERGIS_FRESHNESS_POLL_MS` lee el run-history de los
+    // procesos observables, detecta fallidas/faltantes y empuja a Slack SOLO en transiciones (dedup por
+    // estado). Config-gated: off salvo que se definan webhook + intervalo. No mantiene vivo el proceso.
+    const freshnessSlack = process.env['VERGIS_FRESHNESS_SLACK_WEBHOOK'] ?? ''
+    const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 0)
+    if (fabricWiring.engine && freshnessSlack && freshnessPollMs > 0) {
+      const engine = fabricWiring.engine
+      const postSlack = async (text: string): Promise<void> => {
+        try {
+          await fetch(freshnessSlack, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
+        } catch (e) {
+          console.error('[vergis-rls] freshness slack:', e instanceof Error ? e.message : e)
+        }
+      }
+      let alertState: Record<string, 'failed' | 'missed'> = {}
+      const tick = async (): Promise<void> => {
+        try {
+          const f = await freshnessInputs()
+          const reqOf = new Map(deriveIngestionMap(f.mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
+          const procs = await Promise.all(
+            f.procs
+              .filter((p) => p.engine)
+              .map(async (p) => ({
+                processId: p.id,
+                runs: await engine.listRunHistory(p.id).catch(() => [] as RunRecord[]),
+                requiredCadenceSeconds: reqOf.get(p.id) ?? Number.POSITIVE_INFINITY,
+              })),
+          )
+          const { notify, recovered, next } = diffAlertState(alertState, freshnessAlerts(procs, Date.now()))
+          alertState = next
+          for (const a of notify) await postSlack(`:warning: *Frescura* — proceso \`${a.processId}\` ${a.reason === 'failed' ? 'falló' : 'atrasada (no corre a tiempo)'}${a.lastError ? ` — ${a.lastError}` : ''}`)
+          for (const pid of recovered) await postSlack(`:white_check_mark: *Frescura* — proceso \`${pid}\` recuperado`)
+        } catch (e) {
+          console.error('[vergis-rls] freshness monitor:', e instanceof Error ? e.message : e)
+        }
+      }
+      const timer = setInterval(() => void tick(), freshnessPollMs)
+      timer.unref?.()
+      console.log(`[vergis-rls] monitor de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s → Slack)`)
+    }
     admin = createAdmin({
       entities,
       mdStore,
@@ -662,8 +749,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       domains,
       domainStewardGroups: defaultStewardGroups,
       intakeSlots,
-      intake: intakeWiring.runner,
-      intakeStatus: intakeWiring.status,
+      intake: fabricWiring.runner,
+      intakeStatus: fabricWiring.status,
       signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
       groupStore: govStore,
@@ -678,25 +765,62 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             }
           })()
         : undefined,
-      ingestionMap: async () => {
-        const [procs, outputs, sources] = await Promise.all([govStore.listProcesses(), govStore.listProcessOutputs(), govStore.listSources()])
-        const reports = discover()
-        const piTables = reports.map((r) => ({ piCode: r.code, tables: r.tables }))
-        const piDemandas = (
-          await Promise.all(
-            reports.map(async (r) => {
-              const d = await govStore.getDemanda(r.code)
-              return d ? { piCode: r.code, maxAge: d.maxAge } : null
-            }),
-          )
-        ).filter((x): x is { piCode: string; maxAge: string } => !!x)
-        return deriveIngestionMap({
-          sources: sources.map((s) => ({ id: s.id, oferta: s.oferta })),
-          processes: procs,
-          processOutputs: outputs,
-          piTables,
-          piDemandas,
+      ingestionMap: async () => deriveIngestionMap((await freshnessInputs()).mapInput),
+      // Registro de fuentes (vista de Fuentes en Plataforma): fuentes + procesos + salidas (topología técnica).
+      sourceRegistry: async () => {
+        const [sources, processes, outputs] = await Promise.all([govStore.listSources(), govStore.listProcesses(), govStore.listProcessOutputs()])
+        return { sources, processes, outputs }
+      },
+      // Frescura por entidad de un dominio (vista de dominio): proyección por entidad enriquecida con
+      // run-history + schedule + salud (vía engine client). Scope por dominio = dominio de la fuente del
+      // proceso productor. Tolerante a fallos del motor (no se cae la página).
+      domainFreshness: async (domainId: string) => {
+        const f = await freshnessInputs()
+        const rows = deriveEntityFreshness(f.mapInput)
+        const domainOfSource = new Map(f.sources.map((s) => [s.id, s.domain]))
+        const procById = new Map(f.procs.map((p) => [p.id, p]))
+        const inDomain = rows.filter((r) => {
+          const proc = r.processId ? procById.get(r.processId) : undefined
+          return proc != null && domainOfSource.get(proc.sourceId) === domainId
         })
+        const engine = fabricWiring.engine
+        const cache = new Map<string, { runs: RunRecord[] | 'error'; schedule: number | null }>()
+        const enrich = async (processId: string): Promise<{ runs: RunRecord[] | 'error'; schedule: number | null }> => {
+          const hit = cache.get(processId)
+          if (hit) return hit
+          let runs: RunRecord[] | 'error' = []
+          let schedule: number | null = null
+          if (engine) {
+            try { runs = await engine.listRunHistory(processId) } catch { runs = 'error' }
+            try { schedule = await engine.getScheduleSeconds(processId) } catch { schedule = null }
+          }
+          const v = { runs, schedule }
+          cache.set(processId, v)
+          return v
+        }
+        return Promise.all(
+          inDomain.map(async (r) => {
+            const proc = r.processId ? procById.get(r.processId) : undefined
+            if (!r.processId || !engine || !proc?.engine) return { ...r, engine: false }
+            const { runs, schedule } = await enrich(r.processId)
+            const health = runs !== 'error' && r.requiredCadenceSeconds != null ? classifyProcess(runs, r.requiredCadenceSeconds, Date.now()) : undefined
+            return { ...r, engine: true, runs, health, actualScheduleSeconds: schedule }
+          }),
+        )
+      },
+      // Driver del reconciliador («aplicar cadencia»): empuja la cadencia derivada del proceso al schedule
+      // del motor (one-way, idempotente). Devuelve el plan (set/noop) para feedback.
+      applyCadence: async (processId: string, by: string) => {
+        const engine = fabricWiring.engine
+        if (!engine) throw new Error('Sin conexión al motor: no se puede aplicar la cadencia.')
+        const map = deriveIngestionMap((await freshnessInputs()).mapInput)
+        const row = map.find((m) => m.processId === processId)
+        if (!row) throw new Error(`Proceso desconocido: ${processId}`)
+        const actual = await engine.getScheduleSeconds(processId)
+        const plan = reconcilePlan(row.requiredCadenceSeconds, actual)
+        if (plan.action === 'set') await engine.setScheduleSeconds(processId, row.requiredCadenceSeconds)
+        auditLog.append({ type: 'frescura-aplicar-cadencia', process: processId, by, desiredSeconds: row.requiredCadenceSeconds, action: plan.action })
+        return plan
       },
       identityOf: (h) => identityFor(h as GateHeaders),
       audit: (e) => auditLog.append(e),
