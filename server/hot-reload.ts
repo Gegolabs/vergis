@@ -1,0 +1,85 @@
+// Hot-reload de specs y gobierno SIN restart del proceso.
+//
+// Contexto (work/045 del lab): el server ya re-lee las specs por request (`discover()` + `runSpec`
+// hacen `readFileSync` fresco), así que editar/añadir una spec es live. Lo que este módulo aporta:
+//   1. createCachedScanner — memoiza el `discover()` (que hoy re-parsea TODAS las specs por request)
+//      y lo invalida on-change, con VALIDATE-BEFORE-SWAP (si el re-scan lanza, conserva el valor previo).
+//   2. watchPaths — observa el dir de specs y los archivos de política, con debounce, y dispara el rebuild.
+// El reload del policy store (su gap real) lo orquesta el server llamando `rebuild()` del scanner tras
+// re-poblar el store; este módulo provee las piezas genéricas y testeables.
+
+import { watch, type FSWatcher } from 'node:fs'
+
+/** Coalescer simple: agrupa ráfagas de `trigger()` en una sola ejecución de `fn` tras `ms` de quietud. */
+export function debounce(fn: () => void, ms: number): { trigger: () => void; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return {
+    trigger: () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        fn()
+      }, ms)
+    },
+    cancel: () => {
+      if (timer) clearTimeout(timer)
+      timer = null
+    },
+  }
+}
+
+/**
+ * Observa `paths` (archivos o directorios) y llama `onChange` (debounced) ante cualquier evento.
+ * Tolerante: un path que no se puede observar se loguea y se omite (no tumba el arranque). Devuelve
+ * un `unwatch()` que cierra los watchers y cancela el debounce pendiente.
+ */
+export function watchPaths(
+  paths: string[],
+  onChange: () => void,
+  opts: { debounceMs?: number; log?: (msg: string) => void } = {},
+): () => void {
+  const log = opts.log ?? ((m: string) => console.warn(m))
+  const d = debounce(onChange, opts.debounceMs ?? 200)
+  const watchers: FSWatcher[] = []
+  for (const p of paths) {
+    try {
+      watchers.push(watch(p, { persistent: false }, () => d.trigger()))
+    } catch (e) {
+      log(`[hot-reload] no se pudo observar ${p}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  return () => {
+    d.cancel()
+    for (const w of watchers) {
+      try {
+        w.close()
+      } catch {
+        /* noop */
+      }
+    }
+  }
+}
+
+/**
+ * Cachea el resultado de un `scan()` costoso (p.ej. leer+parsear todas las specs y correr el gate de
+ * gobernanza). `rebuild()` re-ejecuta `scan()` con VALIDATE-BEFORE-SWAP: si `scan()` lanza, conserva el
+ * valor vigente y devuelve `{ ok:false, error }` — una spec a medio editar nunca deja el server sin datos.
+ * La primera carga (en la construcción) sí propaga el error: equivale al fallo de arranque actual.
+ */
+export function createCachedScanner<T>(scan: () => T): {
+  get: () => T
+  rebuild: () => { ok: boolean; error?: string }
+} {
+  let value: T = scan()
+  return {
+    get: () => value,
+    rebuild: () => {
+      try {
+        value = scan()
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+  }
+}

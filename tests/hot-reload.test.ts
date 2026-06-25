@@ -1,0 +1,89 @@
+import { describe, it, expect, vi } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { debounce, createCachedScanner, watchPaths } from '../server/hot-reload'
+
+describe('debounce', () => {
+  it('coalesce una ráfaga de triggers en una sola ejecución tras la quietud', () => {
+    vi.useFakeTimers()
+    let n = 0
+    const d = debounce(() => { n += 1 }, 200)
+    d.trigger(); d.trigger(); d.trigger()
+    expect(n).toBe(0)
+    vi.advanceTimersByTime(199)
+    expect(n).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(n).toBe(1)
+    vi.useRealTimers()
+  })
+
+  it('cancel() evita la ejecución pendiente', () => {
+    vi.useFakeTimers()
+    let n = 0
+    const d = debounce(() => { n += 1 }, 100)
+    d.trigger()
+    d.cancel()
+    vi.advanceTimersByTime(1000)
+    expect(n).toBe(0)
+    vi.useRealTimers()
+  })
+})
+
+describe('createCachedScanner', () => {
+  it('sirve el valor cacheado sin re-ejecutar scan hasta rebuild()', () => {
+    let calls = 0
+    let src = 1
+    const s = createCachedScanner(() => { calls += 1; return src })
+    expect(s.get()).toBe(1)
+    expect(s.get()).toBe(1)
+    expect(calls).toBe(1) // solo la carga inicial
+    src = 2
+    expect(s.get()).toBe(1) // sigue cacheado
+    expect(s.rebuild()).toEqual({ ok: true })
+    expect(s.get()).toBe(2)
+    expect(calls).toBe(2)
+  })
+
+  it('validate-before-swap: si scan() lanza, conserva el valor previo y reporta el error', () => {
+    let mode = 'ok'
+    const s = createCachedScanner(() => {
+      if (mode === 'boom') throw new Error('parse-error')
+      return mode
+    })
+    expect(s.get()).toBe('ok')
+    mode = 'boom'
+    const r = s.rebuild()
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('parse-error')
+    expect(s.get()).toBe('ok') // NO se rompió: conserva el previo
+    mode = 'nuevo'
+    expect(s.rebuild().ok).toBe(true)
+    expect(s.get()).toBe('nuevo')
+  })
+
+  it('la primera carga propaga el error (equivale al fallo de arranque)', () => {
+    expect(() => createCachedScanner(() => { throw new Error('boot-fail') })).toThrow('boot-fail')
+  })
+})
+
+describe('watchPaths', () => {
+  it('tolera un path inexistente: loguea y no lanza; devuelve un unwatch()', () => {
+    const logs: string[] = []
+    const un = watchPaths(['/no/existe/jamas-xyz-123'], () => {}, { log: (m) => logs.push(m) })
+    expect(typeof un).toBe('function')
+    expect(logs.some((l) => l.includes('no se pudo observar'))).toBe(true)
+    un()
+  })
+
+  it('dispara onChange (debounced) cuando cambia un archivo del directorio observado', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vergis-watch-'))
+    let fired = 0
+    const un = watchPaths([dir], () => { fired += 1 }, { debounceMs: 20 })
+    writeFileSync(join(dir, 'a.yaml'), 'x: 1')
+    await new Promise((r) => setTimeout(r, 200))
+    un()
+    rmSync(dir, { recursive: true, force: true })
+    expect(fired).toBeGreaterThanOrEqual(1)
+  })
+})
