@@ -16,11 +16,20 @@ const SOURCES: SourceRow[] = [{ id: 'sap', label: 'SAP B1', oferta: 'PT1H', doma
 const PROCESSES: ProcessRow[] = [{ id: 'p_sap', label: 'Ingesta SAP', sourceId: 'sap', engine: { workspaceId: 'WS', itemId: 'SJD', jobType: 'sparkjob' } }]
 const OUTPUTS = [{ processId: 'p_sap', tableRef: 'fct_saldos' }]
 // Fila de frescura con DRIFT (schedule real 1d ≠ cadencia req 2h) → debe renderizar el botón «Aplicar».
+// Corre como Spark Job (sparkjob): NO debe mostrar alerta de migración.
 const FRESHNESS: DomainEntityFreshness[] = [{
   entity: 'fct_saldos', processId: 'p_sap', processLabel: 'Ingesta SAP', oferta: 'PT1H',
   dependentPis: ['PI-01'], tightestDemand: 'PT2H', requiredCadence: 'PT2H', requiredCadenceSeconds: 7200, unsatisfiable: false,
-  engine: true, runs: [{ startedAt: '2026-06-24T09:00:00Z', endedAt: '2026-06-24T09:01:00Z', status: 'Completed' }],
+  engine: true, engineJobType: 'sparkjob', runs: [{ startedAt: '2026-06-24T09:00:00Z', endedAt: '2026-06-24T09:01:00Z', status: 'Completed' }],
   health: { lastStatus: 'Completed', lastSuccessAt: '2026-06-24T09:01:00Z', ageSeconds: 100, failed: false, missed: false },
+  actualScheduleSeconds: 86_400,
+}]
+// Variante: el proceso corre como NOTEBOOK → debe explicitar tipo + alerta de migración a Spark Job.
+const FRESHNESS_NOTEBOOK: DomainEntityFreshness[] = [{
+  entity: 'fct_asistencia', processId: 'p_buk', processLabel: 'Ingesta Buk', oferta: 'P1D',
+  dependentPis: ['PI-04'], tightestDemand: 'P1D', requiredCadence: 'P1D', requiredCadenceSeconds: 86_400, unsatisfiable: false,
+  engine: true, engineJobType: 'RunNotebook', runs: [{ startedAt: '2026-06-24T06:00:00Z', endedAt: '2026-06-24T06:05:00Z', status: 'Completed' }],
+  health: { lastStatus: 'Completed', lastSuccessAt: '2026-06-24T06:05:00Z', ageSeconds: 100, failed: false, missed: false },
   actualScheduleSeconds: 86_400,
 }]
 
@@ -92,6 +101,25 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(res.body).toContain('fct_saldos')
     expect(res.body).toContain('PT2H') // cadencia requerida
     expect(res.body).toContain('Aplicar') // botón del reconciliador (hay drift)
+    expect(res.body).toContain('Spark Job') // tipo de motor explícito
+    expect(res.body).not.toContain('migrar a Spark Job') // sparkjob no dispara alerta de migración
+  })
+
+  it('Frescura: un proceso que corre como NOTEBOOK explicita el tipo y la alerta de migrar a Spark Job', async () => {
+    const nb = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => FRESHNESS_NOTEBOOK,
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await nb.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('Notebook')
+    expect(res.body).toContain('migrar a Spark Job') // alerta explícita (celda + banner)
   })
 
   it('Aplicar cadencia: POST con CSRF llama al reconciliador y redirige con mensaje', async () => {

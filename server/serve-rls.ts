@@ -804,7 +804,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             if (!r.processId || !engine || !proc?.engine) return { ...r, engine: false }
             const { runs, schedule } = await enrich(r.processId)
             const health = runs !== 'error' && r.requiredCadenceSeconds != null ? classifyProcess(runs, r.requiredCadenceSeconds, Date.now()) : undefined
-            return { ...r, engine: true, runs, health, actualScheduleSeconds: schedule }
+            return { ...r, engine: true, engineJobType: proc.engine.jobType, runs, health, actualScheduleSeconds: schedule }
           }),
         )
       },

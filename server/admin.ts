@@ -70,6 +70,8 @@ export interface IntakeRunner {
 export interface DomainEntityFreshness extends EntityFreshnessRow {
   /** ¿El proceso productor tiene engine_ref (es observable en el motor)? Si no, no hay corridas ni schedule. */
   engine: boolean
+  /** Tipo de job del motor que ejecuta el proceso (Fabric: 'RunNotebook' | 'sparkjob' | 'Pipeline'…). */
+  engineJobType?: string
   /** Últimas corridas del proceso (más reciente primero), o 'error' si el motor no respondió. */
   runs?: RunRecord[] | 'error'
   /** Salud derivada (fallida / faltante) a partir de las corridas y la cadencia requerida. */
@@ -722,8 +724,11 @@ async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
   const { sources, processes, outputs } = await deps.sourceRegistry!()
   const outsOf = (pid: string): string[] => outputs.filter((o) => o.processId === pid).map((o) => o.tableRef)
   const procsOf = (sid: string): ProcessRow[] => processes.filter((p) => p.sourceId === sid)
-  const procCell = (p: ProcessRow): string =>
-    `<div><span class="c">${escapeHtml(p.id)}</span> ${escapeHtml(p.label)}${p.engine ? '' : ' <span class="sub">· sin motor (no observable)</span>'}<div class="sub">${outsOf(p.id).map(escapeHtml).join(', ') || '—'}</div></div>`
+  const procCell = (p: ProcessRow): string => {
+    const k = p.engine ? engineKind(p.engine.jobType) : null
+    const motor = !k ? ' <span class="sub">· sin motor (no observable)</span>' : ` <span class="sub">· ${escapeHtml(k.label)}</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
+    return `<div><span class="c">${escapeHtml(p.id)}</span> ${escapeHtml(p.label)}${motor}<div class="sub">${outsOf(p.id).map(escapeHtml).join(', ') || '—'}</div></div>`
+  }
   const rows = sources
     .map((s) => {
       const ps = procsOf(s.id)
@@ -739,14 +744,26 @@ async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
   )
 }
 
-/** Celda de salud de una entidad: última corrida + bandera fallida/atrasada (o por qué no es observable). */
+/** Tipo de motor que corre el proceso, legible, + si es un Notebook (debe migrar a Spark Job). */
+function engineKind(jobType?: string): { label: string; isNotebook: boolean } {
+  const jt = (jobType ?? '').toLowerCase()
+  if (jt.includes('notebook')) return { label: 'Notebook', isNotebook: true }
+  if (jt === 'sparkjob') return { label: 'Spark Job', isNotebook: false }
+  if (jt === 'pipeline') return { label: 'Pipeline', isNotebook: false }
+  return { label: jobType || 'motor', isNotebook: false }
+}
+
+/** Celda de salud de una entidad: tipo de motor (Notebook/Spark Job) + última corrida + bandera de salud.
+ * Si el proceso corre como Notebook, explicita la alerta de migración a Spark Job. */
 function freshnessHealthCell(r: DomainEntityFreshness): string {
   if (!r.engine) return '<span class="sub">sin motor</span>'
-  if (r.runs === 'error') return '<span class="sub">motor no respondió</span>'
+  const k = engineKind(r.engineJobType)
+  const kind = `<span class="sub">[${escapeHtml(k.label)}]</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
+  if (r.runs === 'error') return `${kind}<br><span class="sub">motor no respondió</span>`
   const runs = r.runs ?? []
-  if (!runs.length) return '<span class="sub">sin corridas</span>'
+  if (!runs.length) return `${kind}<br><span class="sub">sin corridas</span>`
   const flag = r.health?.failed ? ' · ✕ fallida' : r.health?.missed ? ' · ⚠️ atrasada' : ' · ✓'
-  return `${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>`
+  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>`
 }
 
 /** Faceta FRESCURA de un dominio (página propia): brecha demanda↔oferta por entidad + corridas + schedule
@@ -756,6 +773,10 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
   const rows = await deps.domainFreshness!(domain.id)
   const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
+  const notebooks = rows.filter((r) => r.engine && engineKind(r.engineJobType).isNotebook).map((r) => r.processLabel || r.processId).filter(Boolean)
+  const migAlert = notebooks.length
+    ? `<p class="msg err">⚠ ${notebooks.length === 1 ? 'Un proceso corre' : `${notebooks.length} procesos corren`} como <b>Notebook</b> (${escapeHtml([...new Set(notebooks)].join(', '))}). Debe migrar a <b>Spark Job</b> (Fabric-native, failure-safe) — ver el patrón de Finanzas.</p>`
+    : ''
   if (!rows.length) {
     return adminPage(deps, nav, title, `${feedback}${back}<p class="sub">Este dominio aún no tiene entidades con fuente registrada. Conectá sus fuentes en <a href="/admin/sources">Fuentes</a> (plataforma) y asignales este dominio.</p>`)
   }
@@ -784,8 +805,8 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
     })
     .join('')
   return adminPage(deps, nav, title,
-    `${feedback}${back}
-     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El <b>schedule motor</b> es lo que corre hoy; «Aplicar» lo alinea a la cadencia requerida. ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
+    `${feedback}${migAlert}${back}
+     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El <b>schedule motor</b> es lo que corre hoy; «Aplicar» lo alinea a la cadencia requerida. La columna «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
      <table><thead><tr><th>Entidad</th><th>Demanda</th><th>Oferta</th><th>Cadencia req.</th><th>Schedule motor</th><th>Última corrida</th><th>PIs</th></tr></thead>
      <tbody>${body}</tbody></table>`,
   )
