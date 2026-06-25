@@ -2,9 +2,10 @@
  * Ambiente de ADMINISTRACIÓN de Vergis — superficie de ESCRITURA gobernada (primera del sistema).
  *
  * Distingue DOS clases de gestión (ver `docs/gestion-de-dominio.md`):
- *  · GESTIÓN DE PLATAFORMA — transversal: Usuarios y Roles · Grupos de Mira · Settings. Solo admins.
- *    Una sola entrada (`/admin/plataforma`) que adentro despliega sus opciones.
- *  · GESTIÓN DE DOMINIO — por dominio: Ingesta de archivos · Data Maestra · Fuentes & Frescura.
+ *  · GESTIÓN DE PLATAFORMA — transversal: Usuarios y Roles · Grupos de Mira · Fuentes · Settings. Solo
+ *    admins. Una sola entrada (`/admin/plataforma`) que adentro despliega sus opciones. «Fuentes» es el
+ *    registro técnico (conectar fuentes + su oferta); la frescura NO vive acá.
+ *  · GESTIÓN DE DOMINIO — por dominio: Ingesta de archivos · Data Maestra · Frescura (por entidad).
  *    Un área por dominio (`/admin/dominio/<id>`), accesible a los STEWARDS del dominio (+ admin).
  *
  * El home (`/admin`) es un DASHBOARD de salud: lista los dominios que el usuario puede gestionar y —si
@@ -26,6 +27,7 @@ import {
   manageableDomains,
   slotMaxBytes,
   validateUpload,
+  secondsToDuration,
   type AdminStore,
   type DomainDecl,
   type GroupStore,
@@ -34,6 +36,10 @@ import {
   type IntakeTrigger,
   type PlatformSettingStore,
   type IngestionMapRow,
+  type EntityFreshnessRow,
+  type SourceRow,
+  type ProcessRow,
+  type ProcessHealth,
   type MasterDataEntity,
   type MasterDataRow,
   type MasterDataStore,
@@ -60,6 +66,20 @@ export interface IntakeRunner {
   runNow?(trigger: IntakeTrigger, target?: IntakeTarget): Promise<void>
 }
 
+/** Fila de Frescura por entidad enriquecida con el estado en vivo del motor (run-history + schedule + salud). */
+export interface DomainEntityFreshness extends EntityFreshnessRow {
+  /** ¿El proceso productor tiene engine_ref (es observable en el motor)? Si no, no hay corridas ni schedule. */
+  engine: boolean
+  /** Tipo de job del motor que ejecuta el proceso (Fabric: 'RunNotebook' | 'sparkjob' | 'Pipeline'…). */
+  engineJobType?: string
+  /** Últimas corridas del proceso (más reciente primero), o 'error' si el motor no respondió. */
+  runs?: RunRecord[] | 'error'
+  /** Salud derivada (fallida / faltante) a partir de las corridas y la cadencia requerida. */
+  health?: ProcessHealth
+  /** Schedule real del proceso en el motor (segundos); null si no tiene o no se pudo leer. */
+  actualScheduleSeconds?: number | null
+}
+
 export interface AdminDeps {
   entities: MasterDataEntity[]
   mdStore: MasterDataStore
@@ -80,6 +100,12 @@ export interface AdminDeps {
   onWrite?: (entity: MasterDataEntity) => Promise<void>
   /** Mapa de ingestión derivado (frente B): cadencia requerida por proceso. Opcional. */
   ingestionMap?: () => Promise<IngestionMapRow[]>
+  /** Registro de fuentes (vista Fuentes en Plataforma): fuentes + procesos + salidas (topología). Opcional. */
+  sourceRegistry?: () => Promise<{ sources: SourceRow[]; processes: ProcessRow[]; outputs: { processId: string; tableRef: string }[] }>
+  /** Frescura por entidad de un dominio (vista de dominio): proyección por entidad + run-history + schedule + salud. Opcional. */
+  domainFreshness?: (domainId: string) => Promise<DomainEntityFreshness[]>
+  /** Driver del reconciliador: empuja la cadencia derivada de un proceso al schedule del motor. Opcional. */
+  applyCadence?: (processId: string, by: string) => Promise<{ action: 'set' | 'noop'; desiredSeconds: number }>
   /** Nº de PIs servidos (para el tile del dashboard). Opcional. */
   piCount?: number
   /** Settings de plataforma (título del catálogo, etc.). Opcional. */
@@ -183,7 +209,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         const section = di[2]
         const slotId = di[3]
         if (!section && req.method === 'GET') {
-          send(res, 200, await domainPage(deps, nav, domain, isAdmin))
+          send(res, 200, await domainPage(deps, nav, domain))
           return true
         }
         if (section === 'maestra' && req.method === 'GET') {
@@ -202,6 +228,24 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         if (section === 'intake' && slotId && req.method === 'POST') {
           await handleIntake(deps, nav, domain, slotId, req, res, token, email)
+          return true
+        }
+        // Frescura del dominio (por entidad): vista + «aplicar cadencia» (reconciliador). Abierta a stewards.
+        if (section === 'frescura' && deps.domainFreshness && req.method === 'GET') {
+          send(res, 200, await domainFreshnessPage(deps, nav, domain, token, url.searchParams.get('msg') ?? undefined))
+          return true
+        }
+        if (section === 'frescura' && deps.applyCadence && req.method === 'POST') {
+          const f = await readForm(req)
+          requireCsrf(f, token)
+          let msg: string
+          try {
+            const plan = await deps.applyCadence(f['process'] ?? '', email)
+            msg = plan.action === 'set' ? 'Cadencia aplicada al motor.' : 'El schedule ya estaba en la cadencia requerida.'
+          } catch (e) {
+            msg = `Error: ${errMsg(e)}`
+          }
+          redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent(msg)}`)
           return true
         }
       }
@@ -259,8 +303,8 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         if (!isAdmin) return denyPlatform()
         if (await handleGroups(deps, nav, deps.groupStore, path, req, res, token, email)) return true
       }
-      // Mapa de fuentes e ingestión (vista global; gestión de plataforma por ahora)
-      if (deps.ingestionMap && path === '/admin/sources' && req.method === 'GET') {
+      // Fuentes (registro técnico): gestión de PLATAFORMA — conectar fuentes + su oferta + topología.
+      if (deps.sourceRegistry && path === '/admin/sources' && req.method === 'GET') {
         if (!isAdmin) return denyPlatform()
         send(res, 200, await sourcesPage(deps, nav))
         return true
@@ -402,7 +446,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
     s += `<div class="grp">Configuración</div>`
     s += lvl('/admin/roles', 'Usuarios y Roles', active === 'roles')
     if (deps.groupStore) s += lvl('/admin/groups', 'Grupos de Mira', active === 'groups')
-    if (deps.ingestionMap) s += lvl('/admin/sources', 'Mapa de Fuentes', active === 'sources')
+    if (deps.sourceRegistry) s += lvl('/admin/sources', 'Fuentes', active === 'sources')
   } else {
     s += lvl('/admin', 'Inicio', active === 'home')
     if (manageable.length) {
@@ -421,7 +465,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
           s += lvl(`/admin/dominio/${d.id}/maestra`, 'Data Maestra', active === `${base}/maestra`, 'l2')
           if (inMaestra) s += ents.map((e) => lvl(`/admin/e/${e.id}`, e.label, active === `${base}/maestra/${e.id}`, 'l3')).join('')
         }
-        if (deps.ingestionMap && isAdmin) s += lvl('/admin/sources', 'Fuentes & Frescura', false, 'l2')
+        if (deps.domainFreshness) s += lvl(`/admin/dominio/${d.id}/frescura`, 'Frescura', active === `${base}/frescura`, 'l2')
       }
     }
   }
@@ -547,7 +591,7 @@ function renderCargas(slot: IntakeSlot, st: RunRecord[] | 'error' | undefined): 
 
 /** Home de un DOMINIO: MENÚ de facetas (una tarjeta por operación). Cada operación vive en su propia
  * página — el home no expande formularios, solo enruta (mismo patrón que la Gestión de Plataforma). */
-async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, isAdmin: boolean): Promise<string> {
+async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): Promise<string> {
   const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
   const entities = deps.entities.filter((e) => (e.domain ?? '') === domain.id)
 
@@ -559,12 +603,12 @@ async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, isAd
   const maestra = entities.length
     ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/maestra">Data Maestra</a><div class="sub">Entidades gobernadas del dominio (${entities.length}).</div></li>`
     : ''
-  const fuentes = deps.ingestionMap && isAdmin
-    ? `<li><a href="/admin/sources">Fuentes & Frescura</a><div class="sub">Oferta de cada fuente y cadencia requerida derivada de las demandas.</div></li>`
+  const frescura = deps.domainFreshness
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/frescura">Frescura</a><div class="sub">Por entidad: qué tan fresca está vs. lo que demandan sus PIs, sus corridas y su cadencia.</div></li>`
     : ''
 
-  const gestion = ingesta || maestra || fuentes
-    ? `<h2>Gestión del dominio</h2><ul class="cards">${ingesta}${maestra}${fuentes}</ul>`
+  const gestion = ingesta || maestra || frescura
+    ? `<h2>Gestión del dominio</h2><ul class="cards">${ingesta}${maestra}${frescura}</ul>`
     : '<p class="sub">Este dominio aún no tiene facetas habilitadas.</p>'
 
   // Facetas previstas del dominio (roadmap visible, deshabilitadas) — ver work/041 §4.
@@ -674,18 +718,97 @@ async function platformPage(deps: AdminDeps, nav: Chrome, token: string): Promis
   )
 }
 
+/** Fuentes (Gestión de PLATAFORMA): registro técnico — cada fuente, su oferta, su dominio y la topología
+ * de procesos→entidades que alimenta. La frescura (brecha vs demanda, corridas, schedule) vive por dominio. */
 async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
-  const map = await deps.ingestionMap!()
-  const rows = map
-    .map(
-      (r) => `<tr${r.unsatisfiable ? ' style="color:var(--err)"' : ''}><td><span class="c">${escapeHtml(r.processId)}</span> ${escapeHtml(r.label)}</td><td>${escapeHtml(r.oferta)}</td><td><b>${escapeHtml(r.requiredCadence)}</b>${r.unsatisfiable ? ' ⚠️' : ''}</td><td>${r.dependentPis.map((p) => escapeHtml(p)).join(', ') || '<span class="sub">—</span>'}</td></tr>`,
-    )
+  const { sources, processes, outputs } = await deps.sourceRegistry!()
+  const outsOf = (pid: string): string[] => outputs.filter((o) => o.processId === pid).map((o) => o.tableRef)
+  const procsOf = (sid: string): ProcessRow[] => processes.filter((p) => p.sourceId === sid)
+  const procCell = (p: ProcessRow): string => {
+    const k = p.engine ? engineKind(p.engine.jobType) : null
+    const motor = !k ? ' <span class="sub">· sin motor (no observable)</span>' : ` <span class="sub">· ${escapeHtml(k.label)}</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
+    return `<div><span class="c">${escapeHtml(p.id)}</span> ${escapeHtml(p.label)}${motor}<div class="sub">${outsOf(p.id).map(escapeHtml).join(', ') || '—'}</div></div>`
+  }
+  const rows = sources
+    .map((s) => {
+      const ps = procsOf(s.id)
+      const cell = ps.length ? ps.map(procCell).join('') : '<span class="sub">—</span>'
+      return `<tr><td><span class="c">${escapeHtml(s.id)}</span> ${escapeHtml(s.label)}</td><td>${escapeHtml(s.oferta)}</td><td>${s.domain ? escapeHtml(s.domain) : '<span class="sub">—</span>'}</td><td>${cell}</td><td class="sub">${escapeHtml(s.connectedBy ?? '—')}</td></tr>`
+    })
     .join('')
   return adminPage(deps, nav,
-    'Mapa de Fuentes e Ingestión',
-    `<p class="sub">Cadencia requerida = el PI más exigente que depende del proceso marca el paso, con piso en la oferta. ⚠️ = alguna demanda exige más fresco que la oferta (insatisfacible).</p>
-     <table><thead><tr><th>Proceso</th><th>Oferta (fuente)</th><th>Cadencia requerida</th><th>PIs que dependen</th></tr></thead>
-     <tbody>${rows || '<tr><td colspan="4" class="sub">Sin procesos de ingestión registrados.</td></tr>'}</tbody></table>`,
+    'Fuentes',
+    `<p class="sub">Registro técnico de fuentes: cada fuente, su <b>oferta</b> (cada cuánto se actualiza), su dominio y los procesos de ingestión que alimenta. La <b>frescura</b> (brecha vs. demanda, corridas, schedule) se gestiona en cada dominio.</p>
+     <table><thead><tr><th>Fuente</th><th>Oferta</th><th>Dominio</th><th>Procesos → entidades</th><th>Conectada por</th></tr></thead>
+     <tbody>${rows || '<tr><td colspan="5" class="sub">Sin fuentes registradas.</td></tr>'}</tbody></table>`,
+  )
+}
+
+/** Tipo de motor que corre el proceso, legible, + si es un Notebook (debe migrar a Spark Job). */
+function engineKind(jobType?: string): { label: string; isNotebook: boolean } {
+  const jt = (jobType ?? '').toLowerCase()
+  if (jt.includes('notebook')) return { label: 'Notebook', isNotebook: true }
+  if (jt === 'sparkjob') return { label: 'Spark Job', isNotebook: false }
+  if (jt === 'pipeline') return { label: 'Pipeline', isNotebook: false }
+  return { label: jobType || 'motor', isNotebook: false }
+}
+
+/** Celda de salud de una entidad: tipo de motor (Notebook/Spark Job) + última corrida + bandera de salud.
+ * Si el proceso corre como Notebook, explicita la alerta de migración a Spark Job. */
+function freshnessHealthCell(r: DomainEntityFreshness): string {
+  if (!r.engine) return '<span class="sub">sin motor</span>'
+  const k = engineKind(r.engineJobType)
+  const kind = `<span class="sub">[${escapeHtml(k.label)}]</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
+  if (r.runs === 'error') return `${kind}<br><span class="sub">motor no respondió</span>`
+  const runs = r.runs ?? []
+  if (!runs.length) return `${kind}<br><span class="sub">sin corridas</span>`
+  const flag = r.health?.failed ? ' · ✕ fallida' : r.health?.missed ? ' · ⚠️ atrasada' : ' · ✓'
+  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>`
+}
+
+/** Faceta FRESCURA de un dominio (página propia): brecha demanda↔oferta por entidad + corridas + schedule
+ * + «aplicar cadencia» (reconciliador). Es la vista entity-anchored del contrato de frescura del dominio. */
+async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, msg?: string): Promise<string> {
+  const title = `${domain.label} · Frescura`
+  const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
+  const rows = await deps.domainFreshness!(domain.id)
+  const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
+  const notebooks = rows.filter((r) => r.engine && engineKind(r.engineJobType).isNotebook).map((r) => r.processLabel || r.processId).filter(Boolean)
+  const migAlert = notebooks.length
+    ? `<p class="msg err">⚠ ${notebooks.length === 1 ? 'Un proceso corre' : `${notebooks.length} procesos corren`} como <b>Notebook</b> (${escapeHtml([...new Set(notebooks)].join(', '))}). Debe migrar a <b>Spark Job</b> (Fabric-native, failure-safe) — ver el patrón de Finanzas.</p>`
+    : ''
+  if (!rows.length) {
+    return adminPage(deps, nav, title, `${feedback}${back}<p class="sub">Este dominio aún no tiene entidades con fuente registrada. Conectá sus fuentes en <a href="/admin/sources">Fuentes</a> (plataforma) y asignales este dominio.</p>`)
+  }
+  const body = rows
+    .map((r) => {
+      const warn = r.unsatisfiable || r.health?.failed || r.health?.missed
+      const demanda = r.tightestDemand ? escapeHtml(r.tightestDemand) : '<span class="sub">sin demanda</span>'
+      const oferta = r.oferta ? escapeHtml(r.oferta) : '<span class="sub">—</span>'
+      const req = r.requiredCadence ? `<b>${escapeHtml(r.requiredCadence)}</b>${r.unsatisfiable ? ' ⚠️' : ''}` : '<span class="sub">—</span>'
+      const sched = !r.engine
+        ? '<span class="sub">sin motor</span>'
+        : r.actualScheduleSeconds != null
+          ? escapeHtml(secondsToDuration(r.actualScheduleSeconds))
+          : '<span class="sub">sin schedule</span>'
+      const drift = r.engine && r.requiredCadenceSeconds != null && r.actualScheduleSeconds !== r.requiredCadenceSeconds
+      const aplicar = drift && deps.applyCadence && r.processId
+        ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
+        : ''
+      const pis = r.dependentPis.map((p) => escapeHtml(p)).join(', ') || '<span class="sub">—</span>'
+      return `<tr${warn ? ' style="color:var(--err)"' : ''}>
+        <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}</td>
+        <td>${demanda}</td><td>${oferta}</td><td>${req}</td>
+        <td>${sched}${aplicar ? `<div>${aplicar}</div>` : ''}</td>
+        <td>${freshnessHealthCell(r)}</td>
+        <td class="sub">${pis}</td></tr>`
+    })
+    .join('')
+  return adminPage(deps, nav, title,
+    `${feedback}${migAlert}${back}
+     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El <b>schedule motor</b> es lo que corre hoy; «Aplicar» lo alinea a la cadencia requerida. La columna «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
+     <table><thead><tr><th>Entidad</th><th>Demanda</th><th>Oferta</th><th>Cadencia req.</th><th>Schedule motor</th><th>Última corrida</th><th>PIs</th></tr></thead>
+     <tbody>${body}</tbody></table>`,
   )
 }
 

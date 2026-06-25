@@ -24,15 +24,27 @@ Los **insumos de un PI se derivan del spec** (las tablas que toca, ya parseables
 registro **tabla → fuente**. El techo se **calcula**, no se declara — sin drift. Editar una demanda que
 viola el techo se **rechaza** con el máximo exigible.
 
-## 3 · Cadencia requerida de un proceso de ingestión
+## 3 · Cadencia requerida — por entidad (demanda) y por proceso (schedule)
 
-> `cadencia_requerida(proceso) = mín(demanda de los PIs que dependen de sus tablas de salida)`, **con
-> piso en la oferta** de su fuente (no se corre más seguido de lo que la fuente se actualiza).
+> `cadencia_requerida(entidad) = mín(demanda de los PIs que consumen esa entidad)`, **con piso en la
+> oferta** de su fuente. Y `cadencia_requerida(proceso) = mín` sobre las entidades que produce — porque
+> el **proceso es la unidad de ejecución**: corre entero, no por entidad.
 
-El **mapa de fuentes** (área de Administración) muestra, por proceso: oferta · cadencia requerida
-derivada · PIs dependientes · marca de **insatisfacible** (alguna demanda exige más fresco que la
-oferta). Es el análisis de brecha que hace explícito "cada cuánto debe correr cada proceso" — antes
-implícito y sin dueño.
+**Entidad = unidad de demanda; proceso = unidad de schedule.** El negocio demanda **entidades** (tablas
+silver que un PI consume); el motor agenda **procesos**. La cadencia requerida de una entidad es la de
+sus consumidores; la de un proceso es el mínimo (más exigente) sobre las entidades que produce.
+
+Dos superficies, dos clases de gestión (ver [`gestion-de-dominio.md`](gestion-de-dominio.md)):
+
+- **Fuentes** (Gestión de **Plataforma**) — el **registro de fuentes**: conexión, **oferta**, salud /
+  último pull. Técnico, transversal. Es el insumo (bronze) de la matemática.
+- **Frescura** (Gestión de **Dominio**, por dominio) — el análisis de brecha **por entidad**: oferta de
+  su fuente · demanda de sus PIs · cadencia requerida · **insatisfacible** (demanda más fina que la
+  oferta) · corridas (linaje) · schedule deseado/real · salud. Hace explícito "cada cuánto debe
+  refrescarse cada entidad" — antes implícito y sin dueño.
+
+La derivación pura vive en `freshness.ts`: `deriveIngestionMap` (por proceso, alimenta el reconciliador)
+y la proyección por entidad (alimenta la vista de dominio).
 
 ## 4 · Ejecución — delegar, no construir scheduler propio
 
@@ -89,8 +101,10 @@ maestra.
 | Validación de techo en la edición de demanda | ✅ |
 | Mapa de fuentes en Administración | ✅ |
 | Observabilidad — **lógica** (clasificar fallidas/faltantes) | ✅ `ingestion-observability.ts` (unit-tested) |
-| Observabilidad — cliente del motor (leer run-history Fabric) + alertas Slack | 🔧 interfaz lista; impl. HTTP + pipelines Fabric pendientes |
+| Observabilidad — cliente del motor (leer run-history Fabric) + vista por entidad | ✅ `fabric-engine.ts` + Frescura por dominio (`admin.ts`) |
+| Observabilidad — **alerta autónoma** (push a Slack ante fallida/faltante) | ✅ monitor periódico config-gated (`VERGIS_FRESHNESS_SLACK_WEBHOOK` + `_POLL_MS`); dedup por transición (`freshnessAlerts`/`diffAlertState`) |
 | Reconciliador — **lógica** (deseado→real, plan set/noop) | ✅ `ingestion-observability.ts` (unit-tested) |
-| Reconciliador — push del schedule al motor (API) | 🔧 interfaz lista; impl. HTTP pendiente |
+| Reconciliador — push del schedule al motor (API) | ✅ `fabric-engine.ts` (`createFabricScheduler`) + «aplicar cadencia» (`admin.ts`) |
+| Engine_ref del proceso (proceso↔item Fabric) + dominio de la fuente (tag) | ✅ `governance-store.ts` (migración idempotente) |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/038`.
