@@ -37,6 +37,9 @@ form.row{display:flex;gap:8px;align-items:center;max-width:560px;flex-wrap:wrap}
 .fld{display:flex;flex-direction:column;gap:5px}.fld span{font-size:12px;color:var(--muted)}.fld input[type=checkbox]{width:18px;height:18px}
 input,select{background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:7px;padding:9px 11px;font-size:14px;font-family:inherit}
 input[readonly]{opacity:.6}
+input[type=file]{padding:5px 8px;font-size:12px;color:var(--muted);max-width:250px;cursor:pointer}
+input[type=file]::file-selector-button{font:inherit;font-weight:600;font-size:12px;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 12px;margin-right:10px;cursor:pointer}
+input[type=file]::file-selector-button:hover{border-color:var(--accent);color:var(--accent)}
 button{cursor:pointer;border:none;border-radius:7px;padding:9px 15px;font-size:13px;font-weight:600;font-family:inherit}
 .add{background:var(--accent);color:#1d2021}.del{background:transparent;color:var(--err);border:1px solid var(--err);padding:5px 11px}
 .edit{margin-right:10px;font-size:13px}.cancel{align-self:center;color:var(--muted)}.actions{display:flex;gap:14px;align-items:center}
