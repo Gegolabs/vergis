@@ -14,7 +14,7 @@ El ambiente de Administración distingue, por **naturaleza** de lo gestionado, d
 | | **Gestión de Plataforma** | **Gestión de Dominio** |
 |---|---|---|
 | Gobierna | la plataforma misma, transversal | un **dominio de datos** concreto |
-| Incluye | Usuarios y Roles · Grupos de Mira · **Fuentes** · Settings | **Ingesta de archivos** · Data Maestra · **Frescura** (por entidad) |
+| Incluye | Usuarios y Roles · Grupos de Mira · **Fuentes** · Settings | Data Maestra · **Frescura** (por entidad, incl. la **carga manual de archivos**) |
 | Quién | **admins** de plataforma | **stewards** del dominio (+ admin como override) |
 | Presentación | **una sola** entrada (`/admin/plataforma`) que adentro despliega todo | **un área por dominio** (`/admin/dominio/<id>`) |
 
@@ -72,6 +72,14 @@ con el cliente de run-history del motor — ver `frescura-oferta-demanda.md`).
 
 La ingesta vive en la gestión de dominio. Es el **espejo** de la publicación de data maestra: ahí el
 dato **sale** (proyección `__replica`), acá el archivo **entra**.
+
+> **La carga manual se pliega en Frescura** (no es una faceta aparte). Subir un archivo es el **gemelo
+> manual** del schedule automático: las dos formas producen una corrida fresca de la misma entidad. Por
+> eso el acto de cargar vive en la fila de la entidad dentro de Frescura («Alimentar»), junto a «Aplicar
+> cadencia». El write-path (staging, slots, validación, land-and-trigger) es idéntico — solo cambió su
+> hogar en la UI: de «ver staleness» y «actuar» en un solo lugar. El `slot` casa con la entidad por el
+> item del motor (`slot.trigger.processRef === engine_ref.itemId`). Los slots sin entidad registrada
+> aparecen en «Otras cargas» (no se pierden).
 
 ### Staging, NUNCA directo a las tablas
 El usuario sube el archivo a Mira y Mira lo aterriza en **`Files/<...>` de un Lakehouse** = **landing
