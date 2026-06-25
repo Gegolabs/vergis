@@ -685,7 +685,7 @@ function freshnessHealthCell(r: DomainEntityFreshness): string {
 
 /** Formulario compacto de carga manual de un slot (mismo write-path que el intake). */
 function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
-  return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:inline-flex;gap:.3rem;align-items:center;flex-wrap:wrap">
+  return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:320px">
        <input type="hidden" name="_csrf" value="${token}">
        <input type="file" name="file" multiple required>
        <button class="add">Subir</button>
