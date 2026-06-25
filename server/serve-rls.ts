@@ -26,6 +26,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
+import { createCachedScanner, watchPaths } from './hot-reload'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { createHmac, randomBytes } from 'node:crypto'
@@ -93,9 +94,14 @@ const SERVING_CAPS = new Set([ENGINE === 'fabric' ? 'execute-sql-dwh' : 'execute
 
 // --- Policy store (data-anchored, autoría por entidad — charter §2c) --------
 const store = new Map<string, PolicyDecl>()
-for (const p of (process.env['VERGIS_POLICIES'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
-  for (const [ds, pol] of parsePolicyStore(parseYaml(readFileSync(resolve(p), 'utf8')) as PolicyStoreDoc)) store.set(ds, pol)
+const POLICY_PATHS = (process.env['VERGIS_POLICIES'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+/** Carga (o recarga) las políticas de `POLICY_PATHS` dentro de `target`. Lanza si algún archivo no parsea. */
+function loadPolicyStoreInto(target: Map<string, PolicyDecl>): void {
+  for (const p of POLICY_PATHS) {
+    for (const [ds, pol] of parsePolicyStore(parseYaml(readFileSync(resolve(p), 'utf8')) as PolicyStoreDoc)) target.set(ds, pol)
+  }
 }
+loadPolicyStoreInto(store)
 
 // --- Productos de Información (specs authz-blind, ruteados por slug) ---------
 // DESCUBRIMIENTO DINÁMICO re-escaneado por request. Solo specs SERVIBLES (todas sus data-capabilities
@@ -115,7 +121,7 @@ function specPaths(): string[] {
   if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => !f.startsWith('.') && /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
   return SPECS_LIST.map((p) => resolve(p))
 }
-function discover(): Report[] {
+function discoverRaw(): Report[] {
   const out: Report[] = []
   for (const p of specPaths()) {
     let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string } }> }
@@ -142,6 +148,13 @@ function discover(): Report[] {
     out.push({ code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath: p, tables })
   }
   return out
+}
+// CACHE del discover (work/045 Fase 1): hoy `discoverRaw` re-lee+re-parsea TODAS las specs y corre el
+// gate; se invocaba por request. Se memoiza y se invalida on-change (watchPaths) con validate-before-swap.
+// El gate de gobernanza no cambia: solo se cachea su salida; `reloadGovernance()` fuerza el rebuild.
+const specReg = createCachedScanner(discoverRaw)
+function discover(): Report[] {
+  return specReg.get()
 }
 /** ¿El consumidor puede acceder a algún dato de este PI? (índice per-consumidor) */
 function canAccess(table: string, claims: ClaimSet): boolean {
@@ -720,3 +733,35 @@ server.listen(PORT, () => {
 // Bootstrap del motor de serving EN SEGUNDO PLANO: el server ya escucha. `healthz` responde 503 hasta
 // `ready`; la Administración (escritura de data maestra) queda disponible sin esperar al motor.
 void bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
+
+// --- Hot-reload SIN restart (work/045) --------------------------------------
+// Editar/añadir una spec ya es live (discover re-lee por request → ahora cacheado + invalidado on-change).
+// El gap real era el policy store (se carga una vez al init): un PI nuevo sobre una tabla gobernada nueva
+// necesitaba restart. `reloadGovernance` re-lee las políticas in-place (validate-before-swap), reconstruye
+// el cache de specs y re-corre el gate de readiness. servingCap NO se reconstruye: un claim nuevo sin
+// inyección queda fail-closed (deny), no fuga — su alta sigue necesitando restart (documentado en work/045).
+const HOT_RELOAD = (process.env['VERGIS_HOT_RELOAD'] ?? '1') !== '0'
+function reloadGovernance(reason: string): void {
+  const next = new Map<string, PolicyDecl>()
+  try {
+    loadPolicyStoreInto(next)
+  } catch (e) {
+    console.error(`[hot-reload] recarga de políticas falló (${reason}); store vigente conservado: ${e instanceof Error ? e.message : String(e)}`)
+    return
+  }
+  store.clear()
+  for (const [k, v] of next) store.set(k, v) // swap in-place tras parsear TODO ok (misma referencia que las clausuras capturaron)
+  const r = specReg.rebuild()
+  console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${specReg.get().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
+  void bootstrapAll().catch((e) => console.error(`[hot-reload] re-bootstrap (${reason}): ${e instanceof Error ? e.message : String(e)}`))
+}
+if (HOT_RELOAD) {
+  const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
+  watchPaths(specTargets, () => {
+    const r = specReg.rebuild()
+    console.log(r.ok ? `[hot-reload] specs recargadas: ${specReg.get().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
+  })
+  if (POLICY_PATHS.length) watchPaths(POLICY_PATHS.map((p) => resolve(p)), () => reloadGovernance('watch:policies'))
+  process.on('SIGHUP', () => reloadGovernance('SIGHUP'))
+  console.log(`[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} (SIGHUP fuerza recarga de gobierno)`)
+}
