@@ -66,6 +66,52 @@ export function reconcilePlan(desiredSeconds: number, actualSeconds: number | nu
   return { action: actualSeconds === desiredSeconds ? 'noop' : 'set', desiredSeconds }
 }
 
+// ─── Alerta autónoma (push ante fallida/faltante, con dedup por transición) ──────────────────────────
+export interface ProcessAlert {
+  processId: string
+  reason: 'failed' | 'missed'
+  /** Antigüedad de la última corrida exitosa (s); null si nunca. */
+  ageSeconds: number | null
+  /** Mensaje de error de la última corrida (solo cuando reason='failed'). */
+  lastError?: string
+}
+
+/** Alertas ACTUALES = procesos cuya salud es fallida/faltante, a partir de su historial + cadencia requerida. */
+export function freshnessAlerts(
+  procs: { processId: string; runs: RunRecord[]; requiredCadenceSeconds: number }[],
+  nowMs: number,
+): ProcessAlert[] {
+  const out: ProcessAlert[] = []
+  for (const p of procs) {
+    const reason = alertReason(classifyProcess(p.runs, p.requiredCadenceSeconds, nowMs))
+    if (!reason) continue
+    const ageSeconds = classifyProcess(p.runs, p.requiredCadenceSeconds, nowMs).ageSeconds
+    const last = [...p.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0]
+    const alert: ProcessAlert = { processId: p.processId, reason, ageSeconds }
+    if (reason === 'failed' && last?.error) alert.lastError = last.error
+    out.push(alert)
+  }
+  return out
+}
+
+/**
+ * Transición de estado de alertas: qué NOTIFICAR (nueva o cambió de razón) y qué se RECUPERÓ, dado el
+ * estado previo. Evita re-notificar lo que ya estaba avisado (el push solo dispara en transiciones).
+ */
+export function diffAlertState(
+  prev: Record<string, 'failed' | 'missed'>,
+  current: ProcessAlert[],
+): { notify: ProcessAlert[]; recovered: string[]; next: Record<string, 'failed' | 'missed'> } {
+  const next: Record<string, 'failed' | 'missed'> = {}
+  const notify: ProcessAlert[] = []
+  for (const a of current) {
+    next[a.processId] = a.reason
+    if (prev[a.processId] !== a.reason) notify.push(a)
+  }
+  const recovered = Object.keys(prev).filter((pid) => !(pid in next))
+  return { notify, recovered, next }
+}
+
 /** Costura con el motor de ejecución (Fabric u otro). La impl. concreta se inyecta. */
 export interface IngestionEngineClient {
   /** Historial de corridas de un proceso (Fabric: *item job instances*). */

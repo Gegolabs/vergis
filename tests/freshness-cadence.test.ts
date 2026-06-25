@@ -87,7 +87,7 @@ describe('freshness · deriveIngestionMap', () => {
 describe('SourceRegistryStore · fuentes, mapeos y ofertas-por-tabla', () => {
   it('registra fuentes/procesos y resuelve ofertas de las tablas de un PI', async () => {
     const g = await SqliteGovernanceStore.open(null, {})
-    await g.upsertSource('buk', 'Buk RRHH', 'P1D', 'cesar@x.com')
+    await g.upsertSource('buk', 'Buk RRHH', 'P1D', { connectedBy: 'cesar@x.com' })
     await g.upsertSource('sap', 'SAP B1', 'PT1H')
     await g.setTableSource('dbo.fct_asistencia', 'buk')
     await g.setTableSource('dbo.fact_saldos', 'sap')

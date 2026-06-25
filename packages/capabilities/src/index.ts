@@ -45,6 +45,8 @@ export { createTokenProvider, SCOPE_ONELAKE, SCOPE_FABRIC } from './aad-token'
 export type { TokenProvider, SpCreds } from './aad-token'
 export { createOneLakeIntake, createFabricJobs, createFabricJobStatus } from './intake-onelake'
 export type { OneLakeIntake, FabricJobs, FabricJobStatus } from './intake-onelake'
+export { createFabricScheduler, createFabricEngineClient } from './fabric-engine'
+export type { FabricScheduler, EngineResolver } from './fabric-engine'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
 export { SqliteGovernanceStore, GovernanceConflict } from './governance-store'
@@ -62,7 +64,7 @@ export type {
 } from './governance-store'
 export { effectiveRole, canOpen, canCollaborate, canGovern, rankOf, higher } from './pi-authz'
 export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } from './pi-authz'
-export type { SourceRow, ProcessRow, SourceRegistryStore } from './governance-store'
+export type { SourceRow, ProcessRow, EngineRef, SourceRegistryStore } from './governance-store'
 export {
   durationToSeconds,
   secondsToDuration,
@@ -70,10 +72,11 @@ export {
   isDemandaWithinCeiling,
   requiredCadenceSeconds,
   deriveIngestionMap,
+  deriveEntityFreshness,
 } from './freshness'
-export type { SourceInfo, ProcessInfo, IngestionMapRow, DeriveMapInput } from './freshness'
-export { classifyProcess, alertReason, reconcilePlan } from './ingestion-observability'
-export type { RunStatus, RunRecord, ProcessHealth, ReconcilePlan, IngestionEngineClient } from './ingestion-observability'
+export type { SourceInfo, ProcessInfo, IngestionMapRow, EntityFreshnessRow, DeriveMapInput } from './freshness'
+export { classifyProcess, alertReason, reconcilePlan, freshnessAlerts, diffAlertState } from './ingestion-observability'
+export type { RunStatus, RunRecord, ProcessHealth, ReconcilePlan, ProcessAlert, IngestionEngineClient } from './ingestion-observability'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'

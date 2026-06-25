@@ -97,25 +97,38 @@ export interface SourceRow {
   label: string
   /** Oferta: cada cuánto se actualiza (duración ISO-8601). */
   oferta: string
+  /** Dominio al que pertenece la fuente (tag) — define el dominio de las entidades que produce. */
+  domain?: string
   connectedBy?: string
+}
+/** Referencia al item del motor que ejecuta un proceso — habilita leer run-history y empujar schedule. */
+export interface EngineRef {
+  /** Workspace del motor (Fabric). */
+  workspaceId: string
+  /** Item que ejecuta el proceso (pipeline / SJD / notebook). */
+  itemId: string
+  /** Tipo de job del motor (Fabric: 'Pipeline' | 'sparkjob' | 'RunNotebook'…). */
+  jobType: string
 }
 export interface ProcessRow {
   id: string
   label: string
   /** Fuente que ingesta este proceso. */
   sourceId: string
+  /** Item del motor que lo corre. Ausente = aún no observable (sin run-history ni schedule). */
+  engine?: EngineRef
 }
 
 /** Registro de fuentes y procesos de ingestión (frente B): oferta + mapeos tabla↔fuente, proceso↔tablas. */
 export interface SourceRegistryStore {
-  upsertSource(id: string, label: string, oferta: string, connectedBy?: string): Promise<void>
+  upsertSource(id: string, label: string, oferta: string, opts?: { domain?: string; connectedBy?: string }): Promise<void>
   listSources(): Promise<SourceRow[]>
   deleteSource(id: string): Promise<void>
   setTableSource(tableRef: string, sourceId: string): Promise<void>
   listTableSources(): Promise<{ tableRef: string; sourceId: string }[]>
   /** Ofertas de las fuentes que producen estas tablas (para el techo de demanda de un PI). */
   ofertasForTables(tableRefs: string[]): Promise<string[]>
-  upsertProcess(id: string, label: string, sourceId: string): Promise<void>
+  upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef): Promise<void>
   listProcesses(): Promise<ProcessRow[]>
   deleteProcess(id: string): Promise<void>
   setProcessOutput(processId: string, tableRef: string): Promise<void>
@@ -172,14 +185,24 @@ const SETTING_DDL = `CREATE TABLE IF NOT EXISTS platform_setting (
   skey TEXT PRIMARY KEY, svalue TEXT, updated_by TEXT, updated_at TEXT
 );`
 const SOURCE_DDL = `CREATE TABLE IF NOT EXISTS source (
-  source_id TEXT PRIMARY KEY, label TEXT NOT NULL, oferta TEXT NOT NULL, connected_by TEXT
+  source_id TEXT PRIMARY KEY, label TEXT NOT NULL, oferta TEXT NOT NULL, domain TEXT, connected_by TEXT
 );`
 const TABLE_SOURCE_DDL = `CREATE TABLE IF NOT EXISTS table_source (
   table_ref TEXT PRIMARY KEY, source_id TEXT NOT NULL
 );`
 const PROCESS_DDL = `CREATE TABLE IF NOT EXISTS ingestion_process (
-  process_id TEXT PRIMARY KEY, label TEXT NOT NULL, source_id TEXT NOT NULL
+  process_id TEXT PRIMARY KEY, label TEXT NOT NULL, source_id TEXT NOT NULL,
+  engine_workspace TEXT, engine_item TEXT, engine_job_type TEXT
 );`
+
+/** Agrega columnas faltantes a una tabla existente (migración idempotente para DBs ya creadas). */
+function ensureColumns(db: SqlDb, table: string, cols: string[]): void {
+  const existing = new Set(selectAll(db, `PRAGMA table_info(${table})`).map((r) => String(r['name'])))
+  for (const c of cols) {
+    const name = c.split(/\s+/)[0]
+    if (!existing.has(name)) db.run(`ALTER TABLE ${table} ADD COLUMN ${c}`)
+  }
+}
 const PROCESS_OUTPUT_DDL = `CREATE TABLE IF NOT EXISTS process_output (
   process_id TEXT NOT NULL, table_ref TEXT NOT NULL, PRIMARY KEY (process_id, table_ref)
 );`
@@ -188,9 +211,9 @@ export interface GovernanceSeed {
   admins?: string[]
   groups?: GroupSeed[]
   /** Registro de fuentes de la instancia (frente B): fuentes, mapeos tabla→fuente, procesos. */
-  sources?: { id: string; label: string; oferta: string; connectedBy?: string }[]
+  sources?: { id: string; label: string; oferta: string; domain?: string; connectedBy?: string }[]
   tableSources?: { tableRef: string; sourceId: string }[]
-  processes?: { id: string; label: string; sourceId: string }[]
+  processes?: { id: string; label: string; sourceId: string; engine?: EngineRef }[]
   processOutputs?: { processId: string; tableRef: string }[]
 }
 
@@ -210,8 +233,10 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(PI_DEMANDA_DDL)
     db.run(SETTING_DDL)
     db.run(SOURCE_DDL)
+    ensureColumns(db, 'source', ['domain TEXT'])
     db.run(TABLE_SOURCE_DDL)
     db.run(PROCESS_DDL)
+    ensureColumns(db, 'ingestion_process', ['engine_workspace TEXT', 'engine_item TEXT', 'engine_job_type TEXT'])
     db.run(PROCESS_OUTPUT_DDL)
     for (const g of seed.groups ?? []) {
       const id = g.id.trim().toLowerCase()
@@ -231,15 +256,23 @@ export class SqliteGovernanceStore implements GovernanceStore {
     for (const s of seed.sources ?? []) {
       durationToSeconds(s.oferta) // valida
       db.run(
-        `INSERT INTO source (source_id, label, oferta, connected_by) VALUES (?,?,?,?)
-         ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta, connected_by=excluded.connected_by`,
-        [s.id.trim().toLowerCase(), s.label, s.oferta.trim().toUpperCase(), s.connectedBy ?? 'config:VERGIS_SOURCES'],
+        `INSERT INTO source (source_id, label, oferta, domain, connected_by) VALUES (?,?,?,?,?)
+         ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
+           domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by`,
+        [s.id.trim().toLowerCase(), s.label, s.oferta.trim().toUpperCase(), s.domain?.trim().toLowerCase() ?? null, s.connectedBy ?? 'config:VERGIS_SOURCES'],
       )
     }
     for (const ts of seed.tableSources ?? [])
       db.run(`INSERT INTO table_source (table_ref, source_id) VALUES (?,?) ON CONFLICT(table_ref) DO UPDATE SET source_id=excluded.source_id`, [ts.tableRef.trim(), ts.sourceId.trim().toLowerCase()])
     for (const p of seed.processes ?? [])
-      db.run(`INSERT INTO ingestion_process (process_id, label, source_id) VALUES (?,?,?) ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id`, [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase()])
+      db.run(
+        `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type) VALUES (?,?,?,?,?,?)
+         ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
+           engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
+           engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
+           engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type)`,
+        [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null],
+      )
     for (const po of seed.processOutputs ?? [])
       db.run(`INSERT INTO process_output (process_id, table_ref) VALUES (?,?) ON CONFLICT(process_id, table_ref) DO NOTHING`, [po.processId.trim().toLowerCase(), po.tableRef.trim()])
     persistSqliteDb(db, file)
@@ -452,22 +485,25 @@ export class SqliteGovernanceStore implements GovernanceStore {
   }
 
   // ── SourceRegistryStore (oferta + mapeos, frente B) ──
-  async upsertSource(id: string, label: string, oferta: string, connectedBy?: string): Promise<void> {
+  async upsertSource(id: string, label: string, oferta: string, opts: { domain?: string; connectedBy?: string } = {}): Promise<void> {
     const sid = id.trim().toLowerCase()
     if (!SLUG_RE.test(sid)) throw new Error(`Id de fuente inválido '${id}'.`)
     durationToSeconds(oferta) // valida la oferta como duración ISO
+    // COALESCE en domain: un upsert sin domain no borra el tag ya registrado.
     this.db.run(
-      `INSERT INTO source (source_id, label, oferta, connected_by) VALUES (?,?,?,?)
-       ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta, connected_by=excluded.connected_by`,
-      [sid, label.trim() || sid, oferta.trim().toUpperCase(), normEmail(connectedBy) || null],
+      `INSERT INTO source (source_id, label, oferta, domain, connected_by) VALUES (?,?,?,?,?)
+       ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
+         domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by`,
+      [sid, label.trim() || sid, oferta.trim().toUpperCase(), opts.domain?.trim().toLowerCase() || null, normEmail(opts.connectedBy) || null],
     )
     this.persist()
   }
   async listSources(): Promise<SourceRow[]> {
-    return selectAll(this.db, `SELECT source_id, label, oferta, connected_by FROM source ORDER BY source_id ASC`).map((r) => ({
+    return selectAll(this.db, `SELECT source_id, label, oferta, domain, connected_by FROM source ORDER BY source_id ASC`).map((r) => ({
       id: String(r['source_id']),
       label: String(r['label']),
       oferta: String(r['oferta']),
+      domain: r['domain'] == null ? undefined : String(r['domain']),
       connectedBy: r['connected_by'] == null ? undefined : String(r['connected_by']),
     }))
   }
@@ -498,22 +534,35 @@ export class SqliteGovernanceStore implements GovernanceStore {
     }
     return out
   }
-  async upsertProcess(id: string, label: string, sourceId: string): Promise<void> {
+  async upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef): Promise<void> {
     const pid = id.trim().toLowerCase()
     if (!SLUG_RE.test(pid)) throw new Error(`Id de proceso inválido '${id}'.`)
+    if (engine && (!engine.workspaceId?.trim() || !engine.itemId?.trim())) {
+      throw new Error(`engine_ref del proceso '${id}' requiere workspaceId e itemId.`)
+    }
+    // COALESCE: un upsert sin engine NO borra el engine ya registrado (preserva el ref existente).
     this.db.run(
-      `INSERT INTO ingestion_process (process_id, label, source_id) VALUES (?,?,?)
-       ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id`,
-      [pid, label.trim() || pid, sourceId.trim().toLowerCase()],
+      `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
+         engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
+         engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
+         engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type)`,
+      [pid, label.trim() || pid, sourceId.trim().toLowerCase(), engine?.workspaceId?.trim() ?? null, engine?.itemId?.trim() ?? null, engine?.jobType?.trim() || (engine ? 'Pipeline' : null)],
     )
     this.persist()
   }
   async listProcesses(): Promise<ProcessRow[]> {
-    return selectAll(this.db, `SELECT process_id, label, source_id FROM ingestion_process ORDER BY process_id ASC`).map((r) => ({
-      id: String(r['process_id']),
-      label: String(r['label']),
-      sourceId: String(r['source_id']),
-    }))
+    return selectAll(this.db, `SELECT process_id, label, source_id, engine_workspace, engine_item, engine_job_type FROM ingestion_process ORDER BY process_id ASC`).map((r) => {
+      const row: ProcessRow = { id: String(r['process_id']), label: String(r['label']), sourceId: String(r['source_id']) }
+      if (r['engine_workspace'] != null && r['engine_item'] != null) {
+        row.engine = {
+          workspaceId: String(r['engine_workspace']),
+          itemId: String(r['engine_item']),
+          jobType: r['engine_job_type'] != null ? String(r['engine_job_type']) : 'Pipeline',
+        }
+      }
+      return row
+    })
   }
   async deleteProcess(id: string): Promise<void> {
     const pid = id.trim().toLowerCase()

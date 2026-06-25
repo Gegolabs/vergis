@@ -14,14 +14,33 @@ El ambiente de Administración distingue, por **naturaleza** de lo gestionado, d
 | | **Gestión de Plataforma** | **Gestión de Dominio** |
 |---|---|---|
 | Gobierna | la plataforma misma, transversal | un **dominio de datos** concreto |
-| Incluye | Usuarios y Roles · Grupos de Mira · Settings | **Ingesta de archivos** · Data Maestra · Fuentes & Frescura |
+| Incluye | Usuarios y Roles · Grupos de Mira · **Fuentes** · Settings | **Ingesta de archivos** · Data Maestra · **Frescura** (por entidad) |
 | Quién | **admins** de plataforma | **stewards** del dominio (+ admin como override) |
 | Presentación | **una sola** entrada (`/admin/plataforma`) que adentro despliega todo | **un área por dominio** (`/admin/dominio/<id>`) |
 
 Es la forma operable del principio **ownership-por-dominio** (data-mesh): la plataforma ofrece gobierno
 transversal, pero **cada dominio se gestiona como dominio**. La mayoría de lo que parece "administración
-general" (la data maestra de un dominio, sus fuentes, su frescura) es en realidad **de dominio**; lo
-verdaderamente transversal es solo acceso (roles/grupos) y settings.
+general" (la data maestra de un dominio, su **frescura**) es en realidad **de dominio**; lo transversal
+es acceso (roles/grupos), **la conexión técnica de fuentes** y settings.
+
+### Fuentes (plataforma) vs Frescura (dominio) — un corte deliberado
+
+Son **dos cosas distintas** y por eso viven en clases de gestión distintas:
+
+- **Fuentes** = *conectar* una fuente y declarar su **oferta** (cada cuánto se actualiza). Es un acto
+  **técnico** (credenciales, endpoint, item del motor que la ingesta) → **Gestión de Plataforma**. Cada
+  fuente lleva su `domain` (tag), pero el **registro/conexión** se administra de forma central.
+- **Frescura** = ¿la **entidad** que mi dominio sirve cumple lo que sus PIs demandan? Es el **contrato**
+  del dominio con sus consumidores → **Gestión de Dominio**, por dominio. Ancla en la **entidad** (tabla
+  de salida silver), no en la conexión.
+
+La "frescura de insumos" (bronze) **no es un concepto aparte**: es la **oferta de la fuente**, que ya
+vive en Fuentes. La Frescura del dominio lee esa oferta y la confronta con la demanda. Las corridas de
+ingestión aparecen como **linaje debajo de cada entidad** (qué corrida produjo su frescura actual).
+
+> **Entidad = unidad de demanda; proceso = unidad de schedule.** Una entidad hereda la cadencia del
+> proceso que la produce; el schedule del proceso = mín de las cadencias requeridas de sus entidades.
+> La vista es **por entidad**; el push del schedule al motor es **por proceso** (roll-up).
 
 ## 2 · Dominio — concepto liviano, tag-based
 
@@ -80,11 +99,13 @@ NO-SQL; la auth de SQL va por `mssql`).
 
 Un dominio posee su producto de datos de punta a punta. Las facetas (✅ vivas / 🔭 previstas):
 
-- **Entrada:** Ingesta ✅ · Registro de fuentes (oferta) ✅ · Mapa de identidad del dominio 🔭.
+- **Entrada:** Ingesta ✅ · Mapa de identidad del dominio 🔭. *(El registro/conexión de fuentes es de
+  **plataforma** — ver el corte arriba; el dominio sólo lee la oferta de sus fuentes.)*
 - **Dato y modelo:** Data Maestra ✅ · Catálogo/diccionario 🔭 · Linaje 🔭 · Calidad de datos 🔭.
 - **Gobierno del dato:** Política RLS del dominio 🔭 (la mitad de Custos que es del dominio) · Stewards ✅.
 - **Productos:** Catálogo de PIs del dominio 🔭 (*el interior* de un PI es per-PI, no dominio).
-- **Observación:** Observabilidad de ingestión ✅ lógica · Frescura ✅ · Cadencia/reconciliador ✅ lógica.
+- **Observación:** **Frescura por entidad** ✅ (brecha demanda↔oferta · corridas · schedule deseado/real ·
+  salud failed/missed). La cadencia se **deriva** y se **empuja** al motor por proceso (reconciliador).
 
 El área de dominio muestra las facetas vivas y un roadmap visible («Próximamente») de las 🔭.
 
@@ -110,7 +131,8 @@ El área de dominio muestra las facetas vivas y un roadmap visible («Próximame
 | Ingesta: contrato de slots + validación | ✅ (`intake.ts`) |
 | Ingesta: write a OneLake (DFS) + run-now Fabric + token AAD por SP | ✅ (`intake-onelake.ts`, `aad-token.ts`) |
 | Parser multipart (subida de archivo) | ✅ (`server/multipart.ts`) |
-| Salud de ingestión en vivo (run-history del motor) | 🔧 seam listo; impl HTTP pendiente |
+| Frescura por entidad + salud en vivo (run-history) + schedule + «aplicar cadencia» | ✅ (`admin.ts` · faceta Frescura del dominio; `fabric-engine.ts`) |
+| Fuentes (registro técnico) en Gestión de Plataforma | ✅ (`admin.ts` · `/admin/sources`) |
 | Facetas 🔭 (catálogo, linaje, calidad, RLS de dominio, identidad, PIs) | previstas (roadmap visible) |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/041`. GH es **contra qué se prueba**,
