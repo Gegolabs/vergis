@@ -38,10 +38,13 @@ export class VergisError extends Error {
   }
 }
 
-/** Capability (Capa 4). Solo se invoca a través del Botler — nunca por bypass. */
+/** Capability (Capa 4). Solo se invoca a través del Botler — nunca por bypass.
+ *  `signal` (opcional, no rompe implementaciones existentes): el Botler lo aborta al vencer el
+ *  timeout del capability-call — la Capability que lo honre cancela su trabajo en curso (fetch,
+ *  query) en vez de seguir ocupando la conexión tras perder el `Promise.race`. */
 export interface Capability {
   readonly name: string
-  execute(params: unknown, identity: IdentityContext): Promise<unknown>
+  execute(params: unknown, identity: IdentityContext, signal?: AbortSignal): Promise<unknown>
 }
 
 /** Handle controlado que el Botler entrega a un Botlet para actuar sin saltarse la gobernanza. */

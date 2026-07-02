@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vega from 'vega'
 import { compile, type TopLevelSpec } from 'vega-lite'
-import type { Capability } from '@vergis/botler'
+import { canonical, type Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS } from './table-runtime'
@@ -643,11 +644,35 @@ function renderInteractiveScript(it: Interactive): string {
 </script>`
 }
 
+/** Cota de cardinalidad de un `distribution`: sobre este nº de barras, el resto se agrupa en
+ *  «(otros)». Sin la cota, la altura `rows.length * 34` no tiene techo: una dimensión con 500
+ *  valores distintos produce un SVG de ~17.000 px (ilegible y caro de compilar). */
+export const CHART_MAX_BARS = 30
+
+// Caché module-level de SVG por hash de (spec del chart + datos): el compile Vega-Lite → Vega →
+// SVG es CARO y DETERMINISTA (mismos datos + misma config ⇒ mismo SVG), así que dos requests con
+// los mismos datos no deben pagar el compile dos veces. LRU pequeño (tope fijo) — los datos varían
+// por consumidor (RLS), pero cachear el SVG es seguro: la clave incluye las filas exactas.
+const CHART_SVG_CACHE = new Map<string, string>()
+const CHART_SVG_CACHE_MAX = 100
+/** Contadores observables del caché de charts (tests/diagnóstico). */
+export const chartCacheStats = { hits: 0, misses: 0 }
+
 async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Promise<string> {
-  const rows = node.rows ?? []
+  let rows = node.rows ?? []
   const dim = node.dimensionField ?? 'dimension'
   const metric = node.metricField ?? 'metric'
   const horizontal = (node.orientation ?? 'horizontal') === 'horizontal'
+  // Cota top-N: se dibujan las CHART_MAX_BARS mayores por métrica y el resto se agrupa en una
+  // barra «(otros)» (suma de la métrica), con nota discreta al pie — el total sigue cuadrando.
+  let note = ''
+  if (rows.length > CHART_MAX_BARS) {
+    const sorted = [...rows].sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0))
+    const rest = sorted.slice(CHART_MAX_BARS)
+    const restSum = rest.reduce((s, r) => s + (Number(r[metric]) || 0), 0)
+    note = `<div class="chart-note" style="font-size:11px;color:var(--fg-dim,#94a3b8);margin-top:4px">Top ${CHART_MAX_BARS} de ${rows.length} valores — el resto agrupado en «(otros)»</div>`
+    rows = [...sorted.slice(0, CHART_MAX_BARS), { [dim]: '(otros)', [metric]: restSum }]
+  }
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
@@ -670,20 +695,44 @@ async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Prom
       },
     },
   }
-  const svg = await vegaLiteToSvg(spec)
-  return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
+  // Clave = hash de la serialización canónica del spec Vega-Lite completo (incluye datos, ejes,
+  // orientación y tokens del theme ya resueltos) → cualquier variación produce clave distinta.
+  const key = createHash('sha256').update(canonical(spec)).digest('hex')
+  let svg = CHART_SVG_CACHE.get(key)
+  if (svg !== undefined) {
+    chartCacheStats.hits += 1
+    // LRU: re-insertar al usar; el Map preserva orden de inserción → el primero es el menos usado.
+    CHART_SVG_CACHE.delete(key)
+    CHART_SVG_CACHE.set(key, svg)
+  } else {
+    chartCacheStats.misses += 1
+    svg = await vegaLiteToSvg(spec)
+    CHART_SVG_CACHE.set(key, svg)
+    if (CHART_SVG_CACHE.size > CHART_SVG_CACHE_MAX) {
+      const oldest = CHART_SVG_CACHE.keys().next().value
+      if (oldest !== undefined) CHART_SVG_CACHE.delete(oldest)
+    }
+  }
+  return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
+
+/** Umbral de filas del tbody server-rendered de una tabla INTERACTIVA. El tbody servido es solo el
+ *  primer paint (el runtime toma control con el JSON embebido, que es la fuente y va SIEMPRE
+ *  completo): sobre el umbral, embeber todas las filas DOS veces (HTML + JSON) ≈ 2× payload y doble
+ *  trabajo de DOM en el arranque — se sirven solo las primeras N y el runtime completa al arrancar. */
+export const TABLE_SSR_MAX_ROWS = 500
 
 function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): string {
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const drills = node.drills ?? []
   const ranges = colorscaleRanges(cols, rows)
-  const tbody = renderTableBody(cols, rows, ranges, drills, carry)
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
 
   // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
   if (node.interactive === false) {
+    // Estática: sin runtime que complete después → el tbody lleva TODAS las filas.
+    const tbody = renderTableBody(cols, rows, ranges, drills, carry)
     const head =
       cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
       (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
@@ -692,7 +741,9 @@ function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): st
       `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
     )
   }
-  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry)
+  const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
+  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry)
+  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
 }
 
 /** href server-side de una acción de drill, preservando el carry (ctx) y agregando las claves `by`. */
@@ -750,6 +801,7 @@ function renderInteractiveTable(
   titleHtml: string,
   drills: Drill[] = [],
   carry: Record<string, string> = {},
+  ssrComplete = true,
 ): string {
   // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
   const colMeta = cols.map((c) => ({
@@ -795,7 +847,9 @@ function renderInteractiveTable(
   // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
   // `drills` (si la tabla las tiene): el runtime renderiza la columna de acciones (1 link por drill);
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
-  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry }).replace(/</g, '\\u003c')
+  // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
+  //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
+  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry, ssrComplete }).replace(/</g, '\\u003c')
 
   return (
     `<section class="table vtable">${titleHtml}${chips}` +

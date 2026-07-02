@@ -4,7 +4,7 @@ import { renderHtmlPiece } from './render-html-piece'
 import { staticData } from './static-data'
 
 export { staticData } from './static-data'
-export { renderHtmlPiece } from './render-html-piece'
+export { renderHtmlPiece, TABLE_SSR_MAX_ROWS, CHART_MAX_BARS, chartCacheStats } from './render-html-piece'
 export type { ResolvedNode, TableColumn } from './render-html-piece'
 export {
   TABLE_RUNTIME_SOURCE,

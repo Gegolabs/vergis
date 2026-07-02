@@ -36,6 +36,8 @@ export interface ChQueryRequest {
   sql: string
   /** Custom settings request-scoped (`vergis_claim_*`) calculados desde los claims. */
   settings: Record<string, string>
+  /** Señal de cancelación del Botler (timeout): el transporte la honra abortando el fetch. */
+  signal?: AbortSignal
 }
 
 export interface ChQueryResult {
@@ -68,6 +70,9 @@ export const fetchChTransport: ChTransport = async (req) => {
       'Content-Type': 'text/plain; charset=utf-8',
     },
     body: req.sql,
+    // Cancelación (timeout del Botler): sin esto la query perdedora del race seguiría corriendo
+    // y ocupando la conexión HTTP tras el timeout.
+    signal: req.signal,
   })
   const text = await res.text()
   if (!res.ok) {
@@ -98,7 +103,7 @@ export function createExecuteSqlClickHouse(
 
   return {
     name,
-    async execute(params: unknown, identity: IdentityContext): Promise<ChQueryResult> {
+    async execute(params: unknown, identity: IdentityContext, signal?: AbortSignal): Promise<ChQueryResult> {
       const p = (params ?? {}) as ChParams
       if (!p.sql) throw new Error(`${name}: falta params.sql`)
       // Inyección request-time: settings = claims del consumidor. `opts.injections` (la UNIÓN de
@@ -116,6 +121,7 @@ export function createExecuteSqlClickHouse(
         database: profile.database,
         sql: p.sql,
         settings,
+        signal, // el timeout del Botler cancela el fetch en curso
       })
     },
   }

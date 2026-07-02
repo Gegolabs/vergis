@@ -137,20 +137,24 @@ export class Botler {
     this.log.append({ type: 'policy-check', capability: ref, identity: identity.agent, decision: 'allow' })
     const timeoutMs = this.config.capabilityTimeoutMs ?? DEFAULT_CAPABILITY_TIMEOUT_MS
     let timer: ReturnType<typeof setTimeout> | undefined
+    // El `Promise.race` NO cancela a la perdedora: sin señal, una query colgada seguiría ocupando
+    // la conexión tras el timeout. El Botler pasa un AbortSignal y lo aborta al vencer — las
+    // Capabilities que lo honran (fetch/query) sueltan el recurso.
+    const aborter = new AbortController()
     try {
       const data = await Promise.race([
-        cap.execute(params, identity),
+        cap.execute(params, identity, aborter.signal),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            reject(
-              new VergisError({
-                error: 'botler/capability-call',
-                code: 'capability-timeout',
-                path: ref,
-                message: `Capability '${ref}' superó el timeout de ${timeoutMs} ms.`,
-                remediation: 'Revisar la Capability o ajustar capabilityTimeoutMs del Botler.',
-              }),
-            )
+            const err = new VergisError({
+              error: 'botler/capability-call',
+              code: 'capability-timeout',
+              path: ref,
+              message: `Capability '${ref}' superó el timeout de ${timeoutMs} ms.`,
+              remediation: 'Revisar la Capability o ajustar capabilityTimeoutMs del Botler.',
+            })
+            aborter.abort(err) // cancela el trabajo en curso de la Capability perdedora
+            reject(err)
           }, timeoutMs)
           timer.unref?.()
         }),
