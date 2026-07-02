@@ -33,7 +33,7 @@ import { resolve, join } from 'node:path'
 import { createHmac, randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
+import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, withResultCache, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
 import { parseSpec, type AnnotationContext } from '@vergis/mira'
 import {
   bootstrapClickHouse,
@@ -287,6 +287,23 @@ if (ENGINE === 'clickhouse') {
   }
 }
 
+// Caché de RESULTADOS de datos por consumidor (work/052 §2.3) — OPT-IN por instancia: solo si
+// VERGIS_DATA_CACHE_TTL_MS > 0 se envuelve el conector con `withResultCache` (default 0 = sin caché,
+// cada render dispara las queries reales). La clave incluye params + user + claims normalizados →
+// dos consumidores JAMÁS comparten entrada (la RLS no se relaja: un hit devuelve solo lo que esa
+// misma identidad ya obtuvo del motor enforcing). El bootstrap NO pasa por acá (usa su handle directo).
+const DATA_CACHE_TTL_MS = Number(process.env['VERGIS_DATA_CACHE_TTL_MS'] ?? 0)
+if (DATA_CACHE_TTL_MS > 0) {
+  servingCap = withResultCache(servingCap, { ttlMs: DATA_CACHE_TTL_MS })
+  console.log(`[vergis-rls] data-cache por consumidor activo (TTL ${DATA_CACHE_TTL_MS} ms)`)
+}
+
+// Tope de filas materializables por `interactions.filters` (work/052 §2.5). Mira no lee env: se
+// inyecta por runSpec. Sin definir → default de Mira (5000).
+const INTERACTIVE_MAX_ROWS = process.env['VERGIS_INTERACTIVE_MAX_ROWS']
+  ? Number(process.env['VERGIS_INTERACTIVE_MAX_ROWS'])
+  : undefined
+
 // Mapeo claim→cabecera CONFIGURABLE: cada instancia trae sus claims en sus cabeceras (el criterio
 // de la política decide qué claims importan: `groups`, `viewer_area`, etc.). Formato:
 // VERGIS_GATE_CLAIMS="viewer_area:x-forwarded-area,groups:x-forwarded-groups" (default: groups).
@@ -396,6 +413,7 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
     annotations,
     page: nav.page,
     ctx: nav.ctx,
+    interactiveMaxRows: INTERACTIVE_MAX_ROWS,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out.html ?? ''
@@ -666,7 +684,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     const mdStore = useFabricStore
       ? createDwhMasterDataStore(connections)
       : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
-    const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`)
+    // Audit log LONGEVO (vive todo el proceso): modo file-only (retain:false) — append() no acumula
+    // en RAM (crecía sin cota, una entrada por evento admin); la fuente de verdad es el archivo.
+    const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`, undefined, { retain: false })
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.

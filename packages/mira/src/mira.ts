@@ -12,7 +12,18 @@ import { resolveTheme } from './theme-config'
 
 export interface MiraOptions {
   schema: object
+  /**
+   * Tope de filas que `interactions.filters` puede MATERIALIZAR en el HTML (la suma de todos los
+   * datasets embebidos para el filtrado client-side). Superado, el render sale SIN facetas de
+   * dashboard (la tabla sigue interactiva por su propio runtime) y se loguea el tamaño — mejor un
+   * dashboard sin facetas que un HTML de decenas de MB. Lo inyecta el llamador (Mira no lee env;
+   * el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS). Default 5000.
+   */
+  interactiveMaxRows?: number
 }
+
+/** Default del tope de materialización client-side (ver MiraOptions.interactiveMaxRows). */
+export const DEFAULT_INTERACTIVE_MAX_ROWS = 5000
 
 export interface MiraOutput {
   id: string
@@ -164,16 +175,34 @@ export class MiraBotlet implements Botlet {
         })
       }
       if (onStale === 'agentic_fallback') {
-        throw new VergisError({
-          error: 'mira/quality',
-          code: 'stale-agentic-fallback',
-          message: `Datos stale (al ${watermarkLabel}) y política on_stale=agentic_fallback.`,
-        })
-      }
-      // warn_and_show / show_last_valid (sin caché en v0.1) → banner + continuar
-      banner = {
-        type: 'banner',
-        content: `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}).`,
+        // PROVISIONAL: `agentic_fallback` promete que la Capa 2 (cognición) regenere el dato stale;
+        // esa capa aún no está construida. Lanzar error acá mataba el PI por una promesa no
+        // implementada — mientras la Capa 2 no exista, se degrada a warn_and_show con log explícito
+        // y un banner que lo dice. Cuando la cognición llegue, este branch vuelve a escalar al Botler.
+        host.log({ type: 'mira-agentic-fallback-degraded', botletId: this.id, watermark: watermarkLabel })
+        banner = {
+          type: 'banner',
+          content:
+            `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}). ` +
+            `La regeneración cognitiva (agentic_fallback) aún no está disponible; se muestran los datos con este aviso.`,
+        }
+      } else if (onStale === 'show_last_valid') {
+        // `show_last_valid` REAL (servir la última salida VÁLIDA en vez de la stale) requiere el
+        // data-cache por-consumidor habilitado en la instancia (withResultCache del Botler,
+        // VERGIS_DATA_CACHE_TTL_MS > 0), que retiene la última salida por (params, identidad). Mira
+        // NO se acopla al wrapper: como el dato es data-anchored, «lo último válido» que el motor
+        // devuelve ES el dato al watermark — se muestra con banner explícito de a qué fecha
+        // corresponde lo mostrado.
+        banner = {
+          type: 'banner',
+          content: `⚠ Mostrando datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}).`,
+        }
+      } else {
+        // warn_and_show (default) → banner + continuar
+        banner = {
+          type: 'banner',
+          content: `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}).`,
+        }
       }
     } else if (freshness.checked) {
       host.log({ type: 'mira-freshness', botletId: this.id, stale: false, watermark: freshness.watermark?.toISOString().slice(0, 10) })
@@ -195,10 +224,20 @@ export class MiraBotlet implements Botlet {
     // En multi-vista, un filtro solo aplica a la página cuyo dataset se recuperó.
     const filters = (spec.interactions?.filters ?? []).filter((f) => !isMulti || f.dataset in results)
     if (filters.length > 0) {
-      const datasets: Record<string, Record<string, unknown>[]> = {}
-      for (const [name, res] of Object.entries(results)) datasets[name] = res.rows
-      interactive = { datasets, filters }
-      host.log({ type: 'mira-interaction', botletId: this.id, filters: filters.map((f) => f.field) })
+      // Tope de materialización: los datasets se embeben COMPLETOS en el HTML para el filtrado
+      // client-side. Sin cota, un dataset grande produce un documento de decenas de MB. Superado el
+      // tope, NO se materializa (render sin facetas; la tabla sigue interactiva por su runtime).
+      const maxRows = this.opts.interactiveMaxRows ?? DEFAULT_INTERACTIVE_MAX_ROWS
+      let totalRows = 0
+      for (const res of Object.values(results)) totalRows += res.rows.length
+      if (totalRows > maxRows) {
+        host.log({ type: 'mira-interaction-skipped', botletId: this.id, rows: totalRows, max: maxRows })
+      } else {
+        const datasets: Record<string, Record<string, unknown>[]> = {}
+        for (const [name, res] of Object.entries(results)) datasets[name] = res.rows
+        interactive = { datasets, filters }
+        host.log({ type: 'mira-interaction', botletId: this.id, filters: filters.map((f) => f.field) })
+      }
     }
     const renders = spec.delivery?.render ?? [{ format: 'html', target: 'web' }]
     let html = ''

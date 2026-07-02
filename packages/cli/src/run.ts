@@ -74,6 +74,9 @@ export interface RunOptions {
   /** Contexto del drill-through (campo→valor). Viene de la query `?ctx.<campo>=`. Filtro adicional
    *  bindeado dentro de las filas que la RLS ya autoriza (acota, nunca amplía). */
   ctx?: Record<string, string>
+  /** Tope de filas materializables por `interactions.filters` (ver MiraOptions.interactiveMaxRows).
+   *  Mira no lee env: el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS y lo inyecta acá. */
+  interactiveMaxRows?: number
 }
 
 export interface RunOutcome {
@@ -133,7 +136,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
 
   // Se construye desde el spec YA parseado (cacheado): validate() corre por request (depende del
   // catálogo de capabilities), pero el parseo de texto/YAML y del schema no se repiten.
-  const mira = new MiraBotlet(spec, { schema })
+  const mira = new MiraBotlet(spec, { schema, interactiveMaxRows: options.interactiveMaxRows })
   botler.register(mira, options.specPath)
 
   const result = await botler.invoke(mira.id, {

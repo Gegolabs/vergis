@@ -284,6 +284,7 @@ function vtBootstrap(root){
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
   var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
+  var rendered = false; // ¿render() ya corrió? (p.ej. una vista pinneada aplicada vía applySnapshot)
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
   var badge = document.getElementById('vergis-count'); // uña/pestaña de la gaveta común
@@ -500,6 +501,7 @@ function vtBootstrap(root){
     }).join('');
   }
   function render(){
+    rendered = true;
     var rc = renderCols(), ncols = rc.length + nactions;
     var view = vtApply(rows, state);
     if(state.groupLevels.length){
@@ -524,7 +526,21 @@ function vtBootstrap(root){
     }
     if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
   }
-  render();
+  // Arranque: si una vista pinneada ya aplicó (applySnapshot → render), no hay nada que hacer.
+  // Si el tbody servido ya trae TODAS las filas (ssrComplete) y el estado inicial es vacío (sin
+  // orden/búsqueda/facetas/grupos) — y sin columna de anotación, cuya visibilidad la resuelve
+  // render() — el render() inicial reconstruiría un tbody IDÉNTICO al servido: se salta, pintando
+  // solo el conteo (que de otro modo solo pinta render()). En cualquier otro caso, render() normal.
+  var stateEmpty = !state.sort.field && !state.globalSearch && !state.groupLevels.length;
+  for(var fk in state.facets){ if((state.facets[fk]||[]).length) stateEmpty=false; }
+  if(!rendered){
+    // Con 0 filas NO se salta: render() pinta la fila «Sin resultados» (el tbody servido va vacío).
+    if(payload.ssrComplete && stateEmpty && !ann && rows.length){
+      if(countEl) countEl.textContent = rows.length + (rows.length===1?' fila':' filas');
+    } else {
+      render();
+    }
+  }
 }
 Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
 `
