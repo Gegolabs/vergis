@@ -359,7 +359,10 @@ function uniqueDatasets(piece: Record<string, unknown>): string[] {
 function watermarkDatasetOf(spec: MiraSpec): string | undefined {
   const f = (spec.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
   if (!f || f['source_watermark'] === 'ignore') return undefined
-  const wf = String(f['watermark_field'] ?? '')
+  // `resolvePath` acepta el prefijo `data.` en watermark_field — quitarlo acá también, o un spec
+  // con `watermark_field: data.<ds>.<campo>` resolvería 'data' como dataset y el fix no aplicaría.
+  const raw = String(f['watermark_field'] ?? '')
+  const wf = raw.startsWith('data.') ? raw.slice('data.'.length) : raw
   return wf ? wf.split('.')[0] || undefined : undefined
 }
 
