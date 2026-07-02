@@ -427,7 +427,7 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
   }
   const comparison =
     node.comparison != null
-      ? ` <span class="kpi-comparison">${escapeHtml(node.comparisonLabel ?? '')} ${escapeHtml(formatValue(node.comparison, 'int_0'))}</span>`
+      ? ` <span class="kpi-comparison">${escapeHtml(node.comparisonLabel ?? '')} ${escapeHtml(formatValue(node.comparison, node.format))}</span>`
       : ''
   const sizeCls = node.size ? ` kpi-${escapeHtml(node.size)}` : ''
   return (
@@ -614,7 +614,7 @@ function renderInteractiveScript(it: Interactive): string {
       el.querySelector('.kpi-value').textContent = fmt(agg(filteredRowsFor(a.dataset), a), el.getAttribute('data-format'));
       var ca = el.getAttribute('data-comparison-agg');
       if (ca){ var cab = JSON.parse(ca); var cmp = el.querySelector('.kpi-comparison');
-        if (cmp) cmp.textContent = (el.getAttribute('data-comparison-label')||'') + ' ' + fmt(agg(filteredRowsFor(cab.dataset || a.dataset), cab), 'int_0'); }
+        if (cmp) cmp.textContent = (el.getAttribute('data-comparison-label')||'') + ' ' + fmt(agg(filteredRowsFor(cab.dataset || a.dataset), cab), el.getAttribute('data-format')); }
     });
     document.querySelectorAll('[data-semaforo]').forEach(function(el){
       var c = JSON.parse(el.getAttribute('data-semaforo'));
@@ -809,8 +809,17 @@ function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]):
   const ranges: Record<string, { min: number; max: number }> = {}
   for (const c of cols) {
     if (!c.colorscale) continue
-    const nums = rows.map((r) => Number(r[c.field])).filter((n) => !Number.isNaN(n))
-    ranges[c.field] = { min: Math.min(...nums), max: Math.max(...nums) }
+    // Loop en vez de `Math.min(...nums)` / `Math.max(...nums)`: el spread de un arreglo de cientos de
+    // miles de filas revienta el stack (RangeError: too many arguments). El loop es O(n) sin ese límite.
+    let min = Infinity
+    let max = -Infinity
+    for (const r of rows) {
+      const n = Number(r[c.field])
+      if (Number.isNaN(n)) continue
+      if (n < min) min = n
+      if (n > max) max = n
+    }
+    ranges[c.field] = { min, max }
   }
   return ranges
 }

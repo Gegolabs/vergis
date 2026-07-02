@@ -27,6 +27,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createCachedScanner, watchPaths } from './hot-reload'
+import { tablesOf } from './sql-tables'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { createHmac, randomBytes } from 'node:crypto'
@@ -124,9 +125,6 @@ if (!SPECS_DIR && SPECS_LIST.length === 0) throw new Error('Falta VERGIS_SPECS_D
 
 function slugify(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-}
-function tablesOf(sql: string): string[] {
-  return [...sql.matchAll(/\b(?:from|join)\s+([a-z_][\w]*\.[a-z_][\w]*)/gi)].map((m) => m[1])
 }
 function specPaths(): string[] {
   if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => !f.startsWith('.') && /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
@@ -339,7 +337,16 @@ let piConfig: PiConfigHandler | null = null
 let piAclEnabled = false
 let piOwners: Record<string, string> = {}
 let defaultCollabGroups: string[] = []
+// Secreto HMAC de los tokens de anotación. Sin `VERGIS_ANNOTATION_SECRET` se genera uno aleatorio por
+// arranque: sirve para dev, pero en producción los tokens de las páginas ya abiertas NO sobreviven un
+// restart (la escritura de anotación falla hasta recargar) y varias réplicas no comparten la firma.
 const ANN_SECRET = process.env['VERGIS_ANNOTATION_SECRET'] ?? randomBytes(32).toString('hex')
+if (!process.env['VERGIS_ANNOTATION_SECRET']) {
+  console.warn(
+    '[vergis-rls] VERGIS_ANNOTATION_SECRET no definido: se generó un secreto aleatorio. Los tokens de ' +
+      'anotación NO sobreviven un restart ni se comparten entre réplicas. Define el env en producción.',
+  )
+}
 function annSign(piId: string, email: string, key: string): string {
   return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
 }

@@ -113,19 +113,37 @@ export class MiraBotlet implements Botlet {
       controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value })
     }
 
-    for (const name of datasetNames) {
-      if (results[name]) continue // ya recuperado (p.ej. fuente de un control)
-      const ds = spec.data[name]
-      if (!ds) continue
-      const missing: string[] = []
-      const params = isMulti ? applyCtx(ds.params, ctxValues, missing) : ds.params
-      if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: name, params: missing })
-      host.log({ type: 'mira-retrieve', botletId: this.id, dataset: name, capability: ds.capability })
-      const out = await host.capabilityCall(ds.capability, params, identity)
-      results[name] = { rows: expectRows(name, ds.capability, out) }
-      // 4a · Calidad: chequeo de shape (freshness se evalúa tras recuperar todo)
-      this.checkShape(name, ds, results[name], host)
+    // Frescura en multi-vista: `checkFreshness` resuelve el watermark contra `results`. En multi-vista
+    // solo se recuperan los datasets de la página activa, así que si el `watermark_field` apunta a un
+    // dataset de OTRA página, quedaría sin resolver → veredicto "fresco" en silencio (freshness.ts).
+    // Lo incluimos en la recuperación para que la garantía de frescura proteja TODA página, no solo la
+    // que casualmente carga el dataset del watermark. Es una query pequeña.
+    const wmDataset = watermarkDatasetOf(spec)
+    if (wmDataset && spec.data[wmDataset] && !datasetNames.includes(wmDataset)) {
+      datasetNames = [...datasetNames, wmDataset]
     }
+
+    // Recuperación de los datasets de página EN PARALELO: no hay dependencias entre ellos (los
+    // controles ya resolvieron `ctxValues` arriba, secuencialmente porque un control puede depender del
+    // valor del anterior). El `checkShape` se mantiene por-dataset tras su retrieval; los logs pueden
+    // intercalarse. Se saltan los ya recuperados (p.ej. fuente de un control).
+    const pending = datasetNames.filter((name) => !results[name] && spec.data[name])
+    await Promise.all(
+      pending.map(async (name) => {
+        const ds = spec.data[name]!
+        const missing: string[] = []
+        // `applyCtx` SIEMPRE: es no-op cuando el sql no contiene `:ctx.` (devuelve los params intactos).
+        // Antes solo se aplicaba en multi-vista, y un PI de UNA vista con `controls` dejaba el `:ctx.<id>`
+        // literal en el sql (falla en el motor) o hacía del control un no-op silencioso.
+        const params = applyCtx(ds.params, ctxValues, missing)
+        if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: name, params: missing })
+        host.log({ type: 'mira-retrieve', botletId: this.id, dataset: name, capability: ds.capability })
+        const out = await host.capabilityCall(ds.capability, params, identity)
+        results[name] = { rows: expectRows(name, ds.capability, out) }
+        // 4a · Calidad: chequeo de shape (freshness se evalúa tras recuperar todo)
+        this.checkShape(name, ds, results[name], host)
+      }),
+    )
 
     // 4 · freshness (doc 2 §5.3) — degradación según quality.degradation.on_stale
     const freshness = checkFreshness(spec, results, Date.now())
@@ -215,6 +233,18 @@ export class MiraBotlet implements Botlet {
       )) as { html: string }
       html = rendered.html
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
+    }
+
+    // Backstop: si se declararon renders pero NINGUNO produjo HTML (p.ej. `render: [{format: pdf}]` o
+    // un typo como `htlm`), el server respondería 200 con cuerpo vacío = página en blanco silenciosa.
+    // Fallamos ruidoso (la validación ya exige ≥1 render html; esto cubre el resto del pipeline).
+    if (html === '' && renders.length > 0) {
+      throw new VergisError({
+        error: 'mira/render',
+        code: 'no-html-output',
+        message: `Ningún render de delivery.render produjo HTML (formatos: ${renders.map((r) => r.format).join(', ')}).`,
+        remediation: 'Declarar al menos un render con format: html (el único soportado hoy).',
+      })
     }
 
     // 6 · Distribución
@@ -319,6 +349,18 @@ function normalizeCtx(raw: unknown): Record<string, string> {
 /** Datasets (sin repetir) que una pieza referencia vía `data.<dataset>...`. */
 function uniqueDatasets(piece: Record<string, unknown>): string[] {
   return [...new Set(collectDataRefs(piece).map((r) => r.split('.')[0]))]
+}
+
+/**
+ * Dataset del que cuelga el `watermark_field` de la frescura (`quality.freshness`), o `undefined` si
+ * no hay frescura declarada o está en `ignore`. Se recupera siempre para que `checkFreshness` resuelva
+ * el watermark aun cuando el dataset viva en otra página (multi-vista).
+ */
+function watermarkDatasetOf(spec: MiraSpec): string | undefined {
+  const f = (spec.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
+  if (!f || f['source_watermark'] === 'ignore') return undefined
+  const wf = String(f['watermark_field'] ?? '')
+  return wf ? wf.split('.')[0] || undefined : undefined
 }
 
 /**
