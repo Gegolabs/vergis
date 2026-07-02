@@ -27,7 +27,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createCachedScanner, watchPaths } from './hot-reload'
-import { tablesOf } from './sql-tables'
+import { analyzeSqlTables } from './sql-tables'
+import { navFromUrl, type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { createHmac, randomBytes } from 'node:crypto'
@@ -41,6 +42,7 @@ import {
   createExecuteSqlClickHouse,
   createExecuteSqlDwh,
   renderHtmlPiece,
+  renderCsvPiece,
   publicarArtefacto,
   openAnnotationStore,
   parseMasterDataConfig,
@@ -141,12 +143,22 @@ function discoverRaw(): Report[] {
       console.warn(`[vergis-rls] '${p}' no servible bajo engine=${ENGINE} (capability fuera del catálogo: ${caps.join(',')}) — omitido`)
       continue
     }
-    const tables = [...new Set(Object.values(data).flatMap((d) => tablesOf(d.params?.sql ?? '')))]
+    const analyses = Object.values(data).map((d) => analyzeSqlTables(d.params?.sql ?? ''))
+    const tables = [...new Set(analyses.flatMap((a) => a.tables))]
+    const unqualified = [...new Set(analyses.flatMap((a) => a.unqualified))]
     // GATE DE GOBERNANZA (fail-closed, charter §2b) — crítico en push-down: en Fabric una tabla SIN
     // política devuelve TODAS sus filas (el motor no niega por omisión) → un PI que lea una tabla
     // no-gobernada FUGA. No se sirve un PI a menos que CADA tabla que toca tenga política (rls o
     // grant:all). En clickhouse la seguridad la da el bootstrap (solo existen tablas gobernadas).
     if (ENGINE === 'fabric') {
+      // Referencias de UNA sola parte (`FROM dim_area`): el policy store se indexa por schema.tabla →
+      // una single-part NO es verificable contra política. Antes escapaban a la extracción y el PI se
+      // servía SIN verificarlas (fuga silenciosa por estilo de escritura del SQL); ahora se tratan
+      // como no-gobernables y el PI se omite (fail-closed). Escribir la referencia con esquema.
+      if (unqualified.length > 0) {
+        console.warn(`[vergis-rls] '${p}' no servible: referencia tabla(s) sin esquema (no verificables contra el policy store): ${unqualified.join(', ')} — omitido. Calificarlas como schema.tabla.`)
+        continue
+      }
       const ungoverned = tables.filter((t) => !store.has(t))
       if (ungoverned.length > 0) {
         console.warn(`[vergis-rls] '${p}' no servible: lee tabla(s) sin política → fuga en push-down: ${ungoverned.join(', ')} — omitido`)
@@ -368,22 +380,8 @@ function annSign(piId: string, email: string, key: string): string {
   return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
 }
 
-/** Navegación multi-vista de la query: `?page=<id>` + `?ctx.<campo>=<valor>` (drill-through). */
-interface NavQuery {
-  page?: string
-  ctx?: Record<string, string>
-}
-/** Extrae page/ctx de la URL. El `ctx` se bindea como parámetro (injection-safe) aguas abajo. */
-function navFromUrl(rawUrl: string): NavQuery {
-  const u = new URL(rawUrl, 'http://localhost')
-  const page = u.searchParams.get('page') ?? undefined
-  const ctx: Record<string, string> = {}
-  for (const [k, v] of u.searchParams) {
-    const m = k.match(/^ctx\.(.+)$/)
-    if (m) ctx[m[1]] = v
-  }
-  return { page, ctx: Object.keys(ctx).length ? ctx : undefined }
-}
+// La navegación multi-vista (`?page=` + `?ctx.*`, con acumulación de repetidos para multi-select)
+// vive en ./nav.ts — extraída para testearla sin los efectos de módulo de este archivo.
 
 async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery = {}): Promise<string> {
   const identity = identityFor(headers)
@@ -409,7 +407,7 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
     // HARDENING (charter §2b): catálogo de serving = solo el conector enforcing + render/publish.
     // SIN starters (no `static-data` ni vías crudas) → imposible servir dato no-gobernado.
     registerStarters: false,
-    extraCapabilities: [servingCap, renderHtmlPiece, publicarArtefacto],
+    extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
     annotations,
     page: nav.page,
     ctx: nav.ctx,

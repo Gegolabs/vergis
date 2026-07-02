@@ -8,6 +8,9 @@ export interface MiraDataset {
   capability: string
   params?: Record<string, unknown>
   shape?: { type?: string; fields?: Record<string, string> }
+  /** Frescura POR-DATASET (además de la global de quality.freshness): `watermark_field` es un
+   *  CAMPO del propio dataset; `max_age` una duración ISO 8601 soportada. Ver freshness.ts. */
+  freshness?: { watermark_field?: string; max_age?: string; timezone?: string }
 }
 
 /** Una vista (página) de un PI multi-vista. Cada página es una pieza con su propio contexto. */
@@ -105,7 +108,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // Páginas (multi-vista): validar ids únicos y aristas de drill-through.
   if (hasPages) validatePages(s.pages!)
 
-  // Controles de cabecera: id único, source existente, default conocido, single (no multi).
+  // Controles de cabecera: id único, source existente, default conocido (single o multi-select).
   validateControls(s)
 
   // 2 · Referencias colgantes: cada data.<path> usada en alguna pieza existe en data.
@@ -199,15 +202,34 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // fila de ayer queda stale en silencio, y con refuse_render el PI deja de servirse por un typo.
   const freshness = (s.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
   if (freshness && freshness['source_watermark'] !== 'ignore' && freshness['max_age'] != null) {
-    const raw = String(freshness['max_age'])
-    if (parseIsoDuration(raw) <= 0) {
+    validateMaxAge(String(freshness['max_age']), 'quality.freshness.max_age')
+  }
+
+  // 4·ter·bis · Frescura POR-DATASET (`data.<ds>.freshness`): max_age parseable > 0 (mismo check que
+  // el global) y watermark_field declarado en shape.fields cuando el shape existe — un campo colgante
+  // haría el watermark irresoluble → «fresco» en silencio, lo contrario de lo declarado.
+  for (const [name, ds] of Object.entries(s.data)) {
+    const f = ds.freshness
+    if (!f) continue
+    if (f.max_age == null || f.watermark_field == null) {
       throw new VergisError({
         error: 'mira/spec-invalid',
-        code: 'freshness-max-age-unsupported',
-        path: 'quality.freshness.max_age',
-        value: raw,
-        message: `max_age '${raw}' no es una duración ISO 8601 soportada (parsea a 0 ms → staleness silenciosa: todo dato de ayer quedaría stale).`,
-        remediation: 'Usar P#D, PT#H, PT#M, PT#S o sus combinaciones (p.ej. P1D, PT6H, P1DT12H). Semanas/meses: expresarlos en días (P1W → P7D, P1M → P30D).',
+        code: 'freshness-dataset-incomplete',
+        path: `data.${name}.freshness`,
+        message: `La frescura por-dataset de '${name}' requiere 'watermark_field' (un campo del dataset) y 'max_age'.`,
+        remediation: `Declarar ambos, p.ej. freshness: { watermark_field: fecha_dato, max_age: P1D }.`,
+      })
+    }
+    validateMaxAge(String(f.max_age), `data.${name}.freshness.max_age`)
+    const field = String(f.watermark_field)
+    if (ds.shape?.fields && !(field in ds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'freshness-watermark-not-declared',
+        path: `data.${name}.freshness.watermark_field`,
+        value: field,
+        message: `El watermark_field '${field}' no está declarado en data.${name}.shape.fields — el watermark sería irresoluble y la frescura pasaría en silencio.`,
+        remediation: `Declarar '${field}' en shape.fields o corregir watermark_field (es un campo del PROPIO dataset).`,
       })
     }
   }
@@ -261,6 +283,21 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   return s
 }
 
+/** max_age DEBE parsear a > 0 ms — `parseIsoDuration` devuelve 0 para formas no soportadas (P1W,
+ *  P1M) → toda fila de ayer quedaría stale en silencio, y con refuse_render el PI dejaría de servirse. */
+function validateMaxAge(raw: string, path: string): void {
+  if (parseIsoDuration(raw) <= 0) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'freshness-max-age-unsupported',
+      path,
+      value: raw,
+      message: `max_age '${raw}' no es una duración ISO 8601 soportada (parsea a 0 ms → staleness silenciosa: todo dato de ayer quedaría stale).`,
+      remediation: 'Usar P#D, PT#H, PT#M, PT#S o sus combinaciones (p.ej. P1D, PT6H, P1DT12H). Semanas/meses: expresarlos en días (P1W → P7D, P1M → P30D).',
+    })
+  }
+}
+
 /** Arista de drill-through declarada en una tabla: ir a la vista `to` pasando una o más claves `by`. */
 export interface Drillthrough {
   to: string
@@ -290,7 +327,11 @@ export interface MiraControl {
   source: string
   /** Valor inicial cuando no llega `ctx.<id>` en la URL: el mayor / menor / primero de las opciones. */
   default?: 'max' | 'min' | 'first'
-  /** Selección única. Por ahora SOLO single (true). Multi-select se reserva para más adelante. */
+  /**
+   * Selección única (default true). Con `single: false` el control es MULTI-SELECT: los valores viajan
+   * como parámetro repetido (`?ctx.<id>=a&ctx.<id>=b`) y en la query el placeholder `:ctx.<id>` DEBE
+   * vivir dentro de paréntesis de IN (`WHERE semana IN (:ctx.<id>)`) — Mira lo expande a N binds.
+   */
   single?: boolean
 }
 
@@ -341,8 +382,8 @@ function validatePages(pages: MiraPage[]): void {
 }
 
 /**
- * Valida los controles de cabecera: id único, `source` apunta a un dataset existente, `default`
- * conocido, y `single` no es false (multi-select aún no soportado — falla explícita, no silencio).
+ * Valida los controles de cabecera: id único, `source` apunta a un dataset existente y `default`
+ * conocido. `single: false` (multi-select) es una forma válida del control.
  */
 function validateControls(spec: MiraSpec): void {
   const controls = spec.controls ?? []
@@ -389,16 +430,8 @@ function validateControls(spec: MiraSpec): void {
         remediation: 'Usar max (más reciente), min o first, u omitir default.',
       })
     }
-    if (c.single === false) {
-      throw new VergisError({
-        error: 'mira/spec-invalid',
-        code: 'control-multi-unsupported',
-        path: `controls[${c.id}].single`,
-        value: c.single,
-        message: `El control '${c.id}' pide multi-select (single: false), aún no soportado.`,
-        remediation: 'Usar single: true (o omitirlo). El multi-select de cabecera se construirá más adelante.',
-      })
-    }
+    // `single: false` (multi-select) es válido: el control se renderiza como grupo de checkboxes,
+    // los valores viajan repetidos en la URL y Mira expande `:ctx.<id>` a N binds (ver MiraControl).
   }
 }
 

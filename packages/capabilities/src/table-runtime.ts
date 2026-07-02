@@ -250,7 +250,8 @@ function vtCell(col, r, ann){
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
   return '<td class="align-'+(col.align||'left')+'"'+bg+'>'+vtEsc(text)+'</td>';
 }
-function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ if(m[k]!=null&&m[k]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(m[k])); } return q; }
+/* Una clave multi-valor del carry (control multi-select) se repite: &ctx.k=a&ctx.k=b (espejo de ctxQuery server-side). */
+function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ var vs=Array.isArray(m[k])?m[k]:[m[k]]; for(var i=0;i<vs.length;i++){ if(vs[i]!=null&&vs[i]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(vs[i])); } } return q; }
 function vtDrillHref(drill, r, carry){ var keys={}; for(var i=0;i<drill.by.length;i++){ var b=drill.by[i]; keys[b]=String(r[b]==null?'':r[b]); } return '?page='+encodeURIComponent(drill.to)+vtCtxQuery(carry,keys); }
 function vtDrillActions(drills, r, carry){
   if(!drills||!drills.length) return '';
