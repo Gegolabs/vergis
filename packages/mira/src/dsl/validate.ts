@@ -2,6 +2,7 @@ import Ajv, { type ValidateFunction } from 'ajv'
 import addFormats from 'ajv-formats'
 import { VergisError } from '@vergis/botler'
 import { normalizeDrills } from '../compose'
+import { parseIsoDuration } from '../freshness'
 
 export interface MiraDataset {
   capability: string
@@ -50,14 +51,20 @@ export interface MiraSpec {
   }
 }
 
-let cached: ValidateFunction | null = null
+// Caché por-OBJETO de schema (no un único singleton): la compilación AJV es cara, pero un caché de un
+// solo slot ignoraría el argumento `schema` a partir de la 2ª llamada — benigno con un schema, bug
+// latente si conviven dos (versiones del DSL, hot-reload del schema): el 2º usaría el validador del 1º.
+// El WeakMap indexa por identidad del objeto → mismo schema parseado una vez ⇒ mismo validador.
+const validatorCache = new WeakMap<object, ValidateFunction>()
 
 function getValidator(schema: object): ValidateFunction {
-  if (cached) return cached
+  const hit = validatorCache.get(schema)
+  if (hit) return hit
   const ajv = new Ajv({ allErrors: true, strict: false })
   addFormats(ajv)
-  cached = ajv.compile(schema)
-  return cached
+  const compiled = ajv.compile(schema)
+  validatorCache.set(schema, compiled)
+  return compiled
 }
 
 /**
@@ -176,6 +183,73 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         value: field,
         message: `La pieza referencia 'data.${ref}' pero el campo '${field}' no está declarado en data.${dataset}.shape.fields.`,
         remediation: `Declarar '${field}' en shape.fields o corregir la referencia.`,
+      })
+    }
+  }
+
+  // 4·bis · Tipos de elemento de la pieza: cada nodo es un layout (`layout` + `elements`) o tiene
+  // EXACTAMENTE una clave de la lista blanca. Un typo (`markdwon_block:`) compondría `{type: key}` y el
+  // render emitiría un comentario HTML invisible → un rincón del PI desaparece sin error. Fail-loud.
+  for (const [i, pc] of pieces.entries()) {
+    validatePieceNode(pc, hasPages ? `pages[${s.pages![i].id}].piece` : 'piece')
+  }
+
+  // 4·ter · Frescura: si `quality.freshness` se declara con source_watermark != ignore y trae max_age,
+  // DEBE parsear a > 0 ms. `parseIsoDuration` devuelve 0 para formas no soportadas (P1W, P1M) → toda
+  // fila de ayer queda stale en silencio, y con refuse_render el PI deja de servirse por un typo.
+  const freshness = (s.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
+  if (freshness && freshness['source_watermark'] !== 'ignore' && freshness['max_age'] != null) {
+    const raw = String(freshness['max_age'])
+    if (parseIsoDuration(raw) <= 0) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'freshness-max-age-unsupported',
+        path: 'quality.freshness.max_age',
+        value: raw,
+        message: `max_age '${raw}' no es una duración ISO 8601 soportada (parsea a 0 ms → staleness silenciosa: todo dato de ayer quedaría stale).`,
+        remediation: 'Usar P#D, PT#H, PT#M, PT#S o sus combinaciones (p.ej. P1D, PT6H, P1DT12H). Semanas/meses: expresarlos en días (P1W → P7D, P1M → P30D).',
+      })
+    }
+  }
+
+  // 4·quater · Render: si `delivery.render` se declara, DEBE incluir al menos un render html (el único
+  // formato soportado hoy). Sin esto, `render: [{format: pdf}]` — o un typo `htlm` — sirve una página
+  // en blanco con HTTP 200. (Omitir `render` es válido: Mira usa html por defecto.)
+  const renders = (s.delivery?.render ?? []) as { format?: string }[]
+  if (renders.length > 0 && !renders.some((r) => r.format === 'html')) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'render-no-html',
+      path: 'delivery.render',
+      value: renders.map((r) => r.format).join(', '),
+      message: `delivery.render no declara ningún render con format: html (declara: ${renders.map((r) => r.format).join(', ')}).`,
+      remediation: 'Incluir { format: html, target: web }. HTML es el único formato de render soportado hoy.',
+    })
+  }
+
+  // 4·quinquies · Filtros de interacción (client-side): cada filtro referencia un dataset existente y,
+  // si el dataset declara shape.fields, un campo existente. Un filtro colgante produce una faceta vacía
+  // en silencio (render-html-piece: `it.datasets[f.dataset] ?? []`).
+  for (const [i, f] of (s.interactions?.filters ?? []).entries()) {
+    if (!f || typeof f.dataset !== 'string' || !(f.dataset in s.data)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'filter-dataset-dangling',
+        path: `interactions.filters[${i}].dataset`,
+        value: f?.dataset ?? null,
+        message: `El filtro '${f?.field ?? i}' referencia el dataset '${f?.dataset}', que no existe en data.`,
+        remediation: 'Declarar el dataset en data o corregir interactions.filters[].dataset.',
+      })
+    }
+    const ds = s.data[f.dataset]
+    if (ds?.shape?.fields && f.field && !(f.field in ds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'filter-field-dangling',
+        path: `interactions.filters[${i}].field`,
+        value: f.field,
+        message: `El filtro sobre '${f.dataset}' usa el campo '${f.field}', que no está declarado en data.${f.dataset}.shape.fields.`,
+        remediation: `Declarar '${f.field}' en shape.fields o corregir interactions.filters[].field.`,
       })
     }
   }
@@ -325,6 +399,49 @@ function validateControls(spec: MiraSpec): void {
         remediation: 'Usar single: true (o omitirlo). El multi-select de cabecera se construirá más adelante.',
       })
     }
+  }
+}
+
+/** Tipos de elemento de contenido válidos en una pieza (los que `composePiece`/el render reconocen). */
+const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'semaforo', 'distribution', 'table'])
+
+/**
+ * Valida recursivamente un nodo de pieza: o es un layout (`layout` + `elements`) o declara EXACTAMENTE
+ * una clave de la lista blanca de elementos. Rechaza el typo silencioso (`markdwon_block:`) que hoy
+ * pasa como `{type: key}` y se renderiza como comentario HTML invisible.
+ */
+function validatePieceNode(node: unknown, path: string): void {
+  if (node == null || typeof node !== 'object' || Array.isArray(node)) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'piece-node-invalid',
+      path,
+      value: (node ?? null) as never,
+      message: `El nodo de pieza en ${path} no es un objeto (layout o elemento).`,
+      remediation: `Un nodo es un layout (layout + elements) o exactamente uno de: ${[...ELEMENT_TYPES].join(', ')}.`,
+    })
+  }
+  const obj = node as Record<string, unknown>
+  if ('layout' in obj) {
+    const elements = obj['elements']
+    for (const [i, child] of (Array.isArray(elements) ? elements : []).entries()) {
+      validatePieceNode(child, `${path}.elements[${i}]`)
+    }
+    return
+  }
+  const typeKeys = Object.keys(obj).filter((k) => ELEMENT_TYPES.has(k))
+  if (typeKeys.length !== 1) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'unknown-element-type',
+      path,
+      value: Object.keys(obj).join(', ') || null,
+      message:
+        typeKeys.length === 0
+          ? `Nodo de pieza sin tipo de elemento reconocido en ${path} (claves: ${Object.keys(obj).join(', ') || '∅'}). Un typo (p.ej. 'markdwon_block') se compondría como comentario HTML invisible.`
+          : `Nodo de pieza con varios tipos de elemento en ${path}: ${typeKeys.join(', ')}. Un nodo declara exactamente uno.`,
+      remediation: `Cada nodo es un layout (layout + elements) o exactamente uno de: ${[...ELEMENT_TYPES].join(', ')}.`,
+    })
   }
 }
 

@@ -201,6 +201,44 @@ describe('render · control de cabecera default=max', () => {
   })
 })
 
+// PI de UNA vista (piece, sin pages) con controles: el `:ctx.<id>` DEBE reescribirse igual que en
+// multi-vista. Antes `applyCtx` solo corría con `isMulti` → el placeholder quedaba literal (falla en el
+// motor) o el control era un no-op silencioso (work/052 F1).
+const SINGLE_YAML = `
+mira_version: "1.0"
+identity: { id: pi-single-ctrl, display_name: "Single Ctrl", code: PI-SC, version: "1.0", classification: internal }
+controls:
+  - { id: semana, label: "Semana", source: data.semanas.semana, default: max, single: true }
+piece:
+  table:
+    data: data.clientes
+    columns:
+      - { field: empresa, label: "Empresa" }
+      - { field: saldo, label: "Saldo", format: int_0, align: right }
+data:
+  semanas: { capability: mock-sql, params: { sql: "SELECT DISTINCT Semana AS semana FROM dbo.dim_fechas" } }
+  clientes: { capability: mock-sql, params: { sql: "SELECT empresa, socio, saldo FROM dbo.saldo WHERE Semana = :ctx.semana" } }
+quality: {}
+delivery: { render: [{ format: html, target: web }] }
+`
+
+describe('render · PI de UNA vista + control (F1: applyCtx también sin pages)', () => {
+  it('el :ctx.semana del PI de una vista se reescribe a @ctx_semana bindeado (no queda literal)', async () => {
+    const { out, calls } = await render(SINGLE_YAML)
+    expect(out.ok).toBe(true)
+    const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
+    expect(clientes.sql).toContain('@ctx_semana')
+    expect(clientes.sql).not.toContain(':ctx.semana')
+    expect(clientes.params?.['ctx_semana']).toBe('W21') // default max resuelto por el control
+  })
+
+  it('?ctx.semana=W20 override en PI de una vista: la query usa W20', async () => {
+    const { calls } = await render(SINGLE_YAML, { ctx: { semana: 'W20' } })
+    const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
+    expect(clientes.params?.['ctx_semana']).toBe('W20')
+  })
+})
+
 describe('render · drill multi-clave (empresa+socio) bindeado', () => {
   it('page=detalle_es con ctx.empresa+ctx.socio: ambas claves + la semana llegan BINDEADAS', async () => {
     const { out, calls } = await render(YAML, { page: 'detalle-es', ctx: { empresa: 'E1', socio: 'A' } })
