@@ -71,9 +71,10 @@ export interface RunOptions {
   annotations?: AnnotationContext
   /** PI multi-vista: id de la página activa (default: la 1ª). Viene de la query `?page=`. */
   page?: string
-  /** Contexto del drill-through (campo→valor). Viene de la query `?ctx.<campo>=`. Filtro adicional
-   *  bindeado dentro de las filas que la RLS ya autoriza (acota, nunca amplía). */
-  ctx?: Record<string, string>
+  /** Contexto del drill-through (campo→valor(es)). Viene de la query `?ctx.<campo>=` — repetido
+   *  (control multi-select) llega como arreglo. Filtro adicional bindeado dentro de las filas que
+   *  la RLS ya autoriza (acota, nunca amplía). */
+  ctx?: Record<string, string | string[]>
   /** Tope de filas materializables por `interactions.filters` (ver MiraOptions.interactiveMaxRows).
    *  Mira no lee env: el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS y lo inyecta acá. */
   interactiveMaxRows?: number
@@ -82,7 +83,8 @@ export interface RunOptions {
 export interface RunOutcome {
   ok: boolean
   botletId: string
-  artifacts: { format: string; path?: string }[]
+  /** Artefactos: los publicados llevan `path`; los en-memoria (p.ej. CSV del render) llevan `content`. */
+  artifacts: { format: string; path?: string; content?: string }[]
   /** El HTML renderizado (para servir per-request sin pasar por disco). */
   html?: string
   fallback?: { reason: string; recovery: string }
@@ -151,7 +153,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
   })
   botler.stop()
 
-  const output = (result.output ?? {}) as { artifacts?: { format: string; path?: string }[]; html?: string }
+  const output = (result.output ?? {}) as { artifacts?: { format: string; path?: string; content?: string }[]; html?: string }
   return {
     ok: result.ok,
     botletId: result.botletId,

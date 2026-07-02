@@ -150,9 +150,9 @@ describe('validación · controles + drill multi-clave', () => {
     // Lo atrapa el schema (enum) antes que la validación semántica — ambas son rechazo válido.
     expect(() => validate(s)).toThrow(/default/)
   })
-  it('control multi-select (single: false) → rechazo (aún no soportado)', () => {
+  it('control multi-select (single: false) → válido (soportado desde work/052 R3)', () => {
     const s = parseSpec(YAML.replace('single: true', 'single: false')) as Record<string, unknown>
-    expect(() => validate(s)).toThrow(/multi-select/)
+    expect(() => validate(s)).not.toThrow()
   })
   it('drill multi-clave a una vista que no declara todas las claves → rechazo', () => {
     // detalle_es declara context: [empresa, socio]; lo dejamos solo en [socio].

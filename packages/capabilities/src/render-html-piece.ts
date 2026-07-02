@@ -43,13 +43,20 @@ interface PagesNav {
   items: { id: string; title: string }[]
   active: string
 }
-/** Control de cabecera ya resuelto por Mira: opciones + valor seleccionado. */
+/** Control de cabecera ya resuelto por Mira: opciones + valor(es) seleccionado(s). */
 interface ControlResolved {
   id: string
   label: string
   options: string[]
+  /** Valor para display (multi: los valores unidos por ", "). */
   value: string
+  /** Solo multi-select: los valores seleccionados. */
+  values?: string[]
+  /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
+  multi?: boolean
 }
+/** Valor(es) de una clave de contexto a preservar en la navegación (multi-select → varios). */
+type CarryCtx = Record<string, string | string[]>
 interface RenderParams {
   piece: ResolvedNode
   title?: string
@@ -63,7 +70,7 @@ interface RenderParams {
   /** Controles de cabecera (server-side): selectores que fijan `:ctx.<id>` en las queries. */
   controls?: ControlResolved[]
   /** Contexto que toda navegación (nav de páginas, drills, selectores) debe preservar (p.ej. la semana). */
-  carryCtx?: Record<string, string>
+  carryCtx?: CarryCtx
 }
 
 export interface TableColumn {
@@ -85,7 +92,7 @@ export interface TableColumn {
 }
 interface Aggregation {
   dataset?: string
-  op: 'sum' | 'ratio'
+  op: 'sum' | 'ratio' | 'avg' | 'count' | 'min' | 'max' | 'count_distinct'
   field?: string
   num?: string
   den?: string
@@ -139,7 +146,7 @@ interface RenderOpts {
   tokens: ThemeTokens
   interactive: boolean
   /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
-  carry: Record<string, string>
+  carry: CarryCtx
 }
 
 /**
@@ -304,17 +311,22 @@ const PAGES_NAV_CSS = `
 .vpages a.active{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
 `
 
-/** `&ctx.k=v` por cada par de `carry` (más overrides), para preservar contexto en cualquier href. */
-function ctxQuery(carry: Record<string, string>, overrides: Record<string, string> = {}): string {
-  const merged = { ...carry, ...overrides }
-  return Object.entries(merged)
-    .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => `&ctx.${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join('')
+/** `&ctx.k=v` por cada par de `carry` (más overrides), para preservar contexto en cualquier href.
+ *  Una clave multi-valor (control multi-select) se repite: `&ctx.k=a&ctx.k=b` (el server acumula). */
+function ctxQuery(carry: CarryCtx, overrides: Record<string, string> = {}): string {
+  const merged: CarryCtx = { ...carry, ...overrides }
+  let q = ''
+  for (const [k, v] of Object.entries(merged)) {
+    for (const val of Array.isArray(v) ? v : [v]) {
+      if (val == null || val === '') continue
+      q += `&ctx.${encodeURIComponent(k)}=${encodeURIComponent(String(val))}`
+    }
+  }
+  return q
 }
 
 /** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */
-function renderPagesNav(pages: PagesNav, carry: Record<string, string> = {}): string {
+function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}): string {
   const q = ctxQuery(carry)
   const tabs = pages.items
     .map(
@@ -334,24 +346,40 @@ const CONTROLS_BAR_CSS = `
 `
 
 /**
- * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Cada control es un `<select>`
- * (single-select) cuyo cambio recarga la página fijando `?ctx.<id>=<valor>` y preservando `page` +
- * el resto del contexto (carry). Server-side: el valor elegido reentra como `:ctx.<id>` en las
+ * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Un control single es un `<select>`;
+ * uno MULTI (`single: false`) es un grupo de checkboxes (mismo estilo que las facetas del dashboard).
+ * El cambio recarga la página fijando `?ctx.<id>=<valor>` (repetido por valor en multi) y preservando
+ * `page` + el resto del contexto (carry). Server-side: lo elegido reentra como `:ctx.<id>` en las
  * queries → cambia el dato, no solo la vista. LINEAMIENTO: los controles NO van en el cuerpo.
  */
-function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: Record<string, string>): string {
+function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
   return controls
     .map((c) => {
-      // onchange: reconstruir el query con la página activa + el carry (menos este control) +
-      // este control = this.value, y navegar. Robusto: no depende del estado previo de la URL.
-      const onchange =
+      // Prefijo común del handler: reconstruir el query con la página activa + el carry (menos este
+      // control; multi-valor se repite con append). Robusto: no depende del estado previo de la URL.
+      const base =
         `var u=new URL(location.href);u.search='';` +
         (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
         Object.entries(carry)
           .filter(([k]) => k !== c.id)
-          .map(([k, v]) => `u.searchParams.set('ctx.${escapeHtml(k)}',${JSON.stringify(String(v))});`)
-          .join('') +
-        `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
+          .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((val) => `u.searchParams.append('ctx.${escapeHtml(k)}',${JSON.stringify(String(val))});`))
+          .join('')
+      if (c.multi) {
+        // Multi-select: al cambiar cualquier checkbox del grupo se recolectan TODOS los marcados y se
+        // navega con `ctx.<id>` repetido por valor (`?ctx.w=a&ctx.w=b` — navFromUrl los acumula).
+        const onchange =
+          base +
+          `var g=this.closest('.vt-ctl');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
+        const selected = new Set(c.values ?? [])
+        const checks = c.options
+          .map((v) => `<label><input type="checkbox" value="${escapeHtml(v)}"${selected.has(v) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(v)}</label>`)
+          .join('')
+        return (
+          `<div class="faceta vt-ctl vt-ctl-multi" data-ctl="${escapeHtml(c.id)}"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
+          `<div class="faceta-options" role="group" aria-label="${escapeHtml(c.label)}">${checks}</div></div>`
+        )
+      }
+      const onchange = base + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
       const opts = c.options
         .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
         .join('')
@@ -581,10 +609,27 @@ function renderInteractiveScript(it: Interactive): string {
     if (f === 'int_0') return new Intl.NumberFormat('es-CL',{maximumFractionDigits:0}).format(Math.round(v));
     return String(v);
   }
+  // ESPEJO de compose.aggregate (packages/mira/src/compose.ts) — misma semántica de ops para que el
+  // recompute bajo filtro coincida con el valor server-rendered. MANTENER EN SINCRONÍA.
   function agg(rows, a){
     function sum(f){ return rows.reduce(function(s,r){ return s + (Number(r[f])||0); }, 0); }
     if (a.op === 'ratio'){ var d = sum(a.den); return d ? sum(a.num)/d : 0; }
-    return sum(a.field);
+    if (a.op === 'avg'){ return rows.length ? sum(a.field)/rows.length : 0; }
+    if (a.op === 'count'){
+      if (!a.field) return rows.length;
+      return rows.filter(function(r){ return r[a.field] != null && r[a.field] !== ''; }).length;
+    }
+    if (a.op === 'min' || a.op === 'max'){
+      var best = NaN;
+      rows.forEach(function(r){ var n = Number(r[a.field]); if (isNaN(n)) return; if (isNaN(best) || (a.op === 'min' ? n < best : n > best)) best = n; });
+      return isNaN(best) ? 0 : best;
+    }
+    if (a.op === 'count_distinct'){
+      var seen = {}, n = 0;
+      rows.forEach(function(r){ var k = String(r[a.field] == null ? '' : r[a.field]); if (!seen[k]){ seen[k] = 1; n++; } });
+      return n;
+    }
+    return sum(a.field); // sum
   }
   function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function card(r, c){
@@ -722,7 +767,7 @@ async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Prom
  *  trabajo de DOM en el arranque — se sirven solo las primeras N y el runtime completa al arrancar. */
 export const TABLE_SSR_MAX_ROWS = 500
 
-function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): string {
+function renderTable(node: ResolvedNode, carry: CarryCtx = {}): string {
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const drills = node.drills ?? []
@@ -747,14 +792,14 @@ function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): st
 }
 
 /** href server-side de una acción de drill, preservando el carry (ctx) y agregando las claves `by`. */
-function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: Record<string, string>): string {
+function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: CarryCtx): string {
   const keys: Record<string, string> = {}
   for (const k of drill.by) keys[k] = String(row[k] ?? '')
   return `?page=${encodeURIComponent(drill.to)}${ctxQuery(carry, keys)}`
 }
 
 /** Celda de acciones de una fila: un link por drill (etiqueta del drill, o "→" si no la tiene). */
-function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: Record<string, string>): string {
+function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: CarryCtx): string {
   if (drills.length === 0) return ''
   const links = drills
     .map((d) => {
@@ -773,7 +818,7 @@ function renderTableBody(
   rows: Record<string, unknown>[],
   ranges: Record<string, { min: number; max: number }>,
   drills: Drill[] = [],
-  carry: Record<string, string> = {},
+  carry: CarryCtx = {},
 ): string {
   return rows
     .map((r) => {
@@ -800,7 +845,7 @@ function renderInteractiveTable(
   tbody: string,
   titleHtml: string,
   drills: Drill[] = [],
-  carry: Record<string, string> = {},
+  carry: CarryCtx = {},
   ssrComplete = true,
 ): string {
   // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).

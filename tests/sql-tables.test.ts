@@ -2,7 +2,7 @@
 // toca un PI". Si no ve una tabla, esa tabla se serviría sin verificar política → en Fabric fuga TODAS
 // sus filas. La regex vieja no reconocía corchetes T-SQL, comillas dobles ni comma-joins.
 import { describe, it, expect } from 'vitest'
-import { tablesOf } from '../server/sql-tables'
+import { analyzeSqlTables, tablesOf } from '../server/sql-tables'
 
 describe('tablesOf · extracción de tablas para el gate fail-closed', () => {
   it('caso base: FROM/JOIN con schema.tabla desnudo (minúscula, sin repetir)', () => {
@@ -35,5 +35,41 @@ describe('tablesOf · extracción de tablas para el gate fail-closed', () => {
   it('mezcla de estilos en el mismo SQL (comma-join en el FROM + JOIN explícito)', () => {
     const sql = 'SELECT * FROM [dbo].[a], dbo.c JOIN "s"."b" ON [dbo].[a].k = "s"."b".k'
     expect(tablesOf(sql).sort()).toEqual(['dbo.a', 'dbo.c', 's.b'])
+  })
+})
+
+describe('analyzeSqlTables · referencias single-part (work/052 R3-8)', () => {
+  it('FROM dim_area (sin esquema) → unqualified (el gate la trata como NO gobernable)', () => {
+    const a = analyzeSqlTables('SELECT * FROM dim_area WHERE 1=1')
+    expect(a.tables).toEqual([])
+    expect(a.unqualified).toEqual(['dim_area'])
+  })
+
+  it('single-part con alias y en JOIN también se detecta', () => {
+    const a = analyzeSqlTables('SELECT * FROM dbo.a x JOIN dim_area d ON x.k = d.k')
+    expect(a.tables).toEqual(['dbo.a'])
+    expect(a.unqualified).toEqual(['dim_area'])
+  })
+
+  it('CTE no dispara: los nombres de WITH ... AS ( quedan exentos', () => {
+    const sql = 'WITH w1 AS (SELECT 1), w2 AS (SELECT k FROM dbo.b) SELECT * FROM w1 JOIN w2 ON 1=1'
+    const a = analyzeSqlTables(sql)
+    expect(a.tables).toEqual(['dbo.b'])
+    expect(a.unqualified).toEqual([])
+  })
+
+  it('función de tabla pegada al paréntesis (numbers(5), STRING_SPLIT(...)) queda exenta', () => {
+    const a = analyzeSqlTables('WITH dias AS (SELECT n FROM numbers(5)) SELECT * FROM dias')
+    expect(a.unqualified).toEqual([])
+  })
+
+  it('alias de tabla calificada NO se marca como single-part (sin falsos positivos)', () => {
+    const a = analyzeSqlTables('SELECT * FROM dbo.a a, dbo.b b WHERE a.k = b.k')
+    expect(a.tables).toEqual(['dbo.a', 'dbo.b'])
+    expect(a.unqualified).toEqual([])
+  })
+
+  it('tablesOf sigue devolviendo solo las calificadas (contrato existente intacto)', () => {
+    expect(tablesOf('SELECT * FROM dim_area, dbo.a')).toEqual(['dbo.a'])
   })
 })

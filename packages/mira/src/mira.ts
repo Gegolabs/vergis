@@ -2,12 +2,13 @@ import {
   VergisError,
   type Botlet,
   type BotletHost,
+  type IdentityContext,
   type InvocationContext,
 } from '@vergis/botler'
 import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { parseSpec } from './dsl/parse'
-import { collectDataRefs, validateSpec, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
-import { checkFreshness } from './freshness'
+import { collectDataRefs, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
+import { checkFreshness, type FreshnessVerdict } from './freshness'
 import { resolveTheme } from './theme-config'
 
 export interface MiraOptions {
@@ -28,7 +29,31 @@ export const DEFAULT_INTERACTIVE_MAX_ROWS = 5000
 export interface MiraOutput {
   id: string
   html: string
-  artifacts: { format: string; path?: string }[]
+  /** Artefactos producidos: los publicados por un canal llevan `path`; los generados en memoria
+   *  (p.ej. el CSV de `delivery.render`) llevan `content`. */
+  artifacts: { format: string; path?: string; content?: string }[]
+}
+
+/** Contexto de navegación (drill/controles): un valor por clave, o VARIOS (control multi-select). */
+export type CtxValues = Record<string, string | string[]>
+
+/** Barra de navegación de un PI multi-vista (páginas navegables + la activa). */
+export interface PagesNav {
+  items: { id: string; title: string }[]
+  active: string
+}
+
+/** Control de cabecera ya resuelto: opciones + valor(es) seleccionado(s). Viaja al render. */
+export interface ControlResolved {
+  id: string
+  label: string
+  options: string[]
+  /** Valor para display (multi: los valores unidos por ", "). */
+  value: string
+  /** Solo multi-select: los valores seleccionados. */
+  values?: string[]
+  /** `true` si el control es multi-select (`single: false` en el DSL). */
+  multi?: boolean
 }
 
 /**
@@ -61,74 +86,26 @@ export class MiraBotlet implements Botlet {
     }
     const identity = ctx.identity
 
-    // 2·bis · VISTA ACTIVA (multi-vista) o pieza única. En multi-vista se elige la página por
-    // `params.page` (default: la 1ª) y se recuperan SOLO sus datasets. El drill-through pasa
-    // `params.ctx` (campo→valor), que se inyecta como PARÁMETRO BIND (`@ctx_<campo>`, injection-safe)
-    // en el `:ctx.<campo>` de la query — un filtro ADICIONAL dentro de las filas que la RLS ya
-    // autoriza (acota, nunca amplía: la query lee la misma tabla gobernada).
-    const isMulti = Array.isArray(spec.pages) && spec.pages.length > 0
+    // 2·bis · VISTA ACTIVA (multi-vista) o pieza única — ver resolveActiveView.
     const pageParam = ctx.params?.['page'] as string | undefined
     const ctxValues = normalizeCtx(ctx.params?.['ctx'])
-    let activePiece: Record<string, unknown>
-    let pagesNav: { items: { id: string; title: string }[]; active: string } | undefined
-    let datasetNames: string[]
-    if (isMulti) {
-      const pages = spec.pages!
-      const active = pages.find((p) => p.id === pageParam) ?? pages[0]
-      // Las páginas-destino de drill (declaran `context`) NO van en la nav por defecto: solo tienen
-      // sentido alcanzadas por drill. Aparecen "bajo demanda" — únicamente cuando son la vista activa.
-      const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
-      pagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
-      const missing = (active.context ?? []).filter((c) => !ctxValues[c])
-      if (missing.length > 0) {
-        // Vista de detalle sin contexto (acceso directo, no por drill) → no se consulta nada
-        // (evita volcar todo); se muestra una guía para elegir un registro.
-        activePiece = contextPrompt(active, missing)
-        datasetNames = []
-      } else {
-        activePiece = active.piece
-        datasetNames = uniqueDatasets(active.piece)
-      }
-    } else {
-      activePiece = spec.piece as Record<string, unknown>
-      datasetNames = Object.keys(spec.data)
-    }
+    const view = resolveActiveView(spec, pageParam, ctxValues)
+    let { activePiece, datasetNames } = view
+    const pagesNav = view.pagesNav
+    const isMulti = pagesNav != null
 
     // 3 · Recuperación de datos (vía Botler.capability_call, nunca acceso directo)
     const results: Record<string, DatasetResult> = {}
 
-    // 2·ter · CONTROLES DE CABECERA — se resuelven ANTES de las queries de página: cada control fija
-    // un valor (de `ctx.<id>` en la URL, o el default computado sobre las opciones de su dataset
-    // fuente) que se inyecta en `ctxValues` → aparece como `:ctx.<id>` en las queries. El valor viaja
-    // en la navegación (carryCtx) para que "pegue" al cambiar de página o drillear.
-    const controlsResolved: { id: string; label: string; options: string[]; value: string }[] = []
-    const carryCtx: Record<string, string> = {}
-    for (const c of spec.controls ?? []) {
-      const [dsName, field] = stripCtrlSource(c.source)
-      if (!results[dsName]) {
-        const ds = spec.data[dsName]
-        if (ds) {
-          const missing: string[] = []
-          const out = await host.capabilityCall(ds.capability, applyCtx(ds.params, ctxValues, missing), identity)
-          if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: dsName, params: missing })
-          results[dsName] = { rows: expectRows(dsName, ds.capability, out) }
-          host.log({ type: 'mira-control-source', botletId: this.id, control: c.id, dataset: dsName, rows: results[dsName].rows.length })
-        }
-      }
-      const options = [...new Set((results[dsName]?.rows ?? []).map((r) => String(r[field] ?? '')).filter((v) => v !== ''))]
-      const value = resolveControlValue(ctxValues[c.id], options, c.default)
-      if (value !== '') {
-        ctxValues[c.id] = value
-        carryCtx[c.id] = value
-      }
-      controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value })
-    }
+    // 2·ter · CONTROLES DE CABECERA — ver resolveHeaderControls (muta results/ctxValues).
+    const { controlsResolved, carryCtx } = await this.resolveHeaderControls(spec, ctxValues, results, host, identity)
 
-    // Frescura en multi-vista: `checkFreshness` resuelve el watermark contra `results`. En multi-vista
-    // solo se recuperan los datasets de la página activa, así que si el `watermark_field` apunta a un
-    // dataset de OTRA página, quedaría sin resolver → veredicto "fresco" en silencio (freshness.ts).
+    // Frescura en multi-vista: `checkFreshness` resuelve el watermark GLOBAL contra `results`. En
+    // multi-vista solo se recuperan los datasets de la página activa, así que si el `watermark_field`
+    // apunta a un dataset de OTRA página, quedaría sin resolver → veredicto "fresco" en silencio.
     // Lo incluimos en la recuperación para que la garantía de frescura proteja TODA página, no solo la
-    // que casualmente carga el dataset del watermark. Es una query pequeña.
+    // que casualmente carga el dataset del watermark. Es una query pequeña. (Las frescuras POR-DATASET
+    // se evalúan sobre lo recuperado: siguen la página que usa su dataset.)
     const wmDataset = watermarkDatasetOf(spec)
     if (wmDataset && spec.data[wmDataset] && !datasetNames.includes(wmDataset)) {
       datasetNames = [...datasetNames, wmDataset]
@@ -156,57 +133,10 @@ export class MiraBotlet implements Botlet {
       }),
     )
 
-    // 4 · freshness (doc 2 §5.3) — degradación según quality.degradation.on_stale
+    // 4 · freshness (doc 2 §5.3) — declaraciones global + por-dataset; el MÁS stale gana; el banner
+    // nombra al/los dataset(s) atrasado(s). Degradación según quality.degradation.on_stale.
     const freshness = checkFreshness(spec, results, Date.now())
-    let banner: ResolvedNode | null = null
-    if (freshness.checked && freshness.stale) {
-      const onStale = String(
-        (spec.quality as { degradation?: Record<string, unknown> } | undefined)?.degradation?.['on_stale'] ??
-          'warn_and_show',
-      )
-      const watermarkLabel = freshness.watermark?.toISOString().slice(0, 10) ?? '—'
-      host.log({ type: 'mira-freshness', botletId: this.id, stale: true, onStale, ageMs: freshness.ageMs, watermark: watermarkLabel })
-      if (onStale === 'refuse_render') {
-        throw new VergisError({
-          error: 'mira/quality',
-          code: 'stale-refused',
-          message: `Datos stale (al ${watermarkLabel}, antigüedad ${freshness.ageHuman}) y política on_stale=refuse_render.`,
-          remediation: 'Refrescar los datos de origen o relajar quality.freshness.max_age.',
-        })
-      }
-      if (onStale === 'agentic_fallback') {
-        // PROVISIONAL: `agentic_fallback` promete que la Capa 2 (cognición) regenere el dato stale;
-        // esa capa aún no está construida. Lanzar error acá mataba el PI por una promesa no
-        // implementada — mientras la Capa 2 no exista, se degrada a warn_and_show con log explícito
-        // y un banner que lo dice. Cuando la cognición llegue, este branch vuelve a escalar al Botler.
-        host.log({ type: 'mira-agentic-fallback-degraded', botletId: this.id, watermark: watermarkLabel })
-        banner = {
-          type: 'banner',
-          content:
-            `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}). ` +
-            `La regeneración cognitiva (agentic_fallback) aún no está disponible; se muestran los datos con este aviso.`,
-        }
-      } else if (onStale === 'show_last_valid') {
-        // `show_last_valid` REAL (servir la última salida VÁLIDA en vez de la stale) requiere el
-        // data-cache por-consumidor habilitado en la instancia (withResultCache del Botler,
-        // VERGIS_DATA_CACHE_TTL_MS > 0), que retiene la última salida por (params, identidad). Mira
-        // NO se acopla al wrapper: como el dato es data-anchored, «lo último válido» que el motor
-        // devuelve ES el dato al watermark — se muestra con banner explícito de a qué fecha
-        // corresponde lo mostrado.
-        banner = {
-          type: 'banner',
-          content: `⚠ Mostrando datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}).`,
-        }
-      } else {
-        // warn_and_show (default) → banner + continuar
-        banner = {
-          type: 'banner',
-          content: `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw}).`,
-        }
-      }
-    } else if (freshness.checked) {
-      host.log({ type: 'mira-freshness', botletId: this.id, stale: false, watermark: freshness.watermark?.toISOString().slice(0, 10) })
-    }
+    const banner = this.staleBanner(spec, freshness, host)
 
     // 5 · Composición + render
     host.log({ type: 'mira-compose', botletId: this.id })
@@ -214,7 +144,8 @@ export class MiraBotlet implements Botlet {
     const resolved: ResolvedNode = banner ? { layout: 'rows', elements: [banner, composed] } : composed
 
     // 5·bis · Anotaciones (enriquecimiento solo de la capa de viz): si el llamador pasa el
-    // contexto, se fusiona la columna de anotación en la primera tabla por su clave de registro.
+    // contexto, se fusiona la columna de anotación en la tabla destino por su clave de registro
+    // (la del `dataset` pedido, o la primera tabla del árbol por defecto).
     const annCtx = ctx.params?.['annotations'] as AnnotationContext | undefined
     if (annCtx) await applyAnnotations(resolved, annCtx)
 
@@ -239,38 +170,31 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-interaction', botletId: this.id, filters: filters.map((f) => f.field) })
       }
     }
+
+    // 6 · Renders declarados. Soportados: `html` (el documento servido) y `csv` (artefacto en memoria
+    // con las tablas del árbol resuelto — ver render-csv-piece). PDF NO se implementa como render
+    // server-side: se cubre con el print-to-PDF del navegador (botón Imprimir de la gaveta).
+    const artifacts: MiraOutput['artifacts'] = []
     const renders = spec.delivery?.render ?? [{ format: 'html', target: 'web' }]
     let html = ''
     for (const r of renders) {
+      if (r.format === 'csv') {
+        const rendered = (await host.capabilityCall(
+          'render-csv-piece',
+          { piece: resolved, title: spec.identity.display_name },
+          identity,
+        )) as { csv: string }
+        // El contenido queda EN MEMORIA (artifacts[].content); se escribe a disco solo si un canal
+        // de distribución lo publica (hoy los channels publican el HTML — ver §6·bis).
+        artifacts.push({ format: 'csv', content: rendered.csv })
+        host.log({ type: 'mira-render', botletId: this.id, format: 'csv' })
+        continue
+      }
       if (r.format !== 'html') {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
-      const { theme, palette } = resolveTheme(resolved, r.theme)
-      const rendered = (await host.capabilityCall(
-        'render-html-piece',
-        {
-          piece: resolved,
-          title: spec.identity.display_name,
-          theme,
-          palette,
-          meta: {
-            date: freshness.watermark,
-            generatedAt: new Date(),
-            org: spec.identity['org'] as string | undefined,
-            classification: spec.identity.classification,
-            code: spec.identity.code,
-            version: spec.identity['version'] as string | undefined,
-          },
-          interactive,
-          pages: pagesNav,
-          controls: controlsResolved,
-          carryCtx,
-        },
-        identity,
-      )) as { html: string }
-      html = rendered.html
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, r.theme, host, identity)
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -282,12 +206,11 @@ export class MiraBotlet implements Botlet {
         error: 'mira/render',
         code: 'no-html-output',
         message: `Ningún render de delivery.render produjo HTML (formatos: ${renders.map((r) => r.format).join(', ')}).`,
-        remediation: 'Declarar al menos un render con format: html (el único soportado hoy).',
+        remediation: 'Declarar al menos un render con format: html (csv es adicional; PDF = print-to-PDF del navegador).',
       })
     }
 
-    // 6 · Distribución
-    const artifacts: { format: string; path?: string }[] = []
+    // 6·bis · Distribución
     for (const ch of spec.delivery?.channels ?? []) {
       const params = { ...(ch.params ?? {}), content: html, baseDir: ctx.params?.['baseDir'] }
       const out = (await host.capabilityCall(ch.capability, params, identity)) as { path?: string }
@@ -296,6 +219,154 @@ export class MiraBotlet implements Botlet {
     }
 
     return { id: this.id, html, artifacts }
+  }
+
+  /**
+   * 2·ter · Resuelve los CONTROLES DE CABECERA — ANTES de las queries de página: cada control fija
+   * su(s) valor(es) (de `ctx.<id>` en la URL, o el default computado sobre las opciones de su dataset
+   * fuente) que se inyectan en `ctxValues` → aparecen como `:ctx.<id>` en las queries. El valor viaja
+   * en la navegación (carryCtx) para que "pegue" al cambiar de página o drillear.
+   * MUTA `results` (recupera los datasets-fuente) y `ctxValues` (fija los valores) — secuencial a
+   * propósito: un control puede depender del valor del anterior.
+   */
+  private async resolveHeaderControls(
+    spec: MiraSpec,
+    ctxValues: CtxValues,
+    results: Record<string, DatasetResult>,
+    host: BotletHost,
+    identity: IdentityContext,
+  ): Promise<{ controlsResolved: ControlResolved[]; carryCtx: CtxValues }> {
+    const controlsResolved: ControlResolved[] = []
+    const carryCtx: CtxValues = {}
+    for (const c of spec.controls ?? []) {
+      const [dsName, field] = stripCtrlSource(c.source)
+      if (!results[dsName]) {
+        const ds = spec.data[dsName]
+        if (ds) {
+          const missing: string[] = []
+          const out = await host.capabilityCall(ds.capability, applyCtx(ds.params, ctxValues, missing), identity)
+          if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: dsName, params: missing })
+          results[dsName] = { rows: expectRows(dsName, ds.capability, out) }
+          host.log({ type: 'mira-control-source', botletId: this.id, control: c.id, dataset: dsName, rows: results[dsName].rows.length })
+        }
+      }
+      const options = [...new Set((results[dsName]?.rows ?? []).map((r) => String(r[field] ?? '')).filter((v) => v !== ''))]
+      if (isMultiControl(c)) {
+        // Multi-select: los valores de la URL se filtran contra las opciones; sin ninguno válido,
+        // aplica el default (un solo valor, como en single). Se colapsa a string cuando queda uno
+        // (los binds y la URL no distinguen un multi de un single de un valor).
+        const values = resolveControlValues(ctxValues[c.id], options, c.default)
+        if (values.length > 0) {
+          const v = values.length === 1 ? values[0] : values
+          ctxValues[c.id] = v
+          carryCtx[c.id] = v
+        }
+        controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value: values.join(', '), values, multi: true })
+      } else {
+        const value = resolveControlValue(asSingle(ctxValues[c.id]), options, c.default)
+        if (value !== '') {
+          ctxValues[c.id] = value
+          carryCtx[c.id] = value
+        }
+        controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value })
+      }
+    }
+    return { controlsResolved, carryCtx }
+  }
+
+  /** 4·bis · Banner de staleness según `quality.degradation.on_stale` (o null si el dato está fresco). */
+  private staleBanner(spec: MiraSpec, freshness: FreshnessVerdict, host: BotletHost): ResolvedNode | null {
+    if (!freshness.checked) return null
+    if (!freshness.stale) {
+      host.log({ type: 'mira-freshness', botletId: this.id, stale: false, watermark: freshness.watermark?.toISOString().slice(0, 10) })
+      return null
+    }
+    const onStale = String(
+      (spec.quality as { degradation?: Record<string, unknown> } | undefined)?.degradation?.['on_stale'] ?? 'warn_and_show',
+    )
+    const watermarkLabel = freshness.watermark?.toISOString().slice(0, 10) ?? '—'
+    // El banner NOMBRA al/los dataset(s) atrasado(s) — con frescura por-dataset el lector sabe QUÉ
+    // parte del PI está vieja, no solo que "algo" lo está.
+    const who = freshness.staleDatasets?.length ? ` · dataset(s) atrasado(s): ${freshness.staleDatasets.join(', ')}` : ''
+    host.log({ type: 'mira-freshness', botletId: this.id, stale: true, onStale, ageMs: freshness.ageMs, watermark: watermarkLabel, staleDatasets: freshness.staleDatasets })
+    if (onStale === 'refuse_render') {
+      throw new VergisError({
+        error: 'mira/quality',
+        code: 'stale-refused',
+        message: `Datos stale (al ${watermarkLabel}, antigüedad ${freshness.ageHuman}${who}) y política on_stale=refuse_render.`,
+        remediation: 'Refrescar los datos de origen o relajar quality.freshness.max_age.',
+      })
+    }
+    if (onStale === 'agentic_fallback') {
+      // PROVISIONAL: `agentic_fallback` promete que la Capa 2 (cognición) regenere el dato stale;
+      // esa capa aún no está construida. Lanzar error acá mataba el PI por una promesa no
+      // implementada — mientras la Capa 2 no exista, se degrada a warn_and_show con log explícito
+      // y un banner que lo dice. Cuando la cognición llegue, este branch vuelve a escalar al Botler.
+      host.log({ type: 'mira-agentic-fallback-degraded', botletId: this.id, watermark: watermarkLabel })
+      return {
+        type: 'banner',
+        content:
+          `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw})${who}. ` +
+          `La regeneración cognitiva (agentic_fallback) aún no está disponible; se muestran los datos con este aviso.`,
+      }
+    }
+    if (onStale === 'show_last_valid') {
+      // `show_last_valid` REAL (servir la última salida VÁLIDA en vez de la stale) requiere el
+      // data-cache por-consumidor habilitado en la instancia (withResultCache del Botler,
+      // VERGIS_DATA_CACHE_TTL_MS > 0), que retiene la última salida por (params, identidad). Mira
+      // NO se acopla al wrapper: como el dato es data-anchored, «lo último válido» que el motor
+      // devuelve ES el dato al watermark — se muestra con banner explícito de a qué fecha
+      // corresponde lo mostrado.
+      return {
+        type: 'banner',
+        content: `⚠ Mostrando datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw})${who}.`,
+      }
+    }
+    // warn_and_show (default) → banner + continuar
+    return {
+      type: 'banner',
+      content: `⚠ Datos al ${watermarkLabel} — antigüedad ${freshness.ageHuman}, supera el máximo (${freshness.maxAgeRaw})${who}.`,
+    }
+  }
+
+  /** 5·ter · Ensambla los params del render HTML e invoca la Capability (theme por tipo de PI). */
+  private async renderHtml(
+    resolved: ResolvedNode,
+    spec: MiraSpec,
+    freshness: FreshnessVerdict,
+    interactive: unknown,
+    pagesNav: PagesNav | undefined,
+    controlsResolved: ControlResolved[],
+    carryCtx: CtxValues,
+    themeOverride: string | undefined,
+    host: BotletHost,
+    identity: IdentityContext,
+  ): Promise<string> {
+    // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
+    const { theme, palette } = resolveTheme(resolved, themeOverride)
+    const rendered = (await host.capabilityCall(
+      'render-html-piece',
+      {
+        piece: resolved,
+        title: spec.identity.display_name,
+        theme,
+        palette,
+        meta: {
+          date: freshness.watermark,
+          generatedAt: new Date(),
+          org: spec.identity['org'] as string | undefined,
+          classification: spec.identity.classification,
+          code: spec.identity.code,
+          version: spec.identity['version'] as string | undefined,
+        },
+        interactive,
+        pages: pagesNav,
+        controls: controlsResolved,
+        carryCtx,
+      },
+      identity,
+    )) as { html: string }
+    return rendered.html
   }
 
   private checkShape(name: string, ds: MiraDataset, res: DatasetResult, host: BotletHost): void {
@@ -333,6 +404,9 @@ export interface AnnotationContext {
   endpoint: string
   /** Campo-clave del registro. Default: la primera columna de la tabla. */
   keyField?: string
+  /** Dataset de la tabla destino. Si viene, la anotación se aplica a la primera tabla cuyo
+   *  `dataset` coincida; sin él, a la primera tabla del árbol (DFS, comportamiento clásico). */
+  dataset?: string
   /** Dadas las claves visibles, devuelve {clave → {valor compartido, token de escritura firmado}}. */
   resolve(keys: string[]): Promise<Record<string, { value: string; token: string }>>
 }
@@ -340,21 +414,26 @@ export interface AnnotationContext {
 const ANN_VALUE_FIELD = '__ann'
 const ANN_TOKEN_FIELD = '__anntok'
 
-/** Encuentra la primera tabla en el árbol de pieza (DFS). */
-function findFirstTable(node: ResolvedNode): ResolvedNode | undefined {
-  if (node.type === 'table') return node
+/** Encuentra la tabla destino en el árbol (DFS): la primera cuyo `dataset` coincida, o la primera. */
+function findTargetTable(node: ResolvedNode, dataset?: string): ResolvedNode | undefined {
+  if (node.type === 'table' && (!dataset || node.dataset === dataset)) return node
   for (const c of node.elements ?? []) {
-    const f = findFirstTable(c)
+    const f = findTargetTable(c, dataset)
     if (f) return f
   }
   return undefined
 }
 
-/** Fusiona la columna de anotación en la primera tabla, por clave de registro. */
+/** Fusiona la columna de anotación en la tabla destino (por dataset o la primera), por clave de registro. */
 async function applyAnnotations(piece: ResolvedNode, ann: AnnotationContext): Promise<void> {
-  const table = findFirstTable(piece)
+  const table = findTargetTable(piece, ann.dataset)
   if (!table || !table.columnsSpec || table.columnsSpec.length === 0) return
-  const rows = table.rows ?? []
+  // ANTI-ALIASING: `composePiece` copia los ARREGLOS de filas pero no los OBJETOS-fila — mutarlos acá
+  // contaminaría con `__ann`/`__anntok` cualquier otro payload que comparta las filas (p.ej.
+  // `interactive.datasets`) y, con el data-cache activo, quedaría escrito DENTRO del valor cacheado.
+  // Se reemplazan las filas de la tabla destino por copias superficiales antes de mutar.
+  const rows = (table.rows ?? []).map((r) => ({ ...r }))
+  table.rows = rows
   const keyField = ann.keyField ?? table.columnsSpec[0].field
   const keys = [...new Set(rows.map((r) => String(r[keyField] ?? '')))]
   const map = await ann.resolve(keys)
@@ -375,14 +454,58 @@ async function applyAnnotations(piece: ResolvedNode, ann: AnnotationContext): Pr
 
 // --- Multi-vista + drill-through (helpers) ----------------------------------
 
-/** Normaliza el contexto del drill (`params.ctx`) a un mapa campo→string. */
-function normalizeCtx(raw: unknown): Record<string, string> {
+/**
+ * Resuelve la VISTA ACTIVA de un spec (paso puro, testeable): en multi-vista se elige la página por
+ * `pageParam` (default: la 1ª) y se devuelven SOLO sus datasets; en una vista, la pieza + todo `data`.
+ * Las páginas-destino de drill (declaran `context`) NO van en la nav por defecto — aparecen "bajo
+ * demanda", únicamente cuando son la vista activa. Una vista de detalle alcanzada SIN su contexto
+ * (acceso directo, no por drill) devuelve una pieza-guía sin datasets (evita volcar todo).
+ */
+export function resolveActiveView(
+  spec: MiraSpec,
+  pageParam: string | undefined,
+  ctxValues: CtxValues,
+): { activePiece: Record<string, unknown>; pagesNav?: PagesNav; datasetNames: string[] } {
+  const isMulti = Array.isArray(spec.pages) && spec.pages.length > 0
+  if (!isMulti) {
+    return { activePiece: spec.piece as Record<string, unknown>, datasetNames: Object.keys(spec.data) }
+  }
+  const pages = spec.pages!
+  const active = pages.find((p) => p.id === pageParam) ?? pages[0]
+  const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
+  const pagesNav: PagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
+  const missing = (active.context ?? []).filter((c) => !ctxValues[c])
+  if (missing.length > 0) {
+    return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [] }
+  }
+  return { activePiece: active.piece, pagesNav, datasetNames: uniqueDatasets(active.piece) }
+}
+
+/** ¿El control es multi-select? (`single: false` en el DSL; default single). */
+function isMultiControl(c: MiraControl): boolean {
+  return c.single === false
+}
+
+/** Normaliza el contexto del drill (`params.ctx`) a un mapa campo→valor(es). Un parámetro repetido en
+ *  la URL (control multi-select) llega como arreglo; uno solo, como string (back-compat). */
+function normalizeCtx(raw: unknown): CtxValues {
   if (!raw || typeof raw !== 'object') return {}
-  const out: Record<string, string> = {}
+  const out: CtxValues = {}
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (v != null && v !== '') out[k] = String(v)
+    if (Array.isArray(v)) {
+      const list = v.filter((x) => x != null && x !== '').map(String)
+      if (list.length === 1) out[k] = list[0]
+      else if (list.length > 1) out[k] = list
+    } else if (v != null && v !== '') {
+      out[k] = String(v)
+    }
   }
   return out
+}
+
+/** Primer valor de una entrada de contexto (para consumidores single-value). */
+function asSingle(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v
 }
 
 /** Datasets (sin repetir) que una pieza referencia vía `data.<dataset>...`. */
@@ -391,9 +514,9 @@ function uniqueDatasets(piece: Record<string, unknown>): string[] {
 }
 
 /**
- * Dataset del que cuelga el `watermark_field` de la frescura (`quality.freshness`), o `undefined` si
- * no hay frescura declarada o está en `ignore`. Se recupera siempre para que `checkFreshness` resuelva
- * el watermark aun cuando el dataset viva en otra página (multi-vista).
+ * Dataset del que cuelga el `watermark_field` de la frescura GLOBAL (`quality.freshness`), o
+ * `undefined` si no hay frescura declarada o está en `ignore`. Se recupera siempre para que
+ * `checkFreshness` resuelva el watermark aun cuando el dataset viva en otra página (multi-vista).
  */
 function watermarkDatasetOf(spec: MiraSpec): string | undefined {
   const f = (spec.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
@@ -424,19 +547,32 @@ function expectRows(dataset: string, capability: string, out: unknown): Record<s
 }
 
 /**
- * Sustituye `:ctx.<param>` en `params.sql` por un PARÁMETRO BIND `@ctx_<param>` y adjunta su valor
- * en `params.params` (la Capability lo bindea — nunca concatena → injection-safe). Si no hay `:ctx.`
- * o no hay sql, devuelve los params intactos. Un param sin valor en `ctxValues` se bindea como `''`
- * (acota igual) y se reporta en `missing` para que el llamador lo loguee.
+ * Sustituye `:ctx.<param>` en `params.sql` por PARÁMETRO(S) BIND y adjunta su(s) valor(es) en
+ * `params.params` (la Capability los bindea — nunca concatena → injection-safe).
+ *  - Valor único → `@ctx_<param>` (comportamiento clásico).
+ *  - Valor MÚLTIPLE (control multi-select) → `@ctx_<param>_0, @ctx_<param>_1, …` — CONTRATO: con
+ *    multi-valor el placeholder DEBE vivir dentro de paréntesis de IN en el spec
+ *    (`WHERE semana IN (:ctx.semana)`); Mira solo expande la lista de binds, jamás interpola valores.
+ * Si no hay `:ctx.` o no hay sql, devuelve los params intactos. Un param sin valor en `ctxValues`
+ * se bindea como `''` (acota igual) y se reporta en `missing` para que el llamador lo loguee.
  */
-function applyCtx(params: Record<string, unknown> | undefined, ctxValues: Record<string, string>, missing?: string[]): Record<string, unknown> | undefined {
+function applyCtx(params: Record<string, unknown> | undefined, ctxValues: CtxValues, missing?: string[]): Record<string, unknown> | undefined {
   if (!params || typeof params['sql'] !== 'string') return params
   const sql = params['sql'] as string
   if (!sql.includes(':ctx.')) return params
   const bound: Record<string, string> = {}
   const rewritten = sql.replace(/:ctx\.([a-zA-Z0-9_]+)/g, (_m, param: string) => {
-    if (!(param in ctxValues) && missing && !missing.includes(param)) missing.push(param)
-    bound[`ctx_${param}`] = ctxValues[param] ?? ''
+    const v = ctxValues[param]
+    if (v === undefined && missing && !missing.includes(param)) missing.push(param)
+    if (Array.isArray(v)) {
+      return v
+        .map((val, i) => {
+          bound[`ctx_${param}_${i}`] = val
+          return `@ctx_${param}_${i}`
+        })
+        .join(', ')
+    }
+    bound[`ctx_${param}`] = v ?? ''
     return `@ctx_${param}`
   })
   return { ...params, sql: rewritten, params: { ...((params['params'] as Record<string, unknown>) ?? {}), ...bound } }
@@ -468,6 +604,23 @@ export function resolveControlValue(current: string | undefined, options: string
   if (def === 'first') return options[0]
   const sorted = [...options].sort(cmpVals)
   return def === 'min' ? sorted[0] : sorted[sorted.length - 1]
+}
+
+/**
+ * Valores de un control MULTI-SELECT: los de la URL se filtran contra las opciones (solo valores del
+ * catálogo — injection/typo-safe); si no queda ninguno válido, aplica el default (un solo valor,
+ * la misma semántica que el control single).
+ */
+export function resolveControlValues(
+  current: string | string[] | undefined,
+  options: string[],
+  def?: 'max' | 'min' | 'first',
+): string[] {
+  const asked = (current == null ? [] : Array.isArray(current) ? current : [current]).filter((v) => v !== '')
+  const valid = options.length === 0 ? asked : asked.filter((v) => options.includes(v))
+  if (valid.length > 0) return [...new Set(valid)]
+  const fallback = resolveControlValue(undefined, options, def)
+  return fallback === '' ? [] : [fallback]
 }
 
 /** Pieza-guía cuando se entra a una vista de detalle sin el contexto requerido (no por drill). */
