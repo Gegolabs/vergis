@@ -94,7 +94,7 @@ describe('Compilador de policy · codegen ClickHouse (la receta de Fase 0)', () 
   it('QW-04 → CREATE ROW POLICY exacto (mecanismo getSetting/splitByChar/has)', () => {
     const enf = compilePolicyToClickHouse(QW04_AUDIENCE, TARGET, BIND)!
     expect(enf.rowPolicySQL).toBe(
-      `CREATE ROW POLICY pol_areas ON vergis.areas\n` +
+      `CREATE ROW POLICY OR REPLACE pol_areas ON vergis.areas\n` +
         `    FOR SELECT\n` +
         `    USING (getSetting('vergis_claim_groups') != '' AND has(splitByChar(',', getSetting('vergis_claim_groups')), area))\n` +
         `    AS permissive\n` +
@@ -284,6 +284,34 @@ describe('Compilador de policy · codegen Fabric (predicado TVF + SECURITY POLIC
     expect(() =>
       compileFabric(parseAudience(QW04_AUDIENCE), { table: 'areas', columnTypes: { area: 'NVARCHAR(4000)); DROP' } }),
     ).toThrow(/tipo|type|unsafe/i)
+  })
+})
+
+describe('Guard de cardinalidad · op eq con claim multi-valor (no over-grant)', () => {
+  const EQ = parseAudience({ rls: [{ column: 'region', claim: 'regions', op: 'eq' }] })
+  const chEnf = compileClickHouse(EQ, TARGET)!
+  const fabEnf = compileFabric(EQ, { table: 'areas' })!
+
+  it('claim de UN valor: la celda igual pasa, la distinta no (ambos backends)', () => {
+    const s = settingsForInjections(chEnf.injections, { regions: ['norte'] })
+    expect(emulate(chEnf, s, { region: 'norte' })).toBe(true)
+    expect(emulateFabric(fabEnf, s, { region: 'norte' })).toBe(true)
+    expect(emulate(chEnf, s, { region: 'sur' })).toBe(false)
+    expect(emulateFabric(fabEnf, s, { region: 'sur' })).toBe(false)
+  })
+
+  it('claim MULTI-valor: una celda con el valor unido por coma NO pasa (era over-grant)', () => {
+    const s = settingsForInjections(chEnf.injections, { regions: ['a', 'b'] })
+    expect(s['vergis_claim_regions']).toBe('a,b')
+    expect(emulate(chEnf, s, { region: 'a,b' })).toBe(false)
+    expect(emulateFabric(fabEnf, s, { region: 'a,b' })).toBe(false)
+    // eq exige exactamente un valor permitido: un valor suelto tampoco pasa con claim multi-valor.
+    expect(emulate(chEnf, s, { region: 'a' })).toBe(false)
+  })
+
+  it('el codegen emite el guard de coma (position / CHARINDEX)', () => {
+    expect(chEnf.rowPolicySQL).toContain(`position(getSetting('vergis_claim_regions'), ',') = 0`)
+    expect(fabEnf.setupSQL[2]).toContain(`CHARINDEX(N',', CAST(SESSION_CONTEXT(N'vergis_claim_regions') AS NVARCHAR(MAX))) = 0`)
   })
 })
 

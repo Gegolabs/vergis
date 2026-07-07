@@ -49,6 +49,7 @@ export function createTokenProvider(creds: SpCreds, opts: { fetch?: FetchLike; n
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
+      signal: AbortSignal.timeout(15_000), // sin timeout, un AAD colgado bloquea todo lo que dependa del SP
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')

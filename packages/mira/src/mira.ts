@@ -179,14 +179,14 @@ export class MiraBotlet implements Botlet {
     let html = ''
     for (const r of renders) {
       if (r.format === 'csv') {
-        const rendered = (await host.capabilityCall(
+        const rendered = await host.capabilityCall(
           'render-csv-piece',
           { piece: resolved, title: spec.identity.display_name },
           identity,
-        )) as { csv: string }
+        )
         // El contenido queda EN MEMORIA (artifacts[].content); se escribe a disco solo si un canal
         // de distribución lo publica (hoy los channels publican el HTML — ver §6·bis).
-        artifacts.push({ format: 'csv', content: rendered.csv })
+        artifacts.push({ format: 'csv', content: expectString('render-csv-piece', 'csv', rendered) })
         host.log({ type: 'mira-render', botletId: this.id, format: 'csv' })
         continue
       }
@@ -365,8 +365,8 @@ export class MiraBotlet implements Botlet {
         carryCtx,
       },
       identity,
-    )) as { html: string }
-    return rendered.html
+    ))
+    return expectString('render-html-piece', 'html', rendered)
   }
 
   private checkShape(name: string, ds: MiraDataset, res: DatasetResult, host: BotletHost): void {
@@ -532,6 +532,26 @@ function watermarkDatasetOf(spec: MiraSpec): string | undefined {
  * Valida el contrato de salida de una Capability de datos: `{ rows: [...] }`. Falla ruidoso y
  * accionable en la frontera (en vez de un cast silencioso que revienta críptico aguas abajo).
  */
+/**
+ * Valida la frontera de salida de una capability de RENDER: exige `{ <field>: string }`. Sin esto, un
+ * cast a ciegas (`as { html }`) dejaba `undefined` cuando la capability devolvía otra forma, y el
+ * backstop anti-página-en-blanco (que compara contra `''`) no disparaba → HTTP 200 en blanco. Es la
+ * simetría con `expectRows` en la frontera de datos.
+ */
+function expectString(capability: string, field: string, out: unknown): string {
+  const val = (out as Record<string, unknown> | null | undefined)?.[field]
+  if (typeof val !== 'string') {
+    throw new VergisError({
+      error: 'mira/render',
+      code: 'capability-output-invalid',
+      path: field,
+      message: `La Capability de render '${capability}' no devolvió '{ ${field}: string }'.`,
+      remediation: `Toda Capability de render debe devolver un objeto con el campo string '${field}'.`,
+    })
+  }
+  return val
+}
+
 function expectRows(dataset: string, capability: string, out: unknown): Record<string, unknown>[] {
   const rows = (out as { rows?: unknown } | null | undefined)?.rows
   if (!Array.isArray(rows)) {

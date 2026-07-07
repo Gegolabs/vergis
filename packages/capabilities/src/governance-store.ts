@@ -485,8 +485,17 @@ export class SqliteGovernanceStore implements GovernanceStore {
 
   async setDemanda(piCode: string, maxAge: string, updatedBy?: string): Promise<void> {
     const age = maxAge.trim().toUpperCase()
-    if (!/^P(?:\d+W|(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?)$/.test(age) || age === 'P') {
+    // Validar con el MISMO parser que consume la demanda (`durationToSeconds`), no un regex propio:
+    // el regex aceptaba 'PT' (que luego revienta durationToSeconds) y 'P0D', y rechazaba 'P1W1D'.
+    // El `> 0` cubre tanto el throw como un resultado no positivo (P0D, NaN).
+    let seconds: number
+    try {
+      seconds = durationToSeconds(age)
+    } catch {
       throw new Error(`Demanda inválida: '${maxAge}' (use duración ISO-8601, p.ej. PT1H, P1D, P1W).`)
+    }
+    if (!(seconds > 0)) {
+      throw new Error(`Demanda inválida: '${maxAge}' debe ser una duración mayor a cero (p.ej. PT1H, P1D, P1W).`)
     }
     this.db.run(
       `INSERT INTO pi_demanda (pi_code, max_age, updated_by, updated_at) VALUES (?,?,?,?)
