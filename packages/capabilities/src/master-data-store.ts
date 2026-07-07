@@ -142,6 +142,9 @@ export function createDwhMasterDataStore(profiles: Record<string, SqlConnectionP
     }
     const created = new sql.ConnectionPool(cfg).connect()
     pools.set(ref, created)
+    // Evictar la promesa si la primera conexión falla: si no, el fallo transitorio queda cacheado
+    // para siempre (outage permanente hasta restart). El caller ve el rechazo; solo se limpia el caché.
+    created.catch(() => pools.delete(ref))
     return created
   }
   function target(entity: MasterDataEntity): { ref: string; table: string } {

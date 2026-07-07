@@ -124,7 +124,12 @@ export type ValidateResult = { ok: true } | { ok: false; error: string }
 export function validateUpload(slot: IntakeSlot, filename: string, size: number): ValidateResult {
   const name = (filename ?? '').trim()
   if (!name) return { ok: false, error: 'El archivo no tiene nombre.' }
-  if (/[/\\]/.test(name)) return { ok: false, error: `Nombre de archivo inválido (sin rutas): '${name}'.` }
+  if (name === '.' || name === '..') return { ok: false, error: `Nombre de archivo inválido: '${name}'.` }
+  // Separadores de ruta, traversal y caracteres que rompen el encoding del path DFS (`#`/`?` cortan
+  // el path / inyectan query params; `%` habilita doble-encoding; control chars). El nombre va directo
+  // a la URL de OneLake — se trata como hoja, nunca como ruta.
+  // eslint-disable-next-line no-control-regex
+  if (/[/\\?#%\x00-\x1f]/.test(name)) return { ok: false, error: `Nombre de archivo inválido (sin rutas ni caracteres especiales): '${name}'.` }
   if (slot.accept && !globToRegExp(slot.accept).test(name)) {
     return { ok: false, error: `El nombre '${name}' no coincide con el patrón esperado «${slot.accept}».` }
   }

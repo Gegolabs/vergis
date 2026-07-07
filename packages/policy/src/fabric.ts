@@ -37,6 +37,14 @@ export const SETTINGS_PREFIX = 'vergis_'
 /** Identificadores seguros (columna, claim, schema, tabla, nombres): evita inyección por nombre. */
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/**
+ * Collation binaria forzada en las comparaciones del predicado. Sin ella, en una BD con collation
+ * case-insensitive (Azure SQL default `SQL_Latin1_General_CP1_CI_AS`) el claim `ventas` matchearía
+ * filas `VENTAS` — MÁS permisivo que el evaluador de referencia (`===`, case-sensitive) y que
+ * ClickHouse. `BIN2` hace la comparación byte-a-byte, alineando el motor con la semántica de referencia.
+ */
+const COLLATE_BIN = 'COLLATE Latin1_General_100_BIN2'
+
 /** Tipo SQL por defecto del parámetro del predicado (la celda se compara contra NVARCHAR). */
 const DEFAULT_COLUMN_TYPE = 'NVARCHAR(4000)'
 
@@ -125,15 +133,15 @@ function predicateClause(pred: Predicate, schema: string): string {
     const anc = ident('ancestor', pred.ancestor)
     const desc = ident('descendant', pred.descendant)
     return (
-      `(${read} <> N'' AND @${col} IN (` +
-      `SELECT ${desc} FROM ${ref} WHERE ${anc} IN (SELECT value FROM STRING_SPLIT(${read}, N','))))`
+      `(${read} <> N'' AND @${col} ${COLLATE_BIN} IN (` +
+      `SELECT ${desc} FROM ${ref} WHERE ${anc} ${COLLATE_BIN} IN (SELECT value FROM STRING_SPLIT(${read}, N','))))`
     )
   }
   if (pred.op === 'eq') {
-    return `(${read} <> N'' AND @${col} = ${read})`
+    return `(${read} <> N'' AND @${col} ${COLLATE_BIN} = ${read})`
   }
   // in (membresía): STRING_SPLIT del valor delimitado por coma (el `splitByChar`/`has` de ClickHouse)
-  return `(${read} <> N'' AND @${col} IN (SELECT value FROM STRING_SPLIT(${read}, N',')))`
+  return `(${read} <> N'' AND @${col} ${COLLATE_BIN} IN (SELECT value FROM STRING_SPLIT(${read}, N',')))`
 }
 
 /**

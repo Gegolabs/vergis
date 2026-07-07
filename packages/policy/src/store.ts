@@ -56,6 +56,9 @@ export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; da
     if (typeof entry?.dataset !== 'string' || entry.dataset.length === 0) {
       throw err('dataset-missing', `${path}.dataset`, entry?.dataset, `Cada política debe atar a un 'dataset' (string).`, `Declarar 'dataset'.`)
     }
+    if (out.has(entry.dataset)) {
+      throw err('dataset-duplicate', `${path}.dataset`, entry.dataset, `El dataset '${entry.dataset}' tiene más de una política: el last-wins silencioso podría pisar la RLS con un 'grant: all' posterior.`, `Unificar la política de '${entry.dataset}' en una sola entrada.`)
+    }
     const hasGrant = entry.grant != null
     const hasRls = entry.rls != null
     if (hasGrant && hasRls) {

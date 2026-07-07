@@ -89,7 +89,7 @@ describe('Vocabulario · codegen Nivel-2 (subquery al cierre)', () => {
   it('Fabric → predicado TVF con subquery al cierre (via schema-calificada)', () => {
     const enf = compileFabric(parseAudience(HIER_AUDIENCE), FAB_TARGET)!
     const fn = enf.setupSQL[2]
-    expect(fn).toContain(`@region IN (SELECT descendant FROM [ref].[geo_closure] WHERE ancestor IN (SELECT value FROM STRING_SPLIT(`)
+    expect(fn).toContain(`@region COLLATE Latin1_General_100_BIN2 IN (SELECT descendant FROM [ref].[geo_closure] WHERE ancestor COLLATE Latin1_General_100_BIN2 IN (SELECT value FROM STRING_SPLIT(`)
     expect(fn).toContain(`WITH SCHEMABINDING`)
   })
 })

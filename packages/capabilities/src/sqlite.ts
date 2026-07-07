@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import initSqlJs from 'sql.js'
@@ -33,11 +33,18 @@ export async function openSqliteDb(file: string | null): Promise<SqlDb> {
   return new SQL.Database(bytes) as unknown as SqlDb
 }
 
-/** Vuelca la DB a su archivo (no-op si es en memoria). Volumen bajo → escritura inmediata. */
+/**
+ * Vuelca la DB a su archivo (no-op si es en memoria). Volumen bajo → escritura inmediata.
+ * Escritura ATÓMICA: escribe a `${file}.tmp` y hace `rename` (atómico en POSIX sobre el mismo FS).
+ * Un crash/OOM/disco-lleno a mitad de write deja el `.tmp` a medias, nunca el archivo vigente —
+ * este es el único registro de admins/ACLs/grupos y no hay journal ni respaldo.
+ */
 export function persistSqliteDb(db: SqlDb, file: string | null): void {
   if (!file) return
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, Buffer.from(db.export()))
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, Buffer.from(db.export()))
+  renameSync(tmp, file)
 }
 
 /** Lee todas las filas de un prepared SELECT (sin params) como objetos. */

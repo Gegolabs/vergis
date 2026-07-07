@@ -319,6 +319,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
   async deleteGroup(id: string): Promise<void> {
     const gid = id.trim().toLowerCase()
     this.db.run(`DELETE FROM mira_group_member WHERE group_id = ?`, [gid])
+    // Limpiar los grants del grupo: si no, quedan latentes y un grupo recreado con el mismo id
+    // haría que sus nuevos miembros hereden silenciosamente los accesos del grupo anterior.
+    this.db.run(`DELETE FROM pi_grant WHERE principal_type = 'group' AND principal = ?`, [gid])
     this.db.run(`DELETE FROM mira_group WHERE group_id = ?`, [gid])
     this.persist()
   }
@@ -435,6 +438,15 @@ export class SqliteGovernanceStore implements GovernanceStore {
     const p = principalType === 'user' ? normEmail(principal) : principal.trim().toLowerCase()
     if (!p) throw new Error('Principal vacío.')
     if (principalType === 'user' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p)) throw new Error(`Correo inválido: '${principal}'.`)
+    // Anti-lockout, por la otra puerta: degradar al último dueño a un rol menor lo dejaría sin
+    // dueño (mismo caso que `removeGrant` ya impide). Solo aplica si el nuevo rol NO es owner.
+    if (role !== 'owner') {
+      const grants = await this.listGrants(piCode)
+      const current = grants.find((g) => g.principalType === principalType && g.principal === p)
+      if (current?.role === 'owner' && grants.filter((g) => g.role === 'owner').length <= 1) {
+        throw new GovernanceConflict('No se puede degradar al último dueño del PI.')
+      }
+    }
     this.writeGrant(piCode, principalType, p, role, grantedBy)
     this.persist()
   }

@@ -86,6 +86,10 @@ export function createExecuteSqlDwh(
     }
     const created = new sql.ConnectionPool(cfg).connect()
     pools.set(ref, created)
+    // Evictar la promesa si la primera conexión falla (blip de red/AAD): si no, la promesa rechazada
+    // queda cacheada para siempre → outage permanente de este ref hasta reiniciar el proceso. El
+    // caller ve el rechazo igual (await sobre `created`); solo se limpia el caché para reintentar.
+    created.catch(() => pools.delete(ref))
     return created
   }
 
