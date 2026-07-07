@@ -82,6 +82,7 @@ import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
+import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from './deployment-check'
 import {
   claimValues,
   compileClickHouse,
@@ -98,6 +99,12 @@ const ENGINE = (process.env['VERGIS_ENGINE'] ?? 'clickhouse').toLowerCase()
 if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGINE inválido: '${ENGINE}' (clickhouse | fabric).`)
 const PORT = Number(process.env['PORT'] ?? 8080)
 const REFRESH_MS = Number(process.env['VERGIS_REFRESH_MS'] ?? 0)
+
+// Auto-chequeo de coherencia del despliegue (contrato Producto→Infra). Corre ANTES de leer specs,
+// políticas o config de gobierno: si un env referencia un path no montado, o el gobierno se pide con
+// un store efímero, se avisa RUIDOSAMENTE (y en modo strict se aborta) en vez de degradar en silencio
+// —el modo de falla del incidente del avatar (2026-07)—. Ver deploy/compose.reference.yml.
+reportDeploymentConfig(checkDeploymentConfig(process.env), configCheckMode(process.env))
 
 // El catálogo de serving (hardening, charter §2b): SOLO la Capability enforcing del motor activo.
 // En fabric, `execute-sql-dwh` es enforcing PORQUE hay push-down (la RLS vive en la fuente).
