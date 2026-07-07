@@ -59,7 +59,12 @@ function tableToCsv(table: ResolvedNode, sectionTitle?: string): string {
 function rawValue(v: unknown): string {
   if (v == null) return ''
   if (v instanceof Date) return v.toISOString().slice(0, 10)
-  return String(v)
+  const s = String(v)
+  // Neutralización de formula injection: una celda de TEXTO que empieza con un caracter de fórmula
+  // (`= + - @`, tab o CR) se ejecuta al abrir en Excel/Sheets. Se antepone `'` solo a strings —
+  // los números crudos (que el diseño exige sin formatear) quedan intactos.
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) return `'${s}`
+  return s
 }
 
 /** Escapa un campo según RFC 4180: se cita si contiene coma, comilla o salto de línea. */

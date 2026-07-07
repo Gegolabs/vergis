@@ -232,7 +232,7 @@ describe('Compilador de policy · codegen Fabric (predicado TVF + SECURITY POLIC
         `    WITH SCHEMABINDING\n` +
         `    AS RETURN\n` +
         `        SELECT 1 AS vergis_allowed\n` +
-        `        WHERE (CAST(SESSION_CONTEXT(N'vergis_claim_groups') AS NVARCHAR(MAX)) <> N'' AND @area IN (SELECT value FROM STRING_SPLIT(CAST(SESSION_CONTEXT(N'vergis_claim_groups') AS NVARCHAR(MAX)), N',')));`,
+        `        WHERE (CAST(SESSION_CONTEXT(N'vergis_claim_groups') AS NVARCHAR(MAX)) <> N'' AND @area COLLATE Latin1_General_100_BIN2 IN (SELECT value FROM STRING_SPLIT(CAST(SESSION_CONTEXT(N'vergis_claim_groups') AS NVARCHAR(MAX)), N',')));`,
       `CREATE SECURITY POLICY [dbo].[secpol_areas]\n` +
         `    ADD FILTER PREDICATE [dbo].[fn_pol_areas](area) ON [dbo].[areas]\n` +
         `    WITH (STATE = ON);`,
@@ -272,8 +272,8 @@ describe('Compilador de policy · codegen Fabric (predicado TVF + SECURITY POLIC
       combine: 'or',
     })
     const fn = compileFabric(pol, FAB_TARGET)!.setupSQL[2]
-    expect(fn).toContain(`@area IN (SELECT value FROM STRING_SPLIT(`)
-    expect(fn).toContain(`@region = CAST(SESSION_CONTEXT(N'vergis_claim_regions') AS NVARCHAR(MAX))`)
+    expect(fn).toContain(`@area COLLATE Latin1_General_100_BIN2 IN (SELECT value FROM STRING_SPLIT(`)
+    expect(fn).toContain(`@region COLLATE Latin1_General_100_BIN2 = CAST(SESSION_CONTEXT(N'vergis_claim_regions') AS NVARCHAR(MAX))`)
     expect(fn).toContain(`) OR (`) // combine or
     expect(fn).toContain(`(@area NVARCHAR(4000), @region NVARCHAR(4000))`) // ambos params
   })

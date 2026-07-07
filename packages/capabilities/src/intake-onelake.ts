@@ -22,8 +22,13 @@ export interface OneLakeIntake {
   put(target: IntakeTarget, filename: string, bytes: Uint8Array): Promise<void>
 }
 
-const joinPath = (target: IntakeTarget, filename: string): string =>
-  `${target.path.replace(/^\/+|\/+$/g, '')}/${filename}`
+/**
+ * Ruta relativa DFS, codificada POR SEGMENTO con `encodeURIComponent`. `encodeURI` no escapa `?`/`#`,
+ * lo que dejaba que un filename con esos caracteres cortara el path o inyectara query params en la
+ * request autenticada. El filename se trata como hoja (un solo segmento) — nunca como sub-ruta.
+ */
+const encodedRelPath = (target: IntakeTarget, filename: string): string =>
+  [...target.path.replace(/^\/+|\/+$/g, '').split('/'), filename].map(encodeURIComponent).join('/')
 
 export function createOneLakeIntake(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): OneLakeIntake {
   const doFetch = opts.fetch ?? fetch
@@ -35,7 +40,7 @@ export function createOneLakeIntake(tokens: TokenProvider, opts: { fetch?: Fetch
 
   return {
     async put(target, filename, bytes): Promise<void> {
-      const rel = encodeURI(joinPath(target, filename))
+      const rel = encodedRelPath(target, filename)
       const base = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}/${encodeURIComponent(target.lakehouseId)}/${rel}`
       const headers = await auth()
       const len = bytes.byteLength

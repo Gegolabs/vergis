@@ -36,12 +36,12 @@ export function indexHtml(
   title: string,
   opts: { logoUrl?: string; avatar?: string } = {},
 ): string {
-  const lis = items.map((r) => `<li><a href="/${r.slug}"><div class="pi-id"><span class="c">${r.code}</span> ${r.name}</div>${govLine(r)}</a></li>`).join('')
+  const lis = items.map((r) => `<li><a href="/${encodeURIComponent(r.slug)}"><div class="pi-id"><span class="c">${escapeHtml(r.code)}</span> ${escapeHtml(r.name)}</div>${govLine(r)}</a></li>`).join('')
   const logo = opts.logoUrl ? `<img class="logo" src="${opts.logoUrl}" alt="">` : ''
   const avatar = opts.avatar ?? ''
   // Theme oscuro (default, gruvbox) / blanco — vía CSS vars + data-theme; el toggle vive en el avatar.
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title><style>
+<title>${escapeHtml(title)}</title><style>
 :root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374}
 html[data-theme="blanco"]{--bg:#ffffff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8}
 body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:40px;transition:background .15s,color .15s;min-height:100vh;box-sizing:border-box;display:flex;flex-direction:column}
@@ -51,7 +51,7 @@ li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospac
 .pi-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gov{flex:none;text-align:right;font-size:11px;color:var(--muted);line-height:1.5;white-space:nowrap}.gov .gk{text-transform:uppercase;letter-spacing:.04em;font-size:9px;opacity:.7}.gov .na{font-style:italic;opacity:.7}.gov .ginfo{cursor:help;opacity:.6;margin-left:2px}
 ${AVATAR_CSS}</style></head>
-<body>${avatar}<div class="head">${logo}<h1>${title}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis</div>
+<body>${avatar}<div class="head">${logo}<h1>${escapeHtml(title)}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis</div>
 <script>
 (function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();
 </script></body></html>`
