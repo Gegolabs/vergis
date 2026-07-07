@@ -1,0 +1,91 @@
+# Vergis — DESPLIEGUE DE REFERENCIA con Administración/gobierno (motor Fabric, push-down).
+#
+# Este archivo es el CONTRATO Producto→Infra: la lista canónica de envs + montajes que el motor
+# necesita para encender la app de Administración (avatar Perfil/Gestión/Configuración), la gestión
+# de dominio/ingesta, la data maestra, el registro de fuentes/frescura y el gobierno de PI.
+#
+# NO se despliega tal cual: es una PLANTILLA genérica, sin secretos ni datos de ninguna instancia.
+# Una instancia lo COPIA a su repo de infraestructura, reemplaza los `<...>` y pone los secretos en
+# archivos gitignored (env_file). El `docker-compose.yml` de la raíz es el modo "Free" MÍNIMO (sin
+# gobierno) — no partir de él para un despliegue con Administración.
+#
+# El propio motor verifica este contrato al arrancar (server/deployment-check.ts): si un env aquí
+# referencia un archivo/carpeta que no montaste, o pides gobierno con VERGIS_OUT efímero, el arranque
+# lo GRITA (y en modo estricto aborta) en vez de degradar en silencio. Ajusta el rigor con
+# VERGIS_CONFIG_CHECK = strict (default) | warn | off.
+services:
+  vergis:
+    image: ghcr.io/gegolabs/vergis:latest
+    restart: unless-stopped
+    # Secretos de la instancia (NUNCA en git): VERGIS_CONNECTIONS (Service Principal → Fabric),
+    # VERGIS_ADMIN_SEED (admins semilla), VERGIS_INDEX_TITLE/LOGO (branding). En un archivo gitignored.
+    env_file: [vergis.env]
+    environment:
+      VERGIS_ENGINE: fabric                       # motor C: push-down a Fabric (la RLS vive en la fuente)
+      VERGIS_SPECS_DIR: /specs                    # PIs servibles (authz-blind) — montaje ./specs
+      VERGIS_POLICIES: /policies/entidades.yaml   # policy store data-anchored (coma-separado si son varios)
+      VERGIS_IDENTITY_MAP: /identity/map.json     # email del gate → claim de identidad (trust-base)
+
+      # --- Gobierno / Administración (todo esto junto enciende el avatar) ---------------------------
+      VERGIS_OUT: /governance                     # ⚠ GovernanceStore PERSISTENTE (admins/dueños/auditoría).
+                                                  #   NO /tmp: efímero = se pierde en cada restart.
+      VERGIS_MASTER_DATA: /master-data/entidades.yaml   # entidades de data maestra (autoría)
+      VERGIS_DOMAINS: /domains.yaml               # dominios (etiqueta + stewards)
+      VERGIS_GROUPS: /groups.yaml                 # grupos (p. ej. un "Centro de Excelencia")
+      VERGIS_INTAKE: /intake/slots.yaml           # slots de ingesta de archivos
+      VERGIS_SOURCES: /sources.yaml               # registro de fuentes (frescura: oferta + engine_ref)
+      VERGIS_PI_OWNERS: /pi-owners.yaml           # dueños iniciales por PI (semilla de gobierno)
+      VERGIS_INTAKE_SP: <ref-de-conexion>         # conexión cuyo SP escribe OneLake (si hay varias)
+      VERGIS_DEFAULT_STEWARD_GROUPS: <grupo>      # steward por default de todos los dominios (opcional)
+      VERGIS_DEFAULT_COLLABORATOR_GROUPS: <grupo> # colaborador por default de todos los PIs (opcional)
+      VERGIS_SIGNOUT_RD: <url-logout-idp>         # logout completo del IdP (opcional; vacío = interno)
+      # VERGIS_PI_ACL: "1"                        # activa la ACL de artefacto de PIs (default off)
+      # VERGIS_CONFIG_CHECK: strict               # strict (default) | warn | off
+    volumes:
+      # A cada env de arriba que referencia un path le corresponde un montaje. Si falta uno, el motor
+      # lo detecta al arrancar y falla ruidoso (ese fue el modo de falla del incidente del avatar).
+      - ./specs:/specs:ro
+      - ./policies:/policies:ro
+      - ./identity:/identity:ro
+      - ./master-data:/master-data:ro
+      - ./governance:/governance            # PERSISTENTE (no :ro): aquí vive governance.sqlite
+      - ./domains.yaml:/domains.yaml:ro
+      - ./groups.yaml:/groups.yaml:ro
+      - ./intake:/intake:ro
+      - ./sources.yaml:/sources.yaml:ro
+      - ./pi-owners.yaml:/pi-owners.yaml:ro
+    expose: ["8080"]
+
+  # SSO delante del motor: reenvía el email del usuario autenticado como X-Forwarded-Email. Genérico
+  # (aquí oauth2-proxy con un IdP OIDC); reemplaza issuer/client por los de tu tenant. Secretos en env_file.
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    restart: unless-stopped
+    depends_on: [vergis]
+    env_file: [oauth2.env]                  # OAUTH2_PROXY_CLIENT_SECRET + COOKIE_SECRET
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: <https://tu-idp/issuer>
+      OAUTH2_PROXY_CLIENT_ID: <client-id>
+      OAUTH2_PROXY_UPSTREAMS: http://vergis:8080
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"  # reenvía X-Forwarded-Email al motor
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+    expose: ["4180"]
+
+  # Terminación TLS / reverse-proxy público. Genérico (Caddy); cualquier proxy con TLS sirve.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [oauth2-proxy]
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
