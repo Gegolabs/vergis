@@ -138,7 +138,9 @@ function predicateClause(pred: Predicate, schema: string): string {
     )
   }
   if (pred.op === 'eq') {
-    return `(${read} <> N'' AND @${col} ${COLLATE_BIN} = ${read})`
+    // Guard de cardinalidad: un claim multi-valor viaja como 'a,b'; sin `CHARINDEX(N',', ...) = 0`
+    // una celda que contenga 'a,b' pasaría (over-grant). La referencia `eq` exige UN valor.
+    return `(${read} <> N'' AND CHARINDEX(N',', ${read}) = 0 AND @${col} ${COLLATE_BIN} = ${read})`
   }
   // in (membresía): STRING_SPLIT del valor delimitado por coma (el `splitByChar`/`has` de ClickHouse)
   return `(${read} <> N'' AND @${col} ${COLLATE_BIN} IN (SELECT value FROM STRING_SPLIT(${read}, N',')))`
@@ -297,7 +299,7 @@ export function emulateFabric(
       )
       return visible.has(cell)
     }
-    if (pred.op === 'eq') return cell === s
+    if (pred.op === 'eq') return !s.includes(',') && cell === s // guard de cardinalidad (multi-valor → deny)
     return stringSplit(s).includes(cell)
   }
   const results = policy.predicates.map(evalPred)

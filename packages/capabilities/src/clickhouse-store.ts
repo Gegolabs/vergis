@@ -36,6 +36,7 @@ async function chExec(conn: ChAdminConn, sql: string, opts: { json?: boolean } =
       'Content-Type': 'text/plain; charset=utf-8',
     },
     body: sql,
+    signal: AbortSignal.timeout(60_000), // un socket colgado en bootstrap/ingesta dejaba todo pendiente
   })
   const text = await res.text()
   if (!res.ok) throw new Error(`clickhouse: ${res.status} — ${text.slice(0, 500)}\n  SQL: ${sql.slice(0, 200)}`)

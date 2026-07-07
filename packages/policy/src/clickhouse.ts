@@ -89,7 +89,9 @@ function predicateExpr(pred: Predicate): string {
     return `(${get} != '' AND ${col} IN (SELECT ${desc} FROM ${via} WHERE has(splitByChar(',', ${get}), ${anc})))`
   }
   if (pred.op === 'eq') {
-    return `(${get} != '' AND ${col} = ${get})`
+    // Guard de cardinalidad: un claim multi-valor se inyecta como 'a,b'; sin el `position(...) = 0`
+    // una celda que contenga literalmente 'a,b' pasaría (over-grant). La referencia `eq` exige UN valor.
+    return `(${get} != '' AND position(${get}, ',') = 0 AND ${col} = ${get})`
   }
   // in (membresía)
   return `(${get} != '' AND has(splitByChar(',', ${get}), ${col}))`
@@ -104,7 +106,9 @@ export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget):
   const policyName = ident('policyName', target.policyName ?? `pol_${table}`)
   const xml = `<clickhouse><custom_settings_prefixes>${SETTINGS_PREFIX.replace(/_$/, '')}_</custom_settings_prefixes></clickhouse>`
   const rowPolicy = (using: string) =>
-    `CREATE ROW POLICY ${policyName} ON ${db}.${table}\n    FOR SELECT\n    USING ${using}\n    AS permissive\n    TO ${role};`
+    // `OR REPLACE`: idempotente (re-especializar la misma tabla no falla por "already exists"),
+    // simétrico con el setup drop-and-recreate de Fabric.
+    `CREATE ROW POLICY OR REPLACE ${policyName} ON ${db}.${table}\n    FOR SELECT\n    USING ${using}\n    AS permissive\n    TO ${role};`
 
   // PÚBLICO (grant: all) → ROW POLICY allow-all (`USING 1`); la policy existe y permite toda fila.
   if (isPublic(policy)) {
@@ -196,7 +200,7 @@ export function emulate(
       )
       return visible.has(cell)
     }
-    if (pred.op === 'eq') return cell === s
+    if (pred.op === 'eq') return !s.includes(',') && cell === s // guard de cardinalidad (multi-valor → deny)
     return splitByChar(s).includes(cell)
   }
   const results = policy.predicates.map(evalPred)

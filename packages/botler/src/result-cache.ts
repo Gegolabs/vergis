@@ -30,6 +30,10 @@ export interface CachedCapability extends Capability {
   /** Última salida válida conocida para (params, identity), aunque el TTL haya vencido.
    *  `undefined` si esa identidad nunca obtuvo un resultado para esos params. */
   getLastValid(params: unknown, identity: IdentityContext): unknown | undefined
+  /** Vacía el caché por completo. Lo llama el server al recargar gobierno/policies en caliente:
+   *  tras endurecer una política, las entradas cacheadas servirían filas de la política vieja
+   *  hasta vencer el TTL. */
+  clear(): void
   /** Contadores observables (tests/diagnóstico). */
   stats(): { hits: number; misses: number; size: number }
 }
@@ -95,6 +99,10 @@ export function withResultCache(cap: Capability, opts: ResultCacheOptions): Cach
     },
     getLastValid(params: unknown, identity: IdentityContext): unknown | undefined {
       return lastValid.get(cacheKey(cap.name, params, identity))
+    },
+    clear() {
+      entries.clear()
+      lastValid.clear()
     },
     stats() {
       return { ...counters, size: entries.size }

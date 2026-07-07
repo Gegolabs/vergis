@@ -46,7 +46,7 @@ export function createOneLakeIntake(tokens: TokenProvider, opts: { fetch?: Fetch
       const len = bytes.byteLength
 
       // 1) crear el archivo (vacío). Idempotente: overwrite del mismo nombre.
-      const created = await doFetch(`${base}?resource=file`, { method: 'PUT', headers })
+      const created = await doFetch(`${base}?resource=file`, { method: 'PUT', headers, signal: AbortSignal.timeout(30_000) })
       if (!created.ok) throw await dfsError('crear', created, base)
 
       // 2) append de los bytes desde la posición 0.
@@ -54,11 +54,12 @@ export function createOneLakeIntake(tokens: TokenProvider, opts: { fetch?: Fetch
         method: 'PATCH',
         headers: { ...headers, 'content-type': 'application/octet-stream' },
         body: bytes as unknown as RequestInit['body'],
+        signal: AbortSignal.timeout(30_000),
       })
       if (!appended.ok) throw await dfsError('append', appended, base)
 
       // 3) flush (commit) hasta la longitud escrita.
-      const flushed = await doFetch(`${base}?action=flush&position=${len}`, { method: 'PATCH', headers })
+      const flushed = await doFetch(`${base}?action=flush&position=${len}`, { method: 'PATCH', headers, signal: AbortSignal.timeout(30_000) })
       if (!flushed.ok) throw await dfsError('flush', flushed, base)
     },
   }
@@ -83,7 +84,7 @@ export function createFabricJobs(tokens: TokenProvider, opts: { fetch?: FetchLik
       const jobType = trigger.jobType ?? 'Pipeline'
       const token = await tokens.getToken(SCOPE_FABRIC)
       const url = `${FABRIC_API}/workspaces/${encodeURIComponent(ws)}/items/${encodeURIComponent(trigger.processRef)}/jobs/instances?jobType=${encodeURIComponent(jobType)}`
-      const res = await doFetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` } })
+      const res = await doFetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
       // 202 Accepted es el éxito esperado (job encolado).
       if (!res.ok && res.status !== 202) {
         const text = await res.text().catch(() => '')
@@ -122,7 +123,7 @@ export function createFabricJobStatus(tokens: TokenProvider, opts: { fetch?: Fet
     async listInstances(workspaceId, itemId, top = 5): Promise<RunRecord[]> {
       const token = await tokens.getToken(SCOPE_FABRIC)
       const url = `${FABRIC_API}/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}/jobs/instances`
-      const res = await doFetch(url, { headers: { authorization: `Bearer ${token}` } })
+      const res = await doFetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
         throw new Error(`fabric-job-status: listInstances falló (${res.status}) para item '${itemId}': ${text.slice(0, 300)}`)

@@ -174,7 +174,16 @@ export function createDwhMasterDataStore(profiles: Record<string, SqlConnectionP
     },
     async insert(entity, values) {
       const { ref, table } = target(entity)
+      const pk = pkColumn(entity)
       const pool = await getPool(ref)
+      // Fabric Warehouse declara las PK como NOT ENFORCED → un INSERT duplicado NO falla. Chequear
+      // explícito para honrar el contrato (la impl. SQLite lanza MasterDataConflict).
+      const check = pool.request()
+      bind(check, 'pk', pk, pkScalar(pk, String(values[pk.name] ?? '')))
+      const found = await check.query(`SELECT 1 FROM ${table} WHERE ${pk.name} = @pk`)
+      if ((found.recordset ?? []).length > 0) {
+        throw new MasterDataConflict(`Ya existe un registro con ${pk.label} = ${values[pk.name]}.`)
+      }
       const req = pool.request()
       entity.columns.forEach((c, i) => bind(req, `p${i}`, c, values[c.name] ?? null))
       const cols = entity.columns.map((c) => c.name).join(', ')
@@ -191,7 +200,12 @@ export function createDwhMasterDataStore(profiles: Record<string, SqlConnectionP
       setCols.forEach((c, i) => bind(req, `p${i}`, c, values[c.name] ?? null))
       bind(req, 'pk', pk, pkScalar(pk, pkValue))
       const setSql = setCols.map((c, i) => `${c.name} = @p${i}`).join(', ')
-      await req.query(`UPDATE ${table} SET ${setSql} WHERE ${pk.name} = @pk`)
+      const res = await req.query(`UPDATE ${table} SET ${setSql} WHERE ${pk.name} = @pk`)
+      // Sin fila afectada → la PK no existía: no-op silencioso donde SQLite lanza. La UI de
+      // Administración (desarrollada contra la gemela local) asume el error.
+      if ((res.rowsAffected?.[0] ?? 0) === 0) {
+        throw new MasterDataConflict(`No existe un registro con ${pk.label} = ${pkValue}.`)
+      }
     },
     async remove(entity, pkValue) {
       const { ref, table } = target(entity)
