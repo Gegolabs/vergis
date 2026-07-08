@@ -325,6 +325,13 @@ const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-gro
   }, {})
 const GATE_MAPPING = { ...DEFAULT_GATE_MAPPING, claims: gateClaims, decodeUtf8: true }
 
+// A10 · Defensa en profundidad del gate (OPT-IN): con VERGIS_GATE_SECRET definido, se exige que cada
+// request (salvo /healthz) traiga `x-gate-token` con ese valor — un secreto que SOLO el oauth2-proxy
+// conoce y adjunta. Si el server queda expuesto sin el proxy delante (misconfig, puerto directo), los
+// requests sin el token se rechazan → el consumidor no puede fabricar sus claims. Vacío = sin chequeo
+// (comportamiento vivo: la protección sigue siendo que el proxy esté delante).
+const GATE_SECRET = process.env['VERGIS_GATE_SECRET'] ?? ''
+
 // RESOLVER DE IDENTIDAD desde un DIRECTORIO (charter §4–§5): cuando el claim del criterio no viaja
 // en la cabecera del gate sino que se deriva de la identidad autenticada (p.ej. el ÁREA del viewer
 // a partir de su email corporativo), se resuelve contra un mapa de referencia. VERGIS_IDENTITY_MAP
@@ -505,6 +512,10 @@ const server = createServer((req, res) => {
     res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: ready, engine: ENGINE }))
     return
+  }
+  // A10 · Gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).
+  if (GATE_SECRET && req.headers['x-gate-token'] !== GATE_SECRET) {
+    return fail(res, 403, 'Acceso denegado: falta el token del gate (el request no pasó por el proxy).')
   }
   // ADMINISTRACIÓN — superficie de escritura, gateada por rol admin DENTRO del handler. Va antes del
   // gate `ready` (no depende del motor de serving): editar data maestra no es servir dato gobernado.
