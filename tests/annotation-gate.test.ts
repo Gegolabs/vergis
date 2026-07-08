@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { annSign, verifyAnnToken } from '../server/annotations'
+import { annSign, verifyAnnToken, constantTimeEqual } from '../server/annotations'
 
 const SECRET = 'nodo-secret'
 
@@ -43,5 +43,18 @@ describe('anotaciones · época del token (revocación no eterna)', () => {
   it('un token de una época YA fuera de ventana NO valida (revocación corta la escritura)', () => {
     const tok = annSign(SECRET, 'qw-04', 'ana@x.com', 'k', 'A')
     expect(verifyAnnToken(SECRET, 'qw-04', 'ana@x.com', 'k', tok, ['C', 'B'])).toBe(false)
+  })
+})
+
+describe('constantTimeEqual · comparación de tiempo constante (HMAC/CSRF)', () => {
+  it('iguales → true', () => {
+    expect(constantTimeEqual('abc123', 'abc123')).toBe(true)
+  })
+  it('distintos de igual largo → false', () => {
+    expect(constantTimeEqual('abc123', 'abc124')).toBe(false)
+  })
+  it('largos distintos → false sin lanzar (token forjado de otro tamaño)', () => {
+    expect(constantTimeEqual('abc', 'abc123456789')).toBe(false)
+    expect(constantTimeEqual('', 'x')).toBe(false)
   })
 })

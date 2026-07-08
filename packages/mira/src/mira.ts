@@ -93,6 +93,8 @@ export class MiraBotlet implements Botlet {
     let { activePiece, datasetNames } = view
     const pagesNav = view.pagesNav
     const isMulti = pagesNav != null
+    // Enlace a una página inexistente: se sirvió la 1ª en su lugar. Se audita en vez de fallar en silencio.
+    if (view.pageUnknown) host.log({ type: 'mira-page-unknown', botletId: this.id, requested: pageParam, served: pagesNav?.active })
 
     // 3 · Recuperación de datos (vía Botler.capability_call, nunca acceso directo)
     const results: Record<string, DatasetResult> = {}
@@ -465,20 +467,24 @@ export function resolveActiveView(
   spec: MiraSpec,
   pageParam: string | undefined,
   ctxValues: CtxValues,
-): { activePiece: Record<string, unknown>; pagesNav?: PagesNav; datasetNames: string[] } {
+): { activePiece: Record<string, unknown>; pagesNav?: PagesNav; datasetNames: string[]; pageUnknown?: boolean } {
   const isMulti = Array.isArray(spec.pages) && spec.pages.length > 0
   if (!isMulti) {
     return { activePiece: spec.piece as Record<string, unknown>, datasetNames: Object.keys(spec.data) }
   }
   const pages = spec.pages!
-  const active = pages.find((p) => p.id === pageParam) ?? pages[0]
+  const requested = pageParam != null ? pages.find((p) => p.id === pageParam) : undefined
+  const active = requested ?? pages[0]
+  // `?page=<id>` con un id que no existe cae en silencio a la 1ª página. Señalamos el fallback para que
+  // el caller lo audite (`mira-page-unknown`) en vez de que un enlace roto se vea como navegación normal.
+  const pageUnknown = pageParam != null && requested === undefined
   const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
   const pagesNav: PagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
   const missing = (active.context ?? []).filter((c) => !ctxValues[c])
   if (missing.length > 0) {
-    return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [] }
+    return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [], pageUnknown }
   }
-  return { activePiece: active.piece, pagesNav, datasetNames: uniqueDatasets(active.piece) }
+  return { activePiece: active.piece, pagesNav, datasetNames: uniqueDatasets(active.piece), pageUnknown }
 }
 
 /** ¿El control es multi-select? (`single: false` en el DSL; default single). */

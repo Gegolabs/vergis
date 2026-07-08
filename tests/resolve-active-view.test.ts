@@ -38,9 +38,15 @@ describe('resolveActiveView · multi-vista', () => {
     expect(JSON.stringify(v.activePiece)).toContain('Selecciona un registro')
   })
 
-  it('page desconocida → cae a la primera', () => {
+  it('page desconocida → cae a la primera y marca pageUnknown para auditarlo', () => {
     const v = resolveActiveView(spec, 'nope', {})
     expect(v.pagesNav?.active).toBe('resumen')
+    expect(v.pageUnknown).toBe(true)
+  })
+
+  it('page conocida o sin page → pageUnknown falsy (no se audita navegación normal)', () => {
+    expect(resolveActiveView(spec, 'detalle', { socio: 'A' }).pageUnknown).toBeFalsy()
+    expect(resolveActiveView(spec, undefined, {}).pageUnknown).toBeFalsy()
   })
 
   it('una vista (piece) → sin nav y con TODOS los datasets de data', () => {
