@@ -435,7 +435,7 @@ async function handleEntityWrite(
  * facetas (Ingesta · Data Maestra → entidades · Fuentes); en Configuración, las opciones de plataforma. */
 function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, active: string, isAdmin: boolean): string {
   const lvl = (href: string, label: string, on: boolean, cls = ''): string =>
-    `<a href="${href}" class="${[cls, on ? 'on' : ''].filter(Boolean).join(' ')}">${escapeHtml(label)}</a>`
+    `<a href="${escapeHtml(href)}" class="${[cls, on ? 'on' : ''].filter(Boolean).join(' ')}">${escapeHtml(label)}</a>`
   let s = `<span class="bca">${escapeHtml(deps.brandTitle ?? 'Vergis')} · Admin</span>`
   s += `<a href="/" class="catlink">↩ Catálogo de PIs</a>`
   if (scope === 'config') {
