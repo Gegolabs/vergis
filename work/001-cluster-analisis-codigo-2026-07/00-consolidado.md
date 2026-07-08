@@ -212,25 +212,26 @@ Clave del tier A: el runtime de tabla vive en **funciones TS exportadas y testea
 
 ---
 
-## Pendiente reorganizado en olas (2026-07-07)
+## Segundo ciclo — pendiente en 4 olas (2026-07-07)
 
-Olas 1-4 (originales) + la cola no-serve-rls + tier A + el refactor createApp (sustantivo) están HECHOS.
-Lo que resta, en cuatro olas por lo que las habilita:
+El PRIMER ciclo (Olas 1-4 del consolidado original + la cola no-serve-rls + tier A + el refactor
+createApp sustantivo) está HECHO. Lo que resta arranca como un **ciclo nuevo, Olas 1-4**, agrupado por
+lo que cada una habilita:
 
-### Ola 5 · Endurecimiento de serve-rls + config — *ahora, sin motor ni install, riesgo acotado*
+### Ola 1 · Endurecimiento de serve-rls + config — *ahora, sin motor ni install, riesgo acotado*
 - Cablear `configFromEnv()` en serve-rls (activa la validación NaN; hoy config.ts está testeado pero sin usar).
 - **MEDIA:** mutex en `bootstrapAll`/`ingestAll` · re-armar watchers tras save atómico (`hot-reload.ts`) · época en el HMAC de anotaciones (token no-eterno) · retry perpetuo del bootstrap (fabric sin retry).
 - **BAJA:** handler `SIGTERM` graceful · detección de slugs duplicados · `timingSafeEqual` en HMAC/CSRF · micro-caché del índice.
 
-### Ola 6 · Datos sobre motor vivo — *necesita Fabric/ClickHouse para verificar*
+### Ola 2 · Datos sobre motor vivo — *necesita Fabric/ClickHouse para verificar*
 - `master-data-publish` con staging + swap · `TRUNCATE+INSERT` de CH → `EXCHANGE TABLES` · semilla re-aplicada en cada `open()` · Fabric setup en transacción (ventana sin RLS en re-deploy).
 
-### Ola 7 · Estructura, runtime embebido y tooling — *pase dedicado / npm install*
+### Ola 3 · Estructura, runtime embebido y tooling — *pase dedicado / npm install*
 - Wrap final `createApp()` (app.ts/main.ts) + cortes de `render-html-piece.ts`/`mira.ts`/`codegen-common.ts` + dedup de themes.
 - Runtime embebido browser-only: debounce de búsqueda · colisión de vistas guardadas con 2 tablas.
 - Tooling: `vitest`→3/4 (mata el critical dev) · lint · coverage · `noUncheckedIndexedAccess`.
 - Cola de BAJAs: a11y de teclado · string-sniffing de features · CSV BOM · regex de ruta duplicada en admin · `appendFileSync` async · log de página desconocida · validación de identificadores en DDL de CH · alinear schema JSON con el validador.
 
-### Ola 8 · Infra + entrega — *no es código*
+### Ola 4 · Infra + entrega — *no es código*
 - Confirmar **D1** (red de ClickHouse) · **D2** (oauth2-proxy delante) · **D3** (PK NOT ENFORCED) · **D4** (proceso único).
 - Push de `feat/052-r3-features-dsl` + PR.
