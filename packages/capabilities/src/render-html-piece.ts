@@ -1,12 +1,13 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vega from 'vega'
 import { compile, type TopLevelSpec } from 'vega-lite'
-import type { Capability } from '@vergis/botler'
+import { canonical, type Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS } from './table-runtime'
+import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS, vtFormat } from './table-runtime'
 
 /** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
 const VERGIS_VERSION = (() => {
@@ -42,13 +43,20 @@ interface PagesNav {
   items: { id: string; title: string }[]
   active: string
 }
-/** Control de cabecera ya resuelto por Mira: opciones + valor seleccionado. */
+/** Control de cabecera ya resuelto por Mira: opciones + valor(es) seleccionado(s). */
 interface ControlResolved {
   id: string
   label: string
   options: string[]
+  /** Valor para display (multi: los valores unidos por ", "). */
   value: string
+  /** Solo multi-select: los valores seleccionados. */
+  values?: string[]
+  /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
+  multi?: boolean
 }
+/** Valor(es) de una clave de contexto a preservar en la navegación (multi-select → varios). */
+type CarryCtx = Record<string, string | string[]>
 interface RenderParams {
   piece: ResolvedNode
   title?: string
@@ -62,7 +70,7 @@ interface RenderParams {
   /** Controles de cabecera (server-side): selectores que fijan `:ctx.<id>` en las queries. */
   controls?: ControlResolved[]
   /** Contexto que toda navegación (nav de páginas, drills, selectores) debe preservar (p.ej. la semana). */
-  carryCtx?: Record<string, string>
+  carryCtx?: CarryCtx
 }
 
 export interface TableColumn {
@@ -84,7 +92,7 @@ export interface TableColumn {
 }
 interface Aggregation {
   dataset?: string
-  op: 'sum' | 'ratio'
+  op: 'sum' | 'ratio' | 'avg' | 'count' | 'min' | 'max' | 'count_distinct'
   field?: string
   num?: string
   den?: string
@@ -138,7 +146,7 @@ interface RenderOpts {
   tokens: ThemeTokens
   interactive: boolean
   /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
-  carry: Record<string, string>
+  carry: CarryCtx
 }
 
 /**
@@ -303,17 +311,22 @@ const PAGES_NAV_CSS = `
 .vpages a.active{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
 `
 
-/** `&ctx.k=v` por cada par de `carry` (más overrides), para preservar contexto en cualquier href. */
-function ctxQuery(carry: Record<string, string>, overrides: Record<string, string> = {}): string {
-  const merged = { ...carry, ...overrides }
-  return Object.entries(merged)
-    .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => `&ctx.${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join('')
+/** `&ctx.k=v` por cada par de `carry` (más overrides), para preservar contexto en cualquier href.
+ *  Una clave multi-valor (control multi-select) se repite: `&ctx.k=a&ctx.k=b` (el server acumula). */
+function ctxQuery(carry: CarryCtx, overrides: Record<string, string> = {}): string {
+  const merged: CarryCtx = { ...carry, ...overrides }
+  let q = ''
+  for (const [k, v] of Object.entries(merged)) {
+    for (const val of Array.isArray(v) ? v : [v]) {
+      if (val == null || val === '') continue
+      q += `&ctx.${encodeURIComponent(k)}=${encodeURIComponent(String(val))}`
+    }
+  }
+  return q
 }
 
 /** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */
-function renderPagesNav(pages: PagesNav, carry: Record<string, string> = {}): string {
+function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}): string {
   const q = ctxQuery(carry)
   const tabs = pages.items
     .map(
@@ -333,24 +346,40 @@ const CONTROLS_BAR_CSS = `
 `
 
 /**
- * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Cada control es un `<select>`
- * (single-select) cuyo cambio recarga la página fijando `?ctx.<id>=<valor>` y preservando `page` +
- * el resto del contexto (carry). Server-side: el valor elegido reentra como `:ctx.<id>` en las
+ * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Un control single es un `<select>`;
+ * uno MULTI (`single: false`) es un grupo de checkboxes (mismo estilo que las facetas del dashboard).
+ * El cambio recarga la página fijando `?ctx.<id>=<valor>` (repetido por valor en multi) y preservando
+ * `page` + el resto del contexto (carry). Server-side: lo elegido reentra como `:ctx.<id>` en las
  * queries → cambia el dato, no solo la vista. LINEAMIENTO: los controles NO van en el cuerpo.
  */
-function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: Record<string, string>): string {
+function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
   return controls
     .map((c) => {
-      // onchange: reconstruir el query con la página activa + el carry (menos este control) +
-      // este control = this.value, y navegar. Robusto: no depende del estado previo de la URL.
-      const onchange =
+      // Prefijo común del handler: reconstruir el query con la página activa + el carry (menos este
+      // control; multi-valor se repite con append). Robusto: no depende del estado previo de la URL.
+      const base =
         `var u=new URL(location.href);u.search='';` +
         (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
         Object.entries(carry)
           .filter(([k]) => k !== c.id)
-          .map(([k, v]) => `u.searchParams.set('ctx.${escapeHtml(k)}',${JSON.stringify(String(v))});`)
-          .join('') +
-        `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
+          .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((val) => `u.searchParams.append('ctx.${escapeHtml(k)}',${JSON.stringify(String(val))});`))
+          .join('')
+      if (c.multi) {
+        // Multi-select: al cambiar cualquier checkbox del grupo se recolectan TODOS los marcados y se
+        // navega con `ctx.<id>` repetido por valor (`?ctx.w=a&ctx.w=b` — navFromUrl los acumula).
+        const onchange =
+          base +
+          `var g=this.closest('.vt-ctl');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
+        const selected = new Set(c.values ?? [])
+        const checks = c.options
+          .map((v) => `<label><input type="checkbox" value="${escapeHtml(v)}"${selected.has(v) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(v)}</label>`)
+          .join('')
+        return (
+          `<div class="faceta vt-ctl vt-ctl-multi" data-ctl="${escapeHtml(c.id)}"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
+          `<div class="faceta-options" role="group" aria-label="${escapeHtml(c.label)}">${checks}</div></div>`
+        )
+      }
+      const onchange = base + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
       const opts = c.options
         .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
         .join('')
@@ -427,7 +456,7 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
   }
   const comparison =
     node.comparison != null
-      ? ` <span class="kpi-comparison">${escapeHtml(node.comparisonLabel ?? '')} ${escapeHtml(formatValue(node.comparison, 'int_0'))}</span>`
+      ? ` <span class="kpi-comparison">${escapeHtml(node.comparisonLabel ?? '')} ${escapeHtml(formatValue(node.comparison, node.format))}</span>`
       : ''
   const sizeCls = node.size ? ` kpi-${escapeHtml(node.size)}` : ''
   return (
@@ -439,13 +468,15 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
 }
 
 function semaforoCard(label: string, present: number, total: number, green: number, yellow: number): string {
-  const pct = total > 0 ? Math.round((present / total) * 100) : 0
-  const cls = pct >= green ? 'green' : pct >= yellow ? 'yellow' : 'red'
+  // Guard NaN: una fila con present/total nulos pintaba «NaN / NaN» y 0% (rojo). Mostrar «—».
+  const valid = Number.isFinite(present) && Number.isFinite(total)
+  const pct = valid && total > 0 ? Math.round((present / total) * 100) : 0
+  const cls = !valid ? 'red' : pct >= green ? 'green' : pct >= yellow ? 'yellow' : 'red'
   return (
     `<div class="tl-card ${cls}">` +
     `<div class="area-name" title="${escapeHtml(label)}">${escapeHtml(label)}</div>` +
-    `<span class="headcount">${present} / ${total}</span>` +
-    `<span class="pct ${cls}">${pct}%</span>` +
+    `<span class="headcount">${valid ? `${present} / ${total}` : '—'}</span>` +
+    `<span class="pct ${cls}">${valid ? `${pct}%` : '—'}</span>` +
     `</div>`
   )
 }
@@ -552,7 +583,7 @@ function renderDashboardFacets(it: Interactive): string {
   return it.filters
     .map((f) => {
       const rows = it.datasets[f.dataset] ?? []
-      const values = [...new Set(rows.map((r) => String(r[f.field] ?? '')))].sort((a, b) => a.localeCompare(b))
+      const values = [...new Set(rows.map((r) => String(r[f.field] ?? '')))].sort((a, b) => a.localeCompare(b, 'es'))
       const checks = values
         .map((v) => `<label><input type="checkbox" data-field="${escapeHtml(f.field)}" value="${escapeHtml(v)}"> ${escapeHtml(v)}</label>`)
         .join('')
@@ -580,10 +611,27 @@ function renderInteractiveScript(it: Interactive): string {
     if (f === 'int_0') return new Intl.NumberFormat('es-CL',{maximumFractionDigits:0}).format(Math.round(v));
     return String(v);
   }
+  // ESPEJO de compose.aggregate (packages/mira/src/compose.ts) — misma semántica de ops para que el
+  // recompute bajo filtro coincida con el valor server-rendered. MANTENER EN SINCRONÍA.
   function agg(rows, a){
     function sum(f){ return rows.reduce(function(s,r){ return s + (Number(r[f])||0); }, 0); }
     if (a.op === 'ratio'){ var d = sum(a.den); return d ? sum(a.num)/d : 0; }
-    return sum(a.field);
+    if (a.op === 'avg'){ return rows.length ? sum(a.field)/rows.length : 0; }
+    if (a.op === 'count'){
+      if (!a.field) return rows.length;
+      return rows.filter(function(r){ return r[a.field] != null && r[a.field] !== ''; }).length;
+    }
+    if (a.op === 'min' || a.op === 'max'){
+      var best = NaN;
+      rows.forEach(function(r){ var n = Number(r[a.field]); if (isNaN(n)) return; if (isNaN(best) || (a.op === 'min' ? n < best : n > best)) best = n; });
+      return isNaN(best) ? 0 : best;
+    }
+    if (a.op === 'count_distinct'){
+      var seen = {}, n = 0;
+      rows.forEach(function(r){ var k = String(r[a.field] == null ? '' : r[a.field]); if (!seen[k]){ seen[k] = 1; n++; } });
+      return n;
+    }
+    return sum(a.field); // sum
   }
   function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function card(r, c){
@@ -614,7 +662,7 @@ function renderInteractiveScript(it: Interactive): string {
       el.querySelector('.kpi-value').textContent = fmt(agg(filteredRowsFor(a.dataset), a), el.getAttribute('data-format'));
       var ca = el.getAttribute('data-comparison-agg');
       if (ca){ var cab = JSON.parse(ca); var cmp = el.querySelector('.kpi-comparison');
-        if (cmp) cmp.textContent = (el.getAttribute('data-comparison-label')||'') + ' ' + fmt(agg(filteredRowsFor(cab.dataset || a.dataset), cab), 'int_0'); }
+        if (cmp) cmp.textContent = (el.getAttribute('data-comparison-label')||'') + ' ' + fmt(agg(filteredRowsFor(cab.dataset || a.dataset), cab), el.getAttribute('data-format')); }
     });
     document.querySelectorAll('[data-semaforo]').forEach(function(el){
       var c = JSON.parse(el.getAttribute('data-semaforo'));
@@ -643,11 +691,35 @@ function renderInteractiveScript(it: Interactive): string {
 </script>`
 }
 
+/** Cota de cardinalidad de un `distribution`: sobre este nº de barras, el resto se agrupa en
+ *  «(otros)». Sin la cota, la altura `rows.length * 34` no tiene techo: una dimensión con 500
+ *  valores distintos produce un SVG de ~17.000 px (ilegible y caro de compilar). */
+export const CHART_MAX_BARS = 30
+
+// Caché module-level de SVG por hash de (spec del chart + datos): el compile Vega-Lite → Vega →
+// SVG es CARO y DETERMINISTA (mismos datos + misma config ⇒ mismo SVG), así que dos requests con
+// los mismos datos no deben pagar el compile dos veces. LRU pequeño (tope fijo) — los datos varían
+// por consumidor (RLS), pero cachear el SVG es seguro: la clave incluye las filas exactas.
+const CHART_SVG_CACHE = new Map<string, string>()
+const CHART_SVG_CACHE_MAX = 100
+/** Contadores observables del caché de charts (tests/diagnóstico). */
+export const chartCacheStats = { hits: 0, misses: 0 }
+
 async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Promise<string> {
-  const rows = node.rows ?? []
+  let rows = node.rows ?? []
   const dim = node.dimensionField ?? 'dimension'
   const metric = node.metricField ?? 'metric'
   const horizontal = (node.orientation ?? 'horizontal') === 'horizontal'
+  // Cota top-N: se dibujan las CHART_MAX_BARS mayores por métrica y el resto se agrupa en una
+  // barra «(otros)» (suma de la métrica), con nota discreta al pie — el total sigue cuadrando.
+  let note = ''
+  if (rows.length > CHART_MAX_BARS) {
+    const sorted = [...rows].sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0))
+    const rest = sorted.slice(CHART_MAX_BARS)
+    const restSum = rest.reduce((s, r) => s + (Number(r[metric]) || 0), 0)
+    note = `<div class="chart-note" style="font-size:11px;color:var(--fg-dim,#94a3b8);margin-top:4px">Top ${CHART_MAX_BARS} de ${rows.length} valores — el resto agrupado en «(otros)»</div>`
+    rows = [...sorted.slice(0, CHART_MAX_BARS), { [dim]: '(otros)', [metric]: restSum }]
+  }
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
@@ -670,20 +742,44 @@ async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Prom
       },
     },
   }
-  const svg = await vegaLiteToSvg(spec)
-  return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
+  // Clave = hash de la serialización canónica del spec Vega-Lite completo (incluye datos, ejes,
+  // orientación y tokens del theme ya resueltos) → cualquier variación produce clave distinta.
+  const key = createHash('sha256').update(canonical(spec)).digest('hex')
+  let svg = CHART_SVG_CACHE.get(key)
+  if (svg !== undefined) {
+    chartCacheStats.hits += 1
+    // LRU: re-insertar al usar; el Map preserva orden de inserción → el primero es el menos usado.
+    CHART_SVG_CACHE.delete(key)
+    CHART_SVG_CACHE.set(key, svg)
+  } else {
+    chartCacheStats.misses += 1
+    svg = await vegaLiteToSvg(spec)
+    CHART_SVG_CACHE.set(key, svg)
+    if (CHART_SVG_CACHE.size > CHART_SVG_CACHE_MAX) {
+      const oldest = CHART_SVG_CACHE.keys().next().value
+      if (oldest !== undefined) CHART_SVG_CACHE.delete(oldest)
+    }
+  }
+  return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
 
-function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): string {
+/** Umbral de filas del tbody server-rendered de una tabla INTERACTIVA. El tbody servido es solo el
+ *  primer paint (el runtime toma control con el JSON embebido, que es la fuente y va SIEMPRE
+ *  completo): sobre el umbral, embeber todas las filas DOS veces (HTML + JSON) ≈ 2× payload y doble
+ *  trabajo de DOM en el arranque — se sirven solo las primeras N y el runtime completa al arrancar. */
+export const TABLE_SSR_MAX_ROWS = 500
+
+function renderTable(node: ResolvedNode, carry: CarryCtx = {}): string {
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const drills = node.drills ?? []
   const ranges = colorscaleRanges(cols, rows)
-  const tbody = renderTableBody(cols, rows, ranges, drills, carry)
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
 
   // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
   if (node.interactive === false) {
+    // Estática: sin runtime que complete después → el tbody lleva TODAS las filas.
+    const tbody = renderTableBody(cols, rows, ranges, drills, carry)
     const head =
       cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
       (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
@@ -692,18 +788,20 @@ function renderTable(node: ResolvedNode, carry: Record<string, string> = {}): st
       `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
     )
   }
-  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry)
+  const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
+  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry)
+  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
 }
 
 /** href server-side de una acción de drill, preservando el carry (ctx) y agregando las claves `by`. */
-function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: Record<string, string>): string {
+function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: CarryCtx): string {
   const keys: Record<string, string> = {}
   for (const k of drill.by) keys[k] = String(row[k] ?? '')
   return `?page=${encodeURIComponent(drill.to)}${ctxQuery(carry, keys)}`
 }
 
 /** Celda de acciones de una fila: un link por drill (etiqueta del drill, o "→" si no la tiene). */
-function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: Record<string, string>): string {
+function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: CarryCtx): string {
   if (drills.length === 0) return ''
   const links = drills
     .map((d) => {
@@ -722,7 +820,7 @@ function renderTableBody(
   rows: Record<string, unknown>[],
   ranges: Record<string, { min: number; max: number }>,
   drills: Drill[] = [],
-  carry: Record<string, string> = {},
+  carry: CarryCtx = {},
 ): string {
   return rows
     .map((r) => {
@@ -749,7 +847,8 @@ function renderInteractiveTable(
   tbody: string,
   titleHtml: string,
   drills: Drill[] = [],
-  carry: Record<string, string> = {},
+  carry: CarryCtx = {},
+  ssrComplete = true,
 ): string {
   // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
   const colMeta = cols.map((c) => ({
@@ -795,7 +894,9 @@ function renderInteractiveTable(
   // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
   // `drills` (si la tabla las tiene): el runtime renderiza la columna de acciones (1 link por drill);
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
-  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry }).replace(/</g, '\\u003c')
+  // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
+  //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
+  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry, ssrComplete }).replace(/</g, '\\u003c')
 
   return (
     `<section class="table vtable">${titleHtml}${chips}` +
@@ -809,8 +910,17 @@ function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]):
   const ranges: Record<string, { min: number; max: number }> = {}
   for (const c of cols) {
     if (!c.colorscale) continue
-    const nums = rows.map((r) => Number(r[c.field])).filter((n) => !Number.isNaN(n))
-    ranges[c.field] = { min: Math.min(...nums), max: Math.max(...nums) }
+    // Loop en vez de `Math.min(...nums)` / `Math.max(...nums)`: el spread de un arreglo de cientos de
+    // miles de filas revienta el stack (RangeError: too many arguments). El loop es O(n) sin ese límite.
+    let min = Infinity
+    let max = -Infinity
+    for (const r of rows) {
+      const n = Number(r[c.field])
+      if (Number.isNaN(n)) continue
+      if (n < min) min = n
+      if (n > max) max = n
+    }
+    ranges[c.field] = { min, max }
   }
   return ranges
 }
@@ -831,19 +941,8 @@ async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
   return svg
 }
 
+// Delega en vtFormat (el formateador del runtime de tabla): el tbody SERVIDO y el re-render del
+// CLIENTE usan exactamente la misma lógica → sin drift de percent ni de recorte de fecha ISO (03·2).
 function formatValue(value: unknown, format?: string): string {
-  if (typeof value === 'number') {
-    switch (format) {
-      case 'int_0':
-        return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Math.round(value))
-      case 'percent_1':
-        return `${(value * 100).toFixed(1)}%`
-      case 'percent':
-        return `${Math.round(value * 100)}%`
-      default:
-        return String(value)
-    }
-  }
-  if (value instanceof Date) return value.toISOString().slice(0, 10)
-  return String(value ?? '')
+  return vtFormat(value, format)
 }

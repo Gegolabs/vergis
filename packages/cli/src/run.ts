@@ -1,9 +1,39 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Botler, type Capability, type IdentityContext, type LogEntry } from '@vergis/botler'
 import { starterCapabilities, createExecuteSqlDwh, type SqlConnectionProfile } from '@vergis/capabilities'
-import { createMiraBotlet, type AnnotationContext } from '@vergis/mira'
+import { MiraBotlet, parseSpec, type AnnotationContext, type MiraSpec } from '@vergis/mira'
+
+// Caché module-level del camino de serving (work/052 F3): sin ella cada request re-lee+re-parsea el
+// schema y el spec desde disco. El schema se parsea UNA vez por ruta → misma IDENTIDAD de objeto ⇒ el
+// WeakMap de getValidator reusa el validador AJV compilado. El spec (texto+YAML) se memoiza por
+// (ruta, mtime): editar el archivo cambia el mtime e invalida naturalmente (el hot-reload por
+// watchPaths sigue funcionando). NADA muta el spec cacheado entre requests: composePiece copia los
+// arreglos, y las anotaciones mutan filas de RESULTADOS, no el árbol del spec.
+const schemaCache = new Map<string, object>()
+const specCache = new Map<string, { mtimeMs: number; spec: MiraSpec }>()
+/** Contadores de parseo (solo para pruebas: verifican que el 2º request no re-parsea). */
+export const parseCounters = { schema: 0, spec: 0 }
+
+function loadSchema(path: string): object {
+  const hit = schemaCache.get(path)
+  if (hit) return hit
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as object
+  parseCounters.schema++
+  schemaCache.set(path, parsed)
+  return parsed
+}
+
+function loadSpec(path: string): MiraSpec {
+  const mtimeMs = statSync(path).mtimeMs
+  const hit = specCache.get(path)
+  if (hit && hit.mtimeMs === mtimeMs) return hit.spec
+  const spec = parseSpec(readFileSync(path, 'utf8')) as MiraSpec
+  parseCounters.spec++
+  specCache.set(path, { mtimeMs, spec })
+  return spec
+}
 
 export interface RunOptions {
   specPath: string
@@ -41,15 +71,20 @@ export interface RunOptions {
   annotations?: AnnotationContext
   /** PI multi-vista: id de la página activa (default: la 1ª). Viene de la query `?page=`. */
   page?: string
-  /** Contexto del drill-through (campo→valor). Viene de la query `?ctx.<campo>=`. Filtro adicional
-   *  bindeado dentro de las filas que la RLS ya autoriza (acota, nunca amplía). */
-  ctx?: Record<string, string>
+  /** Contexto del drill-through (campo→valor(es)). Viene de la query `?ctx.<campo>=` — repetido
+   *  (control multi-select) llega como arreglo. Filtro adicional bindeado dentro de las filas que
+   *  la RLS ya autoriza (acota, nunca amplía). */
+  ctx?: Record<string, string | string[]>
+  /** Tope de filas materializables por `interactions.filters` (ver MiraOptions.interactiveMaxRows).
+   *  Mira no lee env: el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS y lo inyecta acá. */
+  interactiveMaxRows?: number
 }
 
 export interface RunOutcome {
   ok: boolean
   botletId: string
-  artifacts: { format: string; path?: string }[]
+  /** Artefactos: los publicados llevan `path`; los en-memoria (p.ej. CSV del render) llevan `content`. */
+  artifacts: { format: string; path?: string; content?: string }[]
   /** El HTML renderizado (para servir per-request sin pasar por disco). */
   html?: string
   fallback?: { reason: string; recovery: string }
@@ -72,8 +107,8 @@ function defaultSchemaPath(): string {
  */
 export async function runSpec(options: RunOptions): Promise<RunOutcome> {
   const schemaPath = options.schemaPath ?? defaultSchemaPath()
-  const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as object
-  const specText = readFileSync(options.specPath, 'utf8')
+  const schema = loadSchema(schemaPath)
+  const spec = loadSpec(options.specPath)
 
   const identity: IdentityContext = options.identity ?? { agent: 'vergis-cli' }
   const botler = new Botler({
@@ -101,7 +136,9 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
   }
   for (const cap of options.extraCapabilities ?? []) botler.registerCapability(cap)
 
-  const mira = createMiraBotlet(specText, { schema })
+  // Se construye desde el spec YA parseado (cacheado): validate() corre por request (depende del
+  // catálogo de capabilities), pero el parseo de texto/YAML y del schema no se repiten.
+  const mira = new MiraBotlet(spec, { schema, interactiveMaxRows: options.interactiveMaxRows })
   botler.register(mira, options.specPath)
 
   const result = await botler.invoke(mira.id, {
@@ -116,7 +153,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
   })
   botler.stop()
 
-  const output = (result.output ?? {}) as { artifacts?: { format: string; path?: string }[]; html?: string }
+  const output = (result.output ?? {}) as { artifacts?: { format: string; path?: string; content?: string }[]; html?: string }
   return {
     ok: result.ok,
     botletId: result.botletId,

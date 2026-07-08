@@ -64,9 +64,7 @@
         "properties": {
           "capability": { "type": "string", "minLength": 1 },
           "params": { "type": "object" },
-          "shape": { "type": "object" },
-          "cache_key": { "type": "string" },
-          "watermark_field": { "type": "string" }
+          "shape": { "type": "object" }
         }
       }
     },

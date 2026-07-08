@@ -4,8 +4,16 @@
 
 FROM node:22-slim AS build
 WORKDIR /app
+# Manifests primero → la capa de `npm ci` se cachea y no se invalida al editar código.
+COPY package.json package-lock.json .npmrc ./
+COPY packages/botler/package.json packages/botler/package.json
+COPY packages/capabilities/package.json packages/capabilities/package.json
+COPY packages/cli/package.json packages/cli/package.json
+COPY packages/mira/package.json packages/mira/package.json
+COPY packages/policy/package.json packages/policy/package.json
+RUN npm ci --ignore-scripts
 COPY . .
-RUN npm ci --ignore-scripts && npm run build
+RUN npm run build
 
 FROM node:22-slim
 WORKDIR /app

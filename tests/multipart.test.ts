@@ -47,4 +47,40 @@ describe('multipart · parser binary-safe', () => {
   it('cuerpo sin el boundary → vacío', () => {
     expect(parseMultipart(Buffer.from('basura'), B)).toEqual({ fields: {}, files: [] })
   })
+
+  it('un part sin `name` en Content-Disposition se ignora (no rompe el resto)', () => {
+    const raw = Buffer.from(
+      `--${B}\r\nContent-Disposition: form-data\r\n\r\nhuérfano\r\n` +
+        `--${B}\r\nContent-Disposition: form-data; name="ok"\r\n\r\nsi\r\n--${B}--\r\n`,
+    )
+    const { fields, files } = parseMultipart(raw, B)
+    expect(fields).toEqual({ ok: 'si' })
+    expect(files).toHaveLength(0)
+  })
+
+  it('part con headers malformados (sin línea en blanco) se salta sin lanzar', () => {
+    const raw = Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="x" SIN_SEPARADOR\r\n--${B}--\r\n`)
+    expect(() => parseMultipart(raw, B)).not.toThrow()
+  })
+
+  it('cuerpo truncado (sin el delimitador de cierre) no lanza y devuelve el prefijo parseable', () => {
+    const full = build({ a: '1' }, { field: 'file', filename: 'x.bin', contentType: 'application/octet-stream', bytes: Buffer.from([1, 2, 3]) })
+    const truncated = full.subarray(0, full.length - 12)
+    expect(() => parseMultipart(truncated, B)).not.toThrow()
+  })
+
+  it('campo con valor vacío se preserva', () => {
+    const { fields } = parseMultipart(build({ vacio: '', lleno: 'x' }), B)
+    expect(fields).toEqual({ vacio: '', lleno: 'x' })
+  })
+
+  it('dos archivos en el mismo cuerpo', () => {
+    const raw = Buffer.from(
+      `--${B}\r\nContent-Disposition: form-data; name="file"; filename="a.txt"\r\nContent-Type: text/plain\r\n\r\nAAA\r\n` +
+        `--${B}\r\nContent-Disposition: form-data; name="file"; filename="b.txt"\r\nContent-Type: text/plain\r\n\r\nBBB\r\n--${B}--\r\n`,
+    )
+    const { files } = parseMultipart(raw, B)
+    expect(files.map((f) => f.filename)).toEqual(['a.txt', 'b.txt'])
+    expect(files[1].bytes.toString()).toBe('BBB')
+  })
 })

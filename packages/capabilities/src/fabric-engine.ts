@@ -32,7 +32,9 @@ interface FabricSchedule {
 }
 
 /** segundos → minutos de intervalo Cron (mínimo 1; los redondeos coarse de demanda ya son múltiplos de 60). */
-const secondsToIntervalMinutes = (seconds: number): number => Math.max(1, Math.round(seconds / 60))
+// floor, no round: redondear hacia arriba dejaría el schedule MENOS frecuente que la cadencia
+// requerida (90s → 2min). Hacia abajo es más frecuente — nunca incumple la demanda. Mínimo 1 min.
+const secondsToIntervalMinutes = (seconds: number): number => Math.max(1, Math.floor(seconds / 60))
 
 /** configuración de schedule de Fabric → segundos aproximados (Cron exacto; Daily/Weekly aproximado). */
 function scheduleToSeconds(s: FabricSchedule): number | null {
@@ -59,7 +61,7 @@ export function createFabricScheduler(tokens: TokenProvider, opts: { fetch?: Fet
 
   async function listSchedules(e: EngineRef): Promise<FabricSchedule[]> {
     const token = await tokens.getToken(SCOPE_FABRIC)
-    const res = await doFetch(schedulesUrl(e), { headers: { authorization: `Bearer ${token}` } })
+    const res = await doFetch(schedulesUrl(e), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new Error(`fabric-scheduler: list falló (${res.status}) para item '${e.itemId}': ${text.slice(0, 300)}`)
@@ -100,8 +102,8 @@ export function createFabricScheduler(tokens: TokenProvider, opts: { fetch?: Fet
       const body = JSON.stringify(cronBody(seconds))
       // PATCH si ya hay un schedule (idempotente); POST si es el primero.
       const res = target
-        ? await doFetch(`${schedulesUrl(engine)}/${encodeURIComponent(target.id)}`, { method: 'PATCH', headers, body })
-        : await doFetch(schedulesUrl(engine), { method: 'POST', headers, body })
+        ? await doFetch(`${schedulesUrl(engine)}/${encodeURIComponent(target.id)}`, { method: 'PATCH', headers, body, signal: AbortSignal.timeout(30_000) })
+        : await doFetch(schedulesUrl(engine), { method: 'POST', headers, body, signal: AbortSignal.timeout(30_000) })
       if (!res.ok && res.status !== 201 && res.status !== 202) {
         const text = await res.text().catch(() => '')
         throw new Error(`fabric-scheduler: set falló (${res.status}) para item '${engine.itemId}': ${text.slice(0, 300)}`)

@@ -7,3 +7,13 @@ hello.html
 out
 .git
 .DS_Store
+# Secretos: NUNCA al build context (el stage de build hace COPY . .).
+.env
+.env.*
+*.env
+# Contexto innecesario para el runtime (achica la imagen y la superficie).
+docs
+tests
+.github
+local
+*.md

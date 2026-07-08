@@ -86,17 +86,31 @@ export function createExecuteSqlDwh(
     }
     const created = new sql.ConnectionPool(cfg).connect()
     pools.set(ref, created)
+    // Evictar la promesa si la primera conexión falla (blip de red/AAD): si no, la promesa rechazada
+    // queda cacheada para siempre → outage permanente de este ref hasta reiniciar el proceso. El
+    // caller ve el rechazo igual (await sobre `created`); solo se limpia el caché para reintentar.
+    created.catch(() => pools.delete(ref))
     return created
   }
 
   return {
     name,
-    async execute(params: unknown, identity: IdentityContext): Promise<unknown> {
+    async execute(params: unknown, identity: IdentityContext, signal?: AbortSignal): Promise<unknown> {
       const p = (params ?? {}) as SqlParams
       if (!p.database_ref) throw new Error(`${name}: falta params.database_ref`)
       if (!p.sql) throw new Error(`${name}: falta params.sql`)
       const pool = await getPool(p.database_ref)
       const request = pool.request()
+      // Cancelación (timeout del Botler): mssql no habla AbortSignal — el equivalente es
+      // `request.cancel()`, que corta la query EN CURSO y libera la conexión del pool (sin esto,
+      // la perdedora del Promise.race seguiría ocupándola tras el timeout).
+      const onAbort = (): void => {
+        try { request.cancel() } catch { /* la query pudo terminar justo antes */ }
+      }
+      if (signal) {
+        if (signal.aborted) throw new Error(`${name}: llamada abortada antes de ejecutar`)
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
 
       // Parámetros BIND de la query (drill-through: `@ctx_<campo>`). Bindeados, nunca concatenados.
       if (p.params) {
@@ -119,8 +133,12 @@ export function createExecuteSqlDwh(
 
       // Los `EXEC sp_set_session_context` no emiten result set → el único recordset es el de la
       // query final, igual que en el modo plano.
-      const result = await request.query(text)
-      return { rows: result.recordset ?? [] }
+      try {
+        const result = await request.query(text)
+        return { rows: result.recordset ?? [] }
+      } finally {
+        if (signal) signal.removeEventListener('abort', onAbort)
+      }
     },
     async close(): Promise<void> {
       for (const pool of pools.values()) {
