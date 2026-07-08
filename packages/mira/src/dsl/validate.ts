@@ -113,7 +113,10 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
 
   // 2 · Referencias colgantes: cada data.<path> usada en alguna pieza existe en data.
   const pieces = hasPages ? s.pages!.map((p) => p.piece) : [s.piece as Record<string, unknown>]
-  const refs = [...new Set(pieces.flatMap((pc) => collectDataRefs(pc)))]
+  // Incluye los datasets pelados de `agg.dataset` y `table.data`/`semaforo.data` (que no llevan el
+  // prefijo `data.`): sin esto, un typo ahí pasaba la validación y el widget salía en 0/vacío en
+  // silencio, y `uniqueDatasets` (mismo par de recolectores) tampoco lo recuperaba.
+  const refs = [...new Set(pieces.flatMap((pc) => [...collectDataRefs(pc), ...collectDatasetKeys(pc)]))]
   for (const ref of refs) {
     const dataset = ref.split('.')[0]
     if (!(dataset in s.data)) {
@@ -122,7 +125,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         code: 'dangling-data-reference',
         path: `piece -> data.${ref}`,
         value: ref,
-        message: `La pieza referencia 'data.${ref}' pero el dataset '${dataset}' no existe en el bloque data.`,
+        message: `La pieza referencia el dataset '${dataset}', que no existe en el bloque data.`,
         remediation: `Declarar el dataset '${dataset}' en data, o corregir la referencia.`,
       })
     }
@@ -493,6 +496,28 @@ export function collectDataRefs(node: unknown, acc: Set<string> = new Set()): st
     for (const child of node) collectDataRefs(child, acc)
   } else if (typeof node === 'object') {
     for (const v of Object.values(node as Record<string, unknown>)) collectDataRefs(v, acc)
+  }
+  return [...acc]
+}
+
+/**
+ * Recolecta nombres de dataset referenciados por campos que NO llevan el prefijo `data.` y por eso
+ * escapan a `collectDataRefs`: `dataset` (dentro de `agg`/`comparison_agg`/`summary.agg`) y `data`
+ * (en `table`/`semaforo`). Devuelve el primer segmento (el dataset), tolerando ambas formas
+ * (`areas` o `data.areas.campo`). Corre SOLO sobre subárboles de piece (nunca sobre el bloque `data`
+ * del spec), así que no confunde la declaración de datasets con una referencia.
+ */
+export function collectDatasetKeys(node: unknown, acc: Set<string> = new Set()): string[] {
+  if (node == null) return [...acc]
+  if (Array.isArray(node)) {
+    for (const child of node) collectDatasetKeys(child, acc)
+  } else if (typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    for (const key of ['dataset', 'data'] as const) {
+      const v = obj[key]
+      if (typeof v === 'string' && v.length > 0) acc.add(stripDataRef(v).split('.')[0])
+    }
+    for (const v of Object.values(obj)) collectDatasetKeys(v, acc)
   }
   return [...acc]
 }

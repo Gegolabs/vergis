@@ -26,3 +26,19 @@ services:
       VERGIS_USER: ${VERGIS_USER:-}
       VERGIS_PASS: ${VERGIS_PASS:-}
     restart: unless-stopped
+    init: true
+    mem_limit: 1g
+    # `/healthz` responde 503 hasta bootstrap: healthcheck reacciona a un proceso colgado o eterno-503,
+    # no solo a crashes. node:22-slim no trae curl → se usa el fetch de Node.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # Rotación: el driver json-file por defecto crece sin tope y llena el disco de una VM chica.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
