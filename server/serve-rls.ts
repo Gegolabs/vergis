@@ -31,7 +31,7 @@ import { analyzeSqlTables } from './sql-tables'
 import { navFromUrl, type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
-import { createHmac, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, withResultCache, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
@@ -82,6 +82,7 @@ import {
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { fail, readJsonBody } from './http-util'
+import { annSign as annSignHmac } from './annotations'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -377,9 +378,7 @@ if (!process.env['VERGIS_ANNOTATION_SECRET']) {
       'anotación NO sobreviven un restart ni se comparten entre réplicas. Define el env en producción.',
   )
 }
-function annSign(piId: string, email: string, key: string): string {
-  return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
-}
+const annSign = (piId: string, email: string, key: string): string => annSignHmac(ANN_SECRET, piId, email, key)
 
 // La navegación multi-vista (`?page=` + `?ctx.*`, con acumulación de repetidos para multi-select)
 // vive en ./nav.ts — extraída para testearla sin los efectos de módulo de este archivo.
