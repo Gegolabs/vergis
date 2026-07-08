@@ -502,7 +502,7 @@ function vtBootstrap(root){
   if(chipsEl) chipsEl.addEventListener('click', function(e){
     var chip=e.target.closest('.vt-chip'); if(!chip) return;
     if(chip.getAttribute('data-search')==='global'){ state.globalSearch=''; if(gs) gs.value=''; }
-    else { var f=chip.getAttribute('data-field'), v=chip.getAttribute('data-val'); state.facets[f]=(state.facets[f]||[]).filter(function(x){return x!==v;}); var th=root.querySelector('th[data-field="'+f+'"]'); var pop=th&&th.querySelector('.vt-col-pop'); if(pop&&pop.innerHTML){ var box=pop.querySelector('.vt-pop-opts input[value="'+v.replace(/"/g,'\\\\"')+'"]'); if(box) box.checked=false; } }
+    else { var f=chip.getAttribute('data-field'), v=chip.getAttribute('data-val'); state.facets[f]=(state.facets[f]||[]).filter(function(x){return x!==v;}); var th=root.querySelector('th[data-field="'+f+'"]'); var pop=th&&th.querySelector('.vt-col-pop'); if(pop&&pop.innerHTML){ var ins=pop.querySelectorAll('.vt-pop-opts input'); for(var bi=0;bi<ins.length;bi++){ if(ins[bi].value===v){ ins[bi].checked=false; break; } } } }
     render();
   });
 
