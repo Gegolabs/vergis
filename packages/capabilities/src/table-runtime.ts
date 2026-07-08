@@ -25,6 +25,10 @@ export interface VtState {
   facets: Record<string, string[]>
   /** Columna por la que agrupar (categorización). Vacío = tabla plana. */
   groupBy: string
+  /** Campos sobre los que corre la búsqueda GLOBAL. Si está definido, la búsqueda se limita a ellos
+   *  (las columnas mostradas y buscables) — así no matchea campos ocultos del payload (tokens de
+   *  anotación, claves de drill). Ausente → todos los campos de la fila (back-compat). */
+  searchCols?: string[]
 }
 
 /** Normaliza para comparar: minúsculas + sin acentos. */
@@ -86,12 +90,14 @@ export function vtIsCategorical(
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
 export function vtFormat(value: unknown, format?: string): string {
   if (typeof value === 'number') {
+    if (Number.isNaN(value)) return '—'
     if (format === 'int_0')
       return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Math.round(value))
     if (format === 'percent_1') return (value * 100).toFixed(1) + '%'
     if (format === 'percent') return Math.round(value * 100) + '%'
     return String(value)
   }
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
   const s = String(value == null ? '' : value)
   if (/^\d{4}-\d\d-\d\dT/.test(s)) return s.slice(0, 10)
   return s
@@ -107,7 +113,9 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
     }
     if (gq) {
       let hit = false
-      for (const k in r) {
+      // Solo las columnas buscables si están declaradas; si no, todos los campos (back-compat).
+      const keys = state.searchCols && state.searchCols.length ? state.searchCols : Object.keys(r)
+      for (const k of keys) {
         if (vtNorm(r[k]).indexOf(gq) !== -1) {
           hit = true
           break
@@ -124,15 +132,21 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
   if (state.sort && state.sort.field) {
     const field = state.sort.field
     const k = state.sort.dir === 'desc' ? -1 : 1
+    // Decidir el modo UNA vez por columna (no por par): un comparador que alterna numérico/léxico
+    // según cada par es NO-transitivo → Array.sort da órdenes arbitrarios en columnas mixtas.
+    const numeric = vtIsNumericCol(out, field)
+    const num = (v: unknown): number => (v == null || v === '' ? NaN : Number(v))
     out.sort((a, b) => {
-      const av = a[field]
-      const bv = b[field]
-      const an = Number(av)
-      const bn = Number(bv)
       let c: number
-      if (av !== '' && bv !== '' && av != null && bv != null && !Number.isNaN(an) && !Number.isNaN(bn))
-        c = an - bn
-      else c = vtNorm(av).localeCompare(vtNorm(bv))
+      if (numeric) {
+        const an = num(a[field])
+        const bn = num(b[field])
+        const aN = Number.isNaN(an)
+        const bN = Number.isNaN(bn)
+        c = aN && bN ? 0 : aN ? 1 : bN ? -1 : an - bn // celdas no-numéricas/vacías al final
+      } else {
+        c = vtNorm(a[field]).localeCompare(vtNorm(b[field]))
+      }
       return c * k
     })
   }
@@ -285,6 +299,9 @@ function vtBootstrap(root){
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
   var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
+  // Busqueda global acotada a las columnas mostradas y buscables: los campos ocultos del payload
+  // (tokens de anotacion, claves de drill) no estan en cols, asi que no se buscan por texto.
+  state.searchCols = cols.filter(function(c){ return c.searchable!==false; }).map(function(c){ return c.field; });
   var rendered = false; // ¿render() ya corrió? (p.ej. una vista pinneada aplicada vía applySnapshot)
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
