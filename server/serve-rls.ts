@@ -77,21 +77,19 @@ import {
   type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
-  type ChStoreSchema,
-  type ChColumnType,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
+import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
+import { fail, readJsonBody } from './http-util'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
 import {
   claimValues,
-  compileClickHouse,
   isPublic,
   parsePolicyStore,
   settingForClaim,
-  type ClickHouseEnforcement,
   type Policy,
   type PolicyDecl,
   type PolicyStoreDoc,
@@ -205,23 +203,15 @@ if (ENGINE === 'clickhouse') {
   const CONSUMER_USER = process.env['VERGIS_CH_CONSUMER_USER'] ?? 'botler'
   const TARGET_ROLE = process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role'
 
-  interface DatasetCfg { table: string; columns: Record<string, ChColumnType>; ingest?: { database_ref: string; sql: string }; seed?: Record<string, unknown>[] }
   const DATASETS: DatasetCfg[] = process.env['VERGIS_DATASETS']
     ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_DATASETS']), 'utf8')) as { datasets?: DatasetCfg[] }).datasets ?? [])
     : []
   if (DATASETS.length === 0) throw new Error('engine=clickhouse: falta VERGIS_DATASETS (datasets del nodo).')
 
-  interface BoundDataset { schema: ChStoreSchema; enforcement: ClickHouseEnforcement | null; cfg: DatasetCfg }
-  const BOUND: BoundDataset[] = DATASETS.map((cfg) => {
-    const [database, table] = cfg.table.split('.')
-    if (!database || !table) throw new Error(`Dataset '${cfg.table}' debe ser 'db.tabla'.`)
-    const policy = store.get(cfg.table)
-    if (!policy) throw new Error(`Sin política para '${cfg.table}' en el policy store. Default-deny: declara la entidad/grant — el dato no se sirve sin política.`)
-    const schema: ChStoreSchema = { database, table, columns: cfg.columns }
-    return { schema, enforcement: compileClickHouse(policy, { database, table, role: TARGET_ROLE }), cfg }
-  })
-
-  const UNION_INJECTIONS = [...new Map(BOUND.flatMap((b) => b.enforcement?.injections ?? []).map((inj) => [inj.setting, inj])).values()]
+  // BOUND es mutable: se RECOMPUTA desde el store en cada bootstrap (ver A11 abajo). Al arranque se
+  // computa una vez para derivar las inyecciones del canal de serving (su alta necesita restart).
+  let BOUND: BoundDataset[] = computeBound(DATASETS, store, TARGET_ROLE)
+  const UNION_INJECTIONS = unionInjections(BOUND)
   const chProfile = { url: CH_URL, user: CONSUMER_USER, database: BOUND[0].schema.database }
   servingCap = createExecuteSqlClickHouse(chProfile, null, { injections: UNION_INJECTIONS })
   const ingestDwh = connections ? createExecuteSqlDwh(connections) : null
@@ -242,6 +232,10 @@ if (ENGINE === 'clickhouse') {
     }
   }
   bootstrapAll = async () => {
+    // A11: recomputar el enforcement DESDE EL STORE ACTUAL. En un hot-reload que endurece una policy
+    // (grant:all → rls), reusar el BOUND del arranque dejaba la tabla sin ROW POLICY nueva (fuga);
+    // recomputar acá aplica el endurecimiento en el re-bootstrap.
+    BOUND = computeBound(DATASETS, store, TARGET_ROLE)
     for (let i = 0; i < 60; i += 1) {
       try { for (const b of BOUND) await bootstrapClickHouse(ADMIN, b.schema, b.enforcement); break }
       catch (e) { lastErr = e instanceof Error ? e.message : String(e); if (i === 59) throw e; await sleep(2000) }
@@ -460,25 +454,6 @@ async function piGovSummary(code: string, glabel: Map<string, string>): Promise<
   }
 }
 
-/** Lee el cuerpo JSON de un POST (límite defensivo). */
-function readJsonBody(req: IncomingMessage, limit = 64 * 1024): Promise<unknown> {
-  return new Promise((resolveBody, reject) => {
-    let data = ''
-    req.on('data', (c) => {
-      data += c
-      if (data.length > limit) reject(new Error('body demasiado grande'))
-    })
-    req.on('end', () => {
-      try {
-        resolveBody(data ? JSON.parse(data) : {})
-      } catch {
-        reject(new Error('JSON inválido'))
-      }
-    })
-    req.on('error', reject)
-  })
-}
-
 /** POST /<slug>/annotations — upsert de una anotación; gateado por token HMAC. */
 async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!annStore) return fail(res, 503, 'Anotaciones no disponibles')
@@ -496,11 +471,6 @@ async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: 
   await annStore.upsert(report.slug, key, value, email || undefined)
   res.writeHead(200, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ ok: true }))
-}
-
-function fail(res: ServerResponse, code: number, msg: string): void {
-  res.writeHead(code, { 'content-type': 'text/html; charset=utf-8' })
-  res.end(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:40px"><h1>${code}</h1><p>${msg}</p></body>`)
 }
 
 // Branding del índice — parametrizado por instancia (genérico por defecto, no horneado al beta).
@@ -531,8 +501,9 @@ const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCod
 const server = createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0]
   if (url === '/healthz') {
+    // Payload mínimo: los probes suelen excluirse del SSO; no exponer slugs de PIs ni lastErr (internals).
     res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: ready, engine: ENGINE, lastErr, pi: discover().map((r) => r.slug) }))
+    res.end(JSON.stringify({ ok: ready, engine: ENGINE }))
     return
   }
   // ADMINISTRACIÓN — superficie de escritura, gateada por rol admin DENTRO del handler. Va antes del
@@ -900,9 +871,20 @@ function reloadGovernance(reason: string): void {
   }
   store.clear()
   for (const [k, v] of next) store.set(k, v) // swap in-place tras parsear TODO ok (misma referencia que las clausuras capturaron)
+  // Invalidar el result-cache: tras endurecer una policy, los hits cacheados servirían filas de la
+  // política VIEJA hasta vencer el TTL. `clear()` existe si el conector está envuelto (withResultCache).
+  const cached = servingCap as { clear?: () => void }
+  if (typeof cached.clear === 'function') cached.clear()
   const r = specReg.rebuild()
   console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${specReg.get().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
-  void bootstrapAll().catch((e) => console.error(`[hot-reload] re-bootstrap (${reason}): ${e instanceof Error ? e.message : String(e)}`))
+  // Fail-closed en el reload: si el re-bootstrap falla (fabric: falta SECURITY POLICY nativa para una
+  // tabla recién gobernada; CH: recompilación/ingesta fallida), NO se sigue sirviendo con las
+  // invariantes viejas — ready=false → healthz 503 hasta que un reload exitoso lo restablezca.
+  void bootstrapAll().catch((e) => {
+    ready = false
+    lastErr = e instanceof Error ? e.message : String(e)
+    console.error(`[hot-reload] re-bootstrap (${reason}) falló → ready=false (fail-closed): ${lastErr}`)
+  })
 }
 if (HOT_RELOAD) {
   const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
