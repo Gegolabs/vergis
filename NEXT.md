@@ -113,31 +113,41 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
    - **Colisión de "vistas guardadas"** con 2 tablas en la misma página — `SAVED_VIEWS_JS` /
      `vergisSavedViews`: namespacing de localStorage por tabla + `#vergis-count`. Ref: 03·6.
 
-**D · Tooling** (necesita `npm install`, no disponible en el sandbox de esta sesión):
-   - Subir `vitest` a 3/4 → mata el **critical** del audit dev (GHSA-5xrq-8626-4rwp). `package.json`
-     devDeps. Migración v2→v3 menor. Ref: 05·4.
+**D · Tooling** (`npm install` SÍ estuvo disponible):
+   - ✅ **HECHO** (rama `chore/054-vitest-v4`): subido `vitest` v2→**v4.1.10** — el árbol vite/vite-node de
+     3.x seguía marcado, solo v4 aclara. `npm audit`: 5 vulns (1 critical RCE del UI server, 1 high path
+     traversal, 3 moderate) → **0**. Config de vitest sin cambios; 488 pruebas verdes en v4. Riesgo
+     productivo previo nulo (dev-only). Ref: 05·4.
    - Lint: `eslint` flat config + `typescript-eslint` + script `lint` en CI. Ref: 05·8/12.
    - Coverage: `@vitest/coverage-v8` + `vitest run --coverage` en `vitest.config.ts`. Ref: 05·11.
    - `tsconfig.base.json` `noUncheckedIndexedAccess` — **aflora errores por todo el codebase** (es un
      mini-proyecto, no un flag suelto). Ref: 05·10.
 
 **E · Cola de BAJAs** (contenidas, se toman de a lotes; casi todas testeables):
-   - a11y de teclado en render (gaveta/tabs/sort no enfocables) — 03·15/18.
-   - string-sniffing de features (`body.includes('class="table vtable"')`) → flags de renderers — 03·13.
-   - CSV con BOM (`﻿`) como OPCIÓN — rompe aserciones de `tests/render-csv.test.ts`, actualizarlas.
-   - regex de ruta duplicada en admin (`server/admin.ts` `dmActive` ~:165 vs `di` ~:199) — unificar.
-   - `appendFileSync` async en `packages/botler/src/log.ts` (bloquea event loop si hay logPath).
-   - log de página desconocida en `packages/mira/src/mira.ts` (`?page=<inexistente>` cae a la 1ª en
-     silencio → `mira-page-unknown`).
-   - validación de identificadores en el DDL de `packages/capabilities/src/clickhouse-store.ts` (~:80-105).
-   - alinear `schema/mira-spec.schema.json` con `packages/mira/src/dsl/validate.ts` (el validador
-     implementa reglas que el schema deja como objetos libres) — 04·18.
-   - `timingSafeEqual` en HMAC/CSRF (`server/annotations.ts` `verifyAnnToken`, `server/ui.ts`
-     `requireCsrf`) — BAJA, impráctico por red.
-   - micro-caché (5-30s) del bloque de gobierno del índice en `server/serve-rls.ts` `indexReports` —
-     BAJA rendimiento.
-   - migrar el RESTO de env a `config` (`serve-rls.ts` usa `config` solo para los numéricos; el resto
-     sigue inline) — consolidación.
+   - ✅ **HECHO** (rama `feat/053-r3e-bajas-lote1`): log de página desconocida en mira
+     (`mira-page-unknown`); validación de identificadores en el DDL de `clickhouse-store.ts`
+     (`assertSafeIdent` en db/tabla/columna/tipo/rol/usuario); `timingSafeEqual` en HMAC/CSRF
+     (`constantTimeEqual` en `server/annotations.ts` + `server/ui.ts`); string-sniffing de features →
+     señales explícitas (`RenderSignals` en render-html-piece, 03·13); CSV con BOM UTF-8 como OPT-IN
+     (`delivery.render[].bom`). Tests 488 → 501. Verificado typecheck+test+build.
+   - ⏭️ **DIFERIDAS con motivo** (no eran «testeables/bajo riesgo» en el sandbox):
+     - a11y de teclado en render (gaveta/tabs/sort no enfocables) — 03·15/18. **Browser-only**: la
+       gaveta/tabs son CSS-puro (checkbox+label ocultos) y el sort vive en el runtime embebido; el fix
+       correcto (inputs sr-only-focusables o conversión a `<button aria-expanded>`+JS) solo se verifica
+       en navegador y arriesga regresión visual. Hacer con el server levantable + revisión visual.
+     - regex de ruta duplicada en admin (`dmActive` ~:165 vs `di` ~:199). **NO es dedup mecánico**: `di`
+       tiene un 3er segmento opcional que `dmActive` no; unificar cambia el highlight del sidebar en
+       rutas de 3 segmentos. Archivo authz-adjacent + safeguard + sin harness de routing admin. Requiere
+       primero un test de routing del panel admin.
+     - `appendFileSync` async en `packages/botler/src/log.ts`. **Cuestionado**: es el audit log encadenado;
+       el write síncrono garantiza durabilidad y orden. Un async fire-and-forget PIERDE entradas al
+       crashear y puede reordenar. El fix correcto (cola async con flush-on-exit) es > BAJA. Dejar como
+       está salvo que haya evidencia de contención del event loop bajo carga.
+     - alinear `schema/mira-spec.schema.json` con `validate.ts` — 04·18. El validador (610 LOC) es la
+       fuente de verdad en runtime; el schema deja `quality`/`delivery`/`piece` libres a propósito.
+       Alinearlos por completo = duplicar el validador en JSON Schema (fuzzy, propenso a divergencia).
+     - micro-caché (5-30s) del bloque de gobierno del índice — BAJA rendimiento, toca `serve-rls.ts`.
+     - migrar el RESTO de env a `config` — consolidación, toca `serve-rls.ts`.
 
 ### Ola 4 · Infra + entrega — no es código (ops)
 
