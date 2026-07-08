@@ -17,11 +17,15 @@ import type { ResolvedNode, TableColumn } from './render-html-piece'
  *    tabla obligaría a multiplicar artefactos/nombres; la concatenación seccionada mantiene 1 PI = 1
  *    artefacto y cualquier planilla la abre legible.
  *  - Escaping RFC 4180: se citan los valores con coma, comilla o salto de línea; `"` interna → `""`.
+ *  - `bom` (opt-in, default off): antepone el BOM UTF-8 (`﻿`). Excel en Windows asume la codificación
+ *    local (no UTF-8) al abrir un CSV sin BOM → los acentos salen como mojibake. El BOM se lo dice. Off por
+ *    defecto porque muchos parsers de máquina lo tratan como un caracter espurio de la 1ª celda.
  */
+const UTF8_BOM = '﻿'
 export const renderCsvPiece: Capability = {
   name: 'render-csv-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title } = (params ?? {}) as { piece?: ResolvedNode; title?: string }
+    const { piece, title, bom } = (params ?? {}) as { piece?: ResolvedNode; title?: string; bom?: boolean }
     if (!piece) throw new Error('render-csv-piece: falta el árbol de pieza (piece)')
     const tables = collectTables(piece)
     if (tables.length === 0) {
@@ -33,7 +37,7 @@ export const renderCsvPiece: Capability = {
       })
     }
     const sections = tables.map((t, i) => tableToCsv(t, tables.length > 1 ? t.title ?? `tabla_${i + 1}` : undefined))
-    return { csv: sections.join('\n') }
+    return { csv: (bom ? UTF8_BOM : '') + sections.join('\n') }
   },
 }
 
