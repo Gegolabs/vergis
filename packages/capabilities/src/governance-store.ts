@@ -385,7 +385,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
     if (!pi) throw new Error('bootstrapPi: pi_code vacío.')
     if (await this.getPiGovernance(pi)) return // idempotente
     const owner = normEmail(ownerEmail)
-    this.db.run(`INSERT INTO pi_governance (pi_code, visibility, created_by, created_at) VALUES (?,?,?,?)`, [pi, 'privado', owner || null, now()])
+    // OR IGNORE: idempotente aún si dos requests concurrentes pasan el check-then-act de arriba
+    // (el INSERT del segundo no viola la PK ni rompe la idempotencia prometida).
+    this.db.run(`INSERT OR IGNORE INTO pi_governance (pi_code, visibility, created_by, created_at) VALUES (?,?,?,?)`, [pi, 'privado', owner || null, now()])
     if (owner) this.writeGrant(pi, 'user', owner, 'owner', 'bootstrap')
     for (const g of defaultCollaboratorGroups) {
       const gid = g.trim().toLowerCase()
@@ -438,6 +440,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
     const p = principalType === 'user' ? normEmail(principal) : principal.trim().toLowerCase()
     if (!p) throw new Error('Principal vacío.')
     if (principalType === 'user' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p)) throw new Error(`Correo inválido: '${principal}'.`)
+    // Grant a grupo inexistente = grant inerte y, combinado con la recreación de un grupo con el mismo
+    // id, herencia silenciosa de accesos. Fail-loud.
+    if (principalType === 'group' && !this.groupExists(p)) throw new Error(`No existe el grupo '${principal}'.`)
     // Anti-lockout, por la otra puerta: degradar al último dueño a un rol menor lo dejaría sin
     // dueño (mismo caso que `removeGrant` ya impide). Solo aplica si el nuevo rol NO es owner.
     if (role !== 'owner') {

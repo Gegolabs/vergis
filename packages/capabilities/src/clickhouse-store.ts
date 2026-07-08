@@ -39,7 +39,9 @@ async function chExec(conn: ChAdminConn, sql: string, opts: { json?: boolean } =
     signal: AbortSignal.timeout(60_000), // un socket colgado en bootstrap/ingesta dejaba todo pendiente
   })
   const text = await res.text()
-  if (!res.ok) throw new Error(`clickhouse: ${res.status} — ${text.slice(0, 500)}\n  SQL: ${sql.slice(0, 200)}`)
+  // Solo la PRIMERA línea del SQL: en un INSERT el statement va en la línea 1 y las filas NDJSON
+  // (datos de negocio, posible PII) en las siguientes — no deben terminar en el log de errores.
+  if (!res.ok) throw new Error(`clickhouse: ${res.status} — ${text.slice(0, 500)}\n  SQL: ${sql.split('\n')[0].slice(0, 200)}`)
   if (!opts.json) return []
   return text.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>)
 }

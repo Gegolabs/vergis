@@ -36,6 +36,10 @@ export function createTokenProvider(creds: SpCreds, opts: { fetch?: FetchLike; n
   const doFetch = opts.fetch ?? fetch
   const now = opts.now ?? Date.now
   const cache = new Map<string, CacheEntry>()
+  // Dedupe de adquisiciones en vuelo por scope: al expirar el token, N requests simultáneas verían el
+  // miss y dispararían N POSTs (estampida; AAD throttlea por SP). El `.finally` limpia la entrada tanto
+  // en éxito como en fallo → un 5xx transitorio no queda cacheado (no reintroduce el bug del pool).
+  const inflight = new Map<string, Promise<CacheEntry>>()
   const endpoint = `https://login.microsoftonline.com/${encodeURIComponent(creds.tenantId)}/oauth2/v2.0/token`
 
   async function fetchToken(scope: string): Promise<CacheEntry> {
@@ -65,7 +69,12 @@ export function createTokenProvider(creds: SpCreds, opts: { fetch?: FetchLike; n
     async getToken(scope: string): Promise<string> {
       const hit = cache.get(scope)
       if (hit && hit.expiresAt > now()) return hit.token
-      const fresh = await fetchToken(scope)
+      let pending = inflight.get(scope)
+      if (!pending) {
+        pending = fetchToken(scope).finally(() => inflight.delete(scope))
+        inflight.set(scope, pending)
+      }
+      const fresh = await pending
       cache.set(scope, fresh)
       return fresh.token
     },

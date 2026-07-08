@@ -32,7 +32,9 @@ interface FabricSchedule {
 }
 
 /** segundos → minutos de intervalo Cron (mínimo 1; los redondeos coarse de demanda ya son múltiplos de 60). */
-const secondsToIntervalMinutes = (seconds: number): number => Math.max(1, Math.round(seconds / 60))
+// floor, no round: redondear hacia arriba dejaría el schedule MENOS frecuente que la cadencia
+// requerida (90s → 2min). Hacia abajo es más frecuente — nunca incumple la demanda. Mínimo 1 min.
+const secondsToIntervalMinutes = (seconds: number): number => Math.max(1, Math.floor(seconds / 60))
 
 /** configuración de schedule de Fabric → segundos aproximados (Cron exacto; Daily/Weekly aproximado). */
 function scheduleToSeconds(s: FabricSchedule): number | null {
