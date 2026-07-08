@@ -7,7 +7,7 @@ import { compile, type TopLevelSpec } from 'vega-lite'
 import { canonical, type Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS } from './table-runtime'
+import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS, vtFormat } from './table-runtime'
 
 /** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
 const VERGIS_VERSION = (() => {
@@ -941,20 +941,8 @@ async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
   return svg
 }
 
+// Delega en vtFormat (el formateador del runtime de tabla): el tbody SERVIDO y el re-render del
+// CLIENTE usan exactamente la misma lógica → sin drift de percent ni de recorte de fecha ISO (03·2).
 function formatValue(value: unknown, format?: string): string {
-  if (typeof value === 'number') {
-    if (Number.isNaN(value)) return '—' // sin guard, percent_1 daba «NaN%»
-    switch (format) {
-      case 'int_0':
-        return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Math.round(value))
-      case 'percent_1':
-        return `${(value * 100).toFixed(1)}%`
-      case 'percent':
-        return `${Math.round(value * 100)}%`
-      default:
-        return String(value)
-    }
-  }
-  if (value instanceof Date) return value.toISOString().slice(0, 10)
-  return String(value ?? '')
+  return vtFormat(value, format)
 }
