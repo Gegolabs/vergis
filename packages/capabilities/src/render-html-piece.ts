@@ -147,6 +147,17 @@ interface RenderOpts {
   interactive: boolean
   /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
   carry: CarryCtx
+  /** Señales que el render acumula para decidir qué CSS/runtime inyectar arriba. Evita re-inspeccionar
+   *  el HTML ya emitido (`body.includes('class="table vtable"')`), frágil ante un rename de clase. */
+  signals: RenderSignals
+}
+
+/** Qué features aparecieron en el árbol renderizado (las marca quien las emite, no un sniff de string). */
+interface RenderSignals {
+  /** Hay al menos una tabla INTERACTIVA (runtime de orden/filtro/búsqueda + gaveta + CSS interactivo). */
+  interactiveTable: boolean
+  /** Hay celdas de acciones de drill (`vt-actions`) → requiere DRILL_ACTIONS_CSS. */
+  drillActions: boolean
 }
 
 /**
@@ -259,7 +270,8 @@ export const renderHtmlPiece: Capability = {
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     const carry = carryCtx ?? {}
-    const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry }
+    const signals: RenderSignals = { interactiveTable: false, drillActions: false }
+    const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry, signals }
     // LINEAMIENTO: los controles NO van en el cuerpo del reporte — viven en el INSPECTOR (gaveta),
     // tab Controles, junto a las facetas/búsqueda. El cuerpo es solo la pieza + la nav de vistas.
     const controlsSection = controls && controls.length ? renderControlsSection(controls, pages?.active, carry) : ''
@@ -268,7 +280,7 @@ export const renderHtmlPiece: Capability = {
     const contextStrip = controls && controls.length ? renderContextStrip(controls) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
     let body = contextStrip + nav + (await renderNode(piece, opts))
-    const hasTable = body.includes('class="table vtable"')
+    const hasTable = signals.interactiveTable
     // GAVETA COMÚN (un solo shell por documento) para cualquier PI con controles o interactividad.
     // 3 tabs: Controles · Guardados · Config. En el tab Controles van, de arriba a abajo: los
     // controles de cabecera (server-side) + las facetas del dashboard / los controles del runtime de tabla.
@@ -295,7 +307,7 @@ export const renderHtmlPiece: Capability = {
     if (pages) css += PAGES_NAV_CSS
     if (controlsSection) css += CONTROLS_BAR_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
-    if (body.includes('vt-actions')) css += DRILL_ACTIONS_CSS
+    if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
     if (hasTable) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
@@ -437,7 +449,7 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
     case 'distribution':
       return renderDistribution(node, opts.tokens)
     case 'table':
-      return renderTable(node, opts.carry)
+      return renderTable(node, opts)
     case 'semaforo':
       return renderSemaforo(node, opts)
     default:
@@ -769,12 +781,17 @@ async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Prom
  *  trabajo de DOM en el arranque — se sirven solo las primeras N y el runtime completa al arrancar. */
 export const TABLE_SSR_MAX_ROWS = 500
 
-function renderTable(node: ResolvedNode, carry: CarryCtx = {}): string {
+function renderTable(node: ResolvedNode, opts: RenderOpts): string {
+  const carry = opts.carry
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const drills = node.drills ?? []
   const ranges = colorscaleRanges(cols, rows)
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
+  // Las señales las marca quien emite la feature (no un sniff del HTML de salida): drills → celdas
+  // `vt-actions`; tabla interactiva (default salvo `interactive:false`) → runtime + gaveta + CSS.
+  if (drills.length > 0) opts.signals.drillActions = true
+  if (node.interactive !== false) opts.signals.interactiveTable = true
 
   // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
   if (node.interactive === false) {
