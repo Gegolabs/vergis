@@ -2,7 +2,7 @@
 // `retain:false` evita acumular cada entrada en RAM — la cadena sigue encadenando (seq/prevHash) y
 // el ARCHIVO es la fuente de verdad, verificable offline recomputando los hashes de sus líneas.
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -51,5 +51,36 @@ describe('AppendOnlyLog · modo file-only (retain:false)', () => {
     log.append({ type: 'b' })
     expect(log.all()).toHaveLength(2)
     expect(log.verifyChain()).toBe(true)
+  })
+
+  it('verifyChain DETECTA adulteración: cambiar el hash de una entrada → false', () => {
+    const log = new AppendOnlyLog(undefined, () => '2026-07-01T00:00:00.000Z')
+    log.append({ type: 'a', x: 1 })
+    log.append({ type: 'b', x: 2 })
+    expect(log.verifyChain()).toBe(true)
+    // all() comparte las referencias de entrada con el interno → adulterar aquí lo ve verifyChain.
+    ;(log.all()[0] as { hash: string }).hash = 'f'.repeat(64)
+    expect(log.verifyChain()).toBe(false)
+  })
+
+  it('verifyChain DETECTA adulteración: mutar un campo del payload → false', () => {
+    const log = new AppendOnlyLog(undefined, () => '2026-07-01T00:00:00.000Z')
+    log.append({ type: 'a', x: 1 })
+    log.append({ type: 'b', x: 2 })
+    ;(log.all()[1] as Record<string, unknown>)['x'] = 999
+    expect(log.verifyChain()).toBe(false)
+  })
+
+  it('offline: borrar una entrada intermedia del archivo rompe la cadena (prevHash desalineado)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vergis-log-'))
+    const path = join(dir, 'audit.log')
+    const log = new AppendOnlyLog(path, () => '2026-07-01T00:00:00.000Z', { retain: false })
+    log.append({ type: 'a' })
+    log.append({ type: 'b' })
+    log.append({ type: 'c' })
+    const lines = readFileSync(path, 'utf8').split('\n').filter((l) => l.trim())
+    const tampered = join(dir, 'tampered.log')
+    writeFileSync(tampered, [lines[0], lines[2]].join('\n') + '\n') // sin la del medio
+    expect(verifyFileChain(tampered)).toBe(false)
   })
 })
