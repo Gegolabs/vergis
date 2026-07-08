@@ -177,6 +177,23 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     }
   }
 
+  // 3·bis · Capabilities de los CHANNELS de distribución (el paso 3 solo cubría las de `data`): un
+  // typo en la capability de un canal explotaba tarde en request-time con `capability-not-found`.
+  // (Nota: `channels[].schedule` sigue declarable pero es INERTE — no hay scheduler; rechazarlo
+  // rompería specs existentes, así que su deprecación queda para un cambio de contrato coordinado.)
+  for (const [i, ch] of (s.delivery?.channels ?? []).entries()) {
+    if (ch?.capability && !ctx.capabilities.includes(ch.capability)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'channel-capability-not-catalogued',
+        path: `delivery.channels[${i}].capability`,
+        value: ch.capability,
+        message: `La capability del canal '${ch.capability}' no existe en el catálogo. Catalogadas: ${ctx.capabilities.join(', ')}.`,
+        remediation: `Corregir el nombre o catalogar '${ch.capability}'.`,
+      })
+    }
+  }
+
   // 4 · Consistencia de shape: los campos referenciados están declarados
   for (const ref of refs) {
     const [dataset, field] = ref.split('.')
@@ -206,6 +223,33 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   const freshness = (s.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
   if (freshness && freshness['source_watermark'] !== 'ignore' && freshness['max_age'] != null) {
     validateMaxAge(String(freshness['max_age']), 'quality.freshness.max_age')
+    // watermark_field global (`data.<ds>.<campo>` o `<ds>.<campo>`): mismo par de checks que la
+    // frescura por-dataset (4·ter·bis). Un typo de dataset la deshabilitaba en silencio; uno de campo
+    // resolvía a undefined → toDate null → «fresco» en silencio, lo contrario de lo declarado.
+    if (freshness['watermark_field'] != null) {
+      const [wds, wfield] = stripDataRef(String(freshness['watermark_field'])).split('.')
+      if (!wds || !(wds in s.data)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'freshness-watermark-dataset-dangling',
+          path: 'quality.freshness.watermark_field',
+          value: freshness['watermark_field'] as never,
+          message: `El watermark_field global referencia el dataset '${wds}', que no existe en data.`,
+          remediation: 'Declarar el dataset o corregir watermark_field (forma data.<dataset>.<campo>).',
+        })
+      }
+      const wdsDecl = s.data[wds]
+      if (wfield && wdsDecl?.shape?.fields && !(wfield in wdsDecl.shape.fields)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'freshness-watermark-field-dangling',
+          path: 'quality.freshness.watermark_field',
+          value: freshness['watermark_field'] as never,
+          message: `El watermark_field global usa el campo '${wfield}', que no está en data.${wds}.shape.fields — el watermark sería irresoluble.`,
+          remediation: `Declarar '${wfield}' en shape.fields o corregir watermark_field.`,
+        })
+      }
+    }
   }
 
   // 4·ter·bis · Frescura POR-DATASET (`data.<ds>.freshness`): max_age parseable > 0 (mismo check que
@@ -240,6 +284,17 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // 4·quater · Render: si `delivery.render` se declara, DEBE incluir al menos un render html (el único
   // formato soportado hoy). Sin esto, `render: [{format: pdf}]` — o un typo `htlm` — sirve una página
   // en blanco con HTTP 200. (Omitir `render` es válido: Mira usa html por defecto.)
+  // Lista vacía explícita (`render: []`): en Mira `[] ?? default` NO aplica el default (no es nullish),
+  // el loop de render no corre y sale página en blanco con 200. Omitir `render` es lo válido.
+  if (Array.isArray(s.delivery?.render) && s.delivery.render.length === 0) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'render-empty',
+      path: 'delivery.render',
+      message: 'delivery.render es una lista vacía → página en blanco. Omití `render` (Mira usa html por defecto) o incluí { format: html, target: web }.',
+      remediation: 'Quitar `render` o declarar al menos { format: html, target: web }.',
+    })
+  }
   const renders = (s.delivery?.render ?? []) as { format?: string }[]
   if (renders.length > 0 && !renders.some((r) => r.format === 'html')) {
     throw new VergisError({
@@ -421,6 +476,20 @@ function validateControls(spec: MiraSpec): void {
         value: c.source,
         message: `El control '${c.id}' toma opciones de '${c.source}' pero el dataset '${dataset}' no existe en data.`,
         remediation: `Declarar el dataset fuente en data (p.ej. una query de valores distintos), o corregir source.`,
+      })
+    }
+    // El CAMPO del source (no solo el dataset): un typo deja el control sin opciones → ctx sin fijar
+    // → páginas con 0 filas en silencio. Mismo criterio que los filtros (4·quinquies).
+    const srcField = stripDataRef(c.source).split('.')[1]
+    const cds = spec.data[dataset]
+    if (cds?.shape?.fields && srcField && !(srcField in cds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-source-field-dangling',
+        path: `controls[${c.id}].source`,
+        value: c.source,
+        message: `El control '${c.id}' usa el campo '${srcField}' de '${dataset}', que no está declarado en data.${dataset}.shape.fields.`,
+        remediation: `Declarar '${srcField}' en shape.fields o corregir source.`,
       })
     }
     if (c.default != null && !['max', 'min', 'first'].includes(c.default)) {
