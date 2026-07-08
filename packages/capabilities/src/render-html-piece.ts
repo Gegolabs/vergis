@@ -468,13 +468,15 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
 }
 
 function semaforoCard(label: string, present: number, total: number, green: number, yellow: number): string {
-  const pct = total > 0 ? Math.round((present / total) * 100) : 0
-  const cls = pct >= green ? 'green' : pct >= yellow ? 'yellow' : 'red'
+  // Guard NaN: una fila con present/total nulos pintaba «NaN / NaN» y 0% (rojo). Mostrar «—».
+  const valid = Number.isFinite(present) && Number.isFinite(total)
+  const pct = valid && total > 0 ? Math.round((present / total) * 100) : 0
+  const cls = !valid ? 'red' : pct >= green ? 'green' : pct >= yellow ? 'yellow' : 'red'
   return (
     `<div class="tl-card ${cls}">` +
     `<div class="area-name" title="${escapeHtml(label)}">${escapeHtml(label)}</div>` +
-    `<span class="headcount">${present} / ${total}</span>` +
-    `<span class="pct ${cls}">${pct}%</span>` +
+    `<span class="headcount">${valid ? `${present} / ${total}` : '—'}</span>` +
+    `<span class="pct ${cls}">${valid ? `${pct}%` : '—'}</span>` +
     `</div>`
   )
 }
@@ -581,7 +583,7 @@ function renderDashboardFacets(it: Interactive): string {
   return it.filters
     .map((f) => {
       const rows = it.datasets[f.dataset] ?? []
-      const values = [...new Set(rows.map((r) => String(r[f.field] ?? '')))].sort((a, b) => a.localeCompare(b))
+      const values = [...new Set(rows.map((r) => String(r[f.field] ?? '')))].sort((a, b) => a.localeCompare(b, 'es'))
       const checks = values
         .map((v) => `<label><input type="checkbox" data-field="${escapeHtml(f.field)}" value="${escapeHtml(v)}"> ${escapeHtml(v)}</label>`)
         .join('')
@@ -941,6 +943,7 @@ async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
 
 function formatValue(value: unknown, format?: string): string {
   if (typeof value === 'number') {
+    if (Number.isNaN(value)) return '—' // sin guard, percent_1 daba «NaN%»
     switch (format) {
       case 'int_0':
         return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Math.round(value))

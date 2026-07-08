@@ -80,8 +80,12 @@ describe('watchPaths', () => {
     const dir = mkdtempSync(join(tmpdir(), 'vergis-watch-'))
     let fired = 0
     const un = watchPaths([dir], () => { fired += 1 }, { debounceMs: 20 })
+    // Settle antes de escribir: en macOS el fs.watch no queda armado de inmediato y un write demasiado
+    // pronto pierde el evento (causa real del flake). Luego polling con deadline (sale apenas dispara).
+    await new Promise((r) => setTimeout(r, 100))
     writeFileSync(join(dir, 'a.yaml'), 'x: 1')
-    await new Promise((r) => setTimeout(r, 200))
+    const deadline = Date.now() + 3000
+    while (fired === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
     un()
     rmSync(dir, { recursive: true, force: true })
     expect(fired).toBeGreaterThanOrEqual(1)
