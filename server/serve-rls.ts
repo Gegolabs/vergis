@@ -26,16 +26,15 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
-import { createCachedScanner, watchPaths } from './hot-reload'
-import { analyzeSqlTables } from './sql-tables'
+import { watchPaths } from './hot-reload'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, withResultCache, type Capability, type ClaimSet, type GateHeaders, type IdentityContext } from '@vergis/botler'
-import { parseSpec, type AnnotationContext } from '@vergis/mira'
+import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
+import { type AnnotationContext } from '@vergis/mira'
 import {
   bootstrapClickHouse,
   createIngestClickHouse,
@@ -84,11 +83,12 @@ import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } fro
 import { fail, readJsonBody } from './http-util'
 import { annSign as annSignHmac } from './annotations'
 import { createRequestHandler } from './routes'
+import { createDiscovery, type Report } from './discovery'
+import { createIdentity } from './identity'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
 import {
-  claimValues,
   isPublic,
   parsePolicyStore,
   settingForClaim,
@@ -120,73 +120,18 @@ loadPolicyStoreInto(store)
 // --- Productos de Información (specs authz-blind, ruteados por slug) ---------
 // DESCUBRIMIENTO DINÁMICO re-escaneado por request. Solo specs SERVIBLES (todas sus data-capabilities
 // en el catálogo de serving del motor activo) — los demás se omiten (no-bypass).
-interface Report { code: string; slug: string; name: string; specPath: string; tables: string[] }
 const SPECS_DIR = process.env['VERGIS_SPECS_DIR']
 const SPECS_LIST = (process.env['VERGIS_SPECS'] ?? process.env['VERGIS_SPEC'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 if (!SPECS_DIR && SPECS_LIST.length === 0) throw new Error('Falta VERGIS_SPECS_DIR o VERGIS_SPECS.')
-
-function slugify(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-}
 function specPaths(): string[] {
   if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => !f.startsWith('.') && /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
   return SPECS_LIST.map((p) => resolve(p))
 }
-function discoverRaw(): Report[] {
-  const out: Report[] = []
-  for (const p of specPaths()) {
-    let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string } }> }
-    try { spec = parseSpec(readFileSync(p, 'utf8')) as typeof spec } catch { continue }
-    const data = spec.data ?? {}
-    const caps = Object.values(data).map((d) => d.capability ?? '')
-    if (caps.length === 0 || !caps.every((c) => SERVING_CAPS.has(c))) {
-      console.warn(`[vergis-rls] '${p}' no servible bajo engine=${ENGINE} (capability fuera del catálogo: ${caps.join(',')}) — omitido`)
-      continue
-    }
-    const analyses = Object.values(data).map((d) => analyzeSqlTables(d.params?.sql ?? ''))
-    const tables = [...new Set(analyses.flatMap((a) => a.tables))]
-    const unqualified = [...new Set(analyses.flatMap((a) => a.unqualified))]
-    // GATE DE GOBERNANZA (fail-closed, charter §2b) — crítico en push-down: en Fabric una tabla SIN
-    // política devuelve TODAS sus filas (el motor no niega por omisión) → un PI que lea una tabla
-    // no-gobernada FUGA. No se sirve un PI a menos que CADA tabla que toca tenga política (rls o
-    // grant:all). En clickhouse la seguridad la da el bootstrap (solo existen tablas gobernadas).
-    if (ENGINE === 'fabric') {
-      // Referencias de UNA sola parte (`FROM dim_area`): el policy store se indexa por schema.tabla →
-      // una single-part NO es verificable contra política. Antes escapaban a la extracción y el PI se
-      // servía SIN verificarlas (fuga silenciosa por estilo de escritura del SQL); ahora se tratan
-      // como no-gobernables y el PI se omite (fail-closed). Escribir la referencia con esquema.
-      if (unqualified.length > 0) {
-        console.warn(`[vergis-rls] '${p}' no servible: referencia tabla(s) sin esquema (no verificables contra el policy store): ${unqualified.join(', ')} — omitido. Calificarlas como schema.tabla.`)
-        continue
-      }
-      const ungoverned = tables.filter((t) => !store.has(t))
-      if (ungoverned.length > 0) {
-        console.warn(`[vergis-rls] '${p}' no servible: lee tabla(s) sin política → fuga en push-down: ${ungoverned.join(', ')} — omitido`)
-        continue
-      }
-    }
-    const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
-    out.push({ code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath: p, tables })
-  }
-  return out
-}
-// CACHE del discover (work/045 Fase 1): hoy `discoverRaw` re-lee+re-parsea TODAS las specs y corre el
-// gate; se invocaba por request. Se memoiza y se invalida on-change (watchPaths) con validate-before-swap.
-// El gate de gobernanza no cambia: solo se cachea su salida; `reloadGovernance()` fuerza el rebuild.
-const specReg = createCachedScanner(discoverRaw)
-function discover(): Report[] {
-  return specReg.get()
-}
-/** ¿El consumidor puede acceder a algún dato de este PI? (índice per-consumidor) */
-function canAccess(table: string, claims: ClaimSet): boolean {
-  const policy = store.get(table)
-  if (!policy) return false // sin política → deny
-  if (isPublic(policy)) return true // grant: all
-  return policy.predicates.some((pred) => claimValues(claims, pred.claim).length > 0)
-}
-function visibleFor(reports: Report[], claims: ClaimSet): Report[] {
-  return reports.filter((r) => r.tables.length === 0 || r.tables.some((t) => canAccess(t, claims)))
-}
+// Descubrimiento (memoizado) + gate de gobernanza fail-closed: extraído y testeado en ./discovery.
+// `discovery.rebuild()` (validate-before-swap) lo fuerza tras un hot-reload de gobierno.
+const discovery = createDiscovery({ store, engine: ENGINE as 'clickhouse' | 'fabric', servingCaps: SERVING_CAPS, specPaths })
+const discover = discovery.discover
+const visibleFor = discovery.visibleFor
 
 // --- Setup del CONECTOR según el motor --------------------------------------
 const connections = process.env['VERGIS_CONNECTIONS']
@@ -325,7 +270,6 @@ const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-gro
     if (claim && header) acc[claim] = header.toLowerCase()
     return acc
   }, {})
-const GATE_MAPPING = { ...DEFAULT_GATE_MAPPING, claims: gateClaims, decodeUtf8: true }
 
 // A10 · Defensa en profundidad del gate (OPT-IN): con VERGIS_GATE_SECRET definido, se exige que cada
 // request (salvo /healthz) traiga `x-gate-token` con ese valor — un secreto que SOLO el oauth2-proxy
@@ -343,16 +287,8 @@ const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = p
   ? (JSON.parse(readFileSync(resolve(process.env['VERGIS_IDENTITY_MAP']), 'utf8')) as Record<string, Record<string, string | string[]>>)
   : null
 
-/** Identidad del gate + claims enriquecidos desde el directorio (si hay mapa y el email matchea). */
-function identityFor(headers: GateHeaders) {
-  const identity = identityFromHeaders(headers, GATE_MAPPING)
-  if (!IDENTITY_MAP || !identity.user) return identity
-  const extra = IDENTITY_MAP[identity.user.toLowerCase()]
-  if (!extra) return identity // no mapeado → sin claim del directorio → default-deny
-  const claims: ClaimSet = { ...(identity.claims ?? {}) }
-  for (const [c, v] of Object.entries(extra)) claims[c] = Array.isArray(v) ? v.map(String) : [String(v)]
-  return { ...identity, claims }
-}
+// Identidad del gate + claims enriquecidos desde el directorio: extraído y testeado en ./identity.
+const identityFor = createIdentity(gateClaims, IDENTITY_MAP).identityFor
 
 // ANOTACIONES — enriquecimiento de la capa de viz. Store embebido (SQLite) reemplazable por externo.
 // Lectura: solo se fusionan anotaciones sobre las filas RLS-filtradas que el usuario ya ve.
@@ -837,8 +773,8 @@ function reloadGovernance(reason: string): void {
   // política VIEJA hasta vencer el TTL. `clear()` existe si el conector está envuelto (withResultCache).
   const cached = servingCap as { clear?: () => void }
   if (typeof cached.clear === 'function') cached.clear()
-  const r = specReg.rebuild()
-  console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${specReg.get().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
+  const r = discovery.rebuild()
+  console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${discover().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
   // Fail-closed en el reload: si el re-bootstrap falla (fabric: falta SECURITY POLICY nativa para una
   // tabla recién gobernada; CH: recompilación/ingesta fallida), NO se sigue sirviendo con las
   // invariantes viejas — ready=false → healthz 503 hasta que un reload exitoso lo restablezca.
@@ -851,8 +787,8 @@ function reloadGovernance(reason: string): void {
 if (HOT_RELOAD) {
   const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
   watchPaths(specTargets, () => {
-    const r = specReg.rebuild()
-    console.log(r.ok ? `[hot-reload] specs recargadas: ${specReg.get().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
+    const r = discovery.rebuild()
+    console.log(r.ok ? `[hot-reload] specs recargadas: ${discover().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
   })
   if (POLICY_PATHS.length) watchPaths(POLICY_PATHS.map((p) => resolve(p)), () => reloadGovernance('watch:policies'))
   process.on('SIGHUP', () => reloadGovernance('SIGHUP'))
