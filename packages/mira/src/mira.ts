@@ -183,7 +183,7 @@ export class MiraBotlet implements Botlet {
       if (r.format === 'csv') {
         const rendered = await host.capabilityCall(
           'render-csv-piece',
-          { piece: resolved, title: spec.identity.display_name },
+          { piece: resolved, title: spec.identity.display_name, bom: r.bom },
           identity,
         )
         // El contenido queda EN MEMORIA (artifacts[].content); se escribe a disco solo si un canal

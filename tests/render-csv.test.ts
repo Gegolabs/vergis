@@ -83,4 +83,14 @@ describe('delivery.render format csv', () => {
     const piece: ResolvedNode = { type: 'kpi', value: 1, label: 'x' }
     await expect(renderCsvPiece.execute({ piece, title: 'SinTablas' }, { agent: 'test' })).rejects.toThrow(/tabla/)
   })
+
+  it('bom opt-in: default sin BOM (parsers de máquina); con bom:true antepone el BOM UTF-8 (Excel)', async () => {
+    const piece: ResolvedNode = { type: 'table', columnsSpec: [{ field: 'a', label: 'Á' }], rows: [{ a: 'ñ' }] }
+    const plain = (await renderCsvPiece.execute({ piece }, { agent: 'test' })) as { csv: string }
+    expect(plain.csv.charCodeAt(0)).not.toBe(0xfeff)
+    expect(plain.csv).toBe('Á\nñ\n')
+    const withBom = (await renderCsvPiece.execute({ piece, bom: true }, { agent: 'test' })) as { csv: string }
+    expect(withBom.csv.charCodeAt(0)).toBe(0xfeff)
+    expect(withBom.csv.slice(1)).toBe('Á\nñ\n') // el BOM solo se antepone; el resto es idéntico
+  })
 })
