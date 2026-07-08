@@ -45,6 +45,17 @@ describe('validate-guards · la spec testigo válida pasa', () => {
   })
 })
 
+describe('A13 · datasets pelados (agg.dataset / table.data) se validan', () => {
+  it('agg.dataset con typo → dangling-data-reference (antes pasaba y el KPI salía 0)', () => {
+    const s = parseSpec(BASE.replace('dataset: datos, op: sum', 'dataset: noexiste, op: sum')) as Record<string, unknown>
+    expect(() => validate(s)).toThrow(/noexiste/)
+  })
+  it('table.data pelado con typo → dangling-data-reference', () => {
+    const s = parseSpec(BASE.replace('data: data.datos', 'data: noexiste')) as Record<string, unknown>
+    expect(() => validate(s)).toThrow(/noexiste/)
+  })
+})
+
 describe('F5 · quality.freshness.max_age', () => {
   it('P1W (semanas, no soportado por el parser) → rechazo', () => {
     const s = parseSpec(BASE.replace('max_age: P1D', 'max_age: P1W')) as Record<string, unknown>

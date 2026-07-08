@@ -7,7 +7,7 @@ import {
 } from '@vergis/botler'
 import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { parseSpec } from './dsl/parse'
-import { collectDataRefs, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
+import { collectDataRefs, collectDatasetKeys, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
 import { checkFreshness, type FreshnessVerdict } from './freshness'
 import { resolveTheme } from './theme-config'
 
@@ -490,7 +490,9 @@ function isMultiControl(c: MiraControl): boolean {
  *  la URL (control multi-select) llega como arreglo; uno solo, como string (back-compat). */
 function normalizeCtx(raw: unknown): CtxValues {
   if (!raw || typeof raw !== 'object') return {}
-  const out: CtxValues = {}
+  // Object.create(null): un param `__proto__` multi-valor (arreglo) asignado a un objeto literal
+  // corrompería el prototipo del mapa. Sin prototipo, `__proto__` es una clave normal.
+  const out = Object.create(null) as CtxValues
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (Array.isArray(v)) {
       const list = v.filter((x) => x != null && x !== '').map(String)
@@ -510,7 +512,10 @@ function asSingle(v: string | string[] | undefined): string | undefined {
 
 /** Datasets (sin repetir) que una pieza referencia vía `data.<dataset>...`. */
 function uniqueDatasets(piece: Record<string, unknown>): string[] {
-  return [...new Set(collectDataRefs(piece).map((r) => r.split('.')[0]))]
+  // Une los dos recolectores: referencias `data.<ds>.<campo>` y datasets pelados de agg.dataset /
+  // table.data / semaforo.data — así una página cuyo único uso de un dataset es vía `agg.dataset`
+  // igual lo recupera (antes salía KPI en 0 / tabla vacía).
+  return [...new Set([...collectDataRefs(piece), ...collectDatasetKeys(piece)].map((r) => r.split('.')[0]))]
 }
 
 /**
