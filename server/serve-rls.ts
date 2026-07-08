@@ -28,13 +28,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFileSync, readdirSync } from 'node:fs'
 import { createCachedScanner, watchPaths } from './hot-reload'
 import { analyzeSqlTables } from './sql-tables'
-import { navFromUrl, type NavQuery } from './nav'
+import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, withResultCache, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
+import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, withResultCache, type Capability, type ClaimSet, type GateHeaders, type IdentityContext } from '@vergis/botler'
 import { parseSpec, type AnnotationContext } from '@vergis/mira'
 import {
   bootstrapClickHouse,
@@ -83,6 +83,7 @@ import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { fail, readJsonBody } from './http-util'
 import { annSign as annSignHmac } from './annotations'
+import { createRequestHandler } from './routes'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -504,100 +505,51 @@ const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCod
     { logoUrl: INDEX_LOGO || undefined, avatar },
   )
 
-const server = createServer((req, res) => {
-  const url = (req.url ?? '/').split('?')[0]
-  if (url === '/healthz') {
-    // Payload mínimo: los probes suelen excluirse del SSO; no exponer slugs de PIs ni lastErr (internals).
-    res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: ready, engine: ENGINE }))
-    return
-  }
-  // A10 · Gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).
-  if (GATE_SECRET && req.headers['x-gate-token'] !== GATE_SECRET) {
-    return fail(res, 403, 'Acceso denegado: falta el token del gate (el request no pasó por el proxy).')
-  }
-  // ADMINISTRACIÓN — superficie de escritura, gateada por rol admin DENTRO del handler. Va antes del
-  // gate `ready` (no depende del motor de serving): editar data maestra no es servir dato gobernado.
-  if (admin && (url === '/admin' || url.startsWith('/admin/'))) {
-    admin.tryHandle(req, res).catch((e) => fail(res, 500, `Error en Administración: ${e instanceof Error ? e.message : String(e)}`))
-    return
-  }
-  // Configuración por-PI (compartir/visibilidad/demanda) — gateada por rol de PI dentro del handler.
-  if (piConfig && /^\/[^/]+\/config(?:\/|$)/.test(url)) {
-    piConfig.tryHandle(req, res).then((handled) => {
-      if (!handled) fail(res, 404, 'Ruta no encontrada')
-    }).catch((e) => fail(res, 500, `Error en configuración del PI: ${e instanceof Error ? e.message : String(e)}`))
-    return
-  }
-  if (!ready) return fail(res, 503, 'Inicializando…')
-  const all = discover()
-  // POST /<slug>/annotations — escritura de anotación (único surface mutable; gateado por HMAC).
-  if (req.method === 'POST') {
-    const m = url.match(/^\/([^/]+)\/annotations\/?$/)
-    const report = m && all.find((r) => r.slug === m[1].toLowerCase())
-    if (!report) return fail(res, 404, 'Ruta no encontrada')
-    handleAnnotationWrite(report, req, res).catch((e) =>
-      fail(res, 500, `Error al guardar anotación: ${e instanceof Error ? e.message : String(e)}`),
-    )
-    return
-  }
-  const identity = identityFor(req.headers as GateHeaders)
-  const email = identity.user
+// Operaciones per-request que el router (`routes.ts`) inyecta. Viven acá porque cierran sobre el
+// estado del server (governance/piAclEnabled/domainsCfg/…), leído a request-time. Lógica verbatim.
+const indexReports = async (all: Report[], identity: IdentityContext): Promise<Report[]> => {
   const claims = identity.claims ?? {}
-  const sendHtml = (html: string) => {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(html)
+  if (!(piAclEnabled && governance)) return visibleFor(all, claims)
+  const roles = await Promise.all(all.map((r) => piManagementRole(r.code, identity.user)))
+  return all.filter((_, i) => canOpen(roles[i]))
+}
+const renderIndexPage = async (visible: Report[], identity: IdentityContext): Promise<string> => {
+  const idxTitle = (governance ? await governance.getSetting('index_title') : null) || INDEX_TITLE
+  const emailLc = (identity.user ?? '').toLowerCase()
+  const isAdmin = governance ? await governance.isAdmin(emailLc) : false
+  let hasDomains = isAdmin
+  if (!hasDomains && governance && domainsCfg.length) {
+    const ug = await governance.groupsOf(emailLc)
+    hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
   }
-  // Índice PER-CONSUMIDOR: con ACL encendida, los PIs que la identidad puede ABRIR (autz de artefacto);
-  // sin ACL, los PIs a cuyo DATO tiene acceso (comportamiento vivo). La RLS filtra filas en ambos casos.
-  if (url === '/' || url === '') {
-    const indexFor = async (): Promise<Report[]> => {
-      if (!(piAclEnabled && governance)) return visibleFor(all, claims)
-      const roles = await Promise.all(all.map((r) => piManagementRole(r.code, email)))
-      return all.filter((_, i) => canOpen(roles[i]))
-    }
-    indexFor()
-      .then(async (visible) => {
-        if (visible.length === 1) {
-          return renderReport(visible[0], req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
-        }
-        // Título del catálogo: editable in-app (governance setting) con fallback al env.
-        const idxTitle = (governance ? await governance.getSetting('index_title') : null) || INDEX_TITLE
-        // Marco de identidad: el avatar (mismo componente que la administración). «Gestión» se muestra si
-        // el usuario gestiona algún dominio (admin · default-steward-group · steward directo); «Configuración» si es admin.
-        const emailLc = (email ?? '').toLowerCase()
-        const isAdmin = governance ? await governance.isAdmin(emailLc) : false
-        let hasDomains = isAdmin
-        if (!hasDomains && governance && domainsCfg.length) {
-          const ug = await governance.groupsOf(emailLc)
-          hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
-        }
-        const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: SIGNOUT_RD || '/' })
-        // Gobierno por PI para el catálogo: dueño + colaboradores específicos (líder técnico), con los
-        // grupos default (Centro de Excelencia) anotados aparte (tooltip), no repetidos por fila.
-        const govByCode: GovByCode = new Map()
-        if (governance) {
-          const groups = await governance.listGroups()
-          const glabel = new Map(groups.map((g) => [g.id, g.label]))
-          await Promise.all(visible.map(async (r) => { govByCode.set(r.code, await piGovSummary(r.code, glabel)) }))
-        }
-        sendHtml(indexHtml(visible, idxTitle, avatar, govByCode))
-      })
-      .catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
-    return
+  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: SIGNOUT_RD || '/' })
+  const govByCode: GovByCode = new Map()
+  if (governance) {
+    const groups = await governance.listGroups()
+    const glabel = new Map(groups.map((g) => [g.id, g.label]))
+    await Promise.all(visible.map(async (r) => { govByCode.set(r.code, await piGovSummary(r.code, glabel)) }))
   }
-  const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
-  const report = all.find((r) => r.slug === slug)
-  if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
-  // Gate de ARTEFACTO (si ACL encendida): ¿puede abrir este PI? La RLS de datos aplica igual al render.
-  const openGate = piAclEnabled && governance ? piManagementRole(report.code, email).then(canOpen) : Promise.resolve(true)
-  openGate
-    .then((allowed) => {
-      if (!allowed) return fail(res, 403, `No tienes acceso a este Producto de Información. <a href="/">Ver disponibles</a>`)
-      return renderReport(report, req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
-    })
-    .catch((e) => fail(res, 500, `Error al render por-consumidor: ${e instanceof Error ? e.message : String(e)}`))
-})
+  return indexHtml(visible, idxTitle, avatar, govByCode)
+}
+const canOpenPi = (report: Report, identity: IdentityContext): Promise<boolean> =>
+  piAclEnabled && governance ? piManagementRole(report.code, identity.user).then(canOpen) : Promise.resolve(true)
+
+const server = createServer(
+  createRequestHandler({
+    engine: ENGINE,
+    gateSecret: GATE_SECRET,
+    isReady: () => ready,
+    getAdmin: () => admin,
+    getPiConfig: () => piConfig,
+    discover,
+    identityFor,
+    renderReport,
+    handleAnnotationWrite,
+    indexReports,
+    renderIndexPage,
+    canOpenPi,
+  }),
+)
 
 // Store de anotaciones (no-fatal: si falla, el feature queda inhabilitado, no rompe el serving).
 try {
