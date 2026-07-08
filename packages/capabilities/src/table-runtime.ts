@@ -25,6 +25,10 @@ export interface VtState {
   facets: Record<string, string[]>
   /** Columna por la que agrupar (categorización). Vacío = tabla plana. */
   groupBy: string
+  /** Campos sobre los que corre la búsqueda GLOBAL. Si está definido, la búsqueda se limita a ellos
+   *  (las columnas mostradas y buscables) — así no matchea campos ocultos del payload (tokens de
+   *  anotación, claves de drill). Ausente → todos los campos de la fila (back-compat). */
+  searchCols?: string[]
 }
 
 /** Normaliza para comparar: minúsculas + sin acentos. */
@@ -86,12 +90,14 @@ export function vtIsCategorical(
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
 export function vtFormat(value: unknown, format?: string): string {
   if (typeof value === 'number') {
+    if (Number.isNaN(value)) return '—'
     if (format === 'int_0')
       return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Math.round(value))
     if (format === 'percent_1') return (value * 100).toFixed(1) + '%'
     if (format === 'percent') return Math.round(value * 100) + '%'
     return String(value)
   }
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
   const s = String(value == null ? '' : value)
   if (/^\d{4}-\d\d-\d\dT/.test(s)) return s.slice(0, 10)
   return s
@@ -107,7 +113,9 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
     }
     if (gq) {
       let hit = false
-      for (const k in r) {
+      // Solo las columnas buscables si están declaradas; si no, todos los campos (back-compat).
+      const keys = state.searchCols && state.searchCols.length ? state.searchCols : Object.keys(r)
+      for (const k of keys) {
         if (vtNorm(r[k]).indexOf(gq) !== -1) {
           hit = true
           break
@@ -124,15 +132,21 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
   if (state.sort && state.sort.field) {
     const field = state.sort.field
     const k = state.sort.dir === 'desc' ? -1 : 1
+    // Decidir el modo UNA vez por columna (no por par): un comparador que alterna numérico/léxico
+    // según cada par es NO-transitivo → Array.sort da órdenes arbitrarios en columnas mixtas.
+    const numeric = vtIsNumericCol(out, field)
+    const num = (v: unknown): number => (v == null || v === '' ? NaN : Number(v))
     out.sort((a, b) => {
-      const av = a[field]
-      const bv = b[field]
-      const an = Number(av)
-      const bn = Number(bv)
       let c: number
-      if (av !== '' && bv !== '' && av != null && bv != null && !Number.isNaN(an) && !Number.isNaN(bn))
-        c = an - bn
-      else c = vtNorm(av).localeCompare(vtNorm(bv))
+      if (numeric) {
+        const an = num(a[field])
+        const bn = num(b[field])
+        const aN = Number.isNaN(an)
+        const bN = Number.isNaN(bn)
+        c = aN && bN ? 0 : aN ? 1 : bN ? -1 : an - bn // celdas no-numéricas/vacías al final
+      } else {
+        c = vtNorm(a[field]).localeCompare(vtNorm(b[field]))
+      }
       return c * k
     })
   }
@@ -250,7 +264,8 @@ function vtCell(col, r, ann){
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
   return '<td class="align-'+(col.align||'left')+'"'+bg+'>'+vtEsc(text)+'</td>';
 }
-function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ if(m[k]!=null&&m[k]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(m[k])); } return q; }
+/* Una clave multi-valor del carry (control multi-select) se repite: &ctx.k=a&ctx.k=b (espejo de ctxQuery server-side). */
+function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ var vs=Array.isArray(m[k])?m[k]:[m[k]]; for(var i=0;i<vs.length;i++){ if(vs[i]!=null&&vs[i]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(vs[i])); } } return q; }
 function vtDrillHref(drill, r, carry){ var keys={}; for(var i=0;i<drill.by.length;i++){ var b=drill.by[i]; keys[b]=String(r[b]==null?'':r[b]); } return '?page='+encodeURIComponent(drill.to)+vtCtxQuery(carry,keys); }
 function vtDrillActions(drills, r, carry){
   if(!drills||!drills.length) return '';
@@ -284,6 +299,10 @@ function vtBootstrap(root){
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
   var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
+  // Busqueda global acotada a las columnas mostradas y buscables: los campos ocultos del payload
+  // (tokens de anotacion, claves de drill) no estan en cols, asi que no se buscan por texto.
+  state.searchCols = cols.filter(function(c){ return c.searchable!==false; }).map(function(c){ return c.field; });
+  var rendered = false; // ¿render() ya corrió? (p.ej. una vista pinneada aplicada vía applySnapshot)
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
   var badge = document.getElementById('vergis-count'); // uña/pestaña de la gaveta común
@@ -483,7 +502,7 @@ function vtBootstrap(root){
   if(chipsEl) chipsEl.addEventListener('click', function(e){
     var chip=e.target.closest('.vt-chip'); if(!chip) return;
     if(chip.getAttribute('data-search')==='global'){ state.globalSearch=''; if(gs) gs.value=''; }
-    else { var f=chip.getAttribute('data-field'), v=chip.getAttribute('data-val'); state.facets[f]=(state.facets[f]||[]).filter(function(x){return x!==v;}); var th=root.querySelector('th[data-field="'+f+'"]'); var pop=th&&th.querySelector('.vt-col-pop'); if(pop&&pop.innerHTML){ var box=pop.querySelector('.vt-pop-opts input[value="'+v.replace(/"/g,'\\\\"')+'"]'); if(box) box.checked=false; } }
+    else { var f=chip.getAttribute('data-field'), v=chip.getAttribute('data-val'); state.facets[f]=(state.facets[f]||[]).filter(function(x){return x!==v;}); var th=root.querySelector('th[data-field="'+f+'"]'); var pop=th&&th.querySelector('.vt-col-pop'); if(pop&&pop.innerHTML){ var ins=pop.querySelectorAll('.vt-pop-opts input'); for(var bi=0;bi<ins.length;bi++){ if(ins[bi].value===v){ ins[bi].checked=false; break; } } } }
     render();
   });
 
@@ -500,6 +519,7 @@ function vtBootstrap(root){
     }).join('');
   }
   function render(){
+    rendered = true;
     var rc = renderCols(), ncols = rc.length + nactions;
     var view = vtApply(rows, state);
     if(state.groupLevels.length){
@@ -524,7 +544,21 @@ function vtBootstrap(root){
     }
     if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
   }
-  render();
+  // Arranque: si una vista pinneada ya aplicó (applySnapshot → render), no hay nada que hacer.
+  // Si el tbody servido ya trae TODAS las filas (ssrComplete) y el estado inicial es vacío (sin
+  // orden/búsqueda/facetas/grupos) — y sin columna de anotación, cuya visibilidad la resuelve
+  // render() — el render() inicial reconstruiría un tbody IDÉNTICO al servido: se salta, pintando
+  // solo el conteo (que de otro modo solo pinta render()). En cualquier otro caso, render() normal.
+  var stateEmpty = !state.sort.field && !state.globalSearch && !state.groupLevels.length;
+  for(var fk in state.facets){ if((state.facets[fk]||[]).length) stateEmpty=false; }
+  if(!rendered){
+    // Con 0 filas NO se salta: render() pinta la fila «Sin resultados» (el tbody servido va vacío).
+    if(payload.ssrComplete && stateEmpty && !ann && rows.length){
+      if(countEl) countEl.textContent = rows.length + (rows.length===1?' fila':' filas');
+    } else {
+      render();
+    }
+  }
 }
 Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
 `

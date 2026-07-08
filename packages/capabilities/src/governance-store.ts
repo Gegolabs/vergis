@@ -319,6 +319,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
   async deleteGroup(id: string): Promise<void> {
     const gid = id.trim().toLowerCase()
     this.db.run(`DELETE FROM mira_group_member WHERE group_id = ?`, [gid])
+    // Limpiar los grants del grupo: si no, quedan latentes y un grupo recreado con el mismo id
+    // haría que sus nuevos miembros hereden silenciosamente los accesos del grupo anterior.
+    this.db.run(`DELETE FROM pi_grant WHERE principal_type = 'group' AND principal = ?`, [gid])
     this.db.run(`DELETE FROM mira_group WHERE group_id = ?`, [gid])
     this.persist()
   }
@@ -382,7 +385,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
     if (!pi) throw new Error('bootstrapPi: pi_code vacío.')
     if (await this.getPiGovernance(pi)) return // idempotente
     const owner = normEmail(ownerEmail)
-    this.db.run(`INSERT INTO pi_governance (pi_code, visibility, created_by, created_at) VALUES (?,?,?,?)`, [pi, 'privado', owner || null, now()])
+    // OR IGNORE: idempotente aún si dos requests concurrentes pasan el check-then-act de arriba
+    // (el INSERT del segundo no viola la PK ni rompe la idempotencia prometida).
+    this.db.run(`INSERT OR IGNORE INTO pi_governance (pi_code, visibility, created_by, created_at) VALUES (?,?,?,?)`, [pi, 'privado', owner || null, now()])
     if (owner) this.writeGrant(pi, 'user', owner, 'owner', 'bootstrap')
     for (const g of defaultCollaboratorGroups) {
       const gid = g.trim().toLowerCase()
@@ -435,6 +440,18 @@ export class SqliteGovernanceStore implements GovernanceStore {
     const p = principalType === 'user' ? normEmail(principal) : principal.trim().toLowerCase()
     if (!p) throw new Error('Principal vacío.')
     if (principalType === 'user' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p)) throw new Error(`Correo inválido: '${principal}'.`)
+    // Grant a grupo inexistente = grant inerte y, combinado con la recreación de un grupo con el mismo
+    // id, herencia silenciosa de accesos. Fail-loud.
+    if (principalType === 'group' && !this.groupExists(p)) throw new Error(`No existe el grupo '${principal}'.`)
+    // Anti-lockout, por la otra puerta: degradar al último dueño a un rol menor lo dejaría sin
+    // dueño (mismo caso que `removeGrant` ya impide). Solo aplica si el nuevo rol NO es owner.
+    if (role !== 'owner') {
+      const grants = await this.listGrants(piCode)
+      const current = grants.find((g) => g.principalType === principalType && g.principal === p)
+      if (current?.role === 'owner' && grants.filter((g) => g.role === 'owner').length <= 1) {
+        throw new GovernanceConflict('No se puede degradar al último dueño del PI.')
+      }
+    }
     this.writeGrant(piCode, principalType, p, role, grantedBy)
     this.persist()
   }
@@ -473,8 +490,17 @@ export class SqliteGovernanceStore implements GovernanceStore {
 
   async setDemanda(piCode: string, maxAge: string, updatedBy?: string): Promise<void> {
     const age = maxAge.trim().toUpperCase()
-    if (!/^P(?:\d+W|(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?)$/.test(age) || age === 'P') {
+    // Validar con el MISMO parser que consume la demanda (`durationToSeconds`), no un regex propio:
+    // el regex aceptaba 'PT' (que luego revienta durationToSeconds) y 'P0D', y rechazaba 'P1W1D'.
+    // El `> 0` cubre tanto el throw como un resultado no positivo (P0D, NaN).
+    let seconds: number
+    try {
+      seconds = durationToSeconds(age)
+    } catch {
       throw new Error(`Demanda inválida: '${maxAge}' (use duración ISO-8601, p.ej. PT1H, P1D, P1W).`)
+    }
+    if (!(seconds > 0)) {
+      throw new Error(`Demanda inválida: '${maxAge}' debe ser una duración mayor a cero (p.ej. PT1H, P1D, P1W).`)
     }
     this.db.run(
       `INSERT INTO pi_demanda (pi_code, max_age, updated_by, updated_at) VALUES (?,?,?,?)

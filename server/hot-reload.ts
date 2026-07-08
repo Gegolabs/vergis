@@ -8,7 +8,8 @@
 // El reload del policy store (su gap real) lo orquesta el server llamando `rebuild()` del scanner tras
 // re-poblar el store; este módulo provee las piezas genéricas y testeables.
 
-import { watch, type FSWatcher } from 'node:fs'
+import { watch, statSync, type FSWatcher } from 'node:fs'
+import { dirname, basename } from 'node:path'
 
 /** Coalescer simple: agrupa ráfagas de `trigger()` en una sola ejecución de `fn` tras `ms` de quietud. */
 export function debounce(fn: () => void, ms: number): { trigger: () => void; cancel: () => void } {
@@ -43,7 +44,26 @@ export function watchPaths(
   const watchers: FSWatcher[] = []
   for (const p of paths) {
     try {
-      watchers.push(watch(p, { persistent: false }, () => d.trigger()))
+      const isDir = (() => {
+        try {
+          return statSync(p).isDirectory()
+        } catch {
+          return false
+        }
+      })()
+      if (isDir) {
+        watchers.push(watch(p, { persistent: false }, () => d.trigger()))
+      } else {
+        // Archivo: observar el DIRECTORIO filtrando por basename. Un save atómico (rename de vim/VSCode)
+        // cambia el inode del archivo → un `watch` DIRECTO sobre él quedaría mirando el inode viejo y
+        // dejaría de disparar en silencio. El watch del directorio sobrevive el rename.
+        const base = basename(p)
+        watchers.push(
+          watch(dirname(p), { persistent: false }, (_ev, fn) => {
+            if (!fn || fn === base) d.trigger()
+          }),
+        )
+      }
     } catch (e) {
       log(`[hot-reload] no se pudo observar ${p}: ${e instanceof Error ? e.message : String(e)}`)
     }

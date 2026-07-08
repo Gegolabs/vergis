@@ -1,10 +1,12 @@
 import type { Capability } from '@vergis/botler'
 import { publicarArtefacto } from './publicar-artefacto'
+import { renderCsvPiece } from './render-csv-piece'
 import { renderHtmlPiece } from './render-html-piece'
 import { staticData } from './static-data'
 
 export { staticData } from './static-data'
-export { renderHtmlPiece } from './render-html-piece'
+export { renderHtmlPiece, TABLE_SSR_MAX_ROWS, CHART_MAX_BARS, chartCacheStats } from './render-html-piece'
+export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn } from './render-html-piece'
 export {
   TABLE_RUNTIME_SOURCE,
@@ -89,8 +91,8 @@ export { getTheme, registerTheme, defaultTheme, arbolTheme } from './themes'
 export type { Theme, ThemeTokens, DashboardMeta } from './themes'
 
 /**
- * Conjunto starter genérico (sin acceso a recursos externos): los 3 stubs/render.
+ * Conjunto starter genérico (sin acceso a recursos externos): stubs + renders (html y csv).
  * `execute-sql-dwh` no entra aquí porque requiere perfiles de conexión — se crea
  * con `createExecuteSqlDwh(profiles)` y se registra aparte.
  */
-export const starterCapabilities: Capability[] = [staticData, renderHtmlPiece, publicarArtefacto]
+export const starterCapabilities: Capability[] = [staticData, renderHtmlPiece, renderCsvPiece, publicarArtefacto]

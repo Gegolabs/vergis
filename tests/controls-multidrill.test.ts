@@ -150,9 +150,9 @@ describe('validación · controles + drill multi-clave', () => {
     // Lo atrapa el schema (enum) antes que la validación semántica — ambas son rechazo válido.
     expect(() => validate(s)).toThrow(/default/)
   })
-  it('control multi-select (single: false) → rechazo (aún no soportado)', () => {
+  it('control multi-select (single: false) → válido (soportado desde work/052 R3)', () => {
     const s = parseSpec(YAML.replace('single: true', 'single: false')) as Record<string, unknown>
-    expect(() => validate(s)).toThrow(/multi-select/)
+    expect(() => validate(s)).not.toThrow()
   })
   it('drill multi-clave a una vista que no declara todas las claves → rechazo', () => {
     // detalle_es declara context: [empresa, socio]; lo dejamos solo en [socio].
@@ -196,6 +196,44 @@ describe('render · control de cabecera default=max', () => {
     const { out, calls } = await render(YAML, { ctx: { semana: 'W20' } })
     const html = out.html ?? ''
     expect(html).toContain('<option value="W20" selected>W20</option>')
+    const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
+    expect(clientes.params?.['ctx_semana']).toBe('W20')
+  })
+})
+
+// PI de UNA vista (piece, sin pages) con controles: el `:ctx.<id>` DEBE reescribirse igual que en
+// multi-vista. Antes `applyCtx` solo corría con `isMulti` → el placeholder quedaba literal (falla en el
+// motor) o el control era un no-op silencioso (work/052 F1).
+const SINGLE_YAML = `
+mira_version: "1.0"
+identity: { id: pi-single-ctrl, display_name: "Single Ctrl", code: PI-SC, version: "1.0", classification: internal }
+controls:
+  - { id: semana, label: "Semana", source: data.semanas.semana, default: max, single: true }
+piece:
+  table:
+    data: data.clientes
+    columns:
+      - { field: empresa, label: "Empresa" }
+      - { field: saldo, label: "Saldo", format: int_0, align: right }
+data:
+  semanas: { capability: mock-sql, params: { sql: "SELECT DISTINCT Semana AS semana FROM dbo.dim_fechas" } }
+  clientes: { capability: mock-sql, params: { sql: "SELECT empresa, socio, saldo FROM dbo.saldo WHERE Semana = :ctx.semana" } }
+quality: {}
+delivery: { render: [{ format: html, target: web }] }
+`
+
+describe('render · PI de UNA vista + control (F1: applyCtx también sin pages)', () => {
+  it('el :ctx.semana del PI de una vista se reescribe a @ctx_semana bindeado (no queda literal)', async () => {
+    const { out, calls } = await render(SINGLE_YAML)
+    expect(out.ok).toBe(true)
+    const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
+    expect(clientes.sql).toContain('@ctx_semana')
+    expect(clientes.sql).not.toContain(':ctx.semana')
+    expect(clientes.params?.['ctx_semana']).toBe('W21') // default max resuelto por el control
+  })
+
+  it('?ctx.semana=W20 override en PI de una vista: la query usa W20', async () => {
+    const { calls } = await render(SINGLE_YAML, { ctx: { semana: 'W20' } })
     const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
     expect(clientes.params?.['ctx_semana']).toBe('W20')
   })

@@ -2,11 +2,15 @@ import Ajv, { type ValidateFunction } from 'ajv'
 import addFormats from 'ajv-formats'
 import { VergisError } from '@vergis/botler'
 import { normalizeDrills } from '../compose'
+import { parseIsoDuration } from '../freshness'
 
 export interface MiraDataset {
   capability: string
   params?: Record<string, unknown>
   shape?: { type?: string; fields?: Record<string, string> }
+  /** Frescura POR-DATASET (además de la global de quality.freshness): `watermark_field` es un
+   *  CAMPO del propio dataset; `max_age` una duración ISO 8601 soportada. Ver freshness.ts. */
+  freshness?: { watermark_field?: string; max_age?: string; timezone?: string }
 }
 
 /** Una vista (página) de un PI multi-vista. Cada página es una pieza con su propio contexto. */
@@ -50,14 +54,20 @@ export interface MiraSpec {
   }
 }
 
-let cached: ValidateFunction | null = null
+// Caché por-OBJETO de schema (no un único singleton): la compilación AJV es cara, pero un caché de un
+// solo slot ignoraría el argumento `schema` a partir de la 2ª llamada — benigno con un schema, bug
+// latente si conviven dos (versiones del DSL, hot-reload del schema): el 2º usaría el validador del 1º.
+// El WeakMap indexa por identidad del objeto → mismo schema parseado una vez ⇒ mismo validador.
+const validatorCache = new WeakMap<object, ValidateFunction>()
 
 function getValidator(schema: object): ValidateFunction {
-  if (cached) return cached
+  const hit = validatorCache.get(schema)
+  if (hit) return hit
   const ajv = new Ajv({ allErrors: true, strict: false })
   addFormats(ajv)
-  cached = ajv.compile(schema)
-  return cached
+  const compiled = ajv.compile(schema)
+  validatorCache.set(schema, compiled)
+  return compiled
 }
 
 /**
@@ -98,12 +108,15 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // Páginas (multi-vista): validar ids únicos y aristas de drill-through.
   if (hasPages) validatePages(s.pages!)
 
-  // Controles de cabecera: id único, source existente, default conocido, single (no multi).
+  // Controles de cabecera: id único, source existente, default conocido (single o multi-select).
   validateControls(s)
 
   // 2 · Referencias colgantes: cada data.<path> usada en alguna pieza existe en data.
   const pieces = hasPages ? s.pages!.map((p) => p.piece) : [s.piece as Record<string, unknown>]
-  const refs = [...new Set(pieces.flatMap((pc) => collectDataRefs(pc)))]
+  // Incluye los datasets pelados de `agg.dataset` y `table.data`/`semaforo.data` (que no llevan el
+  // prefijo `data.`): sin esto, un typo ahí pasaba la validación y el widget salía en 0/vacío en
+  // silencio, y `uniqueDatasets` (mismo par de recolectores) tampoco lo recuperaba.
+  const refs = [...new Set(pieces.flatMap((pc) => [...collectDataRefs(pc), ...collectDatasetKeys(pc)]))]
   for (const ref of refs) {
     const dataset = ref.split('.')[0]
     if (!(dataset in s.data)) {
@@ -112,7 +125,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         code: 'dangling-data-reference',
         path: `piece -> data.${ref}`,
         value: ref,
-        message: `La pieza referencia 'data.${ref}' pero el dataset '${dataset}' no existe en el bloque data.`,
+        message: `La pieza referencia el dataset '${dataset}', que no existe en el bloque data.`,
         remediation: `Declarar el dataset '${dataset}' en data, o corregir la referencia.`,
       })
     }
@@ -164,6 +177,23 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     }
   }
 
+  // 3·bis · Capabilities de los CHANNELS de distribución (el paso 3 solo cubría las de `data`): un
+  // typo en la capability de un canal explotaba tarde en request-time con `capability-not-found`.
+  // (Nota: `channels[].schedule` sigue declarable pero es INERTE — no hay scheduler; rechazarlo
+  // rompería specs existentes, así que su deprecación queda para un cambio de contrato coordinado.)
+  for (const [i, ch] of (s.delivery?.channels ?? []).entries()) {
+    if (ch?.capability && !ctx.capabilities.includes(ch.capability)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'channel-capability-not-catalogued',
+        path: `delivery.channels[${i}].capability`,
+        value: ch.capability,
+        message: `La capability del canal '${ch.capability}' no existe en el catálogo. Catalogadas: ${ctx.capabilities.join(', ')}.`,
+        remediation: `Corregir el nombre o catalogar '${ch.capability}'.`,
+      })
+    }
+  }
+
   // 4 · Consistencia de shape: los campos referenciados están declarados
   for (const ref of refs) {
     const [dataset, field] = ref.split('.')
@@ -180,11 +210,150 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     }
   }
 
+  // 4·bis · Tipos de elemento de la pieza: cada nodo es un layout (`layout` + `elements`) o tiene
+  // EXACTAMENTE una clave de la lista blanca. Un typo (`markdwon_block:`) compondría `{type: key}` y el
+  // render emitiría un comentario HTML invisible → un rincón del PI desaparece sin error. Fail-loud.
+  for (const [i, pc] of pieces.entries()) {
+    validatePieceNode(pc, hasPages ? `pages[${s.pages![i].id}].piece` : 'piece')
+  }
+
+  // 4·ter · Frescura: si `quality.freshness` se declara con source_watermark != ignore y trae max_age,
+  // DEBE parsear a > 0 ms. `parseIsoDuration` devuelve 0 para formas no soportadas (P1W, P1M) → toda
+  // fila de ayer queda stale en silencio, y con refuse_render el PI deja de servirse por un typo.
+  const freshness = (s.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
+  if (freshness && freshness['source_watermark'] !== 'ignore' && freshness['max_age'] != null) {
+    validateMaxAge(String(freshness['max_age']), 'quality.freshness.max_age')
+    // watermark_field global (`data.<ds>.<campo>` o `<ds>.<campo>`): mismo par de checks que la
+    // frescura por-dataset (4·ter·bis). Un typo de dataset la deshabilitaba en silencio; uno de campo
+    // resolvía a undefined → toDate null → «fresco» en silencio, lo contrario de lo declarado.
+    if (freshness['watermark_field'] != null) {
+      const [wds, wfield] = stripDataRef(String(freshness['watermark_field'])).split('.')
+      if (!wds || !(wds in s.data)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'freshness-watermark-dataset-dangling',
+          path: 'quality.freshness.watermark_field',
+          value: freshness['watermark_field'] as never,
+          message: `El watermark_field global referencia el dataset '${wds}', que no existe en data.`,
+          remediation: 'Declarar el dataset o corregir watermark_field (forma data.<dataset>.<campo>).',
+        })
+      }
+      const wdsDecl = s.data[wds]
+      if (wfield && wdsDecl?.shape?.fields && !(wfield in wdsDecl.shape.fields)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'freshness-watermark-field-dangling',
+          path: 'quality.freshness.watermark_field',
+          value: freshness['watermark_field'] as never,
+          message: `El watermark_field global usa el campo '${wfield}', que no está en data.${wds}.shape.fields — el watermark sería irresoluble.`,
+          remediation: `Declarar '${wfield}' en shape.fields o corregir watermark_field.`,
+        })
+      }
+    }
+  }
+
+  // 4·ter·bis · Frescura POR-DATASET (`data.<ds>.freshness`): max_age parseable > 0 (mismo check que
+  // el global) y watermark_field declarado en shape.fields cuando el shape existe — un campo colgante
+  // haría el watermark irresoluble → «fresco» en silencio, lo contrario de lo declarado.
+  for (const [name, ds] of Object.entries(s.data)) {
+    const f = ds.freshness
+    if (!f) continue
+    if (f.max_age == null || f.watermark_field == null) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'freshness-dataset-incomplete',
+        path: `data.${name}.freshness`,
+        message: `La frescura por-dataset de '${name}' requiere 'watermark_field' (un campo del dataset) y 'max_age'.`,
+        remediation: `Declarar ambos, p.ej. freshness: { watermark_field: fecha_dato, max_age: P1D }.`,
+      })
+    }
+    validateMaxAge(String(f.max_age), `data.${name}.freshness.max_age`)
+    const field = String(f.watermark_field)
+    if (ds.shape?.fields && !(field in ds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'freshness-watermark-not-declared',
+        path: `data.${name}.freshness.watermark_field`,
+        value: field,
+        message: `El watermark_field '${field}' no está declarado en data.${name}.shape.fields — el watermark sería irresoluble y la frescura pasaría en silencio.`,
+        remediation: `Declarar '${field}' en shape.fields o corregir watermark_field (es un campo del PROPIO dataset).`,
+      })
+    }
+  }
+
+  // 4·quater · Render: si `delivery.render` se declara, DEBE incluir al menos un render html (el único
+  // formato soportado hoy). Sin esto, `render: [{format: pdf}]` — o un typo `htlm` — sirve una página
+  // en blanco con HTTP 200. (Omitir `render` es válido: Mira usa html por defecto.)
+  // Lista vacía explícita (`render: []`): en Mira `[] ?? default` NO aplica el default (no es nullish),
+  // el loop de render no corre y sale página en blanco con 200. Omitir `render` es lo válido.
+  if (Array.isArray(s.delivery?.render) && s.delivery.render.length === 0) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'render-empty',
+      path: 'delivery.render',
+      message: 'delivery.render es una lista vacía → página en blanco. Omití `render` (Mira usa html por defecto) o incluí { format: html, target: web }.',
+      remediation: 'Quitar `render` o declarar al menos { format: html, target: web }.',
+    })
+  }
+  const renders = (s.delivery?.render ?? []) as { format?: string }[]
+  if (renders.length > 0 && !renders.some((r) => r.format === 'html')) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'render-no-html',
+      path: 'delivery.render',
+      value: renders.map((r) => r.format).join(', '),
+      message: `delivery.render no declara ningún render con format: html (declara: ${renders.map((r) => r.format).join(', ')}).`,
+      remediation: 'Incluir { format: html, target: web }. HTML es el único formato de render soportado hoy.',
+    })
+  }
+
+  // 4·quinquies · Filtros de interacción (client-side): cada filtro referencia un dataset existente y,
+  // si el dataset declara shape.fields, un campo existente. Un filtro colgante produce una faceta vacía
+  // en silencio (render-html-piece: `it.datasets[f.dataset] ?? []`).
+  for (const [i, f] of (s.interactions?.filters ?? []).entries()) {
+    if (!f || typeof f.dataset !== 'string' || !(f.dataset in s.data)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'filter-dataset-dangling',
+        path: `interactions.filters[${i}].dataset`,
+        value: f?.dataset ?? null,
+        message: `El filtro '${f?.field ?? i}' referencia el dataset '${f?.dataset}', que no existe en data.`,
+        remediation: 'Declarar el dataset en data o corregir interactions.filters[].dataset.',
+      })
+    }
+    const ds = s.data[f.dataset]
+    if (ds?.shape?.fields && f.field && !(f.field in ds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'filter-field-dangling',
+        path: `interactions.filters[${i}].field`,
+        value: f.field,
+        message: `El filtro sobre '${f.dataset}' usa el campo '${f.field}', que no está declarado en data.${f.dataset}.shape.fields.`,
+        remediation: `Declarar '${f.field}' en shape.fields o corregir interactions.filters[].field.`,
+      })
+    }
+  }
+
   // 5 · El spec es AUTHZ-BLIND (charter §2a): NO declara autorización. La política de quién ve
   // qué fila vive ATADA AL DATO (policy store), y se hace cumplir en el dato (ClickHouse row
   // policy + consumidor de bajo privilegio + solo tablas con política reciben acceso). El reporte
   // no decide acceso — no hay nada de gobernanza que validar acá.
   return s
+}
+
+/** max_age DEBE parsear a > 0 ms — `parseIsoDuration` devuelve 0 para formas no soportadas (P1W,
+ *  P1M) → toda fila de ayer quedaría stale en silencio, y con refuse_render el PI dejaría de servirse. */
+function validateMaxAge(raw: string, path: string): void {
+  if (parseIsoDuration(raw) <= 0) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'freshness-max-age-unsupported',
+      path,
+      value: raw,
+      message: `max_age '${raw}' no es una duración ISO 8601 soportada (parsea a 0 ms → staleness silenciosa: todo dato de ayer quedaría stale).`,
+      remediation: 'Usar P#D, PT#H, PT#M, PT#S o sus combinaciones (p.ej. P1D, PT6H, P1DT12H). Semanas/meses: expresarlos en días (P1W → P7D, P1M → P30D).',
+    })
+  }
 }
 
 /** Arista de drill-through declarada en una tabla: ir a la vista `to` pasando una o más claves `by`. */
@@ -216,7 +385,11 @@ export interface MiraControl {
   source: string
   /** Valor inicial cuando no llega `ctx.<id>` en la URL: el mayor / menor / primero de las opciones. */
   default?: 'max' | 'min' | 'first'
-  /** Selección única. Por ahora SOLO single (true). Multi-select se reserva para más adelante. */
+  /**
+   * Selección única (default true). Con `single: false` el control es MULTI-SELECT: los valores viajan
+   * como parámetro repetido (`?ctx.<id>=a&ctx.<id>=b`) y en la query el placeholder `:ctx.<id>` DEBE
+   * vivir dentro de paréntesis de IN (`WHERE semana IN (:ctx.<id>)`) — Mira lo expande a N binds.
+   */
   single?: boolean
 }
 
@@ -267,8 +440,8 @@ function validatePages(pages: MiraPage[]): void {
 }
 
 /**
- * Valida los controles de cabecera: id único, `source` apunta a un dataset existente, `default`
- * conocido, y `single` no es false (multi-select aún no soportado — falla explícita, no silencio).
+ * Valida los controles de cabecera: id único, `source` apunta a un dataset existente y `default`
+ * conocido. `single: false` (multi-select) es una forma válida del control.
  */
 function validateControls(spec: MiraSpec): void {
   const controls = spec.controls ?? []
@@ -305,6 +478,20 @@ function validateControls(spec: MiraSpec): void {
         remediation: `Declarar el dataset fuente en data (p.ej. una query de valores distintos), o corregir source.`,
       })
     }
+    // El CAMPO del source (no solo el dataset): un typo deja el control sin opciones → ctx sin fijar
+    // → páginas con 0 filas en silencio. Mismo criterio que los filtros (4·quinquies).
+    const srcField = stripDataRef(c.source).split('.')[1]
+    const cds = spec.data[dataset]
+    if (cds?.shape?.fields && srcField && !(srcField in cds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-source-field-dangling',
+        path: `controls[${c.id}].source`,
+        value: c.source,
+        message: `El control '${c.id}' usa el campo '${srcField}' de '${dataset}', que no está declarado en data.${dataset}.shape.fields.`,
+        remediation: `Declarar '${srcField}' en shape.fields o corregir source.`,
+      })
+    }
     if (c.default != null && !['max', 'min', 'first'].includes(c.default)) {
       throw new VergisError({
         error: 'mira/spec-invalid',
@@ -315,16 +502,51 @@ function validateControls(spec: MiraSpec): void {
         remediation: 'Usar max (más reciente), min o first, u omitir default.',
       })
     }
-    if (c.single === false) {
-      throw new VergisError({
-        error: 'mira/spec-invalid',
-        code: 'control-multi-unsupported',
-        path: `controls[${c.id}].single`,
-        value: c.single,
-        message: `El control '${c.id}' pide multi-select (single: false), aún no soportado.`,
-        remediation: 'Usar single: true (o omitirlo). El multi-select de cabecera se construirá más adelante.',
-      })
+    // `single: false` (multi-select) es válido: el control se renderiza como grupo de checkboxes,
+    // los valores viajan repetidos en la URL y Mira expande `:ctx.<id>` a N binds (ver MiraControl).
+  }
+}
+
+/** Tipos de elemento de contenido válidos en una pieza (los que `composePiece`/el render reconocen). */
+const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'semaforo', 'distribution', 'table'])
+
+/**
+ * Valida recursivamente un nodo de pieza: o es un layout (`layout` + `elements`) o declara EXACTAMENTE
+ * una clave de la lista blanca de elementos. Rechaza el typo silencioso (`markdwon_block:`) que hoy
+ * pasa como `{type: key}` y se renderiza como comentario HTML invisible.
+ */
+function validatePieceNode(node: unknown, path: string): void {
+  if (node == null || typeof node !== 'object' || Array.isArray(node)) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'piece-node-invalid',
+      path,
+      value: (node ?? null) as never,
+      message: `El nodo de pieza en ${path} no es un objeto (layout o elemento).`,
+      remediation: `Un nodo es un layout (layout + elements) o exactamente uno de: ${[...ELEMENT_TYPES].join(', ')}.`,
+    })
+  }
+  const obj = node as Record<string, unknown>
+  if ('layout' in obj) {
+    const elements = obj['elements']
+    for (const [i, child] of (Array.isArray(elements) ? elements : []).entries()) {
+      validatePieceNode(child, `${path}.elements[${i}]`)
     }
+    return
+  }
+  const typeKeys = Object.keys(obj).filter((k) => ELEMENT_TYPES.has(k))
+  if (typeKeys.length !== 1) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'unknown-element-type',
+      path,
+      value: Object.keys(obj).join(', ') || null,
+      message:
+        typeKeys.length === 0
+          ? `Nodo de pieza sin tipo de elemento reconocido en ${path} (claves: ${Object.keys(obj).join(', ') || '∅'}). Un typo (p.ej. 'markdwon_block') se compondría como comentario HTML invisible.`
+          : `Nodo de pieza con varios tipos de elemento en ${path}: ${typeKeys.join(', ')}. Un nodo declara exactamente uno.`,
+      remediation: `Cada nodo es un layout (layout + elements) o exactamente uno de: ${[...ELEMENT_TYPES].join(', ')}.`,
+    })
   }
 }
 
@@ -343,6 +565,28 @@ export function collectDataRefs(node: unknown, acc: Set<string> = new Set()): st
     for (const child of node) collectDataRefs(child, acc)
   } else if (typeof node === 'object') {
     for (const v of Object.values(node as Record<string, unknown>)) collectDataRefs(v, acc)
+  }
+  return [...acc]
+}
+
+/**
+ * Recolecta nombres de dataset referenciados por campos que NO llevan el prefijo `data.` y por eso
+ * escapan a `collectDataRefs`: `dataset` (dentro de `agg`/`comparison_agg`/`summary.agg`) y `data`
+ * (en `table`/`semaforo`). Devuelve el primer segmento (el dataset), tolerando ambas formas
+ * (`areas` o `data.areas.campo`). Corre SOLO sobre subárboles de piece (nunca sobre el bloque `data`
+ * del spec), así que no confunde la declaración de datasets con una referencia.
+ */
+export function collectDatasetKeys(node: unknown, acc: Set<string> = new Set()): string[] {
+  if (node == null) return [...acc]
+  if (Array.isArray(node)) {
+    for (const child of node) collectDatasetKeys(child, acc)
+  } else if (typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    for (const key of ['dataset', 'data'] as const) {
+      const v = obj[key]
+      if (typeof v === 'string' && v.length > 0) acc.add(stripDataRef(v).split('.')[0])
+    }
+    for (const v of Object.values(obj)) collectDatasetKeys(v, acc)
   }
   return [...acc]
 }

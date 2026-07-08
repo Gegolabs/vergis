@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import initSqlJs from 'sql.js'
@@ -70,7 +70,11 @@ export class SqliteAnnotationStore implements AnnotationStore {
   private persist(): void {
     if (!this.file) return
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(this.file, Buffer.from(this.db.export()))
+    // Escritura atómica: tmp + rename (ver `sqlite.ts#persistSqliteDb`). Evita dejar el archivo
+    // truncado si el proceso muere a mitad del volcado.
+    const tmp = `${this.file}.tmp`
+    writeFileSync(tmp, Buffer.from(this.db.export()))
+    renameSync(tmp, this.file)
   }
 
   async get(piId: string, keys: string[]): Promise<Map<string, AnnotationRecord>> {

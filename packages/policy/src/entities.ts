@@ -137,6 +137,9 @@ export function resolveEntityStore(doc: EntityStoreDoc | undefined): Map<string,
     if (typeof m?.dataset !== 'string' || m.dataset.length === 0) {
       throw err('dataset-name', `${path}.dataset`, m?.dataset, `Cada mapeo debe atar a un 'dataset' (string).`, `Declarar 'dataset'.`)
     }
+    if (out.has(m.dataset)) {
+      throw err('dataset-duplicate', `${path}.dataset`, m.dataset, `El dataset '${m.dataset}' está mapeado más de una vez: el last-wins silencioso podría pisar la RLS con un 'grant: all' posterior.`, `Unificar el mapeo de '${m.dataset}' en una sola entrada.`)
+    }
     const hasGrant = m.grant != null
     const hasRealizes = m.realizes != null
     if (hasGrant && hasRealizes) {

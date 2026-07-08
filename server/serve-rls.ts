@@ -26,20 +26,22 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
-import { createCachedScanner, watchPaths } from './hot-reload'
+import { watchPaths } from './hot-reload'
+import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
-import { createHmac, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { identityFromHeaders, DEFAULT_GATE_MAPPING, AppendOnlyLog, type Capability, type ClaimSet, type GateHeaders } from '@vergis/botler'
-import { parseSpec, type AnnotationContext } from '@vergis/mira'
+import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
+import { type AnnotationContext } from '@vergis/mira'
 import {
   bootstrapClickHouse,
   createIngestClickHouse,
   createExecuteSqlClickHouse,
   createExecuteSqlDwh,
   renderHtmlPiece,
+  renderCsvPiece,
   publicarArtefacto,
   openAnnotationStore,
   parseMasterDataConfig,
@@ -74,22 +76,24 @@ import {
   type MasterDataEntity,
   type PiRole,
   type AnnotationStore,
-  type ChStoreSchema,
-  type ChColumnType,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
+import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
+import { fail, readJsonBody } from './http-util'
+import { annSign as annSignHmac, verifyAnnToken } from './annotations'
+import { createRequestHandler } from './routes'
+import { createDiscovery, type Report } from './discovery'
+import { createIdentity } from './identity'
+import { configFromEnv } from './config'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
 import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from './deployment-check'
 import {
-  claimValues,
-  compileClickHouse,
   isPublic,
   parsePolicyStore,
   settingForClaim,
-  type ClickHouseEnforcement,
   type Policy,
   type PolicyDecl,
   type PolicyStoreDoc,
@@ -97,8 +101,11 @@ import {
 
 const ENGINE = (process.env['VERGIS_ENGINE'] ?? 'clickhouse').toLowerCase()
 if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGINE inválido: '${ENGINE}' (clickhouse | fabric).`)
-const PORT = Number(process.env['PORT'] ?? 8080)
-const REFRESH_MS = Number(process.env['VERGIS_REFRESH_MS'] ?? 0)
+// Config VALIDADA de los env numéricos (lanza claro al arranque si PORT/REFRESH/TTL/MAX_ROWS no son
+// números — antes `PORT=abc` daba `listen(NaN)` tarde y feo). El secreto de anotación se maneja aparte.
+const config = configFromEnv(process.env, () => '')
+const PORT = config.port
+const REFRESH_MS = config.refreshMs
 
 // Auto-chequeo de coherencia del despliegue (contrato Producto→Infra). Corre ANTES de leer specs,
 // políticas o config de gobierno: si un env referencia un path no montado, o el gobierno se pide con
@@ -124,66 +131,18 @@ loadPolicyStoreInto(store)
 // --- Productos de Información (specs authz-blind, ruteados por slug) ---------
 // DESCUBRIMIENTO DINÁMICO re-escaneado por request. Solo specs SERVIBLES (todas sus data-capabilities
 // en el catálogo de serving del motor activo) — los demás se omiten (no-bypass).
-interface Report { code: string; slug: string; name: string; specPath: string; tables: string[] }
 const SPECS_DIR = process.env['VERGIS_SPECS_DIR']
 const SPECS_LIST = (process.env['VERGIS_SPECS'] ?? process.env['VERGIS_SPEC'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 if (!SPECS_DIR && SPECS_LIST.length === 0) throw new Error('Falta VERGIS_SPECS_DIR o VERGIS_SPECS.')
-
-function slugify(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-}
-function tablesOf(sql: string): string[] {
-  return [...sql.matchAll(/\b(?:from|join)\s+([a-z_][\w]*\.[a-z_][\w]*)/gi)].map((m) => m[1])
-}
 function specPaths(): string[] {
   if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => !f.startsWith('.') && /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
   return SPECS_LIST.map((p) => resolve(p))
 }
-function discoverRaw(): Report[] {
-  const out: Report[] = []
-  for (const p of specPaths()) {
-    let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string } }> }
-    try { spec = parseSpec(readFileSync(p, 'utf8')) as typeof spec } catch { continue }
-    const data = spec.data ?? {}
-    const caps = Object.values(data).map((d) => d.capability ?? '')
-    if (caps.length === 0 || !caps.every((c) => SERVING_CAPS.has(c))) {
-      console.warn(`[vergis-rls] '${p}' no servible bajo engine=${ENGINE} (capability fuera del catálogo: ${caps.join(',')}) — omitido`)
-      continue
-    }
-    const tables = [...new Set(Object.values(data).flatMap((d) => tablesOf(d.params?.sql ?? '')))]
-    // GATE DE GOBERNANZA (fail-closed, charter §2b) — crítico en push-down: en Fabric una tabla SIN
-    // política devuelve TODAS sus filas (el motor no niega por omisión) → un PI que lea una tabla
-    // no-gobernada FUGA. No se sirve un PI a menos que CADA tabla que toca tenga política (rls o
-    // grant:all). En clickhouse la seguridad la da el bootstrap (solo existen tablas gobernadas).
-    if (ENGINE === 'fabric') {
-      const ungoverned = tables.filter((t) => !store.has(t))
-      if (ungoverned.length > 0) {
-        console.warn(`[vergis-rls] '${p}' no servible: lee tabla(s) sin política → fuga en push-down: ${ungoverned.join(', ')} — omitido`)
-        continue
-      }
-    }
-    const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
-    out.push({ code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath: p, tables })
-  }
-  return out
-}
-// CACHE del discover (work/045 Fase 1): hoy `discoverRaw` re-lee+re-parsea TODAS las specs y corre el
-// gate; se invocaba por request. Se memoiza y se invalida on-change (watchPaths) con validate-before-swap.
-// El gate de gobernanza no cambia: solo se cachea su salida; `reloadGovernance()` fuerza el rebuild.
-const specReg = createCachedScanner(discoverRaw)
-function discover(): Report[] {
-  return specReg.get()
-}
-/** ¿El consumidor puede acceder a algún dato de este PI? (índice per-consumidor) */
-function canAccess(table: string, claims: ClaimSet): boolean {
-  const policy = store.get(table)
-  if (!policy) return false // sin política → deny
-  if (isPublic(policy)) return true // grant: all
-  return policy.predicates.some((pred) => claimValues(claims, pred.claim).length > 0)
-}
-function visibleFor(reports: Report[], claims: ClaimSet): Report[] {
-  return reports.filter((r) => r.tables.length === 0 || r.tables.some((t) => canAccess(t, claims)))
-}
+// Descubrimiento (memoizado) + gate de gobernanza fail-closed: extraído y testeado en ./discovery.
+// `discovery.rebuild()` (validate-before-swap) lo fuerza tras un hot-reload de gobierno.
+const discovery = createDiscovery({ store, engine: ENGINE as 'clickhouse' | 'fabric', servingCaps: SERVING_CAPS, specPaths })
+const discover = discovery.discover
+const visibleFor = discovery.visibleFor
 
 // --- Setup del CONECTOR según el motor --------------------------------------
 const connections = process.env['VERGIS_CONNECTIONS']
@@ -202,43 +161,51 @@ if (ENGINE === 'clickhouse') {
   const CONSUMER_USER = process.env['VERGIS_CH_CONSUMER_USER'] ?? 'botler'
   const TARGET_ROLE = process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role'
 
-  interface DatasetCfg { table: string; columns: Record<string, ChColumnType>; ingest?: { database_ref: string; sql: string }; seed?: Record<string, unknown>[] }
   const DATASETS: DatasetCfg[] = process.env['VERGIS_DATASETS']
     ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_DATASETS']), 'utf8')) as { datasets?: DatasetCfg[] }).datasets ?? [])
     : []
   if (DATASETS.length === 0) throw new Error('engine=clickhouse: falta VERGIS_DATASETS (datasets del nodo).')
 
-  interface BoundDataset { schema: ChStoreSchema; enforcement: ClickHouseEnforcement | null; cfg: DatasetCfg }
-  const BOUND: BoundDataset[] = DATASETS.map((cfg) => {
-    const [database, table] = cfg.table.split('.')
-    if (!database || !table) throw new Error(`Dataset '${cfg.table}' debe ser 'db.tabla'.`)
-    const policy = store.get(cfg.table)
-    if (!policy) throw new Error(`Sin política para '${cfg.table}' en el policy store. Default-deny: declara la entidad/grant — el dato no se sirve sin política.`)
-    const schema: ChStoreSchema = { database, table, columns: cfg.columns }
-    return { schema, enforcement: compileClickHouse(policy, { database, table, role: TARGET_ROLE }), cfg }
-  })
-
-  const UNION_INJECTIONS = [...new Map(BOUND.flatMap((b) => b.enforcement?.injections ?? []).map((inj) => [inj.setting, inj])).values()]
+  // BOUND es mutable: se RECOMPUTA desde el store en cada bootstrap (ver A11 abajo). Al arranque se
+  // computa una vez para derivar las inyecciones del canal de serving (su alta necesita restart).
+  let BOUND: BoundDataset[] = computeBound(DATASETS, store, TARGET_ROLE)
+  const UNION_INJECTIONS = unionInjections(BOUND)
   const chProfile = { url: CH_URL, user: CONSUMER_USER, database: BOUND[0].schema.database }
   servingCap = createExecuteSqlClickHouse(chProfile, null, { injections: UNION_INJECTIONS })
   const ingestDwh = connections ? createExecuteSqlDwh(connections) : null
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // Mutex del ingest (cola FIFO): SIGHUP + watch de policies + timer REFRESH_MS + re-bootstrap pueden
+  // solaparse, y el ingest es TRUNCATE+INSERT → dos corridas intercaladas dejan filas DUPLICADAS.
+  // Serializarlo garantiza que nunca corran dos a la vez (el re-bootstrap y el timer comparten el lock).
+  let ingestLock: Promise<void> = Promise.resolve()
   async function ingestAll(): Promise<void> {
-    for (const b of BOUND) {
-      const ingest = createIngestClickHouse(ADMIN, b.schema)
-      let rows: Record<string, unknown>[] | null = null
-      if (b.cfg.ingest && ingestDwh) {
-        const out = (await ingestDwh.execute({ database_ref: b.cfg.ingest.database_ref, sql: b.cfg.ingest.sql }, { agent: 'vergis' })) as { rows: Record<string, unknown>[] }
-        rows = out.rows
-      } else if (b.cfg.seed) rows = b.cfg.seed
-      if (rows) {
-        const r = (await ingest.execute({ rows }, { agent: 'vergis' })) as { ingested: number }
-        console.log(`[vergis-rls] ${b.schema.database}.${b.schema.table}: ${r.ingested} filas`)
+    const prev = ingestLock
+    let release!: () => void
+    ingestLock = new Promise<void>((r) => (release = r))
+    await prev.catch(() => {}) // esperar la corrida anterior; un fallo previo no bloquea la cola
+    try {
+      for (const b of BOUND) {
+        const ingest = createIngestClickHouse(ADMIN, b.schema)
+        let rows: Record<string, unknown>[] | null = null
+        if (b.cfg.ingest && ingestDwh) {
+          const out = (await ingestDwh.execute({ database_ref: b.cfg.ingest.database_ref, sql: b.cfg.ingest.sql }, { agent: 'vergis' })) as { rows: Record<string, unknown>[] }
+          rows = out.rows
+        } else if (b.cfg.seed) rows = b.cfg.seed
+        if (rows) {
+          const r = (await ingest.execute({ rows }, { agent: 'vergis' })) as { ingested: number }
+          console.log(`[vergis-rls] ${b.schema.database}.${b.schema.table}: ${r.ingested} filas`)
+        }
       }
+    } finally {
+      release()
     }
   }
   bootstrapAll = async () => {
+    // A11: recomputar el enforcement DESDE EL STORE ACTUAL. En un hot-reload que endurece una policy
+    // (grant:all → rls), reusar el BOUND del arranque dejaba la tabla sin ROW POLICY nueva (fuga);
+    // recomputar acá aplica el endurecimiento en el re-bootstrap.
+    BOUND = computeBound(DATASETS, store, TARGET_ROLE)
     for (let i = 0; i < 60; i += 1) {
       try { for (const b of BOUND) await bootstrapClickHouse(ADMIN, b.schema, b.enforcement); break }
       catch (e) { lastErr = e instanceof Error ? e.message : String(e); if (i === 59) throw e; await sleep(2000) }
@@ -296,6 +263,21 @@ if (ENGINE === 'clickhouse') {
   }
 }
 
+// Caché de RESULTADOS de datos por consumidor (work/052 §2.3) — OPT-IN por instancia: solo si
+// VERGIS_DATA_CACHE_TTL_MS > 0 se envuelve el conector con `withResultCache` (default 0 = sin caché,
+// cada render dispara las queries reales). La clave incluye params + user + claims normalizados →
+// dos consumidores JAMÁS comparten entrada (la RLS no se relaja: un hit devuelve solo lo que esa
+// misma identidad ya obtuvo del motor enforcing). El bootstrap NO pasa por acá (usa su handle directo).
+const DATA_CACHE_TTL_MS = config.dataCacheTtlMs
+if (DATA_CACHE_TTL_MS > 0) {
+  servingCap = withResultCache(servingCap, { ttlMs: DATA_CACHE_TTL_MS })
+  console.log(`[vergis-rls] data-cache por consumidor activo (TTL ${DATA_CACHE_TTL_MS} ms)`)
+}
+
+// Tope de filas materializables por `interactions.filters` (work/052 §2.5). Mira no lee env: se
+// inyecta por runSpec. Sin definir → default de Mira (5000).
+const INTERACTIVE_MAX_ROWS = config.interactiveMaxRows
+
 // Mapeo claim→cabecera CONFIGURABLE: cada instancia trae sus claims en sus cabeceras (el criterio
 // de la política decide qué claims importan: `groups`, `viewer_area`, etc.). Formato:
 // VERGIS_GATE_CLAIMS="viewer_area:x-forwarded-area,groups:x-forwarded-groups" (default: groups).
@@ -309,7 +291,13 @@ const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-gro
     if (claim && header) acc[claim] = header.toLowerCase()
     return acc
   }, {})
-const GATE_MAPPING = { ...DEFAULT_GATE_MAPPING, claims: gateClaims, decodeUtf8: true }
+
+// A10 · Defensa en profundidad del gate (OPT-IN): con VERGIS_GATE_SECRET definido, se exige que cada
+// request (salvo /healthz) traiga `x-gate-token` con ese valor — un secreto que SOLO el oauth2-proxy
+// conoce y adjunta. Si el server queda expuesto sin el proxy delante (misconfig, puerto directo), los
+// requests sin el token se rechazan → el consumidor no puede fabricar sus claims. Vacío = sin chequeo
+// (comportamiento vivo: la protección sigue siendo que el proxy esté delante).
+const GATE_SECRET = process.env['VERGIS_GATE_SECRET'] ?? ''
 
 // RESOLVER DE IDENTIDAD desde un DIRECTORIO (charter §4–§5): cuando el claim del criterio no viaja
 // en la cabecera del gate sino que se deriva de la identidad autenticada (p.ej. el ÁREA del viewer
@@ -320,16 +308,8 @@ const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = p
   ? (JSON.parse(readFileSync(resolve(process.env['VERGIS_IDENTITY_MAP']), 'utf8')) as Record<string, Record<string, string | string[]>>)
   : null
 
-/** Identidad del gate + claims enriquecidos desde el directorio (si hay mapa y el email matchea). */
-function identityFor(headers: GateHeaders) {
-  const identity = identityFromHeaders(headers, GATE_MAPPING)
-  if (!IDENTITY_MAP || !identity.user) return identity
-  const extra = IDENTITY_MAP[identity.user.toLowerCase()]
-  if (!extra) return identity // no mapeado → sin claim del directorio → default-deny
-  const claims: ClaimSet = { ...(identity.claims ?? {}) }
-  for (const [c, v] of Object.entries(extra)) claims[c] = Array.isArray(v) ? v.map(String) : [String(v)]
-  return { ...identity, claims }
-}
+// Identidad del gate + claims enriquecidos desde el directorio: extraído y testeado en ./identity.
+const identityFor = createIdentity(gateClaims, IDENTITY_MAP).identityFor
 
 // ANOTACIONES — enriquecimiento de la capa de viz. Store embebido (SQLite) reemplazable por externo.
 // Lectura: solo se fusionan anotaciones sobre las filas RLS-filtradas que el usuario ya ve.
@@ -346,27 +326,24 @@ let piConfig: PiConfigHandler | null = null
 let piAclEnabled = false
 let piOwners: Record<string, string> = {}
 let defaultCollabGroups: string[] = []
+// Secreto HMAC de los tokens de anotación. Sin `VERGIS_ANNOTATION_SECRET` se genera uno aleatorio por
+// arranque: sirve para dev, pero en producción los tokens de las páginas ya abiertas NO sobreviven un
+// restart (la escritura de anotación falla hasta recargar) y varias réplicas no comparten la firma.
 const ANN_SECRET = process.env['VERGIS_ANNOTATION_SECRET'] ?? randomBytes(32).toString('hex')
-function annSign(piId: string, email: string, key: string): string {
-  return createHmac('sha256', ANN_SECRET).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
+if (!process.env['VERGIS_ANNOTATION_SECRET']) {
+  console.warn(
+    '[vergis-rls] VERGIS_ANNOTATION_SECRET no definido: se generó un secreto aleatorio. Los tokens de ' +
+      'anotación NO sobreviven un restart ni se comparten entre réplicas. Define el env en producción.',
+  )
 }
+// Época del token de anotación: bucket de 4h. Un token deja de valer cuando el bucket cambia, así
+// una identidad cuyo acceso se revocó no puede escribir con tokens de páginas viejas para siempre.
+const ANN_EPOCH_MS = 4 * 3600_000
+const annEpoch = (t = Date.now()): string => String(Math.floor(t / ANN_EPOCH_MS))
+const annSign = (piId: string, email: string, key: string): string => annSignHmac(ANN_SECRET, piId, email, key, annEpoch())
 
-/** Navegación multi-vista de la query: `?page=<id>` + `?ctx.<campo>=<valor>` (drill-through). */
-interface NavQuery {
-  page?: string
-  ctx?: Record<string, string>
-}
-/** Extrae page/ctx de la URL. El `ctx` se bindea como parámetro (injection-safe) aguas abajo. */
-function navFromUrl(rawUrl: string): NavQuery {
-  const u = new URL(rawUrl, 'http://localhost')
-  const page = u.searchParams.get('page') ?? undefined
-  const ctx: Record<string, string> = {}
-  for (const [k, v] of u.searchParams) {
-    const m = k.match(/^ctx\.(.+)$/)
-    if (m) ctx[m[1]] = v
-  }
-  return { page, ctx: Object.keys(ctx).length ? ctx : undefined }
-}
+// La navegación multi-vista (`?page=` + `?ctx.*`, con acumulación de repetidos para multi-select)
+// vive en ./nav.ts — extraída para testearla sin los efectos de módulo de este archivo.
 
 async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery = {}): Promise<string> {
   const identity = identityFor(headers)
@@ -392,10 +369,11 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
     // HARDENING (charter §2b): catálogo de serving = solo el conector enforcing + render/publish.
     // SIN starters (no `static-data` ni vías crudas) → imposible servir dato no-gobernado.
     registerStarters: false,
-    extraCapabilities: [servingCap, renderHtmlPiece, publicarArtefacto],
+    extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
     annotations,
     page: nav.page,
     ctx: nav.ctx,
+    interactiveMaxRows: INTERACTIVE_MAX_ROWS,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out.html ?? ''
@@ -444,25 +422,6 @@ async function piGovSummary(code: string, glabel: Map<string, string>): Promise<
   }
 }
 
-/** Lee el cuerpo JSON de un POST (límite defensivo). */
-function readJsonBody(req: IncomingMessage, limit = 64 * 1024): Promise<unknown> {
-  return new Promise((resolveBody, reject) => {
-    let data = ''
-    req.on('data', (c) => {
-      data += c
-      if (data.length > limit) reject(new Error('body demasiado grande'))
-    })
-    req.on('end', () => {
-      try {
-        resolveBody(data ? JSON.parse(data) : {})
-      } catch {
-        reject(new Error('JSON inválido'))
-      }
-    })
-    req.on('error', reject)
-  })
-}
-
 /** POST /<slug>/annotations — upsert de una anotación; gateado por token HMAC. */
 async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!annStore) return fail(res, 503, 'Anotaciones no disponibles')
@@ -472,7 +431,8 @@ async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: 
   const key = String(body.key ?? '')
   const token = String(body.token ?? '')
   const value = String(body.value ?? '')
-  if (!key || annSign(report.slug, email, key) !== token) {
+  // Verifica contra la época actual y la anterior (no cortar en el borde del bucket).
+  if (!verifyAnnToken(ANN_SECRET, report.slug, email, key, token, [annEpoch(), annEpoch(Date.now() - ANN_EPOCH_MS)])) {
     res.writeHead(403, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: false, error: 'token inválido (registro no visible para esta identidad)' }))
     return
@@ -480,11 +440,6 @@ async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: 
   await annStore.upsert(report.slug, key, value, email || undefined)
   res.writeHead(200, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ ok: true }))
-}
-
-function fail(res: ServerResponse, code: number, msg: string): void {
-  res.writeHead(code, { 'content-type': 'text/html; charset=utf-8' })
-  res.end(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:40px"><h1>${code}</h1><p>${msg}</p></body>`)
 }
 
 // Branding del índice — parametrizado por instancia (genérico por defecto, no horneado al beta).
@@ -512,95 +467,51 @@ const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCod
     { logoUrl: INDEX_LOGO || undefined, avatar },
   )
 
-const server = createServer((req, res) => {
-  const url = (req.url ?? '/').split('?')[0]
-  if (url === '/healthz') {
-    res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: ready, engine: ENGINE, lastErr, pi: discover().map((r) => r.slug) }))
-    return
-  }
-  // ADMINISTRACIÓN — superficie de escritura, gateada por rol admin DENTRO del handler. Va antes del
-  // gate `ready` (no depende del motor de serving): editar data maestra no es servir dato gobernado.
-  if (admin && (url === '/admin' || url.startsWith('/admin/'))) {
-    admin.tryHandle(req, res).catch((e) => fail(res, 500, `Error en Administración: ${e instanceof Error ? e.message : String(e)}`))
-    return
-  }
-  // Configuración por-PI (compartir/visibilidad/demanda) — gateada por rol de PI dentro del handler.
-  if (piConfig && /^\/[^/]+\/config(?:\/|$)/.test(url)) {
-    piConfig.tryHandle(req, res).then((handled) => {
-      if (!handled) fail(res, 404, 'Ruta no encontrada')
-    }).catch((e) => fail(res, 500, `Error en configuración del PI: ${e instanceof Error ? e.message : String(e)}`))
-    return
-  }
-  if (!ready) return fail(res, 503, 'Inicializando…')
-  const all = discover()
-  // POST /<slug>/annotations — escritura de anotación (único surface mutable; gateado por HMAC).
-  if (req.method === 'POST') {
-    const m = url.match(/^\/([^/]+)\/annotations\/?$/)
-    const report = m && all.find((r) => r.slug === m[1].toLowerCase())
-    if (!report) return fail(res, 404, 'Ruta no encontrada')
-    handleAnnotationWrite(report, req, res).catch((e) =>
-      fail(res, 500, `Error al guardar anotación: ${e instanceof Error ? e.message : String(e)}`),
-    )
-    return
-  }
-  const identity = identityFor(req.headers as GateHeaders)
-  const email = identity.user
+// Operaciones per-request que el router (`routes.ts`) inyecta. Viven acá porque cierran sobre el
+// estado del server (governance/piAclEnabled/domainsCfg/…), leído a request-time. Lógica verbatim.
+const indexReports = async (all: Report[], identity: IdentityContext): Promise<Report[]> => {
   const claims = identity.claims ?? {}
-  const sendHtml = (html: string) => {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(html)
+  if (!(piAclEnabled && governance)) return visibleFor(all, claims)
+  const roles = await Promise.all(all.map((r) => piManagementRole(r.code, identity.user)))
+  return all.filter((_, i) => canOpen(roles[i]))
+}
+const renderIndexPage = async (visible: Report[], identity: IdentityContext): Promise<string> => {
+  const idxTitle = (governance ? await governance.getSetting('index_title') : null) || INDEX_TITLE
+  const emailLc = (identity.user ?? '').toLowerCase()
+  const isAdmin = governance ? await governance.isAdmin(emailLc) : false
+  let hasDomains = isAdmin
+  if (!hasDomains && governance && domainsCfg.length) {
+    const ug = await governance.groupsOf(emailLc)
+    hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
   }
-  // Índice PER-CONSUMIDOR: con ACL encendida, los PIs que la identidad puede ABRIR (autz de artefacto);
-  // sin ACL, los PIs a cuyo DATO tiene acceso (comportamiento vivo). La RLS filtra filas en ambos casos.
-  if (url === '/' || url === '') {
-    const indexFor = async (): Promise<Report[]> => {
-      if (!(piAclEnabled && governance)) return visibleFor(all, claims)
-      const roles = await Promise.all(all.map((r) => piManagementRole(r.code, email)))
-      return all.filter((_, i) => canOpen(roles[i]))
-    }
-    indexFor()
-      .then(async (visible) => {
-        if (visible.length === 1) {
-          return renderReport(visible[0], req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
-        }
-        // Título del catálogo: editable in-app (governance setting) con fallback al env.
-        const idxTitle = (governance ? await governance.getSetting('index_title') : null) || INDEX_TITLE
-        // Marco de identidad: el avatar (mismo componente que la administración). «Gestión» se muestra si
-        // el usuario gestiona algún dominio (admin · default-steward-group · steward directo); «Configuración» si es admin.
-        const emailLc = (email ?? '').toLowerCase()
-        const isAdmin = governance ? await governance.isAdmin(emailLc) : false
-        let hasDomains = isAdmin
-        if (!hasDomains && governance && domainsCfg.length) {
-          const ug = await governance.groupsOf(emailLc)
-          hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
-        }
-        const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: SIGNOUT_RD || '/' })
-        // Gobierno por PI para el catálogo: dueño + colaboradores específicos (líder técnico), con los
-        // grupos default (Centro de Excelencia) anotados aparte (tooltip), no repetidos por fila.
-        const govByCode: GovByCode = new Map()
-        if (governance) {
-          const groups = await governance.listGroups()
-          const glabel = new Map(groups.map((g) => [g.id, g.label]))
-          await Promise.all(visible.map(async (r) => { govByCode.set(r.code, await piGovSummary(r.code, glabel)) }))
-        }
-        sendHtml(indexHtml(visible, idxTitle, avatar, govByCode))
-      })
-      .catch((e) => fail(res, 500, String(e instanceof Error ? e.message : e)))
-    return
+  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: SIGNOUT_RD || '/' })
+  const govByCode: GovByCode = new Map()
+  if (governance) {
+    const groups = await governance.listGroups()
+    const glabel = new Map(groups.map((g) => [g.id, g.label]))
+    await Promise.all(visible.map(async (r) => { govByCode.set(r.code, await piGovSummary(r.code, glabel)) }))
   }
-  const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
-  const report = all.find((r) => r.slug === slug)
-  if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
-  // Gate de ARTEFACTO (si ACL encendida): ¿puede abrir este PI? La RLS de datos aplica igual al render.
-  const openGate = piAclEnabled && governance ? piManagementRole(report.code, email).then(canOpen) : Promise.resolve(true)
-  openGate
-    .then((allowed) => {
-      if (!allowed) return fail(res, 403, `No tienes acceso a este Producto de Información. <a href="/">Ver disponibles</a>`)
-      return renderReport(report, req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
-    })
-    .catch((e) => fail(res, 500, `Error al render por-consumidor: ${e instanceof Error ? e.message : String(e)}`))
-})
+  return indexHtml(visible, idxTitle, avatar, govByCode)
+}
+const canOpenPi = (report: Report, identity: IdentityContext): Promise<boolean> =>
+  piAclEnabled && governance ? piManagementRole(report.code, identity.user).then(canOpen) : Promise.resolve(true)
+
+const server = createServer(
+  createRequestHandler({
+    engine: ENGINE,
+    gateSecret: GATE_SECRET,
+    isReady: () => ready,
+    getAdmin: () => admin,
+    getPiConfig: () => piConfig,
+    discover,
+    identityFor,
+    renderReport,
+    handleAnnotationWrite,
+    indexReports,
+    renderIndexPage,
+    canOpenPi,
+  }),
+)
 
 // Store de anotaciones (no-fatal: si falla, el feature queda inhabilitado, no rompe el serving).
 try {
@@ -666,7 +577,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     const mdStore = useFabricStore
       ? createDwhMasterDataStore(connections)
       : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
-    const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`)
+    // Audit log LONGEVO (vive todo el proceso): modo file-only (retain:false) — append() no acumula
+    // en RAM (crecía sin cota, una entrada por evento admin); la fuente de verdad es el archivo.
+    const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`, undefined, { retain: false })
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
@@ -861,9 +774,35 @@ server.listen(PORT, () => {
   console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
 })
 
+// Cierre graceful: `docker stop` envía SIGTERM. Cerrar el server drena los requests en vuelo antes de
+// salir; el timeout evita colgar el shutdown si un request queda pegado.
+process.on('SIGTERM', () => {
+  console.log('[vergis-rls] SIGTERM — cerrando (drain de requests en vuelo)…')
+  const t = setTimeout(() => process.exit(0), 10_000)
+  t.unref()
+  server.close(() => {
+    clearTimeout(t)
+    process.exit(0)
+  })
+})
+
 // Bootstrap del motor de serving EN SEGUNDO PLANO: el server ya escucha. `healthz` responde 503 hasta
-// `ready`; la Administración (escritura de data maestra) queda disponible sin esperar al motor.
-void bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
+// `ready`; la Administración queda disponible sin esperar al motor. Retry INDEFINIDO con backoff: un
+// fallo transitorio al arrancar (SQL/AAD/red) no debe dejar el server en 503 para siempre — se
+// reintenta hasta que `ready` (fabric no tenía retry; CH moría tras 60 intentos).
+void (async () => {
+  let delay = 2000
+  for (;;) {
+    try {
+      await bootstrapAll()
+      return
+    } catch (e) {
+      console.error(`[vergis-rls] bootstrap falló (reintenta en ${delay / 1000}s): ${e instanceof Error ? e.message : String(e)}`)
+      await new Promise((r) => setTimeout(r, delay))
+      delay = Math.min(delay * 2, 60_000)
+    }
+  }
+})()
 
 // --- Hot-reload SIN restart (work/045) --------------------------------------
 // Editar/añadir una spec ya es live (discover re-lee por request → ahora cacheado + invalidado on-change).
@@ -882,15 +821,26 @@ function reloadGovernance(reason: string): void {
   }
   store.clear()
   for (const [k, v] of next) store.set(k, v) // swap in-place tras parsear TODO ok (misma referencia que las clausuras capturaron)
-  const r = specReg.rebuild()
-  console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${specReg.get().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
-  void bootstrapAll().catch((e) => console.error(`[hot-reload] re-bootstrap (${reason}): ${e instanceof Error ? e.message : String(e)}`))
+  // Invalidar el result-cache: tras endurecer una policy, los hits cacheados servirían filas de la
+  // política VIEJA hasta vencer el TTL. `clear()` existe si el conector está envuelto (withResultCache).
+  const cached = servingCap as { clear?: () => void }
+  if (typeof cached.clear === 'function') cached.clear()
+  const r = discovery.rebuild()
+  console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${discover().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
+  // Fail-closed en el reload: si el re-bootstrap falla (fabric: falta SECURITY POLICY nativa para una
+  // tabla recién gobernada; CH: recompilación/ingesta fallida), NO se sigue sirviendo con las
+  // invariantes viejas — ready=false → healthz 503 hasta que un reload exitoso lo restablezca.
+  void bootstrapAll().catch((e) => {
+    ready = false
+    lastErr = e instanceof Error ? e.message : String(e)
+    console.error(`[hot-reload] re-bootstrap (${reason}) falló → ready=false (fail-closed): ${lastErr}`)
+  })
 }
 if (HOT_RELOAD) {
   const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
   watchPaths(specTargets, () => {
-    const r = specReg.rebuild()
-    console.log(r.ok ? `[hot-reload] specs recargadas: ${specReg.get().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
+    const r = discovery.rebuild()
+    console.log(r.ok ? `[hot-reload] specs recargadas: ${discover().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
   })
   if (POLICY_PATHS.length) watchPaths(POLICY_PATHS.map((p) => resolve(p)), () => reloadGovernance('watch:policies'))
   process.on('SIGHUP', () => reloadGovernance('SIGHUP'))

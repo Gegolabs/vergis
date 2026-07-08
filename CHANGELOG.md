@@ -4,6 +4,25 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.3.0 — 2026-07-07
+
+Cuarta ronda de revisión (cluster `work/001`): hardening de seguridad, robustez y
+divergencias de policy. Sin capacidades nuevas del DSL; el bump de Y refleja el
+conjunto de correcciones de runtime/seguridad de las olas 1–3.
+
+**Seguridad:**
+- **`escapeHtml` escapa la comilla simple** — cierra la inyección JS en handlers inline y el escape del catálogo desde un solo lugar.
+- **Gate de gobernanza del policy store**: se rechaza el `dataset` duplicado (el last-wins podía pisar la RLS) y las divergencias de backend (`COLLATE` binario en Fabric, guard de cardinalidad en `op: eq`, `CREATE ROW POLICY OR REPLACE`).
+- **Intake**: nombre de archivo endurecido (sin traversal ni caracteres que rompan el path DFS) y codificación por segmento.
+- **CSV**: neutralización de formula injection. **`.env`** fuera del build context; **8080** en loopback.
+
+**Robustez:**
+- **Escritura atómica** del store de gobierno (tmp+rename); **evict** de pools mssql envenenados; **timeouts** en todo fetch de red.
+- **`expectString`** en la frontera de render (cierra el 200-en-blanco); **contrato insert/update** de master-data DWH; **`setDemanda`** validado con el parser real.
+- **Validación DSL** de `agg.dataset`/`table.data` pelados (un typo ya no muestra 0 en silencio).
+
+**Operación / CI:** `HEALTHCHECK` + rotación de logs + `mem_limit` en compose; permisos mínimos por job + `concurrency` en CI; pin de Actions/imagen por digest (Renovate); `engines: node>=22`.
+
 ## 0.2.2 — 2026-06-11
 
 Hardening de runtime y de supply chain (sin capacidades nuevas del DSL). Ver

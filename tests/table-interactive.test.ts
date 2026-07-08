@@ -108,12 +108,34 @@ describe('table-runtime · vtApply (filtro + búsqueda + orden)', () => {
     expect(ROWS.map((r) => r.id)).toEqual(before)
   })
 
+  it('columna mixta (números + texto) ordena determinista, no arbitrario (comparador transitivo)', () => {
+    const rows = [{ v: '2' }, { v: '10' }, { v: 'abc' }, { v: '3' }]
+    // Tiene 'abc' → columna NO numérica → orden léxico normalizado para TODOS (estable/transitivo).
+    const out = vtApply(rows, baseState({ sort: { field: 'v', dir: 'asc' } }))
+    expect(out.map((r) => r.v)).toEqual(['10', '2', '3', 'abc'])
+  })
+
+  it('columna toda-numérica (strings de números) ordena numéricamente, no léxico', () => {
+    const rows = [{ v: '2' }, { v: '10' }, { v: '3' }]
+    const out = vtApply(rows, baseState({ sort: { field: 'v', dir: 'asc' } }))
+    expect(out.map((r) => r.v)).toEqual(['2', '3', '10'])
+  })
+
   it('combina faceta + búsqueda + orden', () => {
     const out = vtApply(
       ROWS,
       baseState({ facets: { area: ['Logística'] }, globalSearch: 'o', sort: { field: 'id', dir: 'asc' } }),
     )
     expect(out.map((r) => r.nombre)).toEqual(['Beto Soto', 'Ana Pérez']) // ambos de Logística contienen 'o' (Soto, Logística)
+  })
+
+  it('búsqueda global acotada por searchCols: no matchea campos ocultos (token de anotación)', () => {
+    const rows = [{ nombre: 'Ana', _token: 'secreto-xyz' }, { nombre: 'Beto', _token: 'otro' }]
+    // sin searchCols → matchea el token oculto (comportamiento viejo, back-compat)
+    expect(vtApply(rows, baseState({ globalSearch: 'secreto' }))).toHaveLength(1)
+    // con searchCols=['nombre'] → NO matchea el token, pero sí la columna buscable
+    expect(vtApply(rows, baseState({ globalSearch: 'secreto', searchCols: ['nombre'] }))).toHaveLength(0)
+    expect(vtApply(rows, baseState({ globalSearch: 'ana', searchCols: ['nombre'] }))).toHaveLength(1)
   })
 })
 

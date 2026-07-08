@@ -1,5 +1,5 @@
-export { MiraBotlet, createMiraBotlet, resolveControlValue } from './mira'
-export type { MiraOptions, MiraOutput, AnnotationContext } from './mira'
+export { MiraBotlet, createMiraBotlet, resolveControlValue, resolveControlValues, resolveActiveView, DEFAULT_INTERACTIVE_MAX_ROWS } from './mira'
+export type { MiraOptions, MiraOutput, AnnotationContext, CtxValues, PagesNav, ControlResolved } from './mira'
 export { parseSpec } from './dsl/parse'
 export { validateSpec, collectDataRefs, collectDrills } from './dsl/validate'
 export type { MiraSpec, MiraDataset, MiraControl, Drillthrough } from './dsl/validate'

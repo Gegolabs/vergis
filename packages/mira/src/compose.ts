@@ -8,20 +8,67 @@ export interface DatasetResult {
 /** Agregación declarada de un KPI sobre un dataset (recomputable bajo filtro). */
 export interface Aggregation {
   dataset?: string
-  op: 'sum' | 'ratio'
+  op: 'sum' | 'ratio' | 'avg' | 'count' | 'min' | 'max' | 'count_distinct'
   field?: string
   num?: string
   den?: string
 }
 
-/** Calcula el valor de una agregación sobre un conjunto de filas. */
+/**
+ * Calcula el valor de una agregación sobre un conjunto de filas.
+ * Semántica: `sum`/`avg`/`min`/`max` sobre la coerción numérica de `field` (no-numérico cuenta 0 en
+ * sum/avg y se ignora en min/max; sin filas → 0); `count` sin `field` = número de filas, con `field`
+ * = filas con valor no-nulo/no-vacío; `count_distinct` = valores distintos de `field` (requerido);
+ * `ratio` = sum(num)/sum(den) (den 0 → 0). Op desconocido → fail-loud.
+ * ESPEJO: el `agg()` embebido en renderInteractiveScript (render-html-piece.ts) replica esta
+ * semántica client-side para el recompute bajo filtro — MANTENER EN SINCRONÍA.
+ */
 export function aggregate(rows: Record<string, unknown>[], agg: Aggregation): number {
   const sum = (f?: string): number => (f ? rows.reduce((s, r) => s + (Number(r[f]) || 0), 0) : 0)
-  if (agg.op === 'ratio') {
-    const den = sum(agg.den)
-    return den ? sum(agg.num) / den : 0
+  switch (agg.op) {
+    case 'ratio': {
+      const den = sum(agg.den)
+      return den ? sum(agg.num) / den : 0
+    }
+    case 'sum':
+      return sum(agg.field)
+    case 'avg':
+      return rows.length ? sum(agg.field) / rows.length : 0
+    case 'count':
+      if (!agg.field) return rows.length
+      return rows.filter((r) => r[agg.field!] != null && r[agg.field!] !== '').length
+    case 'min':
+    case 'max': {
+      let best = NaN
+      for (const r of rows) {
+        const n = Number(r[agg.field ?? ''])
+        if (Number.isNaN(n)) continue
+        if (Number.isNaN(best) || (agg.op === 'min' ? n < best : n > best)) best = n
+      }
+      return Number.isNaN(best) ? 0 : best
+    }
+    case 'count_distinct': {
+      if (!agg.field) {
+        throw new VergisError({
+          error: 'mira/compose',
+          code: 'agg-field-missing',
+          path: 'agg.field',
+          message: `La agregación count_distinct requiere 'field' (la columna cuyos valores distintos se cuentan).`,
+          remediation: 'Declarar field en el agg del KPI, p.ej. agg: { op: count_distinct, field: empresa, dataset: ... }.',
+        })
+      }
+      return new Set(rows.map((r) => String(r[agg.field!] ?? ''))).size
+    }
+    default:
+      throw new VergisError({
+        error: 'mira/compose',
+        code: 'agg-op-unknown',
+        path: 'agg.op',
+        value: agg.op,
+        message: `Operación de agregación desconocida: '${agg.op as string}'.`,
+        remediation: 'Usar una de: sum, ratio, avg, count, min, max, count_distinct.',
+      })
   }
-  return sum(agg.field)
 }
 
 /** Spec de columna de tabla (pasa tal cual al renderer; tipado estructural). */
@@ -257,8 +304,12 @@ export function composePiece(
     const drills = normalizeDrills(t.drillthrough)
     return {
       type: 'table',
+      dataset, // permite direccionar la tabla por su dataset (p.ej. anotaciones sobre tabla nombrada)
       rows,
-      columnsSpec: t.columns ?? [],
+      // COPIA del arreglo de columnas (no la referencia al spec): applyAnnotations hace push de la
+      // columna de anotación sobre columnsSpec — sobre la referencia mutaría el SPEC CACHEADO
+      // (run.ts memoiza el spec por mtime) y cada request acumularía una columna más.
+      columnsSpec: [...(t.columns ?? [])],
       title: t.title,
       interactive: t.interactive,
       drills: drills.length ? drills : undefined,

@@ -45,6 +45,12 @@ function err(code: string, path: string, value: unknown, message: string, remedi
  *  - **legacy por-tabla** (`policies`): una entrada por dataset físico.
  */
 export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; datasets?: unknown }) | undefined): Map<string, PolicyDecl> {
+  // Coexistencia de ambas formas: la entidad-canónica ganaría y `policies` se ignoraría en silencio
+  // (en una migración a medias, políticas legacy activas desaparecerían — deny silencioso). Fail-loud.
+  const legacyPolicies = (doc as { policies?: unknown } | undefined)?.policies
+  if (isEntityStore(doc) && Array.isArray(legacyPolicies)) {
+    throw err('form-conflict', 'policies', legacyPolicies, `El documento mezcla la forma entidad-canónica ('entities'/'datasets') con la legacy ('policies'). Solo una.`, `Migrar 'policies' a mapeos de 'datasets', o quitar 'entities'/'datasets'.`)
+  }
   // La forma entidad-canónica (charter §2c) se resuelve al MISMO mapa por-dataset.
   if (isEntityStore(doc)) return resolveEntityStore(doc)
 
@@ -55,6 +61,9 @@ export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; da
     const path = `policies[${i}]`
     if (typeof entry?.dataset !== 'string' || entry.dataset.length === 0) {
       throw err('dataset-missing', `${path}.dataset`, entry?.dataset, `Cada política debe atar a un 'dataset' (string).`, `Declarar 'dataset'.`)
+    }
+    if (out.has(entry.dataset)) {
+      throw err('dataset-duplicate', `${path}.dataset`, entry.dataset, `El dataset '${entry.dataset}' tiene más de una política: el last-wins silencioso podría pisar la RLS con un 'grant: all' posterior.`, `Unificar la política de '${entry.dataset}' en una sola entrada.`)
     }
     const hasGrant = entry.grant != null
     const hasRls = entry.rls != null
