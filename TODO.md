@@ -2,14 +2,19 @@
 
 Pendientes del proyecto. Registro cronológico en `BITACORA.md`.
 
+> **El plan DETALLADO de lo pendiente (para ejecutar la próxima sesión) vive en `NEXT.md`** (raíz).
+> El registro de lo IMPLEMENTADO en la sesión 2026-07-07 (32 archivos de producción, +impacto) está en
+> `work/001-cluster-analisis-codigo-2026-07/07-registro-implementacion.md`; el plan maestro con todos
+> los hallazgos en `work/001-cluster-analisis-codigo-2026-07/00-consolidado.md`.
+
 ## Roadmap técnico
 
 Detalle y justificación en `docs/mejoras-diagnostico.md`:
 
-- [ ] Refactor de los tres monolitos: `render-html-piece.ts` (826 LOC), `MiraBotlet.invoke()` (6 fases en un método), `serve-rls.ts` (discovery + identidad + render + bootstrap)
-- [ ] HMAC criptográfico en el gateo de anotaciones (hoy: token opaco validado server-side)
+- [~] Refactor de los tres monolitos — **`serve-rls.ts` HECHO** (7 módulos extraídos+testeados+usados; falta solo el wrap final `createApp()`, ver NEXT.md · Ola 3·A). Pendientes: `render-html-piece.ts` (~950 LOC) y `mira.ts` (638 LOC) → NEXT.md · Ola 3·B
+- [x] HMAC criptográfico en el gateo de anotaciones — **HECHO** (`server/annotations.ts`, HMAC + época de 4h, con tests adversariales · A15)
 - [ ] Aislamiento del render Vega en subproceso sin red ni filesystem (defensa en profundidad)
-- [ ] Caché de discovery de specs (hoy re-escanea por request; aceptable hasta ~cientos de specs)
+- [x] Caché de discovery de specs — **HECHO** (memoizado + invalidado on-change en `server/discovery.ts` vía `createCachedScanner`)
 - [ ] Migrar los specs normativos del canon (contrato Botler, spec Mira, DSL, naming) de AgencyDomains a `docs/` (declarado en README)
 - [ ] Port del kernel `@vergis/policy` a Go — solo cuando exista driver de negocio (Custos standalone, embedding, librería); ver `docs/adr-001-lenguaje-y-supply-chain.md`
 
