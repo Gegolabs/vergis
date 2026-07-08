@@ -94,7 +94,13 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
         }
       }
       const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
-      out.push({ code, slug: slugify(code), name: spec.identity?.display_name ?? code, specPath: p, tables })
+      const slug = slugify(code)
+      if (out.some((r) => r.slug === slug)) {
+        // Dos specs con el mismo slug: la 2ª es inalcanzable (el router hace `all.find` → la 1ª gana).
+        // Antes pasaba en silencio; ahora se avisa. Usar un identity.code distinto.
+        log(`[vergis-rls] '${p}' colisiona en slug '${slug}' con un PI ya descubierto — el segundo queda inalcanzable. Diferenciar identity.code.`)
+      }
+      out.push({ code, slug, name: spec.identity?.display_name ?? code, specPath: p, tables })
     }
     return out
   }

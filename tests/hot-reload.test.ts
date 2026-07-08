@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { debounce, createCachedScanner, watchPaths } from '../server/hot-reload'
@@ -84,6 +84,24 @@ describe('watchPaths', () => {
     // pronto pierde el evento (causa real del flake). Luego polling con deadline (sale apenas dispara).
     await new Promise((r) => setTimeout(r, 100))
     writeFileSync(join(dir, 'a.yaml'), 'x: 1')
+    const deadline = Date.now() + 3000
+    while (fired === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    un()
+    rmSync(dir, { recursive: true, force: true })
+    expect(fired).toBeGreaterThanOrEqual(1)
+  })
+
+  it('observa un ARCHIVO y sobrevive un save ATÓMICO (rename-replace, como vim/VSCode)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vergis-fw-'))
+    const file = join(dir, 'policy.yaml')
+    writeFileSync(file, 'x: 1')
+    let fired = 0
+    // watch sobre el ARCHIVO: internamente observa su directorio, así el rename no lo deja ciego.
+    const un = watchPaths([file], () => { fired += 1 }, { debounceMs: 20 })
+    await new Promise((r) => setTimeout(r, 100))
+    const tmp = join(dir, 'policy.yaml.tmp')
+    writeFileSync(tmp, 'x: 2')
+    renameSync(tmp, file) // save atómico: cambia el inode del archivo observado
     const deadline = Date.now() + 3000
     while (fired === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
     un()
