@@ -81,10 +81,11 @@ import {
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { fail, readJsonBody } from './http-util'
-import { annSign as annSignHmac } from './annotations'
+import { annSign as annSignHmac, verifyAnnToken } from './annotations'
 import { createRequestHandler } from './routes'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
+import { configFromEnv } from './config'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -99,8 +100,11 @@ import {
 
 const ENGINE = (process.env['VERGIS_ENGINE'] ?? 'clickhouse').toLowerCase()
 if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGINE inválido: '${ENGINE}' (clickhouse | fabric).`)
-const PORT = Number(process.env['PORT'] ?? 8080)
-const REFRESH_MS = Number(process.env['VERGIS_REFRESH_MS'] ?? 0)
+// Config VALIDADA de los env numéricos (lanza claro al arranque si PORT/REFRESH/TTL/MAX_ROWS no son
+// números — antes `PORT=abc` daba `listen(NaN)` tarde y feo). El secreto de anotación se maneja aparte.
+const config = configFromEnv(process.env, () => '')
+const PORT = config.port
+const REFRESH_MS = config.refreshMs
 
 // El catálogo de serving (hardening, charter §2b): SOLO la Capability enforcing del motor activo.
 // En fabric, `execute-sql-dwh` es enforcing PORQUE hay push-down (la RLS vive en la fuente).
@@ -164,18 +168,30 @@ if (ENGINE === 'clickhouse') {
   const ingestDwh = connections ? createExecuteSqlDwh(connections) : null
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // Mutex del ingest (cola FIFO): SIGHUP + watch de policies + timer REFRESH_MS + re-bootstrap pueden
+  // solaparse, y el ingest es TRUNCATE+INSERT → dos corridas intercaladas dejan filas DUPLICADAS.
+  // Serializarlo garantiza que nunca corran dos a la vez (el re-bootstrap y el timer comparten el lock).
+  let ingestLock: Promise<void> = Promise.resolve()
   async function ingestAll(): Promise<void> {
-    for (const b of BOUND) {
-      const ingest = createIngestClickHouse(ADMIN, b.schema)
-      let rows: Record<string, unknown>[] | null = null
-      if (b.cfg.ingest && ingestDwh) {
-        const out = (await ingestDwh.execute({ database_ref: b.cfg.ingest.database_ref, sql: b.cfg.ingest.sql }, { agent: 'vergis' })) as { rows: Record<string, unknown>[] }
-        rows = out.rows
-      } else if (b.cfg.seed) rows = b.cfg.seed
-      if (rows) {
-        const r = (await ingest.execute({ rows }, { agent: 'vergis' })) as { ingested: number }
-        console.log(`[vergis-rls] ${b.schema.database}.${b.schema.table}: ${r.ingested} filas`)
+    const prev = ingestLock
+    let release!: () => void
+    ingestLock = new Promise<void>((r) => (release = r))
+    await prev.catch(() => {}) // esperar la corrida anterior; un fallo previo no bloquea la cola
+    try {
+      for (const b of BOUND) {
+        const ingest = createIngestClickHouse(ADMIN, b.schema)
+        let rows: Record<string, unknown>[] | null = null
+        if (b.cfg.ingest && ingestDwh) {
+          const out = (await ingestDwh.execute({ database_ref: b.cfg.ingest.database_ref, sql: b.cfg.ingest.sql }, { agent: 'vergis' })) as { rows: Record<string, unknown>[] }
+          rows = out.rows
+        } else if (b.cfg.seed) rows = b.cfg.seed
+        if (rows) {
+          const r = (await ingest.execute({ rows }, { agent: 'vergis' })) as { ingested: number }
+          console.log(`[vergis-rls] ${b.schema.database}.${b.schema.table}: ${r.ingested} filas`)
+        }
       }
+    } finally {
+      release()
     }
   }
   bootstrapAll = async () => {
@@ -245,7 +261,7 @@ if (ENGINE === 'clickhouse') {
 // cada render dispara las queries reales). La clave incluye params + user + claims normalizados →
 // dos consumidores JAMÁS comparten entrada (la RLS no se relaja: un hit devuelve solo lo que esa
 // misma identidad ya obtuvo del motor enforcing). El bootstrap NO pasa por acá (usa su handle directo).
-const DATA_CACHE_TTL_MS = Number(process.env['VERGIS_DATA_CACHE_TTL_MS'] ?? 0)
+const DATA_CACHE_TTL_MS = config.dataCacheTtlMs
 if (DATA_CACHE_TTL_MS > 0) {
   servingCap = withResultCache(servingCap, { ttlMs: DATA_CACHE_TTL_MS })
   console.log(`[vergis-rls] data-cache por consumidor activo (TTL ${DATA_CACHE_TTL_MS} ms)`)
@@ -253,9 +269,7 @@ if (DATA_CACHE_TTL_MS > 0) {
 
 // Tope de filas materializables por `interactions.filters` (work/052 §2.5). Mira no lee env: se
 // inyecta por runSpec. Sin definir → default de Mira (5000).
-const INTERACTIVE_MAX_ROWS = process.env['VERGIS_INTERACTIVE_MAX_ROWS']
-  ? Number(process.env['VERGIS_INTERACTIVE_MAX_ROWS'])
-  : undefined
+const INTERACTIVE_MAX_ROWS = config.interactiveMaxRows
 
 // Mapeo claim→cabecera CONFIGURABLE: cada instancia trae sus claims en sus cabeceras (el criterio
 // de la política decide qué claims importan: `groups`, `viewer_area`, etc.). Formato:
@@ -315,7 +329,11 @@ if (!process.env['VERGIS_ANNOTATION_SECRET']) {
       'anotación NO sobreviven un restart ni se comparten entre réplicas. Define el env en producción.',
   )
 }
-const annSign = (piId: string, email: string, key: string): string => annSignHmac(ANN_SECRET, piId, email, key)
+// Época del token de anotación: bucket de 4h. Un token deja de valer cuando el bucket cambia, así
+// una identidad cuyo acceso se revocó no puede escribir con tokens de páginas viejas para siempre.
+const ANN_EPOCH_MS = 4 * 3600_000
+const annEpoch = (t = Date.now()): string => String(Math.floor(t / ANN_EPOCH_MS))
+const annSign = (piId: string, email: string, key: string): string => annSignHmac(ANN_SECRET, piId, email, key, annEpoch())
 
 // La navegación multi-vista (`?page=` + `?ctx.*`, con acumulación de repetidos para multi-select)
 // vive en ./nav.ts — extraída para testearla sin los efectos de módulo de este archivo.
@@ -406,7 +424,8 @@ async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: 
   const key = String(body.key ?? '')
   const token = String(body.token ?? '')
   const value = String(body.value ?? '')
-  if (!key || annSign(report.slug, email, key) !== token) {
+  // Verifica contra la época actual y la anterior (no cortar en el borde del bucket).
+  if (!verifyAnnToken(ANN_SECRET, report.slug, email, key, token, [annEpoch(), annEpoch(Date.now() - ANN_EPOCH_MS)])) {
     res.writeHead(403, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: false, error: 'token inválido (registro no visible para esta identidad)' }))
     return
@@ -748,9 +767,35 @@ server.listen(PORT, () => {
   console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
 })
 
+// Cierre graceful: `docker stop` envía SIGTERM. Cerrar el server drena los requests en vuelo antes de
+// salir; el timeout evita colgar el shutdown si un request queda pegado.
+process.on('SIGTERM', () => {
+  console.log('[vergis-rls] SIGTERM — cerrando (drain de requests en vuelo)…')
+  const t = setTimeout(() => process.exit(0), 10_000)
+  t.unref()
+  server.close(() => {
+    clearTimeout(t)
+    process.exit(0)
+  })
+})
+
 // Bootstrap del motor de serving EN SEGUNDO PLANO: el server ya escucha. `healthz` responde 503 hasta
-// `ready`; la Administración (escritura de data maestra) queda disponible sin esperar al motor.
-void bootstrapAll().catch((e) => console.error(`[vergis-rls] bootstrap falló: ${e instanceof Error ? e.message : String(e)}`))
+// `ready`; la Administración queda disponible sin esperar al motor. Retry INDEFINIDO con backoff: un
+// fallo transitorio al arrancar (SQL/AAD/red) no debe dejar el server en 503 para siempre — se
+// reintenta hasta que `ready` (fabric no tenía retry; CH moría tras 60 intentos).
+void (async () => {
+  let delay = 2000
+  for (;;) {
+    try {
+      await bootstrapAll()
+      return
+    } catch (e) {
+      console.error(`[vergis-rls] bootstrap falló (reintenta en ${delay / 1000}s): ${e instanceof Error ? e.message : String(e)}`)
+      await new Promise((r) => setTimeout(r, delay))
+      delay = Math.min(delay * 2, 60_000)
+    }
+  }
+})()
 
 // --- Hot-reload SIN restart (work/045) --------------------------------------
 // Editar/añadir una spec ya es live (discover re-lee por request → ahora cacheado + invalidado on-change).

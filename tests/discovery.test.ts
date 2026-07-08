@@ -50,6 +50,20 @@ describe('discovery · descubrimiento y catálogo de serving', () => {
     const d = mk({ engine: 'clickhouse', specs: { '/a.yaml': specYaml('X', 'SELECT 1 FROM qw04.areas', 'mock-sql') } })
     expect(d.discover()).toHaveLength(0)
   })
+
+  it('avisa por log si dos specs colisionan en slug (la 2ª queda inalcanzable)', () => {
+    const logs: string[] = []
+    const d = mk({
+      engine: 'clickhouse',
+      specs: {
+        '/a.yaml': specYaml('QW-04', 'SELECT * FROM qw04.areas'),
+        '/b.yaml': specYaml('QW-04', 'SELECT * FROM qw04.areas'),
+      },
+      log: (m) => logs.push(m),
+    })
+    expect(d.discover()).toHaveLength(2)
+    expect(logs.some((l) => l.includes('colisiona en slug'))).toBe(true)
+  })
 })
 
 describe('discovery · gate de gobernanza fail-closed (fabric)', () => {

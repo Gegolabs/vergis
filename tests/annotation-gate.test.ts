@@ -33,3 +33,15 @@ describe('anotaciones · gate HMAC (A15, adversarial)', () => {
     expect(verifyAnnToken(SECRET, 'qw-04', 'ana@x.com', '', '')).toBe(false)
   })
 })
+
+describe('anotaciones · época del token (revocación no eterna)', () => {
+  it('un token firmado en la época A valida mientras A esté aceptada', () => {
+    const tok = annSign(SECRET, 'qw-04', 'ana@x.com', 'k', 'A')
+    expect(verifyAnnToken(SECRET, 'qw-04', 'ana@x.com', 'k', tok, ['A'])).toBe(true)
+    expect(verifyAnnToken(SECRET, 'qw-04', 'ana@x.com', 'k', tok, ['B', 'A'])).toBe(true) // tolera anterior
+  })
+  it('un token de una época YA fuera de ventana NO valida (revocación corta la escritura)', () => {
+    const tok = annSign(SECRET, 'qw-04', 'ana@x.com', 'k', 'A')
+    expect(verifyAnnToken(SECRET, 'qw-04', 'ana@x.com', 'k', tok, ['C', 'B'])).toBe(false)
+  })
+})

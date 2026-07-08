@@ -8,12 +8,17 @@
  */
 import { createHmac } from 'node:crypto'
 
-/** Token de anotación: HMAC(secret, `pi|email|key`), truncado a 24 hex. */
-export function annSign(secret: string, piId: string, email: string, key: string): string {
-  return createHmac('sha256', secret).update(`${piId}|${email}|${key}`).digest('hex').slice(0, 24)
+/**
+ * Token de anotación: HMAC(secret, `pi|email|key|epoch`), truncado a 24 hex. `epoch` es un bucket
+ * temporal (`''` = sin época, back-compat): al incluirlo, un token deja de validar cuando el bucket
+ * cambia, así una identidad cuyo acceso se revocó no puede escribir con tokens de páginas viejas para
+ * siempre (la verificación tolera el bucket anterior para no cortar en el borde — ver `verifyAnnToken`).
+ */
+export function annSign(secret: string, piId: string, email: string, key: string, epoch = ''): string {
+  return createHmac('sha256', secret).update(`${piId}|${email}|${key}|${epoch}`).digest('hex').slice(0, 24)
 }
 
-/** ¿El token corresponde a (pi, email, key)? Falso si la clave es vacía o el token no coincide. */
-export function verifyAnnToken(secret: string, piId: string, email: string, key: string, token: string): boolean {
-  return !!key && annSign(secret, piId, email, key) === token
+/** ¿El token corresponde a (pi, email, key) para ALGUNO de los epochs aceptados (actual + anterior)? */
+export function verifyAnnToken(secret: string, piId: string, email: string, key: string, token: string, epochs: string[] = ['']): boolean {
+  return !!key && epochs.some((e) => annSign(secret, piId, email, key, e) === token)
 }
