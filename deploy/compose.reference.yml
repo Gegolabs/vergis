@@ -25,6 +25,10 @@ services:
       VERGIS_SPECS_DIR: /specs                    # PIs servibles (authz-blind) — montaje ./specs
       VERGIS_POLICIES: /policies/entidades.yaml   # policy store data-anchored (coma-separado si son varios)
       VERGIS_IDENTITY_MAP: /identity/map.json     # email del gate → claim de identidad (trust-base)
+      # VERGIS_GATE_SECRET: <token-compartido>    # D2 · defensa en profundidad (A10): exige `x-gate-token`
+                                                  #   en CADA request. El proxy (abajo) debe inyectarlo. Sin
+                                                  #   esto el gate confía en X-Forwarded-* a ciegas — seguro
+                                                  #   SOLO si vergis:8080 jamás se publica al host (ver abajo).
 
       # --- Gobierno / Administración (todo esto junto enciende el avatar) ---------------------------
       VERGIS_OUT: /governance                     # ⚠ GovernanceStore PERSISTENTE (admins/dueños/auditoría).
@@ -54,6 +58,16 @@ services:
       - ./intake:/intake:ro
       - ./sources.yaml:/sources.yaml:ro
       - ./pi-owners.yaml:/pi-owners.yaml:ro
+    # `expose` (NO `ports:`) es DELIBERADO — supuesto de red D2. vergis:8080 debe quedar SOLO en la red
+    # interna de compose, alcanzable únicamente por oauth2-proxy. El gate confía en X-Forwarded-* sin
+    # verificar (así entrega el proxy la identidad); publicar este puerto al host = cualquiera inyecta
+    # X-Forwarded-Groups/-Email arbitrarios = bypass total de RLS. NUNCA le pongas `ports: ["8080:8080"]`.
+    # Belt-and-suspenders: define VERGIS_GATE_SECRET (arriba) y que el proxy inyecte `x-gate-token`.
+    #
+    # Supuesto D1 (solo motor ClickHouse, no este ejemplo Fabric): el servicio ClickHouse debe estar en la
+    # MISMA red interna, sin puerto publicado. El usuario data-plane es `no_password` y los claims son
+    # settings auto-asignables → alcance de red al HTTP de CH = bypass total de la row-policy. Igual que
+    # acá: nada de data-plane se publica; el único ingress público es Caddy (TLS) → oauth2-proxy (SSO).
     expose: ["8080"]
 
   # SSO delante del motor: reenvía el email del usuario autenticado como X-Forwarded-Email. Genérico
