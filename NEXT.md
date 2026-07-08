@@ -156,10 +156,12 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
    chequean parte del contrato — revisarlos primero.
    - **D1** · ClickHouse SOLO alcanzable por la red interna de compose (el usuario data-plane es
      `no_password` y los claims son settings auto-asignables → alcance de red al puerto HTTP = bypass
-     total de RLS). Ref: 02·5.
+     total de RLS). Ref: 02·5. **📝 DOCUMENTADO** en `deploy/compose.reference.yml` (nota de red junto al
+     servicio). Falta el chequeo runtime (el server no ve la topología de red de CH fácilmente).
    - **D2** · oauth2-proxy SIEMPRE delante (`gate.ts` confía en `X-Forwarded-*` sin verificar → puerto
-     expuesto = claims arbitrarios). El A10 (gate secret opt-in) ya ayuda si se activa
-     `VERGIS_GATE_SECRET`. Ref: 04·5.
+     expuesto = claims arbitrarios). Ref: 04·5. **✅ ABORDADO** (rama `feat/053`): `deployment-check.ts`
+     avisa al arranque si sirve PIs (`VERGIS_SPECS_DIR`) sin `VERGIS_GATE_SECRET`; `compose.reference.yml`
+     documenta por qué `expose` (no `ports:`) es deliberado + el gate secret como opción.
    - **D3** · PK `NOT ENFORCED` en Fabric (INSERT duplicado no falla — mitigado por A12). Ref: 02·4.
    - **D4** · server como proceso único contra los SQLite (load-at-open/full-write last-writer-wins).
      Ref: 02·11.
