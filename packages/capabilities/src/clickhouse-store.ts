@@ -46,6 +46,26 @@ async function chExec(conn: ChAdminConn, sql: string, opts: { json?: boolean } =
   return text.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>)
 }
 
+/** Identificadores seguros (db, tabla, columna, rol, usuario): evita inyección por nombre en el DDL/DML,
+ *  que se construye por interpolación de string (ClickHouse HTTP no parametriza identificadores). Mismo
+ *  patrón que el compilador `@vergis/policy` (Ola 3·B consolidará ambos en un `codegen-common`). */
+const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+function assertSafeIdent(kind: string, value: string): string {
+  if (!SAFE_IDENT.test(value)) {
+    throw new Error(`clickhouse-store: '${value}' no es un identificador seguro para ${kind} (esperado ${SAFE_IDENT}).`)
+  }
+  return value
+}
+/** Valida TODOS los identificadores del schema antes de que entren al DDL/DML por interpolación. */
+function assertSchemaIdents(schema: ChStoreSchema): void {
+  assertSafeIdent('database', schema.database)
+  assertSafeIdent('table', schema.table)
+  for (const [name, type] of Object.entries(schema.columns)) {
+    assertSafeIdent('column', name)
+    assertSafeIdent('column-type', type)
+  }
+}
+
 /** Tipo ClickHouse de una columna del store (mínimo para QW-04: texto + enteros). */
 export type ChColumnType = 'String' | 'UInt32' | 'Int32' | 'Float64' | 'Date'
 
@@ -75,8 +95,9 @@ export async function bootstrapClickHouse(
   enforcement: ClickHouseEnforcement | null,
   opts: BootstrapOptions = {},
 ): Promise<void> {
-  const role = opts.consumerRole ?? 'consumer_role'
-  const user = opts.consumerUser ?? 'botler'
+  const role = assertSafeIdent('role', opts.consumerRole ?? 'consumer_role')
+  const user = assertSafeIdent('user', opts.consumerUser ?? 'botler')
+  assertSchemaIdents(schema)
   const cols = Object.entries(schema.columns).map(([n, t]) => `${n} ${t}`).join(', ')
   const orderBy = Object.keys(schema.columns)[0] ?? 'tuple()'
 
@@ -119,6 +140,7 @@ interface IngestParams {
  * usuario WRITER (admin acá), nunca el consumidor. Idempotente: re-ingiere dejando el mismo estado.
  */
 export function createIngestClickHouse(writer: ChAdminConn, schema: ChStoreSchema, name = 'ingest-to-clickhouse'): Capability {
+  assertSchemaIdents(schema) // el schema es fijo por store: validar al construir, no en cada ingesta
   return {
     name,
     async execute(params: unknown): Promise<{ ingested: number }> {
