@@ -116,3 +116,24 @@ delgado. Su valor (testabilidad) ya está mayormente capturado porque la LÓGICA
 recompute de enforcement, identidad, discovery) ya vive en módulos testeados. Su riesgo (reescribir el
 router/bootstrap sin tests de ruta) no se justifica autónomamente. Recomendación: hacerlo como pase
 dedicado escribiendo primero los tests de ruta con req/res fakes, con el diseño de arriba como mapa.
+
+---
+
+## Estado FINAL (2026-07-07) — sustancialmente completo
+
+`serve-rls.ts`: **916 → 796 LOC**, y ahora USA todos los módulos extraídos (sin lógica duplicada).
+
+**7 módulos extraídos, testeados Y usados por serve-rls:**
+`config` · `identity` · `discovery` (gate) · `http-util` · `engines/clickhouse` (A11) · `annotations`
+(A15) · `routes` (router, antes 0 tests → 12 tests).
+
+**Todos los fixes bloqueados landeados y verificados** (typecheck + build de esbuild + 464 tests):
+A11, A10, A15, `/healthz`, `fail`/`readJsonBody`.
+
+**Lo único que resta para la forma LITERAL `createApp()`:** envolver el bootstrap top-level (~600
+líneas: setup de engine, annStore, governance/admin, listen) en `async function createApp(config)` +
+`main()`, para que `serve-rls.ts` sea importable sin side-effects. **Recomendación: NO hacerlo como
+edición autónoma apurada.** Es un re-indentado mecánico de 600 líneas del server RLS sin tests de
+integración de todo-el-server; su valor marginal (testear la composición completa) es bajo porque
+CADA pieza ya está testeada y usada. Merece un pase dedicado con el server corriendo para verificar,
+o aceptarse el estado actual como la culminación sustantiva (que es lo recomendado).
