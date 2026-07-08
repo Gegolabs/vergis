@@ -45,6 +45,17 @@ describe('validate-guards · la spec testigo válida pasa', () => {
   })
 })
 
+describe('DSL · validaciones de ola 4', () => {
+  it('delivery.render: [] (vacío explícito) → rechazo (era página en blanco)', () => {
+    const s = parseSpec(BASE.replace('render: [{ format: html, target: web }]', 'render: []')) as Record<string, unknown>
+    expect(() => validate(s)).toThrow(/vacía|blanco/)
+  })
+  it('watermark_field global con campo colgante → rechazo (era «fresco» en silencio)', () => {
+    const s = parseSpec(BASE.replace('watermark_field: datos.area', 'watermark_field: datos.noexiste')) as Record<string, unknown>
+    expect(() => validate(s)).toThrow(/noexiste/)
+  })
+})
+
 describe('A13 · datasets pelados (agg.dataset / table.data) se validan', () => {
   it('agg.dataset con typo → dangling-data-reference (antes pasaba y el KPI salía 0)', () => {
     const s = parseSpec(BASE.replace('dataset: datos, op: sum', 'dataset: noexiste, op: sum')) as Record<string, unknown>
