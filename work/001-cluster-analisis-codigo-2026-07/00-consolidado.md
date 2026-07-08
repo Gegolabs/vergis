@@ -218,7 +218,10 @@ El PRIMER ciclo (Olas 1-4 del consolidado original + la cola no-serve-rls + tier
 createApp sustantivo) está HECHO. Lo que resta arranca como un **ciclo nuevo, Olas 1-4**, agrupado por
 lo que cada una habilita:
 
-### Ola 1 · Endurecimiento de serve-rls + config — *ahora, sin motor ni install, riesgo acotado*
+### Ola 1 · Endurecimiento de serve-rls + config — ✅ HECHA (commit `091dae1`)
+Época del HMAC · mutex del ingest · retry con backoff · watchers atómicos · SIGTERM · slugs duplicados · configFromEnv (numéricos). Pendiente menor: timingSafeEqual (BAJA impráctico), micro-caché del índice, migración completa de env.
+
+*(original:)* — *ahora, sin motor ni install, riesgo acotado*
 - Cablear `configFromEnv()` en serve-rls (activa la validación NaN; hoy config.ts está testeado pero sin usar).
 - **MEDIA:** mutex en `bootstrapAll`/`ingestAll` · re-armar watchers tras save atómico (`hot-reload.ts`) · época en el HMAC de anotaciones (token no-eterno) · retry perpetuo del bootstrap (fabric sin retry).
 - **BAJA:** handler `SIGTERM` graceful · detección de slugs duplicados · `timingSafeEqual` en HMAC/CSRF · micro-caché del índice.
