@@ -16,13 +16,12 @@ import type { PolicyDecl } from './ir'
 export * from './ir'
 export { parseAudience, type AudienceDecl } from './frontend'
 export { bindPolicy, type BindContext } from './binder'
+export { settingForClaim, SETTINGS_PREFIX, ident, SAFE_IDENT } from './codegen-common'
 export {
   compileClickHouse,
   requestSettings,
   settingsForInjections,
   emulate,
-  settingForClaim,
-  SETTINGS_PREFIX,
   type ClickHouseEnforcement,
   type ClickHouseTarget,
 } from './clickhouse'
