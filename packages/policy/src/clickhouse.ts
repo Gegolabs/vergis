@@ -21,11 +21,7 @@ import {
   type Predicate,
   type ReferenceData,
 } from './ir'
-
-export const SETTINGS_PREFIX = 'vergis_'
-
-/** Identificadores seguros (columna, claim, rol, tabla): evita inyección por nombre. */
-const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+import { SETTINGS_PREFIX, ident, settingForClaim } from './codegen-common'
 
 /** Identificador calificado (p.ej. `db.tabla` de una jerarquía de referencia): cada parte segura. */
 function qualifiedIdent(kind: string, value: string): string {
@@ -54,25 +50,6 @@ export interface ClickHouseEnforcement {
   injections: { setting: string; claim: string }[]
   /** El IR compilado (para emulación/aserciones). */
   policy: PolicyDecl
-}
-
-function ident(kind: string, value: string): string {
-  if (!SAFE_IDENT.test(value)) {
-    throw new VergisError({
-      error: 'policy/codegen',
-      code: 'unsafe-identifier',
-      path: kind,
-      value,
-      message: `'${value}' no es un identificador seguro para ${kind} (esperado ${SAFE_IDENT}).`,
-      remediation: `Usar solo letras, dígitos y guion bajo en ${kind}.`,
-    })
-  }
-  return value
-}
-
-/** Nombre del custom setting que transporta los valores permitidos de un claim. */
-export function settingForClaim(claim: string): string {
-  return `${SETTINGS_PREFIX}claim_${ident('claim', claim)}`
 }
 
 /** Expresión USING de un predicado (la receta ClickHouse), con guard de default-deny. */

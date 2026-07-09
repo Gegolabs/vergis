@@ -22,6 +22,7 @@
 
 import { VergisError } from '@vergis/botler'
 import { settingsForInjections } from './clickhouse'
+import { SETTINGS_PREFIX, ident, settingForClaim } from './codegen-common'
 import {
   isHierarchy,
   isPublic,
@@ -31,11 +32,6 @@ import {
   type Predicate,
   type ReferenceData,
 } from './ir'
-
-export const SETTINGS_PREFIX = 'vergis_'
-
-/** Identificadores seguros (columna, claim, schema, tabla, nombres): evita inyección por nombre. */
-const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
  * Collation binaria forzada en las comparaciones del predicado. Sin ella, en una BD con collation
@@ -77,20 +73,6 @@ export interface FabricEnforcement {
   policy: PolicyDecl
 }
 
-function ident(kind: string, value: string): string {
-  if (!SAFE_IDENT.test(value)) {
-    throw new VergisError({
-      error: 'policy/codegen',
-      code: 'unsafe-identifier',
-      path: kind,
-      value,
-      message: `'${value}' no es un identificador seguro para ${kind} (esperado ${SAFE_IDENT}).`,
-      remediation: `Usar solo letras, dígitos y guion bajo en ${kind}.`,
-    })
-  }
-  return value
-}
-
 /** El tipo de columna debe ser un tipo SQL plausible: letras/dígitos/_ y opcional `(n)` o `(n,m)`. */
 function columnType(value: string): string {
   if (!/^[A-Za-z][A-Za-z0-9_]*(\(\s*\d+\s*(,\s*\d+\s*)?\))?$/.test(value)) {
@@ -104,11 +86,6 @@ function columnType(value: string): string {
     })
   }
   return value
-}
-
-/** Nombre del custom setting que transporta los valores permitidos de un claim. */
-export function settingForClaim(claim: string): string {
-  return `${SETTINGS_PREFIX}claim_${ident('claim', claim)}`
 }
 
 /** Lee el SESSION_CONTEXT de un claim como NVARCHAR(MAX). */
