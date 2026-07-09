@@ -7,6 +7,7 @@ import {
 } from '@vergis/botler'
 import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { applyAnnotations, type AnnotationContext } from './annotations'
+import { expectString, expectRows } from './contract'
 import { parseSpec } from './dsl/parse'
 import { collectDataRefs, collectDatasetKeys, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
 import { checkFreshness, type FreshnessVerdict } from './freshness'
@@ -478,44 +479,6 @@ function watermarkDatasetOf(spec: MiraSpec): string | undefined {
   const raw = String(f['watermark_field'] ?? '')
   const wf = raw.startsWith('data.') ? raw.slice('data.'.length) : raw
   return wf ? wf.split('.')[0] || undefined : undefined
-}
-
-/**
- * Valida el contrato de salida de una Capability de datos: `{ rows: [...] }`. Falla ruidoso y
- * accionable en la frontera (en vez de un cast silencioso que revienta críptico aguas abajo).
- */
-/**
- * Valida la frontera de salida de una capability de RENDER: exige `{ <field>: string }`. Sin esto, un
- * cast a ciegas (`as { html }`) dejaba `undefined` cuando la capability devolvía otra forma, y el
- * backstop anti-página-en-blanco (que compara contra `''`) no disparaba → HTTP 200 en blanco. Es la
- * simetría con `expectRows` en la frontera de datos.
- */
-function expectString(capability: string, field: string, out: unknown): string {
-  const val = (out as Record<string, unknown> | null | undefined)?.[field]
-  if (typeof val !== 'string') {
-    throw new VergisError({
-      error: 'mira/render',
-      code: 'capability-output-invalid',
-      path: field,
-      message: `La Capability de render '${capability}' no devolvió '{ ${field}: string }'.`,
-      remediation: `Toda Capability de render debe devolver un objeto con el campo string '${field}'.`,
-    })
-  }
-  return val
-}
-
-function expectRows(dataset: string, capability: string, out: unknown): Record<string, unknown>[] {
-  const rows = (out as { rows?: unknown } | null | undefined)?.rows
-  if (!Array.isArray(rows)) {
-    throw new VergisError({
-      error: 'mira/retrieve',
-      code: 'capability-output-invalid',
-      path: `data.${dataset}`,
-      message: `La Capability '${capability}' no devolvió '{ rows: [...] }' para el dataset '${dataset}'.`,
-      remediation: 'Toda Capability de datos debe devolver un objeto con un arreglo `rows`.',
-    })
-  }
-  return rows as Record<string, unknown>[]
 }
 
 /**
