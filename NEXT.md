@@ -106,10 +106,12 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
      `piece-css`, `piece-types`, `piece-util`, `render-table`, `render-chart`, `interactive-script`. Los
      370 restantes son la orquestación núcleo + widgets chicos (kpi/semáforo/tray/nav) — cohesivo. Ref:
      03·13. Behavior-preserving (504 tests intactas en cada paso).
-   - ⏳ **PENDIENTE** (pase dedicado): `packages/mira/src/mira.ts` (638 LOC) → `pipeline/views`,
-     `controls`, `retrieve`, `annotations`. Ref: 04·15. Mover-sin-cambiar-comportamiento, verificable con
-     las 504 pruebas — pero toca el PIPELINE de invocación del Botlet (núcleo del enforcement), hacer con
-     foco y verificando el enforcement, no solo el typecheck.
+   - ✅ **HECHO** (rama `feat/053`): `mira.ts` cortado 669 → 378 LOC (-43%) en 5 módulos: `annotations`
+     (enriquecimiento viz), `contract` (expectString/expectRows), `mira-types` (CtxValues/PagesNav/
+     ControlResolved neutrales), `controls` (applyCtx + resolveControlValue/Values), `views` (multi-vista/
+     drill). Los 378 restantes son la CLASE MiraBotlet (el pipeline `invoke` con métodos que usan `this`)
+     + createMiraBotlet — no extraíbles sin cambiar la estructura. Ref: 04·15. Behavior-preserving (504
+     tests intactas en cada paso, incluidas controls/multidrill que ejercitan applyCtx y la resolución).
    - ⏭️ **DIFERIDO con motivo**: dedup de CSS entre `themes/default.ts` y `themes/arbol.ts` (03·15). NO es
      dedup mecánico: comparten la ESTRUCTURA de selectores pero difieren en valores — `default` usa colores
      hardcodeados (look claro), `arbol` usa CSS vars (Gruvbox + hovers). Solo ~3 reglas de layout son
