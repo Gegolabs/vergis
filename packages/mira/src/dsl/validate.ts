@@ -48,7 +48,7 @@ export interface MiraSpec {
   data: Record<string, MiraDataset>
   quality: Record<string, unknown>
   delivery: {
-    render?: { format: string; target?: string; theme?: string }[]
+    render?: { format: string; target?: string; theme?: string; bom?: boolean }[]
     channels?: { type: string; capability: string; params?: Record<string, unknown>; schedule?: string }[]
     [k: string]: unknown
   }

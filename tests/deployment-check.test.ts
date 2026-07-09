@@ -65,6 +65,22 @@ describe('checkDeploymentConfig', () => {
     expect(checkDeploymentConfig({ VERGIS_ENGINE: 'fabric' })).toEqual([])
   })
 
+  it('D2 · sirve PIs (VERGIS_SPECS_DIR) sin VERGIS_GATE_SECRET → aviso de gate bypasseable', () => {
+    const f = checkDeploymentConfig({ VERGIS_SPECS_DIR: persistentDir })
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatchObject({ level: 'warn', env: 'VERGIS_GATE_SECRET' })
+    expect(f[0]?.message).toContain('X-Forwarded')
+  })
+
+  it('D2 · sirve PIs CON VERGIS_GATE_SECRET → sin aviso de gate', () => {
+    const f = checkDeploymentConfig({ VERGIS_SPECS_DIR: persistentDir, VERGIS_GATE_SECRET: 'proxy-token' })
+    expect(f).toEqual([])
+  })
+
+  it('D2 · sin VERGIS_SPECS_DIR no exige el gate secret (no todo despliegue sirve PIs)', () => {
+    expect(checkDeploymentConfig({ VERGIS_GATE_SECRET: '' })).toEqual([])
+  })
+
   it('reproduce el incidente del avatar: master-data sin montar + admin seed + OUT efímero', () => {
     const f = checkDeploymentConfig({
       VERGIS_MASTER_DATA: '/master-data/entidades.yaml', // no montado

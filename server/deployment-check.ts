@@ -66,6 +66,24 @@ export function checkDeploymentConfig(env: NodeJS.ProcessEnv = process.env): Con
     }
   }
 
+  // 1·bis) D2 · El gate confía en `X-Forwarded-*` SIN verificar (así entrega oauth2-proxy la identidad).
+  //    Si el server sirve PIs (VERGIS_SPECS_DIR) sin VERGIS_GATE_SECRET (A10), cualquier puerto alcanzable
+  //    SALTÁNDOSE el proxy puede inyectar `X-Forwarded-Groups`/`-Email` arbitrarios → claims a voluntad =
+  //    bypass total de RLS. El gate secret gatea TODO el server antes de cualquier handler (routes.ts).
+  //    WARN (no error): un despliegue donde oauth2-proxy es el ÚNICO ingress es válido; el secret es la
+  //    red de defensa en profundidad si esa topología se rompe. Ver supuesto D2 en NEXT.md.
+  if (has('VERGIS_SPECS_DIR') && !has('VERGIS_GATE_SECRET')) {
+    findings.push({
+      level: 'warn',
+      env: 'VERGIS_GATE_SECRET',
+      message:
+        'el server sirve PIs pero VERGIS_GATE_SECRET no está definido: el gate confía en los headers ' +
+        'X-Forwarded-* sin verificar. Si un puerto queda alcanzable sin pasar por oauth2-proxy, un cliente ' +
+        'puede inyectar claims arbitrarios (bypass de RLS). Asegura que el proxy sea el único ingress, o ' +
+        'define VERGIS_GATE_SECRET para exigir el token del proxy en cada request.',
+    })
+  }
+
   // 2) Gobierno pedido pero GovernanceStore EFÍMERO → WARN. Sin VERGIS_OUT (o bajo /tmp), el store de
   //    admins/dueños/auditoría no sobrevive un restart: el avatar de Administración reaparece vacío.
   if (GOVERNANCE_ENVS.some(has)) {

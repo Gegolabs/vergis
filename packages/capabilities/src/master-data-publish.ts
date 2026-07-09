@@ -17,7 +17,46 @@ import type { SqlConnectionProfile } from './execute-sql-dwh'
 /** Nombre de la tabla de proyección de una entidad (convención `__replica`). `id` validado → seguro. */
 export const replicaTable = (entity: MasterDataEntity): string => `dbo.md_${entity.id}__replica`
 
-const ddlType = (c: MasterDataColumn): string => (c.type === 'string' ? 'VARCHAR(400)' : c.type === 'int' ? 'BIGINT' : 'BIT')
+/** Tabla STAGING de la publicación (`__replica_new`): se construye y puebla acá, luego swap a la viva. */
+export const replicaStagingTable = (entity: MasterDataEntity): string => `dbo.md_${entity.id}__replica_new`
+
+// NVARCHAR (no VARCHAR): la data maestra puede traer acentos/no-Latin (nombres de socios, etc.). VARCHAR
+// bajo una collation Latin los mutila; NVARCHAR (Unicode) los preserva. Igual en el bind y en el fn.
+const ddlType = (c: MasterDataColumn): string => (c.type === 'string' ? 'NVARCHAR(400)' : c.type === 'int' ? 'BIGINT' : 'BIT')
+
+/**
+ * Plan de publicación ATÓMICO (staging + swap) — puro y testeable, sin motor. El `publish()` clásico hacía
+ * DROP TABLE de la réplica VIVA y LUEGO el INSERT fila-a-fila: si el INSERT fallaba a mitad, la réplica
+ * quedaba destruida/parcial para TODOS los PIs consumidores (outage). Acá se construye y puebla una tabla
+ * `__replica_new`, y solo cuando está lista se hace el swap (drop de la vieja + `sp_rename`), recreando la
+ * policy allow-all sobre el nombre vivo. El tramo destructivo es breve y ocurre DESPUÉS de tener los datos.
+ */
+export function masterDataPublishPlan(
+  entity: MasterDataEntity,
+  consumerPrincipals: string[] = [],
+): { staging: string; live: string; columns: string[]; buildStaging: string[]; swap: string[] } {
+  const live = replicaTable(entity) // dbo.md_<id>__replica
+  const staging = replicaStagingTable(entity) // dbo.md_<id>__replica_new
+  const bare = live.replace(/^dbo\./, '')
+  const pk = pkColumn(entity)
+  const columns = entity.columns.map((c) => c.name)
+  const colDdl = entity.columns.map((c) => `${c.name} ${ddlType(c)}`).join(', ')
+  const buildStaging = [
+    `DROP TABLE IF EXISTS ${staging};`, // limpia un staging de una corrida abortada previa
+    `CREATE TABLE ${staging} (${colDdl});`,
+  ]
+  const swap = [
+    // El DROP de policy+función va ANTES del DROP TABLE (dependencia de SCHEMABINDING sobre la tabla viva).
+    `DROP SECURITY POLICY IF EXISTS [dbo].[secpol_${bare}];`,
+    `DROP FUNCTION IF EXISTS [dbo].[fn_pol_${bare}];`,
+    `DROP TABLE IF EXISTS ${live};`,
+    `EXEC sp_rename '${staging}', '${bare}';`, // 2º arg = nuevo nombre del objeto SIN schema
+    `CREATE FUNCTION [dbo].[fn_pol_${bare}](@c NVARCHAR(400)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`,
+    `CREATE SECURITY POLICY [dbo].[secpol_${bare}] ADD FILTER PREDICATE [dbo].[fn_pol_${bare}](${pk.name}) ON ${live} WITH (STATE = ON);`,
+    ...consumerPrincipals.map((p) => `GRANT SELECT ON ${live} TO [${p.replace(/]/g, ']]')}];`),
+  ]
+  return { staging, live, columns, buildStaging, swap }
+}
 
 export interface PublisherTarget {
   /** database_ref del store consumidor (debe existir en VERGIS_CONNECTIONS). */
@@ -64,36 +103,27 @@ export function createDwhPublisher(profiles: Record<string, SqlConnectionProfile
 
   return {
     async publish(entity, rows, target) {
-      const t = replicaTable(entity)
-      const bare = t.replace(/^dbo\./, '')
-      const pk = pkColumn(entity)
+      const plan = masterDataPublishPlan(entity, target.consumerPrincipals ?? [])
       const pool = await getPool(target.database_ref)
-      // 1) (re)crear la réplica
-      await pool.request().batch(`DROP SECURITY POLICY IF EXISTS [dbo].[secpol_${bare}];`)
-      await pool.request().batch(`DROP FUNCTION IF EXISTS [dbo].[fn_pol_${bare}];`)
-      await pool.request().batch(`DROP TABLE IF EXISTS ${t};`)
-      const colDdl = entity.columns.map((c) => `${c.name} ${ddlType(c)}`).join(', ')
-      await pool.request().batch(`CREATE TABLE ${t} (${colDdl});`)
-      // 2) insertar filas (bindeadas)
-      const names = entity.columns.map((c) => c.name)
+      // 1) construir la STAGING (la réplica VIVA sigue intacta y sirviendo).
+      for (const stmt of plan.buildStaging) await pool.request().batch(stmt)
+      // 2) poblar la staging con las filas (bindeadas). Es el tramo lento/propenso a fallar — si revienta
+      //    acá, la réplica viva NO se tocó: los PIs consumidores siguen viendo los datos anteriores.
+      const names = plan.columns
       for (const r of rows) {
         const rq = pool.request()
         entity.columns.forEach((c, i) => {
           const v = r[c.name]
-          if (v == null) rq.input(`p${i}`, c.type === 'string' ? sql.VarChar : c.type === 'int' ? sql.BigInt : sql.Bit, null)
+          if (v == null) rq.input(`p${i}`, c.type === 'string' ? sql.NVarChar : c.type === 'int' ? sql.BigInt : sql.Bit, null)
           else if (c.type === 'bool') rq.input(`p${i}`, sql.Bit, v ? 1 : 0)
           else if (c.type === 'int') rq.input(`p${i}`, sql.BigInt, Number(v))
-          else rq.input(`p${i}`, sql.VarChar, String(v))
+          else rq.input(`p${i}`, sql.NVarChar, String(v))
         })
-        await rq.query(`INSERT INTO ${t} (${names.join(',')}) VALUES (${names.map((_, i) => '@p' + i).join(',')})`)
+        await rq.query(`INSERT INTO ${plan.staging} (${names.join(',')}) VALUES (${names.map((_, i) => '@p' + i).join(',')})`)
       }
-      // 3) SECURITY POLICY allow-all (gate fail-closed; público gobernado)
-      await pool.request().batch(`CREATE FUNCTION [dbo].[fn_pol_${bare}](@c VARCHAR(400)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`)
-      await pool.request().batch(`CREATE SECURITY POLICY [dbo].[secpol_${bare}] ADD FILTER PREDICATE [dbo].[fn_pol_${bare}](${pk.name}) ON ${t} WITH (STATE = ON);`)
-      // 4) grants RO: la réplica es read-only para los consumidores (el publicador, dueño, la escribe).
-      for (const principal of target.consumerPrincipals ?? []) {
-        await pool.request().batch(`GRANT SELECT ON ${t} TO [${principal.replace(/]/g, ']]')}];`)
-      }
+      // 3) SWAP: recién ahora se toca la réplica viva (drop de la vieja + sp_rename de la staging + policy
+      //    allow-all recreada). Tramo breve y con los datos ya listos.
+      for (const stmt of plan.swap) await pool.request().batch(stmt)
     },
     async close() {
       for (const p of pools.values()) {

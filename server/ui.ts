@@ -6,6 +6,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHmac } from 'node:crypto'
 import { escapeHtml } from '@vergis/capabilities'
+import { constantTimeEqual } from './annotations'
 
 /** CSS del avatar de identidad (menú arriba-derecha). Compartido por las superficies de admin y el
  * catálogo, para que ambas usen el mismo marco. Referencia las mismas CSS vars (--card/--accent/…). */
@@ -128,7 +129,7 @@ export function csrfFactory(secret: string): (email: string) => string {
   return (email: string) => createHmac('sha256', secret).update(`vergis-csrf|${email}`).digest('hex').slice(0, 24)
 }
 export function requireCsrf(f: Record<string, string>, token: string): void {
-  if ((f['_csrf'] ?? '') !== token) throw new CsrfError('Token de formulario inválido (recarga la página).')
+  if (!constantTimeEqual(f['_csrf'] ?? '', token)) throw new CsrfError('Token de formulario inválido (recarga la página).')
 }
 
 export function readForm(req: IncomingMessage, limit = 256 * 1024): Promise<Record<string, string>> {
