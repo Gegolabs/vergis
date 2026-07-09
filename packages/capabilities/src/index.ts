@@ -39,7 +39,7 @@ export {
   MasterDataConflict,
 } from './master-data-store'
 export type { MasterDataStore, MasterDataRow } from './master-data-store'
-export { createDwhPublisher, replicaTable } from './master-data-publish'
+export { createDwhPublisher, replicaTable, replicaStagingTable, masterDataPublishPlan } from './master-data-publish'
 export type { Publisher, PublisherTarget } from './master-data-publish'
 export { parseDomainsConfig, canManageDomain, manageableDomains } from './domain'
 export type { DomainDecl } from './domain'
