@@ -98,13 +98,20 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
    motor a mano — un error de scope acá rompe el enforcement RLS en silencio y los tests no lo atrapan.**
 
 **B · Cortes de archivos** (mover sin cambiar comportamiento):
-   - `packages/capabilities/src/render-html-piece.ts` (~950 LOC) → `piece-css`, `format`, `render-chart`,
-     `render-table`, `tray`, `interactive-script`, `piece-types`. Ref: 03·13.
-   - `packages/mira/src/mira.ts` (638 LOC) → `pipeline/views`, `controls`, `retrieve`, `annotations`.
-     Ref: 04·15.
-   - `packages/policy/src/codegen-common.ts` — extraer `SAFE_IDENT`/`ident`/`settingForClaim`/
-     `SETTINGS_PREFIX` duplicados entre `clickhouse.ts` y `fabric.ts`. Ref: 04·16.
-   - Dedup de CSS entre `themes/default.ts` y `themes/arbol.ts` (base.css compartido). Ref: 03·15.
+   - ✅ **HECHO** (rama `feat/053`): `codegen-common.ts` extraído (SAFE_IDENT/ident/settingForClaim/
+     SETTINGS_PREFIX unificados entre clickhouse.ts y fabric.ts; clickhouse-store reusa el `ident`
+     compartido — 3ª copia cerrada). Ref: 04·16. + `piece-css.ts` extraído de render-html-piece
+     (TABLE_INTERACTIVE_CSS + TRAY_CSS, ~97 LOC; el archivo bajó 965 → 862).
+   - ⏳ **PENDIENTE** (pase dedicado, más grande): completar el corte de `render-html-piece.ts` (862 LOC
+     restantes → `format`, `render-chart`, `render-table`, `tray`, `interactive-script`, `piece-types`).
+     Ref: 03·13. Y `packages/mira/src/mira.ts` (638 LOC) → `pipeline/views`, `controls`, `retrieve`,
+     `annotations`. Ref: 04·15. Ambos son mover-sin-cambiar-comportamiento, verificables con las 504
+     pruebas — pero con churn de imports, hacer con foco.
+   - ⏭️ **DIFERIDO con motivo**: dedup de CSS entre `themes/default.ts` y `themes/arbol.ts` (03·15). NO es
+     dedup mecánico: comparten la ESTRUCTURA de selectores pero difieren en valores — `default` usa colores
+     hardcodeados (look claro), `arbol` usa CSS vars (Gruvbox + hovers). Solo ~3 reglas de layout son
+     byte-idénticas; una base.css real exige convertir `default` a variables, lo que CAMBIA el output — es
+     decisión de diseño, no un movimiento seguro.
 
 **C · Runtime embebido browser-only** (NO testeable behavioralmente; el test `new Function(
    TABLE_RUNTIME_SOURCE)` solo valida sintaxis. Editar con cuidado):
