@@ -83,13 +83,16 @@ Los 4 ítems implementados con verificación por la suite (el SQL/plan se testea
 
 ### Ola 3 · Estructura, runtime embebido y tooling — pase dedicado / `npm install`
 
-**A · El wrap final de `createApp()`** (lo más grande; ALTO RIESGO). Envolver el bootstrap top-level de
-   `server/serve-rls.ts` (~600 líneas: setup de engine, annStore, governance/admin, `listen`) en
-   `async function createApp(config): Promise<App>` + un `server/main.ts` que hace el `listen`, para que
-   `serve-rls.ts` sea importable sin side-effects. Los 7 módulos ya están extraídos/usados; esto es el
-   re-indentado del resto. Diseño completo en `work/001/02-refactor-createapp.md`. **Recomendación:
-   escribir primero tests de integración de la composición (con el server levantable) y hacerlo con el
-   motor a mano — un error de scope acá rompe el enforcement RLS en silencio y los tests no lo atrapan.**
+**A · El wrap final de `createApp()`** — ⏸️ **ACEPTADO EL ESTADO ACTUAL como culminación** (recomendación
+   del propio diseño, `work/001/02-refactor-createapp.md` §"Estado FINAL"). Los 7 módulos ya están
+   extraídos, testeados Y usados por serve-rls; TODOS los fixes bloqueados (A11/A10/A15/healthz) ya
+   aterrizaron. Lo único que resta es el re-indentado MECÁNICO de ~600 líneas del bootstrap en
+   `createApp()` + `main.ts`. **NO hacerlo como edición autónoma:** (1) el cyber safeguard impide LEER
+   `serve-rls.ts` con Read (solo grep por Bash), (2) sin motor no se verifica el enforcement end-to-end,
+   (3) un error de scope rompe RLS en silencio y los tests no lo atrapan. El valor marginal (testear la
+   composición completa) es bajo porque cada pieza ya está testeada. Merece un pase dedicado con el server
+   corriendo. **Igual criterio para los BAJA que tocan serve-rls** (micro-caché de gobierno, migrar el
+   resto de env a `config`): requieren editar el monolito bajo el safeguard → pase dedicado.
 
 **B · Cortes de archivos** (mover sin cambiar comportamiento):
    - ✅ **HECHO** (rama `feat/053`): `codegen-common.ts` extraído (SAFE_IDENT/ident/settingForClaim/
@@ -114,10 +117,14 @@ Los 4 ítems implementados con verificación por la suite (el SQL/plan se testea
 
 **C · Runtime embebido browser-only** (NO testeable behavioralmente; el test `new Function(
    TABLE_RUNTIME_SOURCE)` solo valida sintaxis. Editar con cuidado):
-   - **Debounce** de la búsqueda global — `packages/capabilities/src/table-runtime.ts`, el handler
-     `input` del string embebido (~150ms). Ref: 03·5.
-   - **Colisión de "vistas guardadas"** con 2 tablas en la misma página — `SAVED_VIEWS_JS` /
-     `vergisSavedViews`: namespacing de localStorage por tabla + `#vergis-count`. Ref: 03·6.
+   - ✅ **HECHO** (rama `feat/053`, commit 74cbfee): **debounce** ~150ms de la búsqueda global de tabla
+     (`table-runtime.ts`, handler `input`). Patrón estándar clearTimeout/setTimeout; verificado por
+     sintaxis + 44 tests del render interactivo. Ref: 03·5.
+   - ⏭️ **DIFERIDA con motivo**: **colisión de "vistas guardadas"** con 2 tablas en la misma página
+     (`SAVED_VIEWS_JS`/`vergisSavedViews`). Ref: 03·6. NO es solo namespacing de localStorage: la gaveta
+     es ÚNICA por documento (un solo `.tray-saved`), así que dos tablas comparten el panel — el 2º
+     `vergisSavedViews` sobrescribe el del 1º. Fix correcto = panel por-tabla o selector, decisión de
+     diseño browser-only, no verificable sin un PI de 2 tablas en el navegador. Pase dedicado con browser.
 
 **D · Tooling** (`npm install` SÍ estuvo disponible):
    - ✅ **HECHO** (rama `chore/054-vitest-v4`): subido `vitest` v2→**v4.1.10** — el árbol vite/vite-node de
@@ -179,9 +186,28 @@ Los 4 ítems implementados con verificación por la suite (el SQL/plan se testea
 
 ---
 
-## 4 · Sugerencia de orden
+## 4 · Estado final del segundo ciclo (2026-07-08)
 
-Sin motor ni `npm install` disponibles: arrancar por la **Ola 3·E** (cola de BAJAs testeables — alto
-retorno, bajo riesgo, verificable con el loop) y la **Ola 4·1** (confirmar D1/D2, gratis). La Ola 2 y la
-Ola 3·D esperan motor/install. La Ola 3·A (wrap createApp) es la más riesgosa — hacerla con el server
-levantable y tests de integración primero, no a ciegas.
+**Prácticamente todo lo que se puede hacer con seguridad EN CÓDIGO está hecho** (ramas `feat/053` +
+`chore/054`, 512 tests, 0 vulns). Resumen:
+
+- **Ola 1** (2º ciclo) · ✅ hecha (sesión anterior).
+- **Ola 2** (datos sobre motor vivo, 4 ítems) · ✅ implementada + testeada por la suite. ⚠️ **Falta
+  verificación en vivo** contra Fabric/ClickHouse antes de confiar en producción (2·3 tombstone SÍ está
+  verificado end-to-end con SQLite; 2·1/2·2/2·4 necesitan el motor real; 2·4 es opt-in default-off).
+- **Ola 3·B** (cortes de archivos) · ✅ hecha: render-html-piece 965→370, mira.ts 669→378, codegen-common.
+  Diferido: dedup theme CSS (no mecánico).
+- **Ola 3·C** · ✅ debounce; diferida la colisión de vistas guardadas (browser-only, arquitectónica).
+- **Ola 3·D** (tooling) · ✅ vitest v4 (audit 0). Pendiente opcional: eslint, coverage,
+  `noUncheckedIndexedAccess` (aflora errores por todo el codebase — su propio mini-proyecto).
+- **Ola 3·E** (BAJAs) · ✅ 5 hechas; el resto diferido con motivo (a11y browser-only, admin regex no
+  mecánico, appendFileSync sync-correcto, schema/validate fuzzy).
+- **Ola 3·A** (wrap createApp) · ⏸️ aceptado el estado actual como culminación (recomendación del diseño).
+  Lo que resta toca `serve-rls.ts` bajo el cyber safeguard → pase dedicado con server corriendo.
+- **Ola 4** · D1 documentado, D2 abordado (chequeo de arranque), D3/D4 arquitectónicos. Lo demás es
+  **ops externo** (instalar la app de Renovate, redesplegar la VM, verificar charts vega en un PI vivo) —
+  no es código y necesita accesos fuera de este entorno.
+
+**Lo que queda son tres categorías, todas fuera del alcance de una edición segura acá:** (a) verificación
+en vivo de la Ola 2 contra los motores; (b) el pase dedicado de Ola 3·A con el server levantable; (c) los
+ops de Ola 4 (Renovate/VM/deploy). El resto es opcional (tooling 3·D) o diferido con motivo documentado.
