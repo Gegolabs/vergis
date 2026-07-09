@@ -13,7 +13,7 @@
 // · botler/consumer (serve). El consumidor jamás escribe ni ve más que su policy.
 
 import type { Capability } from '@vergis/botler'
-import type { ClickHouseEnforcement } from '@vergis/policy'
+import { ident, type ClickHouseEnforcement } from '@vergis/policy'
 
 /** Conexión a ClickHouse con privilegio (admin para bootstrap, writer para ingesta). */
 export interface ChAdminConn {
@@ -46,23 +46,17 @@ async function chExec(conn: ChAdminConn, sql: string, opts: { json?: boolean } =
   return text.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>)
 }
 
-/** Identificadores seguros (db, tabla, columna, rol, usuario): evita inyección por nombre en el DDL/DML,
- *  que se construye por interpolación de string (ClickHouse HTTP no parametriza identificadores). Mismo
- *  patrón que el compilador `@vergis/policy` (Ola 3·B consolidará ambos en un `codegen-common`). */
-const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
-function assertSafeIdent(kind: string, value: string): string {
-  if (!SAFE_IDENT.test(value)) {
-    throw new Error(`clickhouse-store: '${value}' no es un identificador seguro para ${kind} (esperado ${SAFE_IDENT}).`)
-  }
-  return value
-}
+// Los identificadores del store (db/tabla/columna/tipo/rol/usuario) entran al DDL/DML por interpolación
+// de string — el HTTP de ClickHouse no parametriza identificadores. Se validan con el MISMO `ident()` del
+// compilador `@vergis/policy` (codegen-common), única fuente del patrón de identificador seguro.
+
 /** Valida TODOS los identificadores del schema antes de que entren al DDL/DML por interpolación. */
 function assertSchemaIdents(schema: ChStoreSchema): void {
-  assertSafeIdent('database', schema.database)
-  assertSafeIdent('table', schema.table)
+  ident('database', schema.database)
+  ident('table', schema.table)
   for (const [name, type] of Object.entries(schema.columns)) {
-    assertSafeIdent('column', name)
-    assertSafeIdent('column-type', type)
+    ident('column', name)
+    ident('column-type', type)
   }
 }
 
@@ -95,8 +89,8 @@ export async function bootstrapClickHouse(
   enforcement: ClickHouseEnforcement | null,
   opts: BootstrapOptions = {},
 ): Promise<void> {
-  const role = assertSafeIdent('role', opts.consumerRole ?? 'consumer_role')
-  const user = assertSafeIdent('user', opts.consumerUser ?? 'botler')
+  const role = ident('role', opts.consumerRole ?? 'consumer_role')
+  const user = ident('user', opts.consumerUser ?? 'botler')
   assertSchemaIdents(schema)
   const cols = Object.entries(schema.columns).map(([n, t]) => `${n} ${t}`).join(', ')
   const orderBy = Object.keys(schema.columns)[0] ?? 'tuple()'
