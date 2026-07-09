@@ -58,6 +58,14 @@ export interface FabricTarget {
   /** Columna a la que bindear el predicado allow-all de una policy PÚBLICA (la función la ignora).
    *  Requerida solo para `grant: all` (que no declara dimensión); para gobernadas se ignora. */
   bindColumn?: string
+  /**
+   * Envuelve `setupSQL` en una transacción (`SET XACT_ABORT ON; BEGIN TRANSACTION; … COMMIT;`) para que
+   * el DROP+CREATE sea ATÓMICO: el DDL toma locks Sch-M hasta el commit → una query concurrente BLOQUEA
+   * en vez de ver la tabla SIN policy (ventana sin RLS) entre el DROP y el CREATE. Default `false` =
+   * sentencias sueltas (contrato clásico). **Activar SOLO si el aplicador corre todas las sentencias de
+   * `setupSQL` en LA MISMA sesión y en orden** (una transacción T-SQL abarca batches de una sesión; si el
+   * aplicador usa conexión-por-sentencia, el BEGIN quedaría sin COMMIT y la instalación se revertiría). */
+  transactional?: boolean
 }
 
 export interface FabricEnforcement {
@@ -138,6 +146,10 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
     `DROP SECURITY POLICY IF EXISTS ${q(polName)};`,
     `DROP FUNCTION IF EXISTS ${q(fnName)};`,
   ]
+  // Envuelve el DROP+CREATE en una transacción cuando el target lo pide (ver FabricTarget.transactional):
+  // cierra la ventana sin RLS entre el DROP y el CREATE. Off por default → contrato de sentencias sueltas.
+  const wrapSetup = (stmts: string[]): string[] =>
+    target.transactional ? ['SET XACT_ABORT ON;\nBEGIN TRANSACTION;', ...stmts, 'COMMIT;'] : stmts
 
   // PÚBLICO (grant: all) → artefacto ALLOW-ALL: la policy EXISTE y permite TODA fila (función
   // SIN `WHERE`). Así "público" se manifiesta en el motor y "sin policy" = sin gobierno (no público).
@@ -163,7 +175,7 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
       `    ADD FILTER PREDICATE ${q(fnName)}(${bindCol}) ON ${qTable}\n    WITH (STATE = ON);`
     return {
       prefix: SETTINGS_PREFIX,
-      setupSQL: [...teardownSQL, createFunctionPub, createPolicyPub],
+      setupSQL: wrapSetup([...teardownSQL, createFunctionPub, createPolicyPub]),
       teardownSQL,
       injections: [], // pública: sin claim que inyectar
       policy,
@@ -197,7 +209,7 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
   return {
     prefix: SETTINGS_PREFIX,
     // Idempotente: tirar lo previo (policy antes que función por la dependencia de SCHEMABINDING) y recrear.
-    setupSQL: [...teardownSQL, createFunction, createPolicy],
+    setupSQL: wrapSetup([...teardownSQL, createFunction, createPolicy]),
     teardownSQL,
     injections: [...new Set(policy.predicates.map((p) => p.claim))].map((claim) => ({ setting: settingForClaim(claim), claim })),
     policy,
