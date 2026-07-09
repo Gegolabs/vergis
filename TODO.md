@@ -11,7 +11,7 @@ Pendientes del proyecto. Registro cronológico en `BITACORA.md`.
 
 Detalle y justificación en `docs/mejoras-diagnostico.md`:
 
-- [~] Refactor de los tres monolitos — **`serve-rls.ts` HECHO** (7 módulos extraídos+testeados+usados; falta solo el wrap final `createApp()`, ver NEXT.md · Ola 3·A). Pendientes: `render-html-piece.ts` (~950 LOC) y `mira.ts` (638 LOC) → NEXT.md · Ola 3·B
+- [x] Refactor de los tres monolitos — **HECHO**: `serve-rls.ts` (7 módulos, sesión 07-07; falta solo el wrap literal `createApp()`, ver NEXT.md · Ola 3·A, aceptado como culminación); `render-html-piece.ts` 965→370 LOC en 6 módulos y `mira.ts` 669→378 LOC en 5 módulos (sesión 07-08, ver NEXT.md · Ola 3·B). Todo behavior-preserving (512 tests)
 - [x] HMAC criptográfico en el gateo de anotaciones — **HECHO** (`server/annotations.ts`, HMAC + época de 4h, con tests adversariales · A15)
 - [ ] Aislamiento del render Vega en subproceso sin red ni filesystem (defensa en profundidad)
 - [x] Caché de discovery de specs — **HECHO** (memoizado + invalidado on-change en `server/discovery.ts` vía `createCachedScanner`)
