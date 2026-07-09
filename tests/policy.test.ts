@@ -243,6 +243,20 @@ describe('Compilador de policy · codegen Fabric (predicado TVF + SECURITY POLIC
     ])
     expect(enf.injections).toEqual([{ setting: 'vergis_claim_groups', claim: 'groups' }])
   })
+  it('transactional (opt-in, Ola 2·4) → envuelve setupSQL en SET XACT_ABORT ON + BEGIN/COMMIT; el default NO', () => {
+    const plain = compileFabric(parseAudience(QW04_AUDIENCE), FAB_TARGET)!
+    // Default: sin envoltura — sentencias sueltas (contrato clásico).
+    expect(plain.setupSQL[0]).toBe(`DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`)
+    expect(plain.setupSQL.join('\n')).not.toContain('BEGIN TRANSACTION')
+    // Opt-in: DROP+CREATE atómico (cierra la ventana sin RLS entre el DROP y el CREATE).
+    const tx = compileFabric(parseAudience(QW04_AUDIENCE), { ...FAB_TARGET, transactional: true })!
+    expect(tx.setupSQL[0]).toBe('SET XACT_ABORT ON;\nBEGIN TRANSACTION;')
+    expect(tx.setupSQL[tx.setupSQL.length - 1]).toBe('COMMIT;')
+    // El DDL del medio es el mismo, solo desplazado un índice por el BEGIN.
+    expect(tx.setupSQL[1]).toBe(`DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`)
+    expect(tx.setupSQL[4]).toContain('CREATE SECURITY POLICY [dbo].[secpol_areas]')
+    expect(tx.teardownSQL).toEqual(plain.teardownSQL) // teardown NO se envuelve
+  })
   it('PI público (grant: all) → SECURITY POLICY allow-all (función sin WHERE), no null', () => {
     const enf = compilePolicyToFabric({ rls: 'public' }, { ...FAB_TARGET, bindColumn: 'area' }, BIND)
     const setup = enf.setupSQL.join('\n')
