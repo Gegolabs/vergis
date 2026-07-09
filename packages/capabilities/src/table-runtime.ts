@@ -329,7 +329,9 @@ function vtBootstrap(root){
     trayWrap.appendChild(sec);
     gs=sec.querySelector('.vt-global-search'); countEl=sec.querySelector('.vt-count');
     levelsEl=sec.querySelector('.vt-group-levels'); addSel=sec.querySelector('.vt-group-add'); groupActions=sec.querySelector('.vt-group-actions');
-    gs.addEventListener('input', function(){ state.globalSearch=gs.value; render(); });
+    // Debounce (~150ms): en una tabla grande, re-renderizar en CADA tecla trababa el input. Se acumulan
+    // las pulsaciones y se renderiza una vez que el usuario pausa (el value del input sigue instantáneo).
+    var gsTimer; gs.addEventListener('input', function(){ clearTimeout(gsTimer); gsTimer=setTimeout(function(){ state.globalSearch=gs.value; render(); }, 150); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
     if(addSel){
       addSel.addEventListener('change', function(){ if(!addSel.value) return; state.groupLevels.push(addSel.value); state.collapsed={}; renderGroupUI(); render(); });
