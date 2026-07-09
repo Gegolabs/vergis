@@ -63,29 +63,23 @@ sustantivo + **Ola 1 del segundo ciclo** → todo en `main`. Highlights:
 
 ## 3 · PENDIENTE — segundo ciclo
 
-### Ola 2 · Datos sobre motor vivo — ⚠️ REQUIERE Fabric/ClickHouse para verificar
+### Ola 2 · Datos sobre motor vivo — ✅ HECHA (rama `feat/053`); ⚠️ FALTA VERIFICACIÓN EN VIVO
 
-No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano (o entregar como diseño).
+Los 4 ítems implementados con verificación por la suite (el SQL/plan se testea sin motor). Cada uno
+**cambia SQL/DDL de producción** → hay que verificarlo contra el motor real antes de confiar en producción.
 
-1. **`master-data-publish` con staging + swap** — `packages/capabilities/src/master-data-publish.ts`,
-   `publish()`. Hoy es DROP POLICY→DROP FN→DROP TABLE→CREATE→INSERT fila-a-fila→CREATE POLICY, **sin
-   staging**: un fallo a mitad deja la réplica rota para TODOS los PIs consumidores. Fix: publicar a
-   `md_<id>__replica_new`, poblar, y swap (`sp_rename` en transacción). Bonus: `NVARCHAR(400)` en vez
-   de `VarChar` (hoy pierde caracteres no-Latin). Ref: 02·8. **Verificar contra Fabric.**
-2. **CH `TRUNCATE+INSERT` → `EXCHANGE TABLES`** — `packages/capabilities/src/clickhouse-store.ts`,
-   `createIngestClickHouse`. Hoy TRUNCATE luego INSERT: ventana de 0 filas + si el INSERT falla el
-   store queda vacío servido como verdad. Fix: ingestar a `<tabla>_staging` + `EXCHANGE TABLES`
-   (atómico en CH). Ref: 02·10/14. **Verificar contra ClickHouse.**
-3. **Semilla re-aplicada en cada `open()`** — `packages/capabilities/src/governance-store.ts`, el
-   sembrado en `open()`. Miembros de grupos semilla borrados con `removeMember` reaparecen al restart
-   (`ON CONFLICT DO NOTHING` re-inserta). Fix: marcar miembros semilla como no-removibles, o insertar
-   solo al crear el grupo por 1ª vez. Documentar precedencia. Ref: 02·10.
-4. **Fabric setup en transacción** — `packages/policy/src/fabric.ts`, `compileFabric` → `setupSQL`.
-   Hoy `[DROP policy, DROP fn, CREATE fn, CREATE policy]` deja una **ventana sin RLS** entre el DROP y
-   el CREATE (query concurrente ve todas las filas). Fix: envolver en transacción o patrón
-   `ALTER`/create-new-then-swap. **OJO:** cambia la estructura de `setupSQL` → hay que actualizar las
-   aserciones exactas de DDL en `tests/policy.test.ts` y `tests/relation-hierarchy.test.ts`. Ref: 04·7.
-   **Verificar contra Fabric.**
+1. ✅ **`master-data-publish` con staging + swap** (commit 4d6c35f). `masterDataPublishPlan` (puro,
+   testeado) construye/puebla `__replica_new` y swapea con `sp_rename` recién cuando está lista — el
+   INSERT lento ya no destruye la réplica viva. Bonus `NVARCHAR(400)` aplicado. **Verificar contra
+   Fabric:** `sp_rename` + `CREATE SECURITY POLICY` en el aplicador real.
+2. ✅ **CH staging + `EXCHANGE TABLES`** (commit f122a18). Ingesta a `<tabla>_staging` + swap atómico;
+   +2 tests con stub de fetch. **Verificar contra ClickHouse:** requiere Atomic engine (default).
+3. ✅ **Semilla no resucita miembros removidos** (commit 34433d5). Tombstone `mira_group_seed_removed`;
+   totalmente testeado con SQLite (sin motor externo) — este está VERIFICADO end-to-end.
+4. ✅ **Fabric setup transaccional OPT-IN** (commit f1a3334). `FabricTarget.transactional` envuelve
+   `setupSQL` en `SET XACT_ABORT ON; BEGIN TRAN … COMMIT`. **Default OFF** (contrato clásico intacto):
+   NO se cambió a ciegas porque el aplicador es out-of-band — con conexión-por-sentencia el BEGIN
+   quedaría sin COMMIT. **Verificar contra Fabric** que el aplicador corre todo en una sesión, y activar.
 
 ### Ola 3 · Estructura, runtime embebido y tooling — pase dedicado / `npm install`
 
