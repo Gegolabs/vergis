@@ -5,9 +5,11 @@ import { renderHtmlPiece } from './render-html-piece'
 import { staticData } from './static-data'
 
 export { staticData } from './static-data'
-export { renderHtmlPiece, TABLE_SSR_MAX_ROWS, CHART_MAX_BARS, chartCacheStats } from './render-html-piece'
+export { renderHtmlPiece } from './render-html-piece'
+export { CHART_MAX_BARS, chartCacheStats } from './render-chart'
+export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
-export type { ResolvedNode, TableColumn } from './render-html-piece'
+export type { ResolvedNode, TableColumn } from './piece-types'
 export {
   TABLE_RUNTIME_SOURCE,
   vtNorm,
@@ -37,7 +39,7 @@ export {
   MasterDataConflict,
 } from './master-data-store'
 export type { MasterDataStore, MasterDataRow } from './master-data-store'
-export { createDwhPublisher, replicaTable } from './master-data-publish'
+export { createDwhPublisher, replicaTable, replicaStagingTable, masterDataPublishPlan } from './master-data-publish'
 export type { Publisher, PublisherTarget } from './master-data-publish'
 export { parseDomainsConfig, canManageDomain, manageableDomains } from './domain'
 export type { DomainDecl } from './domain'

@@ -6,6 +6,11 @@ import {
   type InvocationContext,
 } from '@vergis/botler'
 import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
+import { applyAnnotations, type AnnotationContext } from './annotations'
+import { expectString, expectRows } from './contract'
+import type { CtxValues, PagesNav, ControlResolved } from './mira-types'
+import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues } from './controls'
+import { resolveActiveView, normalizeCtx, watermarkDatasetOf, isMultiControl, asSingle } from './views'
 import { parseSpec } from './dsl/parse'
 import { collectDataRefs, collectDatasetKeys, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
 import { checkFreshness, type FreshnessVerdict } from './freshness'
@@ -32,28 +37,6 @@ export interface MiraOutput {
   /** Artefactos producidos: los publicados por un canal llevan `path`; los generados en memoria
    *  (p.ej. el CSV de `delivery.render`) llevan `content`. */
   artifacts: { format: string; path?: string; content?: string }[]
-}
-
-/** Contexto de navegación (drill/controles): un valor por clave, o VARIOS (control multi-select). */
-export type CtxValues = Record<string, string | string[]>
-
-/** Barra de navegación de un PI multi-vista (páginas navegables + la activa). */
-export interface PagesNav {
-  items: { id: string; title: string }[]
-  active: string
-}
-
-/** Control de cabecera ya resuelto: opciones + valor(es) seleccionado(s). Viaja al render. */
-export interface ControlResolved {
-  id: string
-  label: string
-  options: string[]
-  /** Valor para display (multi: los valores unidos por ", "). */
-  value: string
-  /** Solo multi-select: los valores seleccionados. */
-  values?: string[]
-  /** `true` si el control es multi-select (`single: false` en el DSL). */
-  multi?: boolean
 }
 
 /**
@@ -93,6 +76,8 @@ export class MiraBotlet implements Botlet {
     let { activePiece, datasetNames } = view
     const pagesNav = view.pagesNav
     const isMulti = pagesNav != null
+    // Enlace a una página inexistente: se sirvió la 1ª en su lugar. Se audita en vez de fallar en silencio.
+    if (view.pageUnknown) host.log({ type: 'mira-page-unknown', botletId: this.id, requested: pageParam, served: pagesNav?.active })
 
     // 3 · Recuperación de datos (vía Botler.capability_call, nunca acceso directo)
     const results: Record<string, DatasetResult> = {}
@@ -181,7 +166,7 @@ export class MiraBotlet implements Botlet {
       if (r.format === 'csv') {
         const rendered = await host.capabilityCall(
           'render-csv-piece',
-          { piece: resolved, title: spec.identity.display_name },
+          { piece: resolved, title: spec.identity.display_name, bom: r.bom },
           identity,
         )
         // El contenido queda EN MEMORIA (artifacts[].content); se escribe a disco solo si un canal
@@ -391,273 +376,3 @@ export function createMiraBotlet(specText: string, opts: MiraOptions): MiraBotle
   return new MiraBotlet(spec, opts)
 }
 
-/**
- * Contexto de anotaciones que el llamador (server) inyecta vía `params.annotations`. Mira solo
- * fusiona la columna en la pieza; el origen del dato y la firma del token los provee `resolve`.
- */
-export interface AnnotationContext {
-  /** Identificador del PI (clave de partición de las anotaciones). */
-  piId: string
-  /** Etiqueta de la columna. Default "Anotaciones". */
-  label?: string
-  /** Endpoint POST para escribir una anotación. */
-  endpoint: string
-  /** Campo-clave del registro. Default: la primera columna de la tabla. */
-  keyField?: string
-  /** Dataset de la tabla destino. Si viene, la anotación se aplica a la primera tabla cuyo
-   *  `dataset` coincida; sin él, a la primera tabla del árbol (DFS, comportamiento clásico). */
-  dataset?: string
-  /** Dadas las claves visibles, devuelve {clave → {valor compartido, token de escritura firmado}}. */
-  resolve(keys: string[]): Promise<Record<string, { value: string; token: string }>>
-}
-
-const ANN_VALUE_FIELD = '__ann'
-const ANN_TOKEN_FIELD = '__anntok'
-
-/** Encuentra la tabla destino en el árbol (DFS): la primera cuyo `dataset` coincida, o la primera. */
-function findTargetTable(node: ResolvedNode, dataset?: string): ResolvedNode | undefined {
-  if (node.type === 'table' && (!dataset || node.dataset === dataset)) return node
-  for (const c of node.elements ?? []) {
-    const f = findTargetTable(c, dataset)
-    if (f) return f
-  }
-  return undefined
-}
-
-/** Fusiona la columna de anotación en la tabla destino (por dataset o la primera), por clave de registro. */
-async function applyAnnotations(piece: ResolvedNode, ann: AnnotationContext): Promise<void> {
-  const table = findTargetTable(piece, ann.dataset)
-  if (!table || !table.columnsSpec || table.columnsSpec.length === 0) return
-  // ANTI-ALIASING: `composePiece` copia los ARREGLOS de filas pero no los OBJETOS-fila — mutarlos acá
-  // contaminaría con `__ann`/`__anntok` cualquier otro payload que comparta las filas (p.ej.
-  // `interactive.datasets`) y, con el data-cache activo, quedaría escrito DENTRO del valor cacheado.
-  // Se reemplazan las filas de la tabla destino por copias superficiales antes de mutar.
-  const rows = (table.rows ?? []).map((r) => ({ ...r }))
-  table.rows = rows
-  const keyField = ann.keyField ?? table.columnsSpec[0].field
-  const keys = [...new Set(rows.map((r) => String(r[keyField] ?? '')))]
-  const map = await ann.resolve(keys)
-  for (const r of rows) {
-    const k = String(r[keyField] ?? '')
-    r[ANN_VALUE_FIELD] = map[k]?.value ?? ''
-    r[ANN_TOKEN_FIELD] = map[k]?.token ?? ''
-  }
-  table.columnsSpec.push({ field: ANN_VALUE_FIELD, label: ann.label ?? 'Anotaciones', annotation: true })
-  table.annotation = {
-    valueField: ANN_VALUE_FIELD,
-    tokenField: ANN_TOKEN_FIELD,
-    keyField,
-    endpoint: ann.endpoint,
-    label: ann.label ?? 'Anotaciones',
-  }
-}
-
-// --- Multi-vista + drill-through (helpers) ----------------------------------
-
-/**
- * Resuelve la VISTA ACTIVA de un spec (paso puro, testeable): en multi-vista se elige la página por
- * `pageParam` (default: la 1ª) y se devuelven SOLO sus datasets; en una vista, la pieza + todo `data`.
- * Las páginas-destino de drill (declaran `context`) NO van en la nav por defecto — aparecen "bajo
- * demanda", únicamente cuando son la vista activa. Una vista de detalle alcanzada SIN su contexto
- * (acceso directo, no por drill) devuelve una pieza-guía sin datasets (evita volcar todo).
- */
-export function resolveActiveView(
-  spec: MiraSpec,
-  pageParam: string | undefined,
-  ctxValues: CtxValues,
-): { activePiece: Record<string, unknown>; pagesNav?: PagesNav; datasetNames: string[] } {
-  const isMulti = Array.isArray(spec.pages) && spec.pages.length > 0
-  if (!isMulti) {
-    return { activePiece: spec.piece as Record<string, unknown>, datasetNames: Object.keys(spec.data) }
-  }
-  const pages = spec.pages!
-  const active = pages.find((p) => p.id === pageParam) ?? pages[0]
-  const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
-  const pagesNav: PagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
-  const missing = (active.context ?? []).filter((c) => !ctxValues[c])
-  if (missing.length > 0) {
-    return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [] }
-  }
-  return { activePiece: active.piece, pagesNav, datasetNames: uniqueDatasets(active.piece) }
-}
-
-/** ¿El control es multi-select? (`single: false` en el DSL; default single). */
-function isMultiControl(c: MiraControl): boolean {
-  return c.single === false
-}
-
-/** Normaliza el contexto del drill (`params.ctx`) a un mapa campo→valor(es). Un parámetro repetido en
- *  la URL (control multi-select) llega como arreglo; uno solo, como string (back-compat). */
-function normalizeCtx(raw: unknown): CtxValues {
-  if (!raw || typeof raw !== 'object') return {}
-  // Object.create(null): un param `__proto__` multi-valor (arreglo) asignado a un objeto literal
-  // corrompería el prototipo del mapa. Sin prototipo, `__proto__` es una clave normal.
-  const out = Object.create(null) as CtxValues
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (Array.isArray(v)) {
-      const list = v.filter((x) => x != null && x !== '').map(String)
-      if (list.length === 1) out[k] = list[0]
-      else if (list.length > 1) out[k] = list
-    } else if (v != null && v !== '') {
-      out[k] = String(v)
-    }
-  }
-  return out
-}
-
-/** Primer valor de una entrada de contexto (para consumidores single-value). */
-function asSingle(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v
-}
-
-/** Datasets (sin repetir) que una pieza referencia vía `data.<dataset>...`. */
-function uniqueDatasets(piece: Record<string, unknown>): string[] {
-  // Une los dos recolectores: referencias `data.<ds>.<campo>` y datasets pelados de agg.dataset /
-  // table.data / semaforo.data — así una página cuyo único uso de un dataset es vía `agg.dataset`
-  // igual lo recupera (antes salía KPI en 0 / tabla vacía).
-  return [...new Set([...collectDataRefs(piece), ...collectDatasetKeys(piece)].map((r) => r.split('.')[0]))]
-}
-
-/**
- * Dataset del que cuelga el `watermark_field` de la frescura GLOBAL (`quality.freshness`), o
- * `undefined` si no hay frescura declarada o está en `ignore`. Se recupera siempre para que
- * `checkFreshness` resuelva el watermark aun cuando el dataset viva en otra página (multi-vista).
- */
-function watermarkDatasetOf(spec: MiraSpec): string | undefined {
-  const f = (spec.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
-  if (!f || f['source_watermark'] === 'ignore') return undefined
-  // `resolvePath` acepta el prefijo `data.` en watermark_field — quitarlo acá también, o un spec
-  // con `watermark_field: data.<ds>.<campo>` resolvería 'data' como dataset y el fix no aplicaría.
-  const raw = String(f['watermark_field'] ?? '')
-  const wf = raw.startsWith('data.') ? raw.slice('data.'.length) : raw
-  return wf ? wf.split('.')[0] || undefined : undefined
-}
-
-/**
- * Valida el contrato de salida de una Capability de datos: `{ rows: [...] }`. Falla ruidoso y
- * accionable en la frontera (en vez de un cast silencioso que revienta críptico aguas abajo).
- */
-/**
- * Valida la frontera de salida de una capability de RENDER: exige `{ <field>: string }`. Sin esto, un
- * cast a ciegas (`as { html }`) dejaba `undefined` cuando la capability devolvía otra forma, y el
- * backstop anti-página-en-blanco (que compara contra `''`) no disparaba → HTTP 200 en blanco. Es la
- * simetría con `expectRows` en la frontera de datos.
- */
-function expectString(capability: string, field: string, out: unknown): string {
-  const val = (out as Record<string, unknown> | null | undefined)?.[field]
-  if (typeof val !== 'string') {
-    throw new VergisError({
-      error: 'mira/render',
-      code: 'capability-output-invalid',
-      path: field,
-      message: `La Capability de render '${capability}' no devolvió '{ ${field}: string }'.`,
-      remediation: `Toda Capability de render debe devolver un objeto con el campo string '${field}'.`,
-    })
-  }
-  return val
-}
-
-function expectRows(dataset: string, capability: string, out: unknown): Record<string, unknown>[] {
-  const rows = (out as { rows?: unknown } | null | undefined)?.rows
-  if (!Array.isArray(rows)) {
-    throw new VergisError({
-      error: 'mira/retrieve',
-      code: 'capability-output-invalid',
-      path: `data.${dataset}`,
-      message: `La Capability '${capability}' no devolvió '{ rows: [...] }' para el dataset '${dataset}'.`,
-      remediation: 'Toda Capability de datos debe devolver un objeto con un arreglo `rows`.',
-    })
-  }
-  return rows as Record<string, unknown>[]
-}
-
-/**
- * Sustituye `:ctx.<param>` en `params.sql` por PARÁMETRO(S) BIND y adjunta su(s) valor(es) en
- * `params.params` (la Capability los bindea — nunca concatena → injection-safe).
- *  - Valor único → `@ctx_<param>` (comportamiento clásico).
- *  - Valor MÚLTIPLE (control multi-select) → `@ctx_<param>_0, @ctx_<param>_1, …` — CONTRATO: con
- *    multi-valor el placeholder DEBE vivir dentro de paréntesis de IN en el spec
- *    (`WHERE semana IN (:ctx.semana)`); Mira solo expande la lista de binds, jamás interpola valores.
- * Si no hay `:ctx.` o no hay sql, devuelve los params intactos. Un param sin valor en `ctxValues`
- * se bindea como `''` (acota igual) y se reporta en `missing` para que el llamador lo loguee.
- */
-function applyCtx(params: Record<string, unknown> | undefined, ctxValues: CtxValues, missing?: string[]): Record<string, unknown> | undefined {
-  if (!params || typeof params['sql'] !== 'string') return params
-  const sql = params['sql'] as string
-  if (!sql.includes(':ctx.')) return params
-  const bound: Record<string, string> = {}
-  const rewritten = sql.replace(/:ctx\.([a-zA-Z0-9_]+)/g, (_m, param: string) => {
-    const v = ctxValues[param]
-    if (v === undefined && missing && !missing.includes(param)) missing.push(param)
-    if (Array.isArray(v)) {
-      return v
-        .map((val, i) => {
-          bound[`ctx_${param}_${i}`] = val
-          return `@ctx_${param}_${i}`
-        })
-        .join(', ')
-    }
-    bound[`ctx_${param}`] = v ?? ''
-    return `@ctx_${param}`
-  })
-  return { ...params, sql: rewritten, params: { ...((params['params'] as Record<string, unknown>) ?? {}), ...bound } }
-}
-
-/** `data.<dataset>.<field>` (source de un control) → [dataset, field]. */
-function stripCtrlSource(source: string): [string, string] {
-  const ref = typeof source === 'string' && source.startsWith('data.') ? source.slice('data.'.length) : String(source ?? '')
-  const [ds, field] = ref.split('.')
-  return [ds ?? '', field ?? '']
-}
-
-/** Compara valores de opción: numérico si ambos parsean, si no orden natural (numeric-aware). */
-function cmpVals(a: string, b: string): number {
-  const an = Number(a)
-  const bn = Number(b)
-  if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn
-  return a.localeCompare(b, undefined, { numeric: true })
-}
-
-/**
- * Valor de un control: si `current` (de la URL) es una opción válida, gana; si no, el default sobre
- * las opciones (`max` = mayor/más reciente, `min` = menor, `first` = primera de aparición). Sin
- * opciones, respeta lo pedido; sin nada, cadena vacía.
- */
-export function resolveControlValue(current: string | undefined, options: string[], def?: 'max' | 'min' | 'first'): string {
-  if (current != null && current !== '' && (options.length === 0 || options.includes(current))) return current
-  if (options.length === 0) return ''
-  if (def === 'first') return options[0]
-  const sorted = [...options].sort(cmpVals)
-  return def === 'min' ? sorted[0] : sorted[sorted.length - 1]
-}
-
-/**
- * Valores de un control MULTI-SELECT: los de la URL se filtran contra las opciones (solo valores del
- * catálogo — injection/typo-safe); si no queda ninguno válido, aplica el default (un solo valor,
- * la misma semántica que el control single).
- */
-export function resolveControlValues(
-  current: string | string[] | undefined,
-  options: string[],
-  def?: 'max' | 'min' | 'first',
-): string[] {
-  const asked = (current == null ? [] : Array.isArray(current) ? current : [current]).filter((v) => v !== '')
-  const valid = options.length === 0 ? asked : asked.filter((v) => options.includes(v))
-  if (valid.length > 0) return [...new Set(valid)]
-  const fallback = resolveControlValue(undefined, options, def)
-  return fallback === '' ? [] : [fallback]
-}
-
-/** Pieza-guía cuando se entra a una vista de detalle sin el contexto requerido (no por drill). */
-function contextPrompt(page: MiraPage, missing: string[]): Record<string, unknown> {
-  return {
-    layout: 'rows',
-    elements: [
-      {
-        markdown_block: {
-          content: `### ${page.title}\n\nSelecciona un registro en otra vista para ver su detalle (falta: ${missing.join(', ')}).`,
-        },
-      },
-    ],
-  }
-}

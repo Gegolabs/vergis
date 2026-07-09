@@ -63,81 +63,104 @@ sustantivo + **Ola 1 del segundo ciclo** → todo en `main`. Highlights:
 
 ## 3 · PENDIENTE — segundo ciclo
 
-### Ola 2 · Datos sobre motor vivo — ⚠️ REQUIERE Fabric/ClickHouse para verificar
+### Ola 2 · Datos sobre motor vivo — ✅ HECHA (rama `feat/053`); ⚠️ FALTA VERIFICACIÓN EN VIVO
 
-No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano (o entregar como diseño).
+Los 4 ítems implementados con verificación por la suite (el SQL/plan se testea sin motor). Cada uno
+**cambia SQL/DDL de producción** → hay que verificarlo contra el motor real antes de confiar en producción.
 
-1. **`master-data-publish` con staging + swap** — `packages/capabilities/src/master-data-publish.ts`,
-   `publish()`. Hoy es DROP POLICY→DROP FN→DROP TABLE→CREATE→INSERT fila-a-fila→CREATE POLICY, **sin
-   staging**: un fallo a mitad deja la réplica rota para TODOS los PIs consumidores. Fix: publicar a
-   `md_<id>__replica_new`, poblar, y swap (`sp_rename` en transacción). Bonus: `NVARCHAR(400)` en vez
-   de `VarChar` (hoy pierde caracteres no-Latin). Ref: 02·8. **Verificar contra Fabric.**
-2. **CH `TRUNCATE+INSERT` → `EXCHANGE TABLES`** — `packages/capabilities/src/clickhouse-store.ts`,
-   `createIngestClickHouse`. Hoy TRUNCATE luego INSERT: ventana de 0 filas + si el INSERT falla el
-   store queda vacío servido como verdad. Fix: ingestar a `<tabla>_staging` + `EXCHANGE TABLES`
-   (atómico en CH). Ref: 02·10/14. **Verificar contra ClickHouse.**
-3. **Semilla re-aplicada en cada `open()`** — `packages/capabilities/src/governance-store.ts`, el
-   sembrado en `open()`. Miembros de grupos semilla borrados con `removeMember` reaparecen al restart
-   (`ON CONFLICT DO NOTHING` re-inserta). Fix: marcar miembros semilla como no-removibles, o insertar
-   solo al crear el grupo por 1ª vez. Documentar precedencia. Ref: 02·10.
-4. **Fabric setup en transacción** — `packages/policy/src/fabric.ts`, `compileFabric` → `setupSQL`.
-   Hoy `[DROP policy, DROP fn, CREATE fn, CREATE policy]` deja una **ventana sin RLS** entre el DROP y
-   el CREATE (query concurrente ve todas las filas). Fix: envolver en transacción o patrón
-   `ALTER`/create-new-then-swap. **OJO:** cambia la estructura de `setupSQL` → hay que actualizar las
-   aserciones exactas de DDL en `tests/policy.test.ts` y `tests/relation-hierarchy.test.ts`. Ref: 04·7.
-   **Verificar contra Fabric.**
+1. ✅ **`master-data-publish` con staging + swap** (commit 4d6c35f). `masterDataPublishPlan` (puro,
+   testeado) construye/puebla `__replica_new` y swapea con `sp_rename` recién cuando está lista — el
+   INSERT lento ya no destruye la réplica viva. Bonus `NVARCHAR(400)` aplicado. **Verificar contra
+   Fabric:** `sp_rename` + `CREATE SECURITY POLICY` en el aplicador real.
+2. ✅ **CH staging + `EXCHANGE TABLES`** (commit f122a18). Ingesta a `<tabla>_staging` + swap atómico;
+   +2 tests con stub de fetch. **Verificar contra ClickHouse:** requiere Atomic engine (default).
+3. ✅ **Semilla no resucita miembros removidos** (commit 34433d5). Tombstone `mira_group_seed_removed`;
+   totalmente testeado con SQLite (sin motor externo) — este está VERIFICADO end-to-end.
+4. ✅ **Fabric setup transaccional OPT-IN** (commit f1a3334). `FabricTarget.transactional` envuelve
+   `setupSQL` en `SET XACT_ABORT ON; BEGIN TRAN … COMMIT`. **Default OFF** (contrato clásico intacto):
+   NO se cambió a ciegas porque el aplicador es out-of-band — con conexión-por-sentencia el BEGIN
+   quedaría sin COMMIT. **Verificar contra Fabric** que el aplicador corre todo en una sesión, y activar.
 
 ### Ola 3 · Estructura, runtime embebido y tooling — pase dedicado / `npm install`
 
-**A · El wrap final de `createApp()`** (lo más grande; ALTO RIESGO). Envolver el bootstrap top-level de
-   `server/serve-rls.ts` (~600 líneas: setup de engine, annStore, governance/admin, `listen`) en
-   `async function createApp(config): Promise<App>` + un `server/main.ts` que hace el `listen`, para que
-   `serve-rls.ts` sea importable sin side-effects. Los 7 módulos ya están extraídos/usados; esto es el
-   re-indentado del resto. Diseño completo en `work/001/02-refactor-createapp.md`. **Recomendación:
-   escribir primero tests de integración de la composición (con el server levantable) y hacerlo con el
-   motor a mano — un error de scope acá rompe el enforcement RLS en silencio y los tests no lo atrapan.**
+**A · El wrap final de `createApp()`** — ⏸️ **ACEPTADO EL ESTADO ACTUAL como culminación** (recomendación
+   del propio diseño, `work/001/02-refactor-createapp.md` §"Estado FINAL"). Los 7 módulos ya están
+   extraídos, testeados Y usados por serve-rls; TODOS los fixes bloqueados (A11/A10/A15/healthz) ya
+   aterrizaron. Lo único que resta es el re-indentado MECÁNICO de ~600 líneas del bootstrap en
+   `createApp()` + `main.ts`. **NO hacerlo como edición autónoma:** (1) el cyber safeguard impide LEER
+   `serve-rls.ts` con Read (solo grep por Bash), (2) sin motor no se verifica el enforcement end-to-end,
+   (3) un error de scope rompe RLS en silencio y los tests no lo atrapan. El valor marginal (testear la
+   composición completa) es bajo porque cada pieza ya está testeada. Merece un pase dedicado con el server
+   corriendo. **Igual criterio para los BAJA que tocan serve-rls** (micro-caché de gobierno, migrar el
+   resto de env a `config`): requieren editar el monolito bajo el safeguard → pase dedicado.
 
 **B · Cortes de archivos** (mover sin cambiar comportamiento):
-   - `packages/capabilities/src/render-html-piece.ts` (~950 LOC) → `piece-css`, `format`, `render-chart`,
-     `render-table`, `tray`, `interactive-script`, `piece-types`. Ref: 03·13.
-   - `packages/mira/src/mira.ts` (638 LOC) → `pipeline/views`, `controls`, `retrieve`, `annotations`.
-     Ref: 04·15.
-   - `packages/policy/src/codegen-common.ts` — extraer `SAFE_IDENT`/`ident`/`settingForClaim`/
-     `SETTINGS_PREFIX` duplicados entre `clickhouse.ts` y `fabric.ts`. Ref: 04·16.
-   - Dedup de CSS entre `themes/default.ts` y `themes/arbol.ts` (base.css compartido). Ref: 03·15.
+   - ✅ **HECHO** (rama `feat/053`): `codegen-common.ts` extraído (SAFE_IDENT/ident/settingForClaim/
+     SETTINGS_PREFIX unificados entre clickhouse.ts y fabric.ts; clickhouse-store reusa el `ident`
+     compartido — 3ª copia cerrada). Ref: 04·16. + `piece-css.ts` extraído de render-html-piece
+     (TABLE_INTERACTIVE_CSS + TRAY_CSS, ~97 LOC; el archivo bajó 965 → 862).
+   - ✅ **HECHO** (rama `feat/053`): `render-html-piece.ts` cortado 965 → 370 LOC (-62%) en 6 módulos:
+     `piece-css`, `piece-types`, `piece-util`, `render-table`, `render-chart`, `interactive-script`. Los
+     370 restantes son la orquestación núcleo + widgets chicos (kpi/semáforo/tray/nav) — cohesivo. Ref:
+     03·13. Behavior-preserving (504 tests intactas en cada paso).
+   - ✅ **HECHO** (rama `feat/053`): `mira.ts` cortado 669 → 378 LOC (-43%) en 5 módulos: `annotations`
+     (enriquecimiento viz), `contract` (expectString/expectRows), `mira-types` (CtxValues/PagesNav/
+     ControlResolved neutrales), `controls` (applyCtx + resolveControlValue/Values), `views` (multi-vista/
+     drill). Los 378 restantes son la CLASE MiraBotlet (el pipeline `invoke` con métodos que usan `this`)
+     + createMiraBotlet — no extraíbles sin cambiar la estructura. Ref: 04·15. Behavior-preserving (504
+     tests intactas en cada paso, incluidas controls/multidrill que ejercitan applyCtx y la resolución).
+   - ⏭️ **DIFERIDO con motivo**: dedup de CSS entre `themes/default.ts` y `themes/arbol.ts` (03·15). NO es
+     dedup mecánico: comparten la ESTRUCTURA de selectores pero difieren en valores — `default` usa colores
+     hardcodeados (look claro), `arbol` usa CSS vars (Gruvbox + hovers). Solo ~3 reglas de layout son
+     byte-idénticas; una base.css real exige convertir `default` a variables, lo que CAMBIA el output — es
+     decisión de diseño, no un movimiento seguro.
 
 **C · Runtime embebido browser-only** (NO testeable behavioralmente; el test `new Function(
    TABLE_RUNTIME_SOURCE)` solo valida sintaxis. Editar con cuidado):
-   - **Debounce** de la búsqueda global — `packages/capabilities/src/table-runtime.ts`, el handler
-     `input` del string embebido (~150ms). Ref: 03·5.
-   - **Colisión de "vistas guardadas"** con 2 tablas en la misma página — `SAVED_VIEWS_JS` /
-     `vergisSavedViews`: namespacing de localStorage por tabla + `#vergis-count`. Ref: 03·6.
+   - ✅ **HECHO** (rama `feat/053`, commit 74cbfee): **debounce** ~150ms de la búsqueda global de tabla
+     (`table-runtime.ts`, handler `input`). Patrón estándar clearTimeout/setTimeout; verificado por
+     sintaxis + 44 tests del render interactivo. Ref: 03·5.
+   - ⏭️ **DIFERIDA con motivo**: **colisión de "vistas guardadas"** con 2 tablas en la misma página
+     (`SAVED_VIEWS_JS`/`vergisSavedViews`). Ref: 03·6. NO es solo namespacing de localStorage: la gaveta
+     es ÚNICA por documento (un solo `.tray-saved`), así que dos tablas comparten el panel — el 2º
+     `vergisSavedViews` sobrescribe el del 1º. Fix correcto = panel por-tabla o selector, decisión de
+     diseño browser-only, no verificable sin un PI de 2 tablas en el navegador. Pase dedicado con browser.
 
-**D · Tooling** (necesita `npm install`, no disponible en el sandbox de esta sesión):
-   - Subir `vitest` a 3/4 → mata el **critical** del audit dev (GHSA-5xrq-8626-4rwp). `package.json`
-     devDeps. Migración v2→v3 menor. Ref: 05·4.
+**D · Tooling** (`npm install` SÍ estuvo disponible):
+   - ✅ **HECHO** (rama `chore/054-vitest-v4`): subido `vitest` v2→**v4.1.10** — el árbol vite/vite-node de
+     3.x seguía marcado, solo v4 aclara. `npm audit`: 5 vulns (1 critical RCE del UI server, 1 high path
+     traversal, 3 moderate) → **0**. Config de vitest sin cambios; 488 pruebas verdes en v4. Riesgo
+     productivo previo nulo (dev-only). Ref: 05·4.
    - Lint: `eslint` flat config + `typescript-eslint` + script `lint` en CI. Ref: 05·8/12.
    - Coverage: `@vitest/coverage-v8` + `vitest run --coverage` en `vitest.config.ts`. Ref: 05·11.
    - `tsconfig.base.json` `noUncheckedIndexedAccess` — **aflora errores por todo el codebase** (es un
      mini-proyecto, no un flag suelto). Ref: 05·10.
 
 **E · Cola de BAJAs** (contenidas, se toman de a lotes; casi todas testeables):
-   - a11y de teclado en render (gaveta/tabs/sort no enfocables) — 03·15/18.
-   - string-sniffing de features (`body.includes('class="table vtable"')`) → flags de renderers — 03·13.
-   - CSV con BOM (`﻿`) como OPCIÓN — rompe aserciones de `tests/render-csv.test.ts`, actualizarlas.
-   - regex de ruta duplicada en admin (`server/admin.ts` `dmActive` ~:165 vs `di` ~:199) — unificar.
-   - `appendFileSync` async en `packages/botler/src/log.ts` (bloquea event loop si hay logPath).
-   - log de página desconocida en `packages/mira/src/mira.ts` (`?page=<inexistente>` cae a la 1ª en
-     silencio → `mira-page-unknown`).
-   - validación de identificadores en el DDL de `packages/capabilities/src/clickhouse-store.ts` (~:80-105).
-   - alinear `schema/mira-spec.schema.json` con `packages/mira/src/dsl/validate.ts` (el validador
-     implementa reglas que el schema deja como objetos libres) — 04·18.
-   - `timingSafeEqual` en HMAC/CSRF (`server/annotations.ts` `verifyAnnToken`, `server/ui.ts`
-     `requireCsrf`) — BAJA, impráctico por red.
-   - micro-caché (5-30s) del bloque de gobierno del índice en `server/serve-rls.ts` `indexReports` —
-     BAJA rendimiento.
-   - migrar el RESTO de env a `config` (`serve-rls.ts` usa `config` solo para los numéricos; el resto
-     sigue inline) — consolidación.
+   - ✅ **HECHO** (rama `feat/053-r3e-bajas-lote1`): log de página desconocida en mira
+     (`mira-page-unknown`); validación de identificadores en el DDL de `clickhouse-store.ts`
+     (`assertSafeIdent` en db/tabla/columna/tipo/rol/usuario); `timingSafeEqual` en HMAC/CSRF
+     (`constantTimeEqual` en `server/annotations.ts` + `server/ui.ts`); string-sniffing de features →
+     señales explícitas (`RenderSignals` en render-html-piece, 03·13); CSV con BOM UTF-8 como OPT-IN
+     (`delivery.render[].bom`). Tests 488 → 501. Verificado typecheck+test+build.
+   - ⏭️ **DIFERIDAS con motivo** (no eran «testeables/bajo riesgo» en el sandbox):
+     - a11y de teclado en render (gaveta/tabs/sort no enfocables) — 03·15/18. **Browser-only**: la
+       gaveta/tabs son CSS-puro (checkbox+label ocultos) y el sort vive en el runtime embebido; el fix
+       correcto (inputs sr-only-focusables o conversión a `<button aria-expanded>`+JS) solo se verifica
+       en navegador y arriesga regresión visual. Hacer con el server levantable + revisión visual.
+     - regex de ruta duplicada en admin (`dmActive` ~:165 vs `di` ~:199). **NO es dedup mecánico**: `di`
+       tiene un 3er segmento opcional que `dmActive` no; unificar cambia el highlight del sidebar en
+       rutas de 3 segmentos. Archivo authz-adjacent + safeguard + sin harness de routing admin. Requiere
+       primero un test de routing del panel admin.
+     - `appendFileSync` async en `packages/botler/src/log.ts`. **Cuestionado**: es el audit log encadenado;
+       el write síncrono garantiza durabilidad y orden. Un async fire-and-forget PIERDE entradas al
+       crashear y puede reordenar. El fix correcto (cola async con flush-on-exit) es > BAJA. Dejar como
+       está salvo que haya evidencia de contención del event loop bajo carga.
+     - alinear `schema/mira-spec.schema.json` con `validate.ts` — 04·18. El validador (610 LOC) es la
+       fuente de verdad en runtime; el schema deja `quality`/`delivery`/`piece` libres a propósito.
+       Alinearlos por completo = duplicar el validador en JSON Schema (fuzzy, propenso a divergencia).
+     - micro-caché (5-30s) del bloque de gobierno del índice — BAJA rendimiento, toca `serve-rls.ts`.
+     - migrar el RESTO de env a `config` — consolidación, toca `serve-rls.ts`.
 
 ### Ola 4 · Infra + entrega — no es código (ops)
 
@@ -146,10 +169,12 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
    chequean parte del contrato — revisarlos primero.
    - **D1** · ClickHouse SOLO alcanzable por la red interna de compose (el usuario data-plane es
      `no_password` y los claims son settings auto-asignables → alcance de red al puerto HTTP = bypass
-     total de RLS). Ref: 02·5.
+     total de RLS). Ref: 02·5. **📝 DOCUMENTADO** en `deploy/compose.reference.yml` (nota de red junto al
+     servicio). Falta el chequeo runtime (el server no ve la topología de red de CH fácilmente).
    - **D2** · oauth2-proxy SIEMPRE delante (`gate.ts` confía en `X-Forwarded-*` sin verificar → puerto
-     expuesto = claims arbitrarios). El A10 (gate secret opt-in) ya ayuda si se activa
-     `VERGIS_GATE_SECRET`. Ref: 04·5.
+     expuesto = claims arbitrarios). Ref: 04·5. **✅ ABORDADO** (rama `feat/053`): `deployment-check.ts`
+     avisa al arranque si sirve PIs (`VERGIS_SPECS_DIR`) sin `VERGIS_GATE_SECRET`; `compose.reference.yml`
+     documenta por qué `expose` (no `ports:`) es deliberado + el gate secret como opción.
    - **D3** · PK `NOT ENFORCED` en Fabric (INSERT duplicado no falla — mitigado por A12). Ref: 02·4.
    - **D4** · server como proceso único contra los SQLite (load-at-open/full-write last-writer-wins).
      Ref: 02·11.
@@ -161,9 +186,28 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
 
 ---
 
-## 4 · Sugerencia de orden
+## 4 · Estado final del segundo ciclo (2026-07-08)
 
-Sin motor ni `npm install` disponibles: arrancar por la **Ola 3·E** (cola de BAJAs testeables — alto
-retorno, bajo riesgo, verificable con el loop) y la **Ola 4·1** (confirmar D1/D2, gratis). La Ola 2 y la
-Ola 3·D esperan motor/install. La Ola 3·A (wrap createApp) es la más riesgosa — hacerla con el server
-levantable y tests de integración primero, no a ciegas.
+**Prácticamente todo lo que se puede hacer con seguridad EN CÓDIGO está hecho** (ramas `feat/053` +
+`chore/054`, 512 tests, 0 vulns). Resumen:
+
+- **Ola 1** (2º ciclo) · ✅ hecha (sesión anterior).
+- **Ola 2** (datos sobre motor vivo, 4 ítems) · ✅ implementada + testeada por la suite. ⚠️ **Falta
+  verificación en vivo** contra Fabric/ClickHouse antes de confiar en producción (2·3 tombstone SÍ está
+  verificado end-to-end con SQLite; 2·1/2·2/2·4 necesitan el motor real; 2·4 es opt-in default-off).
+- **Ola 3·B** (cortes de archivos) · ✅ hecha: render-html-piece 965→370, mira.ts 669→378, codegen-common.
+  Diferido: dedup theme CSS (no mecánico).
+- **Ola 3·C** · ✅ debounce; diferida la colisión de vistas guardadas (browser-only, arquitectónica).
+- **Ola 3·D** (tooling) · ✅ vitest v4 (audit 0). Pendiente opcional: eslint, coverage,
+  `noUncheckedIndexedAccess` (aflora errores por todo el codebase — su propio mini-proyecto).
+- **Ola 3·E** (BAJAs) · ✅ 5 hechas; el resto diferido con motivo (a11y browser-only, admin regex no
+  mecánico, appendFileSync sync-correcto, schema/validate fuzzy).
+- **Ola 3·A** (wrap createApp) · ⏸️ aceptado el estado actual como culminación (recomendación del diseño).
+  Lo que resta toca `serve-rls.ts` bajo el cyber safeguard → pase dedicado con server corriendo.
+- **Ola 4** · D1 documentado, D2 abordado (chequeo de arranque), D3/D4 arquitectónicos. Lo demás es
+  **ops externo** (instalar la app de Renovate, redesplegar la VM, verificar charts vega en un PI vivo) —
+  no es código y necesita accesos fuera de este entorno.
+
+**Lo que queda son tres categorías, todas fuera del alcance de una edición segura acá:** (a) verificación
+en vivo de la Ola 2 contra los motores; (b) el pase dedicado de Ola 3·A con el server levantable; (c) los
+ops de Ola 4 (Renovate/VM/deploy). El resto es opcional (tooling 3·D) o diferido con motivo documentado.
