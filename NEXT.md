@@ -102,11 +102,14 @@ No hacer a ciegas: cambian SQL/DDL de producción. Hacerlas con un motor a mano 
      SETTINGS_PREFIX unificados entre clickhouse.ts y fabric.ts; clickhouse-store reusa el `ident`
      compartido — 3ª copia cerrada). Ref: 04·16. + `piece-css.ts` extraído de render-html-piece
      (TABLE_INTERACTIVE_CSS + TRAY_CSS, ~97 LOC; el archivo bajó 965 → 862).
-   - ⏳ **PENDIENTE** (pase dedicado, más grande): completar el corte de `render-html-piece.ts` (862 LOC
-     restantes → `format`, `render-chart`, `render-table`, `tray`, `interactive-script`, `piece-types`).
-     Ref: 03·13. Y `packages/mira/src/mira.ts` (638 LOC) → `pipeline/views`, `controls`, `retrieve`,
-     `annotations`. Ref: 04·15. Ambos son mover-sin-cambiar-comportamiento, verificables con las 504
-     pruebas — pero con churn de imports, hacer con foco.
+   - ✅ **HECHO** (rama `feat/053`): `render-html-piece.ts` cortado 965 → 370 LOC (-62%) en 6 módulos:
+     `piece-css`, `piece-types`, `piece-util`, `render-table`, `render-chart`, `interactive-script`. Los
+     370 restantes son la orquestación núcleo + widgets chicos (kpi/semáforo/tray/nav) — cohesivo. Ref:
+     03·13. Behavior-preserving (504 tests intactas en cada paso).
+   - ⏳ **PENDIENTE** (pase dedicado): `packages/mira/src/mira.ts` (638 LOC) → `pipeline/views`,
+     `controls`, `retrieve`, `annotations`. Ref: 04·15. Mover-sin-cambiar-comportamiento, verificable con
+     las 504 pruebas — pero toca el PIPELINE de invocación del Botlet (núcleo del enforcement), hacer con
+     foco y verificando el enforcement, no solo el typecheck.
    - ⏭️ **DIFERIDO con motivo**: dedup de CSS entre `themes/default.ts` y `themes/arbol.ts` (03·15). NO es
      dedup mecánico: comparten la ESTRUCTURA de selectores pero difieren en valores — `default` usa colores
      hardcodeados (look claro), `arbol` usa CSS vars (Gruvbox + hovers). Solo ~3 reglas de layout son
