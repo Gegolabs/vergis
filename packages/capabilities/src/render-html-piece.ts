@@ -7,11 +7,13 @@ import { compile, type TopLevelSpec } from 'vega-lite'
 import { canonical, type Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS, vtFormat } from './table-runtime'
+import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
+import { renderTable } from './render-table'
+import { ctxQuery, formatValue } from './piece-util'
 import type {
   Interactive, PagesNav, ControlResolved, CarryCtx, RenderParams,
-  TableColumn, ResolvedNode, Drill, RenderOpts, RenderSignals,
+  ResolvedNode, RenderOpts, RenderSignals,
 } from './piece-types'
 
 /** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
@@ -94,19 +96,6 @@ const PAGES_NAV_CSS = `
 .vpages a.active{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
 `
 
-/** `&ctx.k=v` por cada par de `carry` (más overrides), para preservar contexto en cualquier href.
- *  Una clave multi-valor (control multi-select) se repite: `&ctx.k=a&ctx.k=b` (el server acumula). */
-function ctxQuery(carry: CarryCtx, overrides: Record<string, string> = {}): string {
-  const merged: CarryCtx = { ...carry, ...overrides }
-  let q = ''
-  for (const [k, v] of Object.entries(merged)) {
-    for (const val of Array.isArray(v) ? v : [v]) {
-      if (val == null || val === '') continue
-      q += `&ctx.${encodeURIComponent(k)}=${encodeURIComponent(String(val))}`
-    }
-  }
-  return q
-}
 
 /** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */
 function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}): string {
@@ -546,179 +535,6 @@ async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Prom
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
 
-/** Umbral de filas del tbody server-rendered de una tabla INTERACTIVA. El tbody servido es solo el
- *  primer paint (el runtime toma control con el JSON embebido, que es la fuente y va SIEMPRE
- *  completo): sobre el umbral, embeber todas las filas DOS veces (HTML + JSON) ≈ 2× payload y doble
- *  trabajo de DOM en el arranque — se sirven solo las primeras N y el runtime completa al arrancar. */
-export const TABLE_SSR_MAX_ROWS = 500
-
-function renderTable(node: ResolvedNode, opts: RenderOpts): string {
-  const carry = opts.carry
-  const cols = node.columnsSpec ?? []
-  const rows = node.rows ?? []
-  const drills = node.drills ?? []
-  const ranges = colorscaleRanges(cols, rows)
-  const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
-  // Las señales las marca quien emite la feature (no un sniff del HTML de salida): drills → celdas
-  // `vt-actions`; tabla interactiva (default salvo `interactive:false`) → runtime + gaveta + CSS.
-  if (drills.length > 0) opts.signals.drillActions = true
-  if (node.interactive !== false) opts.signals.interactiveTable = true
-
-  // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
-  if (node.interactive === false) {
-    // Estática: sin runtime que complete después → el tbody lleva TODAS las filas.
-    const tbody = renderTableBody(cols, rows, ranges, drills, carry)
-    const head =
-      cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
-      (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
-    return (
-      `<section class="table">${titleHtml}` +
-      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
-    )
-  }
-  const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
-  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry)
-  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
-}
-
-/** href server-side de una acción de drill, preservando el carry (ctx) y agregando las claves `by`. */
-function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: CarryCtx): string {
-  const keys: Record<string, string> = {}
-  for (const k of drill.by) keys[k] = String(row[k] ?? '')
-  return `?page=${encodeURIComponent(drill.to)}${ctxQuery(carry, keys)}`
-}
-
-/** Celda de acciones de una fila: un link por drill (etiqueta del drill, o "→" si no la tiene). */
-function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: CarryCtx): string {
-  if (drills.length === 0) return ''
-  const links = drills
-    .map((d) => {
-      const href = escapeHtml(serverDrillHref(d, row, carry))
-      const label = d.label ? escapeHtml(d.label) : '→'
-      const cls = d.label ? 'vt-drill-link' : 'vt-drill-link vt-drill-arrow'
-      const title = d.label ? escapeHtml(d.label) : 'Ver detalle'
-      return `<a class="${cls}" href="${href}" title="${title}">${label}</a>`
-    })
-    .join('')
-  return `<td class="vt-actions">${links}</td>`
-}
-
-function renderTableBody(
-  cols: TableColumn[],
-  rows: Record<string, unknown>[],
-  ranges: Record<string, { min: number; max: number }>,
-  drills: Drill[] = [],
-  carry: CarryCtx = {},
-): string {
-  return rows
-    .map((r) => {
-      const cells = cols
-        .map((c) => {
-          const raw = r[c.field]
-          const text = formatValue(raw, c.format)
-          const bg = c.colorscale ? colorscaleBg(Number(raw), ranges[c.field]) : ''
-          return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(text)}</td>`
-        })
-        .join('')
-      // Single-drill: la fila admite doble-clic (back-compat) además del link de acciones.
-      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}">` : '<tr>'
-      return `${open}${cells}${drillActionsCell(drills, r, carry)}</tr>`
-    })
-    .join('\n')
-}
-
-function renderInteractiveTable(
-  node: ResolvedNode,
-  cols: TableColumn[],
-  rows: Record<string, unknown>[],
-  ranges: Record<string, { min: number; max: number }>,
-  tbody: string,
-  titleHtml: string,
-  drills: Drill[] = [],
-  carry: CarryCtx = {},
-  ssrComplete = true,
-): string {
-  // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
-  const colMeta = cols.map((c) => ({
-    field: c.field,
-    label: c.label ?? c.field,
-    align: c.align ?? 'left',
-    format: c.format,
-    colorscale: c.colorscale === true || undefined,
-    ranges: c.colorscale ? ranges[c.field] : undefined,
-    sortable: c.sortable !== false,
-    searchable: c.searchable !== false,
-    // La columna de anotación: sin faceta ni agrupar (texto libre); editable lo maneja el runtime.
-    filter: c.annotation ? false : c.filter,
-    groupBy: c.annotation ? false : c.groupBy,
-    annotation: c.annotation || undefined,
-  }))
-  // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
-  // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.
-  // Sin fila de búsqueda siempre visible.
-  const headCells = colMeta
-    .map((c) => {
-      const sortAttr = c.sortable ? ' data-sortable="1"' : ''
-      const sortCls = c.sortable ? ' vt-sortable' : ''
-      const filterCtrl =
-        c.filter !== false
-          ? `<button type="button" class="vt-filter-btn" data-field="${escapeHtml(c.field)}" aria-label="Filtrar y buscar en ${escapeHtml(c.label)}" title="Filtrar / buscar">` +
-            `<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M1.7 3h12.6l-5 6v4.1l-2.6 1.2V9z" fill="currentColor"/></svg></button>` +
-            `<div class="vt-col-pop" data-field="${escapeHtml(c.field)}" hidden></div>`
-          : ''
-      return (
-        `<th class="align-${c.align}${sortCls} vt-col" data-field="${escapeHtml(c.field)}"${sortAttr} aria-sort="none">` +
-        `<span class="vt-th-inner"><span class="vt-th-label">${escapeHtml(c.label)}<span class="vt-sort-ind"></span></span>${filterCtrl}</span></th>`
-      )
-    })
-    .join('') + (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
-
-  // Los controles globales (búsqueda en toda la tabla, agrupar, limpiar, conteo) NO van inline:
-  // el runtime los inyecta en la GAVETA COMÚN (.tray-sections). Inline solo quedan los chips de
-  // filtros activos (feedback visible sin abrir la gaveta) y el ícono por columna en el header.
-  const chips = `<div class="vt-chips"></div>`
-
-  // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
-  // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
-  // `drills` (si la tabla las tiene): el runtime renderiza la columna de acciones (1 link por drill);
-  //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
-  // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
-  //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
-  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry, ssrComplete }).replace(/</g, '\\u003c')
-
-  return (
-    `<section class="table vtable">${titleHtml}${chips}` +
-    `<div class="vt-scroll"><table><thead><tr class="vt-head-row">${headCells}</tr></thead>` +
-    `<tbody>${tbody}</tbody></table></div>` +
-    `<script type="application/json" class="vtable-data">${payload}</script></section>`
-  )
-}
-
-function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]): Record<string, { min: number; max: number }> {
-  const ranges: Record<string, { min: number; max: number }> = {}
-  for (const c of cols) {
-    if (!c.colorscale) continue
-    // Loop en vez de `Math.min(...nums)` / `Math.max(...nums)`: el spread de un arreglo de cientos de
-    // miles de filas revienta el stack (RangeError: too many arguments). El loop es O(n) sin ese límite.
-    let min = Infinity
-    let max = -Infinity
-    for (const r of rows) {
-      const n = Number(r[c.field])
-      if (Number.isNaN(n)) continue
-      if (n < min) min = n
-      if (n > max) max = n
-    }
-    ranges[c.field] = { min, max }
-  }
-  return ranges
-}
-
-function colorscaleBg(value: number, range?: { min: number; max: number }): string {
-  if (!range || Number.isNaN(value) || range.max === range.min) return ''
-  const t = (value - range.min) / (range.max - range.min)
-  const light = Math.round(95 - t * 45)
-  return ` style="background:hsl(8,75%,${light}%)"`
-}
 
 async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
   const vgSpec = compile(spec).spec
@@ -727,10 +543,4 @@ async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
   const svg = await view.toSVG()
   view.finalize()
   return svg
-}
-
-// Delega en vtFormat (el formateador del runtime de tabla): el tbody SERVIDO y el re-render del
-// CLIENTE usan exactamente la misma lógica → sin drift de percent ni de recorte de fecha ISO (03·2).
-function formatValue(value: unknown, format?: string): string {
-  return vtFormat(value, format)
 }

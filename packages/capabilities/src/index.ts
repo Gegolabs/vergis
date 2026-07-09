@@ -5,7 +5,8 @@ import { renderHtmlPiece } from './render-html-piece'
 import { staticData } from './static-data'
 
 export { staticData } from './static-data'
-export { renderHtmlPiece, TABLE_SSR_MAX_ROWS, CHART_MAX_BARS, chartCacheStats } from './render-html-piece'
+export { renderHtmlPiece, CHART_MAX_BARS, chartCacheStats } from './render-html-piece'
+export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn } from './piece-types'
 export {
