@@ -160,6 +160,15 @@ const MEMBER_DDL = `CREATE TABLE IF NOT EXISTS mira_group_member (
   added_at TEXT,
   PRIMARY KEY (group_id, email)
 );`
+// Tombstone de miembros SEMILLA removidos en runtime. Sin esto, `open()` re-siembra en cada restart
+// (el INSERT ... ON CONFLICT DO NOTHING re-inserta la fila borrada) → un miembro que un admin quitó
+// reaparece. PRECEDENCIA: el runtime gana sobre la config — un `removeMember` deja tombstone y el
+// re-sembrado lo salta; un `addMember` posterior lo limpia (readmitir = revocar el tombstone).
+const SEED_REMOVED_DDL = `CREATE TABLE IF NOT EXISTS mira_group_seed_removed (
+  group_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  PRIMARY KEY (group_id, email)
+);`
 const PI_GOV_DDL = `CREATE TABLE IF NOT EXISTS pi_governance (
   pi_code TEXT PRIMARY KEY,
   visibility TEXT NOT NULL DEFAULT 'privado',
@@ -228,6 +237,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     ensureAdminTable(db, seed.admins ?? [])
     db.run(GROUP_DDL)
     db.run(MEMBER_DDL)
+    db.run(SEED_REMOVED_DDL)
     db.run(PI_GOV_DDL)
     db.run(PI_GRANT_DDL)
     db.run(PI_DEMANDA_DDL)
@@ -245,10 +255,12 @@ export class SqliteGovernanceStore implements GovernanceStore {
       for (const m of g.members ?? []) {
         const email = normEmail(m)
         if (!email) continue
+        // Salta los que un admin removió en runtime (tombstone): el re-sembrado NO los resucita.
         db.run(
-          `INSERT INTO mira_group_member (group_id, email, added_by, added_at) VALUES (?,?,?,?)
+          `INSERT INTO mira_group_member (group_id, email, added_by, added_at)
+           SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mira_group_seed_removed WHERE group_id = ? AND email = ?)
            ON CONFLICT(group_id, email) DO NOTHING`,
-          [id, email, 'config:VERGIS_GROUPS', now()],
+          [id, email, 'config:VERGIS_GROUPS', now(), id, email],
         )
       }
     }
@@ -322,6 +334,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
     // Limpiar los grants del grupo: si no, quedan latentes y un grupo recreado con el mismo id
     // haría que sus nuevos miembros hereden silenciosamente los accesos del grupo anterior.
     this.db.run(`DELETE FROM pi_grant WHERE principal_type = 'group' AND principal = ?`, [gid])
+    // Limpia los tombstones: un grupo recreado (por semilla o a mano) parte de cero, sin exclusiones viejas.
+    this.db.run(`DELETE FROM mira_group_seed_removed WHERE group_id = ?`, [gid])
     this.db.run(`DELETE FROM mira_group WHERE group_id = ?`, [gid])
     this.persist()
   }
@@ -353,11 +367,17 @@ export class SqliteGovernanceStore implements GovernanceStore {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw new Error(`Correo inválido: '${email}'.`)
     if (await this.isMember(gid, e)) return false
     this.db.run(`INSERT INTO mira_group_member (group_id, email, added_by, added_at) VALUES (?,?,?,?)`, [gid, e, normEmail(addedBy) || null, now()])
+    // Readmitir limpia el tombstone: si vuelve a estar en la config semilla, el re-sembrado ya no lo salta.
+    this.db.run(`DELETE FROM mira_group_seed_removed WHERE group_id = ? AND email = ?`, [gid, e])
     this.persist()
     return true
   }
   async removeMember(groupId: string, email: string): Promise<void> {
-    this.db.run(`DELETE FROM mira_group_member WHERE group_id = ? AND email = ?`, [groupId.trim().toLowerCase(), normEmail(email)])
+    const gid = groupId.trim().toLowerCase()
+    const e = normEmail(email)
+    this.db.run(`DELETE FROM mira_group_member WHERE group_id = ? AND email = ?`, [gid, e])
+    // Tombstone: el re-sembrado en `open()` NO debe resucitar a un miembro semilla removido a mano.
+    this.db.run(`INSERT INTO mira_group_seed_removed (group_id, email) VALUES (?,?) ON CONFLICT(group_id, email) DO NOTHING`, [gid, e])
     this.persist()
   }
   async groupsOf(email: string | undefined): Promise<string[]> {
