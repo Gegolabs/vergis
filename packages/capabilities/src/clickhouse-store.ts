@@ -129,23 +129,35 @@ interface IngestParams {
 }
 
 /**
- * `ingest-to-clickhouse` — Capability de ingesta al store (refresh-time). Full-replace:
- * TRUNCATE + INSERT (caché desechable; el sistema de registro es la fuente). Corre con un
- * usuario WRITER (admin acá), nunca el consumidor. Idempotente: re-ingiere dejando el mismo estado.
+ * `ingest-to-clickhouse` — Capability de ingesta al store (refresh-time). Full-replace ATÓMICO vía
+ * tabla staging + `EXCHANGE TABLES`. Un `TRUNCATE` + `INSERT` directo dejaba dos fallas: (1) ventana de
+ * 0 filas entre el TRUNCATE y el fin del INSERT — un consumidor que lee ahí ve el store VACÍO; (2) si el
+ * INSERT falla a mitad, el store queda vacío/parcial y se sirve como verdad. Con staging, la tabla
+ * servida solo cambia en el swap atómico de `EXCHANGE TABLES` (Atomic engine, default en CH): o los datos
+ * viejos completos, o los nuevos completos, nunca un estado intermedio. Corre con un usuario WRITER (admin
+ * acá), nunca el consumidor. Idempotente: re-ingiere dejando el mismo estado.
  */
 export function createIngestClickHouse(writer: ChAdminConn, schema: ChStoreSchema, name = 'ingest-to-clickhouse'): Capability {
   assertSchemaIdents(schema) // el schema es fijo por store: validar al construir, no en cada ingesta
+  const qualified = `${schema.database}.${schema.table}`
+  const staging = `${schema.database}.${schema.table}_staging`
   return {
     name,
     async execute(params: unknown): Promise<{ ingested: number }> {
       const p = (params ?? {}) as IngestParams
       const rows = p.rows ?? []
-      await chExec(writer, `TRUNCATE TABLE IF EXISTS ${schema.database}.${schema.table}`)
+      // 1) staging con la MISMA estructura que la tabla servida (idempotente). 2) vaciarla por si quedó
+      //    algo de una corrida abortada. 3) poblarla. 4) swap atómico. La tabla servida no ve intermedios.
+      await chExec(writer, `CREATE TABLE IF NOT EXISTS ${staging} AS ${qualified}`)
+      await chExec(writer, `TRUNCATE TABLE IF EXISTS ${staging}`)
       if (rows.length > 0) {
         const cols = Object.keys(schema.columns)
         const ndjson = rows.map((r) => JSON.stringify(Object.fromEntries(cols.map((c) => [c, r[c]])))).join('\n')
-        await chExec({ ...writer }, `INSERT INTO ${schema.database}.${schema.table} (${cols.join(', ')}) FORMAT JSONEachRow\n${ndjson}`)
+        await chExec({ ...writer }, `INSERT INTO ${staging} (${cols.join(', ')}) FORMAT JSONEachRow\n${ndjson}`)
       }
+      // Swap atómico: la tabla servida pasa a tener las filas nuevas de una sola vez (si algo falló
+      // antes, se aborta acá y la tabla servida conserva intactos los datos de la corrida anterior).
+      await chExec(writer, `EXCHANGE TABLES ${qualified} AND ${staging}`)
       return { ingested: rows.length }
     },
   }
