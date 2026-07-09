@@ -1,5 +1,5 @@
 import { VergisError, type Capability } from '@vergis/botler'
-import type { ResolvedNode, TableColumn } from './render-html-piece'
+import type { ResolvedNode, TableColumn } from './piece-types'
 
 /**
  * `render-csv-piece` — árbol de pieza resuelto (compuesto por Mira) → artefacto CSV de LA(S) TABLA(S).

@@ -6,9 +6,13 @@ import * as vega from 'vega'
 import { compile, type TopLevelSpec } from 'vega-lite'
 import { canonical, type Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
-import { getTheme, type DashboardMeta, type ThemeTokens } from './themes'
+import { getTheme, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE, SAVED_VIEWS_JS, vtFormat } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
+import type {
+  Interactive, PagesNav, ControlResolved, CarryCtx, RenderParams,
+  TableColumn, ResolvedNode, Drill, RenderOpts, RenderSignals,
+} from './piece-types'
 
 /** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
 const VERGIS_VERSION = (() => {
@@ -29,137 +33,6 @@ const VERGIS_VERSION = (() => {
  * datos materializados + JS que filtra y recomputa KPIs/semáforo client-side — sin
  * nuevas queries. La pieza sigue siendo pre-forjada y reproducible.
  */
-interface FilterSpec {
-  dataset: string
-  field: string
-  label?: string
-  multi?: boolean
-}
-interface Interactive {
-  datasets: Record<string, Record<string, unknown>[]>
-  /** Los filtros disponibles que viven en la bandeja. */
-  filters: FilterSpec[]
-}
-interface PagesNav {
-  items: { id: string; title: string }[]
-  active: string
-}
-/** Control de cabecera ya resuelto por Mira: opciones + valor(es) seleccionado(s). */
-interface ControlResolved {
-  id: string
-  label: string
-  options: string[]
-  /** Valor para display (multi: los valores unidos por ", "). */
-  value: string
-  /** Solo multi-select: los valores seleccionados. */
-  values?: string[]
-  /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
-  multi?: boolean
-}
-/** Valor(es) de una clave de contexto a preservar en la navegación (multi-select → varios). */
-type CarryCtx = Record<string, string | string[]>
-interface RenderParams {
-  piece: ResolvedNode
-  title?: string
-  theme?: string
-  /** Paleta inicial del theme (default por tipo de PI; el usuario la cambia en la gaveta). */
-  palette?: string
-  meta?: DashboardMeta
-  interactive?: Interactive
-  /** PI multi-vista: barra de navegación de páginas (links `?page=<id>`). */
-  pages?: PagesNav
-  /** Controles de cabecera (server-side): selectores que fijan `:ctx.<id>` en las queries. */
-  controls?: ControlResolved[]
-  /** Contexto que toda navegación (nav de páginas, drills, selectores) debe preservar (p.ej. la semana). */
-  carryCtx?: CarryCtx
-}
-
-export interface TableColumn {
-  field: string
-  label?: string
-  format?: string
-  align?: string
-  colorscale?: boolean
-  /** Override del auto-on: orden por esta columna (default: true). */
-  sortable?: boolean
-  /** Override del auto-on: búsqueda por esta columna (default: true). */
-  searchable?: boolean
-  /** Override de la heurística: faceta de filtro (default: auto por cardinalidad). */
-  filter?: boolean
-  /** Override de la heurística: disponible para agrupar (default: igual que filter). */
-  groupBy?: boolean
-  /** Columna de anotación (editable; enriquecimiento de la capa de viz). */
-  annotation?: boolean
-}
-interface Aggregation {
-  dataset?: string
-  op: 'sum' | 'ratio' | 'avg' | 'count' | 'min' | 'max' | 'count_distinct'
-  field?: string
-  num?: string
-  den?: string
-}
-
-export interface ResolvedNode {
-  layout?: string
-  columns?: number
-  elements?: ResolvedNode[]
-  type?: string
-  content?: string
-  value?: unknown
-  label?: string
-  format?: string
-  accent?: string
-  comparison?: unknown
-  comparisonLabel?: string
-  agg?: Aggregation
-  comparisonAgg?: Aggregation
-  size?: string
-  span?: number
-  rows?: Record<string, unknown>[]
-  dimensionField?: string
-  metricField?: string
-  orientation?: string
-  title?: string
-  columnsSpec?: TableColumn[]
-  labelField?: string
-  presentField?: string
-  totalField?: string
-  pctField?: string
-  thresholds?: { green?: number; yellow?: number }
-  dataset?: string
-  summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
-  /** Tabla: `false` desactiva la interactividad (orden/filtro/búsqueda/agrupar) → tabla estática. */
-  interactive?: boolean
-  /** Tabla: meta de anotaciones (columna editable compartida). */
-  annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
-  /** Tabla: acciones de drill-through por fila (a la vista `to` pasando las claves `by`). */
-  drills?: Drill[]
-}
-
-/** Una acción de drill-through: a la vista `to`, pasando una o más claves de contexto `by`. */
-export interface Drill {
-  to: string
-  by: string[]
-  label?: string
-}
-
-interface RenderOpts {
-  tokens: ThemeTokens
-  interactive: boolean
-  /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
-  carry: CarryCtx
-  /** Señales que el render acumula para decidir qué CSS/runtime inyectar arriba. Evita re-inspeccionar
-   *  el HTML ya emitido (`body.includes('class="table vtable"')`), frágil ante un rename de clase. */
-  signals: RenderSignals
-}
-
-/** Qué features aparecieron en el árbol renderizado (las marca quien las emite, no un sniff de string). */
-interface RenderSignals {
-  /** Hay al menos una tabla INTERACTIVA (runtime de orden/filtro/búsqueda + gaveta + CSS interactivo). */
-  interactiveTable: boolean
-  /** Hay celdas de acciones de drill (`vt-actions`) → requiere DRILL_ACTIONS_CSS. */
-  drillActions: boolean
-}
 
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
