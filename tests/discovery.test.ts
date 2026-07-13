@@ -104,8 +104,8 @@ describe('discovery · canAccess / visibleFor', () => {
 
   it('visibleFor: PI sin datos gobernados es visible; con datos, filtra por acceso', () => {
     const reports = [
-      { code: 'A', slug: 'a', name: 'A', specPath: '/a', tables: [] },
-      { code: 'B', slug: 'b', name: 'B', specPath: '/b', tables: ['dbo.saldos'] },
+      { code: 'A', slug: 'a', name: 'A', specPath: '/a', tables: [], databaseRefs: [] },
+      { code: 'B', slug: 'b', name: 'B', specPath: '/b', tables: ['dbo.saldos'], databaseRefs: [] },
     ]
     expect(d.visibleFor(reports, {}).map((r) => r.code)).toEqual(['A'])
     expect(d.visibleFor(reports, { groups: ['ventas'] }).map((r) => r.code)).toEqual(['A', 'B'])
