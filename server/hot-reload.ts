@@ -103,3 +103,27 @@ export function createCachedScanner<T>(scan: () => T): {
     },
   }
 }
+
+/**
+ * Swap IN-PLACE de un registro vivo `{ clave: valor }` (issue #50: perfiles de conexión). Todos los
+ * consumidores capturaron la MISMA referencia y resuelven por clave a call-time — mutarla in-place
+ * equivale a un hot-reload sin re-cablear nada. Devuelve el diff en CONTEOS + claves (jamás valores:
+ * los perfiles llevan secretos y este resultado se loguea).
+ */
+export function swapRecordInPlace<T>(current: Record<string, T>, next: Record<string, T>): { added: string[]; changed: string[]; removed: string[] } {
+  const added: string[] = []
+  const changed: string[] = []
+  const removed: string[] = []
+  for (const k of Object.keys(current)) {
+    if (!(k in next)) {
+      removed.push(k)
+      delete current[k]
+    }
+  }
+  for (const [k, v] of Object.entries(next)) {
+    if (!(k in current)) added.push(k)
+    else if (JSON.stringify(current[k]) !== JSON.stringify(v)) changed.push(k)
+    current[k] = v
+  }
+  return { added, changed, removed }
+}

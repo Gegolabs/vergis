@@ -33,6 +33,15 @@ describe('checkDeploymentConfig', () => {
     expect(checkDeploymentConfig({ VERGIS_IDENTITY_MAP: existingFile })).toEqual([])
   })
 
+  // Issue #50: VERGIS_CONNECTIONS es dual — JSON inline o ruta a archivo.
+  it('VERGIS_CONNECTIONS como RUTA ausente → error; como ruta existente o JSON inline → nada', () => {
+    const f = checkDeploymentConfig({ VERGIS_CONNECTIONS: MISSING })
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatchObject({ level: 'error', env: 'VERGIS_CONNECTIONS' })
+    expect(checkDeploymentConfig({ VERGIS_CONNECTIONS: existingFile })).toEqual([])
+    expect(checkDeploymentConfig({ VERGIS_CONNECTIONS: '{"wh":{"server":"s","database":"d"}}' })).toEqual([])
+  })
+
   it('un env de gobierno con path presente pero sin VERGIS_OUT → solo aviso de efímero', () => {
     const f = checkDeploymentConfig({ VERGIS_MASTER_DATA: existingFile })
     expect(f).toHaveLength(1)
