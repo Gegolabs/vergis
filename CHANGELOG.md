@@ -4,6 +4,36 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.4.0 — 2026-07-13
+
+Cierre de los issues #50–#54 (todos reportados desde la instancia GH en beta): robustez
+operacional del serving push-down y del gobierno de dominio.
+
+**Serving (engine=fabric):**
+- **Fail-closed por PI, no por proceso** (#52): la verificación de RLS nativa es por PI y
+  consulta solo las conexiones en uso; un PI que no verifica responde `503` con motivo
+  accionable y los demás siguen sirviendo. Indeterminación (conexión caída) conserva el
+  veredicto sano previo; un veredicto definitivo siempre bloquea. `/healthz` distingue
+  `starting`/`degraded`/`serving` con conteos `{total, serving}` (sin slugs: sigue reducido).
+- **Herencia de gobierno vista→base** (#54): una vista-contrato `WITH SCHEMABINDING` sobre
+  bases gobernadas sirve sin entrada propia en el policy store ni secpol duplicada; el
+  linaje se resuelve en la fuente (certeza o nada, transitivo, fail-closed) y la herencia
+  queda en el log del gate. La visibilidad del índice hereda igual.
+
+**Gobierno de dominio:**
+- **Hot-reload de conexiones, dominios e intake** (#50): `VERGIS_CONNECTIONS` acepta ruta a
+  archivo (preferido: secretos fuera de `/proc`/`docker inspect`) además de JSON inline;
+  los tres archivos recargan con validate-before-swap por archivo (uno malformado conserva
+  su estado vigente). El alta completa de un dominio ya no exige restart.
+
+**UX / correctness:**
+- **Motivo de falla del job disparado visible** (#53): la celda «Última corrida» de Frescura
+  y los slots de «Otras cargas» muestran el `failureReason` de Fabric (escapado, recortado) —
+  quien carga un archivo ya no reintenta a ciegas.
+- **`format: int_0` sobre strings numéricos** (#51): los `SUM(BIGINT)` que el driver entrega
+  como string se formatean igual que los números; enteros sobre `MAX_SAFE_INTEGER` se agrupan
+  sobre el string sin perder dígitos. Aplica a servidor y cliente (formateador único).
+
 ## 0.3.0 — 2026-07-07
 
 Cuarta ronda de revisión (cluster `work/001`): hardening de seguridad, robustez y
