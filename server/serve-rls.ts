@@ -80,7 +80,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
-import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, type PiVerdict } from './engines/fabric'
+import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
 import { fail, readJsonBody } from './http-util'
 import { annSign as annSignHmac, verifyAnnToken } from './annotations'
 import { createRequestHandler } from './routes'
@@ -139,9 +139,12 @@ function specPaths(): string[] {
   if (SPECS_DIR) return readdirSync(resolve(SPECS_DIR)).filter((f) => !f.startsWith('.') && /\.ya?ml$/.test(f)).map((f) => join(resolve(SPECS_DIR), f)).sort()
   return SPECS_LIST.map((p) => resolve(p))
 }
+// Linaje vista→base observado en la fuente (issue #54) — referencia VIVA: la verificación del
+// bootstrap la re-puebla; `canAccess` hereda por acá la política de las bases de una vista-contrato.
+const viewLineage = new Map<string, string[]>()
 // Descubrimiento (memoizado) + gate de gobernanza fail-closed: extraído y testeado en ./discovery.
 // `discovery.rebuild()` (validate-before-swap) lo fuerza tras un hot-reload de gobierno.
-const discovery = createDiscovery({ store, engine: ENGINE as 'clickhouse' | 'fabric', servingCaps: SERVING_CAPS, specPaths })
+const discovery = createDiscovery({ store, engine: ENGINE as 'clickhouse' | 'fabric', servingCaps: SERVING_CAPS, specPaths, resolveBases: (t) => viewLineage.get(t) })
 const discover = discovery.discover
 const visibleFor = discovery.visibleFor
 
@@ -254,18 +257,30 @@ if (ENGINE === 'clickhouse') {
   // demás siguen. La lógica pura vive en ./engines/fabric (testeada); acá solo el plumbing.
   bootstrapAll = async () => {
     const reports = discover()
-    const { state, usedRefs, refErrors } = await verifyFabricServability({
+    const { state, usedRefs, refErrors, inherited, viewLineage: lineage } = await verifyFabricServability({
       pis: reports.map((r) => ({ slug: r.slug, tables: r.tables, databaseRefs: r.databaseRefs })),
       store,
-      protectedTablesOf: async (ref) => {
-        const out = (await dwh.execute({ database_ref: ref, sql: SYS_SECURITY_POLICIES_SQL }, { agent: 'vergis' })) as { rows: { sch: string; tbl: string }[] }
-        return new Set(out.rows.map((row) => `${row.sch}.${row.tbl}`))
+      sourceStateOf: async (ref) => {
+        const prot = (await dwh.execute({ database_ref: ref, sql: SYS_SECURITY_POLICIES_SQL }, { agent: 'vergis' })) as { rows: { sch: string; tbl: string }[] }
+        const lin = (await dwh.execute({ database_ref: ref, sql: SYS_VIEW_LINEAGE_SQL }, { agent: 'vergis' })) as { rows: { vsch: string; vname: string; bsch: string; bname: string }[] }
+        const viewLineage = new Map<string, string[]>()
+        for (const row of lin.rows) {
+          const v = `${row.vsch}.${row.vname}`
+          const b = `${row.bsch}.${row.bname}`
+          const bases = viewLineage.get(v) ?? []
+          if (!bases.includes(b)) viewLineage.set(v, [...bases, b])
+        }
+        return { protectedTables: new Set(prot.rows.map((row) => `${row.sch}.${row.tbl}`)), viewLineage }
       },
       previous: piState,
     })
-    // Swap tras evaluar TODO (validate-before-swap): el estado vivo nunca queda a medias.
+    // Swap tras evaluar TODO (validate-before-swap): el estado vivo nunca queda a medias. El linaje
+    // alimenta la visibilidad del índice (canAccess hereda la política de las bases, issue #54).
     piState.clear()
     for (const [slug, v] of state) piState.set(slug, v)
+    viewLineage.clear()
+    for (const [v, bases] of lineage) viewLineage.set(v, bases)
+    for (const h of inherited) console.log(`[vergis-rls] herencia de gobierno (PI '${h.slug}'): ${h.view} ← ${h.bases.join(', ')} (política + secpol de la base).`)
     ready = true // frío superado: de acá en adelante el estado es por-PI
     const degraded = [...state].filter(([, v]) => !v.ok) as [string, { ok: false; reason: string }][]
     for (const [slug, v] of degraded) console.error(`[vergis-rls] PI '${slug}' NO servible (fail-closed): ${v.reason}`)
