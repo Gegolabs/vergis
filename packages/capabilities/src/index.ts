@@ -77,6 +77,9 @@ export {
   requiredCadenceSeconds,
   deriveIngestionMap,
   deriveEntityFreshness,
+  OFERTA_EVENTO,
+  isEventDriven,
+  validateOferta,
 } from './freshness'
 export type { SourceInfo, ProcessInfo, IngestionMapRow, EntityFreshnessRow, DeriveMapInput } from './freshness'
 export { classifyProcess, alertReason, reconcilePlan, freshnessAlerts, diffAlertState } from './ingestion-observability'

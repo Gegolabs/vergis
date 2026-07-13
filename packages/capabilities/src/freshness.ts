@@ -16,6 +16,19 @@
 const UNIT_SECONDS: Record<string, number> = { Y: 365 * 86400, W: 7 * 86400, D: 86400, H: 3600, S: 1 }
 // 'M' es ambiguo (mes en fecha, minuto en tiempo) → se resuelve por posición (antes/después de 'T').
 
+/** Oferta EVENT-DRIVEN: la fuente no tiene cadencia (cada llegada es un evento — p. ej. una OC por
+ * archivo). No impone piso a la demanda, el reconciliador no la agenda, y su salud es solo por
+ * corridas fallidas (no hay «atrasada» sin periodo). Registrarla con una cadencia inventada sería
+ * fabricar un dato — este sentinel la modela honestamente. */
+export const OFERTA_EVENTO = 'evento'
+export const isEventDriven = (oferta: string | null | undefined): boolean =>
+  (oferta ?? '').trim().toLowerCase() === OFERTA_EVENTO
+
+/** Valida una oferta declarable: duración ISO-8601 o el sentinel `evento`. Lanza si no es ninguna. */
+export function validateOferta(oferta: string): void {
+  if (!isEventDriven(oferta)) durationToSeconds(oferta)
+}
+
 /** Parsea una duración ISO-8601 a segundos (aprox: Y=365d, mes=30d). Lanza si es inválida. */
 export function durationToSeconds(iso: string): number {
   const s = (iso ?? '').trim().toUpperCase()
@@ -49,7 +62,8 @@ export function secondsToDuration(total: number): string {
 
 /** Techo de la demanda (en segundos de max_age) = la oferta MÁS LENTA de los insumos. 0 si no hay insumos. */
 export function demandaCeilingSeconds(ofertaDurations: string[]): number {
-  return ofertaDurations.reduce((mx, o) => Math.max(mx, durationToSeconds(o)), 0)
+  // Una fuente event-driven no impone piso: se actualiza cuando llega el evento.
+  return ofertaDurations.filter((o) => !isEventDriven(o)).reduce((mx, o) => Math.max(mx, durationToSeconds(o)), 0)
 }
 
 /** ¿La demanda respeta el techo? (su max_age ≥ la oferta más lenta). Sin insumos conocidos → permitida. */
@@ -117,15 +131,18 @@ export function deriveIngestionMap(input: DeriveMapInput): IngestionMapRow[] {
     if (!outputsOf.has(po.processId)) outputsOf.set(po.processId, new Set())
     outputsOf.get(po.processId)!.add(po.tableRef)
   }
-  return input.processes.map((proc) => {
+  return input.processes.flatMap((proc) => {
     const oferta = ofertaOf.get(proc.sourceId) ?? 'P1Y' // sin oferta declarada → muy lenta (no fuerza nada)
+    // EVENT-DRIVEN: no hay cadencia que derivar ni schedule que reconciliar — el proceso corre cuando
+    // llega el evento (land-and-trigger). No entra al mapa del reconciliador.
+    if (isEventDriven(oferta)) return []
     const outs = outputsOf.get(proc.id) ?? new Set<string>()
     const dependentPis = input.piTables.filter((pt) => pt.tables.some((t) => outs.has(t))).map((pt) => pt.piCode)
     const demandas = dependentPis.map((pi) => demandaOf.get(pi)).filter((d): d is string => !!d)
     const reqSec = requiredCadenceSeconds(demandas, oferta)
     const ofertaSec = durationToSeconds(oferta)
     const unsatisfiable = demandas.some((d) => durationToSeconds(d) < ofertaSec)
-    return {
+    return [{
       processId: proc.id,
       label: proc.label,
       oferta,
@@ -133,7 +150,7 @@ export function deriveIngestionMap(input: DeriveMapInput): IngestionMapRow[] {
       requiredCadenceSeconds: reqSec,
       dependentPis,
       unsatisfiable,
-    }
+    }]
   })
 }
 
@@ -183,8 +200,11 @@ export function deriveEntityFreshness(input: DeriveMapInput): EntityFreshnessRow
     const demandas = dependentPis.map((pi) => demandaOf.get(pi)).filter((d): d is string => !!d)
     const tightestSec = demandas.reduce((mn, d) => Math.min(mn, durationToSeconds(d)), Infinity)
     const tightestDemand = demandas.length ? secondsToDuration(tightestSec) : null
-    const reqSec = oferta != null ? requiredCadenceSeconds(demandas, oferta) : demandas.length ? tightestSec : null
-    const ofertaSec = oferta != null ? durationToSeconds(oferta) : null
+    // EVENT-DRIVEN: sin piso de oferta ni cadencia periódica — la cadencia requerida solo existe si
+    // algún PI declara demanda (y es esa demanda); nunca es insatisfacible por oferta.
+    const evento = isEventDriven(oferta)
+    const reqSec = oferta != null && !evento ? requiredCadenceSeconds(demandas, oferta) : demandas.length ? tightestSec : null
+    const ofertaSec = oferta != null && !evento ? durationToSeconds(oferta) : null
     const unsatisfiable = ofertaSec != null && demandas.some((d) => durationToSeconds(d) < ofertaSec)
     return {
       entity,
