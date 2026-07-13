@@ -69,6 +69,28 @@ describe('table-runtime · helpers puros', () => {
     expect(vtFormat('2026-05-25T00:00:00.000Z')).toBe('2026-05-25')
     expect(vtFormat('Presente')).toBe('Presente')
   })
+
+  // Issue #51: el driver entrega BIGINT como string (SUM sobre BIGINT) — el format numérico debe
+  // aplicar igual que sobre número, sin perder precisión más allá de MAX_SAFE_INTEGER.
+  it('vtFormat: int_0 sobre STRING numérico agrupa miles igual que sobre número', () => {
+    expect(vtFormat(640838, 'int_0')).toBe('640.838')
+    expect(vtFormat('640838', 'int_0')).toBe('640.838') // mismo format, mismo render
+    expect(vtFormat('-2644239500', 'int_0')).toBe('-2.644.239.500')
+    expect(vtFormat('0', 'int_0')).toBe('0')
+    expect(vtFormat('007', 'int_0')).toBe('7') // ceros a la izquierda no agrupan raro
+  })
+
+  it('vtFormat: un entero mayor que MAX_SAFE_INTEGER se formatea SIN perder dígitos', () => {
+    expect(vtFormat('9007199254740993', 'int_0')).toBe('9.007.199.254.740.993') // Number lo redondearía a …992
+    expect(vtFormat('123456789012345678901', 'int_0')).toBe('123.456.789.012.345.678.901')
+  })
+
+  it('vtFormat: string decimal con format numérico coacciona; no numérico se sirve tal cual', () => {
+    expect(vtFormat('1234.6', 'int_0')).toBe('1.235') // DECIMAL-as-string: redondea como el número
+    expect(vtFormat('0.123', 'percent_1')).toBe('12.3%')
+    expect(vtFormat('N/A', 'int_0')).toBe('N/A') // no rompe el render
+    expect(vtFormat('', 'int_0')).toBe('')
+  })
 })
 
 describe('table-runtime · vtApply (filtro + búsqueda + orden)', () => {
