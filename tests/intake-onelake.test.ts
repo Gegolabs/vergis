@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createOneLakeIntake, createFabricJobs, createFabricJobStatus, type TokenProvider } from '@vergis/capabilities'
+import { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus, type TokenProvider } from '@vergis/capabilities'
 
 const tokens: TokenProvider = { getToken: async () => 'BEARER123' }
 
@@ -108,5 +108,37 @@ describe('intake-onelake · estado de corridas (jobs/instances)', () => {
   it('listInstances: error HTTP → throw', async () => {
     const status = createFabricJobStatus(tokens, { fetch: jsonFetch({}, 403) })
     await expect(status.listInstances('WS', 'SJD')).rejects.toThrow(/listInstances falló \(403\)/)
+  })
+})
+
+// Issue #55: lectura del log de conversión desde el landing (OneLake DFS GET).
+describe('intake-onelake · lectura (OneLakeReader)', () => {
+  const target = { workspaceId: 'WS', lakehouseId: 'LH' }
+  const fetchWith = (status: number, body: string) =>
+    (async (url: string, init?: { headers?: Record<string, string> }) => {
+      fetchWith.last = { url: String(url), auth: init?.headers?.['authorization'] }
+      return { ok: status < 400, status, text: async () => body } as unknown as Response
+    }) as unknown as typeof fetch
+  fetchWith.last = { url: '', auth: undefined as string | undefined }
+
+  it('read: GET con bearer y path codificado por segmento; devuelve el contenido', async () => {
+    const reader = createOneLakeReader(tokens, { fetch: fetchWith(200, '[ingest] ✔ DONE commit W28: 7626 filas') })
+    const out = await reader.read(target, 'Files/code/_ingest_log.txt')
+    expect(out).toContain('7626 filas')
+    expect(fetchWith.last.url).toBe('https://onelake.dfs.fabric.microsoft.com/WS/LH/Files/code/_ingest_log.txt')
+    expect(fetchWith.last.auth).toBe('Bearer BEARER123')
+  })
+
+  it('read: 404 → null (sin log no es error); otro fallo HTTP → throw', async () => {
+    expect(await createOneLakeReader(tokens, { fetch: fetchWith(404, '') }).read(target, 'Files/x.txt')).toBeNull()
+    await expect(createOneLakeReader(tokens, { fetch: fetchWith(403, 'denied') }).read(target, 'Files/x.txt')).rejects.toThrow(/leer.*403/)
+  })
+
+  it('read: un log largo devuelve la COLA (el diagnóstico vive al final)', async () => {
+    const body = 'INICIO-'.padEnd(100_000, 'x') + 'FINAL'
+    const out = await createOneLakeReader(tokens, { fetch: fetchWith(200, body) }).read(target, 'Files/x.txt', { maxBytes: 1024 })
+    expect(out).toHaveLength(1024)
+    expect(out!.endsWith('FINAL')).toBe(true)
+    expect(out).not.toContain('INICIO')
   })
 })

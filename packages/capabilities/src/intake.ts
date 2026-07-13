@@ -44,6 +44,10 @@ export interface IntakeSlot {
   maxBytes?: number
   target: IntakeTarget
   trigger?: IntakeTrigger
+  /** Ruta (dentro del MISMO lakehouse del target) del log que escribe el proceso de conversión —
+   * Frescura lo expone para reconfirmar una carga (filas, semana, commit) sin acceso a Fabric.
+   * Default `Files/code/_ingest_log.txt`; `log: false` en el YAML lo deshabilita. */
+  log?: string | false
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
@@ -84,8 +88,19 @@ function parseSlot(s: unknown, i: number, seen: Set<string>): IntakeSlot {
     if (t['jobType'] != null) trig.jobType = String(t['jobType'])
     out.trigger = trig
   }
+  if (o['log'] === false) out.log = false
+  else if (o['log'] != null) {
+    const p = String(o['log'])
+    if (!/^Files\//.test(p)) throw new Error(`intake: '${id}'.log debe empezar en 'Files/' (vive en el mismo Lakehouse del target).`)
+    out.log = p
+  }
   return out
 }
+
+/** Ruta efectiva del log de conversión de un slot (null = deshabilitado). */
+export const DEFAULT_INGEST_LOG = 'Files/code/_ingest_log.txt'
+export const slotLogPath = (slot: IntakeSlot): string | null =>
+  slot.log === false ? null : slot.log ?? DEFAULT_INGEST_LOG
 
 function parseTarget(raw: unknown, slotId: string): IntakeTarget {
   const o = (raw ?? {}) as Record<string, unknown>

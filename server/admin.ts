@@ -96,6 +96,9 @@ export interface AdminDeps {
   intake?: IntakeRunner
   /** Estado de las últimas corridas de conversión de un slot (frente B · observabilidad). Opcional. */
   intakeStatus?: (slot: IntakeSlot) => Promise<RunRecord[]>
+  /** Log de la última conversión del slot (issue #55): reconfirma una carga (filas, semana, commit)
+   * sin acceso a Fabric. null = sin log (slot sin convención de log o archivo inexistente). Opcional. */
+  intakeLog?: (slot: IntakeSlot) => Promise<string | null>
   /** Grupos gestionados por Mira (sección «Grupos»). Opcional. */
   groupStore?: GroupStore
   /** Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional. */
@@ -715,6 +718,21 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   // Slots de ingesta del dominio: la carga manual se pliega acá. Una entidad casa con su slot por el item
   // del motor (slot.trigger.processRef === engine_ref.itemId del proceso que la produce).
   const domSlots = deps.intake ? (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id) : []
+  // Log de la última conversión por slot (issue #55): la reconfirmación de una carga (filas, semana,
+  // commit, archivado) legible sin acceso a Fabric. Tolerante a fallos: sin log → sin sección.
+  const slotLogs = new Map<string, string>()
+  if (deps.intakeLog) {
+    await Promise.all(domSlots.map(async (s) => {
+      const log = await deps.intakeLog!(s).catch(() => null)
+      if (log?.trim()) slotLogs.set(s.id, log)
+    }))
+  }
+  const logDetails = (slotId: string): string => {
+    const log = slotLogs.get(slotId)
+    if (!log) return ''
+    const tail = log.length > 4000 ? `…${log.slice(-4000)}` : log
+    return `<details class="guia"><summary class="sub">Log de la última conversión</summary><pre class="sub" style="white-space:pre-wrap;overflow-x:auto;max-height:260px;overflow-y:auto">${escapeHtml(tail.trim())}</pre></details>`
+  }
   const slotFor = (r: DomainEntityFreshness): IntakeSlot | undefined =>
     r.engineItemId ? domSlots.find((s) => s.trigger?.processRef && s.trigger.processRef === r.engineItemId) : undefined
   if (!rows.length && !domSlots.length) {
@@ -738,7 +756,7 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
         : ''
       const slot = slotFor(r)
       if (slot) matched.add(slot.id)
-      const alimentar = slot ? uploadForm(domain.id, slot, token) : '<span class="sub">automática</span>'
+      const alimentar = slot ? uploadForm(domain.id, slot, token) + logDetails(slot.id) : '<span class="sub">automática</span>'
       const pis = r.dependentPis.map((p) => escapeHtml(p)).join(', ')
       return `<tr${warn ? ' style="color:var(--err)"' : ''}>
         <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}${pis ? `<div class="sub">PIs: ${pis}</div>` : ''}</td>
@@ -768,7 +786,7 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   }
   const orphanSection = orphanSlots.length
     ? `<h2>Otras cargas</h2><p class="sub">Slots de ingesta del dominio sin entidad registrada en Frescura todavía (registrá su fuente/proceso en <a href="/admin/sources">Fuentes</a> para verlas por entidad).</p>
-       <ul class="cards">${orphanSlots.map((s) => `<li><b>${escapeHtml(s.label)}</b>${s.description ? `<div class="sub">${escapeHtml(s.description)}</div>` : ''}${slotRunLine(s)}${uploadForm(domain.id, s, token)}</li>`).join('')}</ul>`
+       <ul class="cards">${orphanSlots.map((s) => `<li><b>${escapeHtml(s.label)}</b>${s.description ? `<div class="sub">${escapeHtml(s.description)}</div>` : ''}${slotRunLine(s)}${uploadForm(domain.id, s, token)}${logDetails(s.id)}</li>`).join('')}</ul>`
     : ''
   const guia = domSlots.length
     ? `<details class="guia"><summary>¿Cómo alimentar manualmente?</summary>
