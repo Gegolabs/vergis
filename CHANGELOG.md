@@ -4,6 +4,15 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.6.0 — 2026-07-13
+
+- **`oferta: evento`** — fuentes EVENT-DRIVEN de primera clase (la mejora que la instancia GH
+  documentaba como pendiente): una fuente sin cadencia (cada llegada es un evento, p. ej. una OC
+  por archivo) se declara honestamente sin fabricar una periodicidad. No impone piso a la demanda,
+  el reconciliador no la agenda, su entidad aparece en Frescura con corridas y salud de falla, y el
+  monitor alerta conversiones fallidas. Habilita registrar el proceso de PI-07 y cerrar su hueco de
+  observabilidad (#56) sin datos inventados.
+
 ## 0.5.0 — 2026-07-13
 
 La operación de cargas se vuelve una superficie de primera clase (issues #55–#58, todos
