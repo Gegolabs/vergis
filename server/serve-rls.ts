@@ -26,7 +26,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, readdirSync } from 'node:fs'
-import { watchPaths } from './hot-reload'
+import { watchPaths, swapRecordInPlace } from './hot-reload'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
@@ -146,9 +146,21 @@ const discover = discovery.discover
 const visibleFor = discovery.visibleFor
 
 // --- Setup del CONECTOR según el motor --------------------------------------
-const connections = process.env['VERGIS_CONNECTIONS']
-  ? (JSON.parse(process.env['VERGIS_CONNECTIONS']) as Record<string, SqlConnectionProfile>)
-  : null
+// VERGIS_CONNECTIONS acepta JSON inline (compat) o una RUTA a un archivo JSON (issue #50). El archivo
+// es preferible: los perfiles llevan secretos y un env es legible en /proc y `docker inspect`; un
+// archivo montado con permisos restrictivos no — y además habilita el hot-reload (abajo).
+const CONNECTIONS_RAW = (process.env['VERGIS_CONNECTIONS'] ?? '').trim()
+const CONNECTIONS_FILE = CONNECTIONS_RAW && !CONNECTIONS_RAW.startsWith('{') ? resolve(CONNECTIONS_RAW) : null
+function parseConnections(): Record<string, SqlConnectionProfile> | null {
+  if (!CONNECTIONS_RAW) return null
+  const text = CONNECTIONS_FILE ? readFileSync(CONNECTIONS_FILE, 'utf8') : CONNECTIONS_RAW
+  const parsed = JSON.parse(text) as Record<string, SqlConnectionProfile>
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('VERGIS_CONNECTIONS debe ser un objeto { database_ref: perfil }.')
+  return parsed
+}
+// Referencia VIVA (mismo patrón que el policy store): el hot-reload muta este objeto IN-PLACE y todos
+// los consumidores (conector, publisher, master-data) resuelven el perfil por database_ref a call-time.
+const connections = parseConnections()
 
 // `ready` es SOLO el gate del arranque en frío (nada evaluado aún). Después, la servibilidad es
 // POR PI (issue #52): `piState` guarda el veredicto por slug (engine=fabric); en clickhouse la
@@ -323,7 +335,14 @@ let annStore: AnnotationStore | null = null
 // índice/apertura siguen por acceso-a-datos (comportamiento vivo); encendido, gatean por la ACL del
 // PI (rol owner/collaborator/viewer) compuesta con la RLS de datos (que NUNCA se salta).
 let governance: SqliteGovernanceStore | null = null
-let domainsCfg: DomainDecl[] = [] // dominios declarados (para gatear «Gestión» en el avatar del catálogo)
+// Gobierno de dominio con referencia VIVA (issue #50): el admin y el catálogo leen ESTOS arreglos a
+// request-time; el hot-reload los re-puebla in-place (splice) — un dominio o slot nuevo entra sin restart.
+const domainsCfg: DomainDecl[] = [] // dominios declarados (también gatea «Gestión» en el avatar del catálogo)
+const intakeSlotsCfg: IntakeSlot[] = [] // slots de ingesta declarados
+const parseDomainsFile = (): DomainDecl[] =>
+  process.env['VERGIS_DOMAINS'] ? parseDomainsConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_DOMAINS']), 'utf8'))) : []
+const parseIntakeFile = (): IntakeSlot[] =>
+  process.env['VERGIS_INTAKE'] ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8'))) : []
 let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
 let piAclEnabled = false
@@ -551,13 +570,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_GROUPS']), 'utf8')) as { groups?: GroupSeed[] }).groups ?? [])
       : []
     // Gestión de DOMINIO: dominios declarados (etiqueta + stewards) y slots de ingesta de la instancia.
-    const domains: DomainDecl[] = process.env['VERGIS_DOMAINS']
-      ? parseDomainsConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_DOMAINS']), 'utf8')))
-      : []
-    domainsCfg = domains // expuesto a module-level para el avatar del catálogo (¿gestiona dominios?)
-    const intakeSlots: IntakeSlot[] = process.env['VERGIS_INTAKE']
-      ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8')))
-      : []
+    // Se cargan EN los arreglos vivos module-level (el hot-reload los re-puebla in-place, issue #50).
+    domainsCfg.splice(0, domainsCfg.length, ...parseDomainsFile())
+    const domains = domainsCfg
+    intakeSlotsCfg.splice(0, intakeSlotsCfg.length, ...parseIntakeFile())
+    const intakeSlots = intakeSlotsCfg
     // Registro de fuentes de la instancia (frente B · frescura): fuentes (oferta + dominio), mapeos
     // tabla→fuente, procesos (con engine_ref al item del motor) y proceso→salidas. Declarativo: se
     // re-siembra en cada arranque (idempotente). Sin el archivo, el registro queda vacío (no hay frescura).
@@ -610,7 +627,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       const jobStatus = createFabricJobStatus(tokens)
       // Engine client (frente B · frescura): resuelve processRef → engine_ref con el registro de procesos.
       const engine = createFabricEngineClient(tokens, async (processRef) => (await govStore.listProcesses()).find((p) => p.id === processRef)?.engine)
-      if (!intakeSlots.length) return { engine }
+      // El runner se construye aunque HOY no haya slots: los slots son un arreglo vivo (hot-reload,
+      // issue #50) y uno agregado en caliente debe encontrar su ejecutor listo.
       const onelake = createOneLakeIntake(tokens)
       const jobs = createFabricJobs(tokens)
       return {
@@ -825,7 +843,49 @@ void (async () => {
 // el cache de specs y re-corre el gate de readiness. servingCap NO se reconstruye: un claim nuevo sin
 // inyección queda fail-closed (deny), no fuga — su alta sigue necesitando restart (documentado en work/045).
 const HOT_RELOAD = (process.env['VERGIS_HOT_RELOAD'] ?? '1') !== '0'
+
+/** Re-parsea conexiones + dominios + slots (issue #50) con validate-before-swap POR ARCHIVO: uno
+ * malformado conserva su estado vigente y se loguea, los otros dos igual entran. Los swaps son
+ * IN-PLACE sobre las referencias vivas que capturaron todos los consumidores. Sin secretos en logs:
+ * de las conexiones solo se reportan conteos y refs, jamás perfiles. */
+function reloadDomainGovernance(reason: string): void {
+  if (CONNECTIONS_FILE && connections) {
+    try {
+      const diff = swapRecordInPlace(connections, parseConnections() ?? {})
+      // El pool mssql de un ref YA conectado conserva sus credenciales hasta reciclarse (evict on
+      // error) o un restart — el perfil cambiado aplica a conexiones futuras.
+      for (const k of diff.changed) console.warn(`[hot-reload] conexión '${k}' cambió: un pool ya abierto conserva las credenciales previas hasta reciclarse.`)
+      if (diff.added.length || diff.changed.length || diff.removed.length) {
+        console.log(`[hot-reload] conexiones (${reason}): +${diff.added.length} nuevas · ${diff.changed.length} cambiadas · -${diff.removed.length} removidas (${Object.keys(connections).length} activas)`)
+      }
+    } catch (e) {
+      console.error(`[hot-reload] recarga de conexiones falló (${reason}); perfiles vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  try {
+    const next = parseDomainsFile()
+    if (next.length !== domainsCfg.length || JSON.stringify(next) !== JSON.stringify(domainsCfg)) {
+      domainsCfg.splice(0, domainsCfg.length, ...next)
+      console.log(`[hot-reload] dominios (${reason}): ${domainsCfg.length} declarado(s)`)
+    }
+  } catch (e) {
+    console.error(`[hot-reload] recarga de dominios falló (${reason}); dominios vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  try {
+    const next = parseIntakeFile()
+    if (next.length !== intakeSlotsCfg.length || JSON.stringify(next) !== JSON.stringify(intakeSlotsCfg)) {
+      intakeSlotsCfg.splice(0, intakeSlotsCfg.length, ...next)
+      console.log(`[hot-reload] slots de ingesta (${reason}): ${intakeSlotsCfg.length} declarado(s)`)
+    }
+  } catch (e) {
+    console.error(`[hot-reload] recarga de slots de ingesta falló (${reason}); slots vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 function reloadGovernance(reason: string): void {
+  // Primero el gobierno de dominio (conexiones/dominios/slots): el re-bootstrap de abajo ya debe ver
+  // los perfiles nuevos para verificar un PI sobre un warehouse recién dado de alta (issue #50 + #52).
+  reloadDomainGovernance(reason)
   const next = new Map<string, PolicyDecl>()
   try {
     loadPolicyStoreInto(next)
@@ -870,6 +930,15 @@ if (HOT_RELOAD) {
     }
   })
   if (POLICY_PATHS.length) watchPaths(POLICY_PATHS.map((p) => resolve(p)), () => reloadGovernance('watch:policies'))
+  // Gobierno de dominio (issue #50): conexiones (si es archivo) + dominios + slots. La recarga es la
+  // COMPLETA (reloadGovernance): un dominio nuevo llega con los tres a la vez y el re-bootstrap debe
+  // verificar el PI nuevo contra el perfil nuevo — recargar solo el archivo tocado dejaría el alta a medias.
+  const domainGovTargets = [
+    ...(CONNECTIONS_FILE ? [CONNECTIONS_FILE] : []),
+    ...(process.env['VERGIS_DOMAINS'] ? [resolve(process.env['VERGIS_DOMAINS'])] : []),
+    ...(process.env['VERGIS_INTAKE'] ? [resolve(process.env['VERGIS_INTAKE'])] : []),
+  ]
+  if (domainGovTargets.length) watchPaths(domainGovTargets, () => reloadGovernance('watch:dominio'))
   process.on('SIGHUP', () => reloadGovernance('SIGHUP'))
-  console.log(`[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} (SIGHUP fuerza recarga de gobierno)`)
+  console.log(`[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} (SIGHUP fuerza recarga de gobierno)`)
 }

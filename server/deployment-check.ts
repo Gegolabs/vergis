@@ -65,6 +65,13 @@ export function checkDeploymentConfig(env: NodeJS.ProcessEnv = process.env): Con
       }
     }
   }
+  // 1·ter) VERGIS_CONNECTIONS es dual: JSON inline (empieza con '{') o RUTA a archivo (issue #50).
+  //    Como ruta, el mismo chequeo de arriba — pero SIN volcar el valor al reporte si fuera inline
+  //    (contiene secretos): solo se reporta como path cuando NO es inline.
+  const connRaw = (env['VERGIS_CONNECTIONS'] ?? '').trim()
+  if (connRaw && !connRaw.startsWith('{') && !existsSync(resolve(connRaw))) {
+    findings.push({ level: 'error', env: 'VERGIS_CONNECTIONS', message: `VERGIS_CONNECTIONS=${connRaw} no es JSON inline y el path no existe (¿volumen sin montar?).` })
+  }
 
   // 1·bis) D2 · El gate confía en `X-Forwarded-*` SIN verificar (así entrega oauth2-proxy la identidad).
   //    Si el server sirve PIs (VERGIS_SPECS_DIR) sin VERGIS_GATE_SECRET (A10), cualquier puerto alcanzable
