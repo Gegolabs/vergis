@@ -2,7 +2,40 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { debounce, createCachedScanner, watchPaths } from '../server/hot-reload'
+import { debounce, createCachedScanner, watchPaths, swapRecordInPlace } from '../server/hot-reload'
+
+describe('swapRecordInPlace (issue #50 · hot-reload de perfiles de conexión)', () => {
+  it('muta IN-PLACE la misma referencia: altas, cambios y bajas', () => {
+    const live: Record<string, { server: string; secret: string }> = {
+      wh_a: { server: 'a', secret: 's1' },
+      wh_b: { server: 'b', secret: 's2' },
+    }
+    const captured = live // un consumidor que capturó la referencia (createExecuteSqlDwh)
+    const diff = swapRecordInPlace(live, {
+      wh_a: { server: 'a', secret: 's1' }, // intacta
+      wh_b: { server: 'b', secret: 'ROTADO' }, // cambiada
+      wh_c: { server: 'c', secret: 's3' }, // nueva
+      // wh_removida: no está → si existiera, saldría
+    })
+    expect(diff).toEqual({ added: ['wh_c'], changed: ['wh_b'], removed: [] })
+    expect(captured['wh_c']).toEqual({ server: 'c', secret: 's3' }) // el consumidor la ve sin re-cablear
+    expect(captured['wh_b'].secret).toBe('ROTADO')
+  })
+
+  it('una clave removida del archivo desaparece del registro vivo', () => {
+    const live: Record<string, number> = { a: 1, b: 2 }
+    const diff = swapRecordInPlace(live, { a: 1 })
+    expect(diff.removed).toEqual(['b'])
+    expect('b' in live).toBe(false)
+  })
+
+  it('el diff reporta CLAVES, jamás valores (los perfiles llevan secretos y esto se loguea)', () => {
+    const live: Record<string, { secret: string }> = { wh: { secret: 'viejo' } }
+    const diff = swapRecordInPlace(live, { wh: { secret: 'nuevo' } })
+    expect(JSON.stringify(diff)).not.toContain('viejo')
+    expect(JSON.stringify(diff)).not.toContain('nuevo')
+  })
+})
 
 describe('debounce', () => {
   it('coalesce una ráfaga de triggers en una sola ejecución tras la quietud', () => {

@@ -19,6 +19,10 @@ services:
     restart: unless-stopped
     # Secretos de la instancia (NUNCA en git): VERGIS_CONNECTIONS (Service Principal → Fabric),
     # VERGIS_ADMIN_SEED (admins semilla), VERGIS_INDEX_TITLE/LOGO (branding). En un archivo gitignored.
+    # VERGIS_CONNECTIONS acepta JSON inline O una RUTA a un archivo JSON montado (preferido): un
+    # archivo con permisos restrictivos no queda legible en /proc ni `docker inspect`, y tiene
+    # hot-reload — dar de alta el warehouse de un dominio nuevo no exige restart (junto con
+    # VERGIS_DOMAINS y VERGIS_INTAKE, que también recargan en caliente).
     env_file: [vergis.env]
     environment:
       VERGIS_ENGINE: fabric                       # motor C: push-down a Fabric (la RLS vive en la fuente)
