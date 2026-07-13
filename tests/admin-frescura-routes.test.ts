@@ -199,6 +199,59 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(res.body).toContain('SystemExit: mezcla de semanas')
   })
 
+  // Issue #55: el LOG de la última conversión visible en Frescura — reconfirmación sin Fabric.
+  it('Frescura: el slot muestra el log de la última conversión (escapado); sin log no hay sección', async () => {
+    const SLOTS = parseIntakeConfig({
+      slots: [
+        { id: 'saldos', label: 'Saldos', domain: 'cartera', maxBytes: 1024, target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' }, trigger: { processRef: 'P1' } },
+        { id: 'sin_log', label: 'Sin log', domain: 'cartera', maxBytes: 1024, target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/otro' }, trigger: { processRef: 'P2' } },
+      ],
+    })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => [],
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      intakeStatus: async () => [],
+      intakeLog: async (s) => (s.id === 'saldos' ? '[ingest] ✔ DONE commit fact_saldos W28: 7626 filas <raw>' : null),
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('Log de la última conversión')
+    expect(res.body).toContain('7626 filas &lt;raw&gt;') // contenido visible y ESCAPADO
+    expect(res.body.split('Log de la última conversión')).toHaveLength(2) // solo el slot que tiene log
+  })
+
+  it('Frescura: un intakeLog que falla no rompe la página (sin sección, render igual)', async () => {
+    const SLOTS = parseIntakeConfig({
+      slots: [{ id: 'saldos', label: 'Saldos', domain: 'cartera', maxBytes: 1024, target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' }, trigger: { processRef: 'P1' } }],
+    })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => [],
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      intakeStatus: async () => [],
+      intakeLog: async () => { throw new Error('onelake caído') },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).not.toContain('Log de la última conversión')
+  })
+
   it('Otras cargas: si el motor no responde, el slot lo dice en vez de callar', async () => {
     const SLOTS = parseIntakeConfig({
       slots: [{

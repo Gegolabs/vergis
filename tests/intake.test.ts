@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseIntakeConfig, matchSlot, validateUpload, globToRegExp, slotMaxBytes } from '@vergis/capabilities'
+import { parseIntakeConfig, matchSlot, validateUpload, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG } from '@vergis/capabilities'
 
 const SLOT = {
   slots: [
@@ -27,6 +27,15 @@ describe('intake · contrato declarativo', () => {
   it('default de maxBytes = 25 MB cuando se omite', () => {
     const slots = parseIntakeConfig({ slots: [{ id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }] })
     expect(slotMaxBytes(slots[0])).toBe(25 * 1024 * 1024)
+  })
+
+  // Issue #55: la ruta del log de conversión es declarable, con default por convención.
+  it('slotLogPath: default Files/code/_ingest_log.txt · declarable · log:false lo apaga · fuera de Files/ rechaza', () => {
+    const base = { id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }
+    expect(slotLogPath(parseIntakeConfig({ slots: [base] })[0])).toBe(DEFAULT_INGEST_LOG)
+    expect(slotLogPath(parseIntakeConfig({ slots: [{ ...base, log: 'Files/logs/conv.txt' }] })[0])).toBe('Files/logs/conv.txt')
+    expect(slotLogPath(parseIntakeConfig({ slots: [{ ...base, log: false }] })[0])).toBeNull()
+    expect(() => parseIntakeConfig({ slots: [{ ...base, log: '/etc/passwd' }] })).toThrow(/Files\//)
   })
 
   it('rechaza target incompleto, path fuera de Files/, id dup, trigger sin processRef', () => {

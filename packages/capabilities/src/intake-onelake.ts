@@ -70,6 +70,30 @@ async function dfsError(stage: string, res: Response, url: string): Promise<Erro
   return new Error(`onelake-intake: ${stage} falló (${res.status}) en ${url.replace(/\?.*$/, '')}: ${text.slice(0, 300)}`)
 }
 
+/** Lectura de un archivo del Lakehouse (p. ej. el LOG del proceso de conversión — issue #55). */
+export interface OneLakeReader {
+  /** Contenido del archivo, o null si no existe (404). Otros fallos lanzan. */
+  read(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string, opts?: { maxBytes?: number }): Promise<string | null>
+}
+
+export function createOneLakeReader(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): OneLakeReader {
+  const doFetch = opts.fetch ?? fetch
+  return {
+    async read(target, path, o = {}): Promise<string | null> {
+      const token = await tokens.getToken(SCOPE_ONELAKE)
+      const rel = path.replace(/^\/+|\/+$/g, '').split('/').map(encodeURIComponent).join('/')
+      const url = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}/${encodeURIComponent(target.lakehouseId)}/${rel}`
+      const res = await doFetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
+      if (res.status === 404) return null
+      if (!res.ok) throw await dfsError('leer', res, url)
+      const text = await res.text()
+      // Cola del archivo (el diagnóstico vive al final): tope defensivo para logs largos.
+      const max = o.maxBytes ?? 64 * 1024
+      return text.length > max ? text.slice(-max) : text
+    },
+  }
+}
+
 /** Dispara pipelines de Fabric (run-now) — land-and-trigger del intake. */
 export interface FabricJobs {
   runNow(trigger: IntakeTrigger, target?: IntakeTarget): Promise<void>
