@@ -89,6 +89,20 @@ export function vtIsCategorical(
 
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
 export function vtFormat(value: unknown, format?: string): string {
+  // Los drivers SQL entregan los enteros de 64 bits como STRING para no perder precisión (p. ej.
+  // SUM sobre BIGINT) — un `format` numérico debe formatear también el string numérico. Un entero
+  // se agrupa SOBRE el string (convertir a Number perdería dígitos más allá de MAX_SAFE_INTEGER);
+  // un string no numérico sigue su camino normal (se sirve tal cual, sin romper el render).
+  // AUTOCONTENIDO a propósito: esta función viaja al browser vía `.toString()` (PURE_FNS).
+  if (typeof value === 'string' && (format === 'int_0' || format === 'percent_1' || format === 'percent')) {
+    const s = value.trim()
+    if (format === 'int_0' && /^[+-]?\d+$/.test(s)) {
+      const digits = s.replace(/^[+-]/, '').replace(/^0+(?=\d)/, '')
+      const neg = s.charAt(0) === '-' && digits !== '0' ? '-' : ''
+      return neg + digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+    }
+    if (s !== '' && !Number.isNaN(Number(s))) return vtFormat(Number(s), format)
+  }
   if (typeof value === 'number') {
     if (Number.isNaN(value)) return '—'
     if (format === 'int_0')
