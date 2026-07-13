@@ -4,6 +4,15 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.6.1 — 2026-07-13
+
+- **fix(render): los controles del Inspector navegan de nuevo** — el `onchange` generado usaba
+  `new URL(…)`, que dentro de un handler inline resuelve contra `document.URL` (un string que
+  sombrea al constructor) y lanzaba `TypeError` en todo browser real: el selector single/multi
+  jamás navegó por clic (la URL directa `?ctx.*` sí funcionaba, por eso los probes no lo vieron).
+  Ahora `new window.URL(…)` + test de regresión que ejecuta el handler bajo el scoping real de
+  inline (`with(document)`), no solo su sintaxis. Reportado por la instancia GH (PI-01/PI-07).
+
 ## 0.6.0 — 2026-07-13
 
 - **`oferta: evento`** — fuentes EVENT-DRIVEN de primera clase (la mejora que la instancia GH
