@@ -553,6 +553,13 @@ function statusBadge(s: RunStatus): string {
     default: return s
   }
 }
+/** Motivo de falla de una corrida, listo para incrustar: escapado y recortado (los `failureReason`
+ * de Fabric traen stacks largos; la primera parte es la que diagnostica). Vacío si no hay error. */
+function runErrorLine(r: RunRecord | undefined): string {
+  if (!r?.error) return ''
+  const msg = r.error.length > 300 ? `${r.error.slice(0, 300)}…` : r.error
+  return `<div class="sub" style="color:var(--err)">${escapeHtml(msg)}</div>`
+}
 /** Antigüedad legible de una corrida ('hace 2 min', o la fecha si es vieja). */
 function fmtWhen(iso: string): string {
   const t = Date.parse(iso)
@@ -680,7 +687,7 @@ function freshnessHealthCell(r: DomainEntityFreshness): string {
   const runs = r.runs ?? []
   if (!runs.length) return `${kind}<br><span class="sub">sin corridas</span>`
   const flag = r.health?.failed ? ' · ✕ fallida' : r.health?.missed ? ' · ⚠️ atrasada' : ' · ✓'
-  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>`
+  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>${runErrorLine(runs[0])}`
 }
 
 /** Formulario compacto de carga manual de un slot (mismo write-path que el intake). */
@@ -744,9 +751,24 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   // Slots del dominio sin entidad registrada (land-only, o cuya fuente/proceso aún no está en el registro):
   // su carga manual igual debe tener dónde — no se pierde.
   const orphanSlots = domSlots.filter((s) => !matched.has(s.id))
+  // Estado de conversión por slot huérfano (mismo dato que «Última corrida» de las entidades): sin él,
+  // quien sube acá queda a ciegas si el job disparado falla — solo vería el archivo «recibido».
+  const orphanRuns = new Map<string, RunRecord[] | 'error'>()
+  if (deps.intakeStatus) {
+    await Promise.all(orphanSlots.filter((s) => s.trigger).map(async (s) => {
+      orphanRuns.set(s.id, await deps.intakeStatus!(s).catch(() => 'error' as const))
+    }))
+  }
+  const slotRunLine = (s: IntakeSlot): string => {
+    const st = orphanRuns.get(s.id)
+    if (st === undefined) return ''
+    if (st === 'error') return '<div class="sub">No se pudo consultar el estado de la conversión (reintentá refrescando).</div>'
+    if (!st.length) return '<div class="sub">Sin corridas todavía.</div>'
+    return `<div class="sub">Última corrida: ${statusBadge(st[0].status)} ${fmtWhen(st[0].startedAt)}</div>${runErrorLine(st[0])}`
+  }
   const orphanSection = orphanSlots.length
     ? `<h2>Otras cargas</h2><p class="sub">Slots de ingesta del dominio sin entidad registrada en Frescura todavía (registrá su fuente/proceso en <a href="/admin/sources">Fuentes</a> para verlas por entidad).</p>
-       <ul class="cards">${orphanSlots.map((s) => `<li><b>${escapeHtml(s.label)}</b>${s.description ? `<div class="sub">${escapeHtml(s.description)}</div>` : ''}${uploadForm(domain.id, s, token)}</li>`).join('')}</ul>`
+       <ul class="cards">${orphanSlots.map((s) => `<li><b>${escapeHtml(s.label)}</b>${s.description ? `<div class="sub">${escapeHtml(s.description)}</div>` : ''}${slotRunLine(s)}${uploadForm(domain.id, s, token)}</li>`).join('')}</ul>`
     : ''
   const guia = domSlots.length
     ? `<details class="guia"><summary>¿Cómo alimentar manualmente?</summary>
