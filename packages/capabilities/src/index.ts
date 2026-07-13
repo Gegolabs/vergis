@@ -48,7 +48,7 @@ export type { IntakeSlot, IntakeTarget, IntakeTrigger, ValidateResult } from './
 export { createTokenProvider, SCOPE_ONELAKE, SCOPE_FABRIC } from './aad-token'
 export type { TokenProvider, SpCreds } from './aad-token'
 export { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus } from './intake-onelake'
-export type { OneLakeIntake, FabricJobs, FabricJobStatus } from './intake-onelake'
+export type { OneLakeIntake, OneLakeReader, OneLakeEntry, FabricJobs, FabricJobStatus } from './intake-onelake'
 export { createFabricScheduler, createFabricEngineClient } from './fabric-engine'
 export type { FabricScheduler, EngineResolver } from './fabric-engine'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'

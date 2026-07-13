@@ -4,6 +4,27 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.5.0 — 2026-07-13
+
+La operación de cargas se vuelve una superficie de primera clase (issues #55–#58, todos
+nacidos de la operación real de la instancia GH ese mismo día).
+
+- **Consola de Cargas por dominio** (#58, `/admin/dominio/<id>/cargas`): línea de tiempo
+  que correlaciona cargas de archivos (quién/cuándo/tamaño, del audit) con corridas de
+  conversión (estado/duración/motivo); landing y archivo histórico (`_processed/`)
+  navegables; **re-run** de la conversión, **retiro** de un archivo del landing (a
+  `_retirado/`, reversible) y **reactivación** desde el histórico — el ciclo completo de
+  rollback honesto para pipelines por-clave. Todas las acciones con CSRF + steward + audit.
+- **Log de la última conversión visible** (#55): en Frescura y en la consola; el slot
+  declara la ruta (`log`, default `Files/code/_ingest_log.txt`); lectura OneLake tolerante.
+- **Coherencia declarativa** (#56): un slot cuyo trigger no está registrado como proceso
+  en Fuentes se acusa ruidosamente (Frescura + consola) — era el hueco silencioso que dejó
+  al slot de PI-07 sin observabilidad.
+- **Residuos en el landing** (#57): archivos anteriores a la última corrida completada se
+  marcan «se re-procesará», con retiro a un clic — la causa raíz del duplicado de datos
+  del incidente PI-07.
+- Capabilities: `OneLakeReader` gana `list`/`copy`/`remove`/`readBytes` (DFS).
+
 ## 0.4.0 — 2026-07-13
 
 Cierre de los issues #50–#54 (todos reportados desde la instancia GH en beta): robustez
