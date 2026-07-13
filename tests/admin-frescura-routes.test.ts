@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAdmin, type AdminHandler, type DomainEntityFreshness } from '../server/admin'
-import { parseMasterDataConfig, parseDomainsConfig, SqliteMasterDataStore, SqliteAdminStore, type SourceRow, type ProcessRow } from '@vergis/capabilities'
+import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, type SourceRow, type ProcessRow, type RunRecord } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
 const SECRET = 'test-secret'
@@ -120,6 +120,109 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     await nb.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
     expect(res.body).toContain('Notebook')
     expect(res.body).toContain('migrar a Spark Job') // alerta explícita (celda + banner)
+  })
+
+  // Issue #53: el motivo de la falla del job disparado debe ser legible en Frescura — sin él, quien
+  // carga un archivo solo ve «Falló» y reintenta a ciegas.
+  it('Frescura: una corrida fallida muestra el MOTIVO (failureReason), escapado', async () => {
+    const FAILED: DomainEntityFreshness[] = [{
+      ...FRESHNESS[0],
+      runs: [{ startedAt: '2026-07-09T09:00:00Z', endedAt: '2026-07-09T09:01:00Z', status: 'Failed', error: 'SystemExit: mezcla de semanas en la landing <W27+W28>' }],
+      health: { lastStatus: 'Failed', lastSuccessAt: null, ageSeconds: null, failed: true, missed: false },
+    }]
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => FAILED,
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('✕ Falló')
+    expect(res.body).toContain('SystemExit: mezcla de semanas en la landing &lt;W27+W28&gt;') // motivo visible y escapado
+  })
+
+  it('Frescura: un motivo de falla muy largo se recorta (los failureReason de Fabric traen stacks)', async () => {
+    const LONG = 'x'.repeat(400)
+    const FAILED: DomainEntityFreshness[] = [{
+      ...FRESHNESS[0],
+      runs: [{ startedAt: '2026-07-09T09:00:00Z', status: 'Failed', error: LONG }],
+      health: { lastStatus: 'Failed', lastSuccessAt: null, ageSeconds: null, failed: true, missed: false },
+    }]
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => FAILED,
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain(`${'x'.repeat(300)}…`)
+    expect(res.body).not.toContain('x'.repeat(301))
+  })
+
+  it('Otras cargas: un slot huérfano muestra su última corrida con motivo de falla (intakeStatus)', async () => {
+    const SLOTS = parseIntakeConfig({
+      slots: [{
+        id: 'saldos', label: 'Antigüedad de saldos', domain: 'cartera', maxBytes: 1024,
+        target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' },
+        trigger: { processRef: 'PIPE-HUERFANO' },
+      }],
+    })
+    const runs: RunRecord[] = [{ startedAt: '2026-07-09T09:00:00Z', status: 'Failed', error: 'SystemExit: mezcla de semanas' }]
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => [], // sin entidades: el slot cae en «Otras cargas»
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      intakeStatus: async () => runs,
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('Otras cargas')
+    expect(res.body).toContain('Última corrida:')
+    expect(res.body).toContain('✕ Falló')
+    expect(res.body).toContain('SystemExit: mezcla de semanas')
+  })
+
+  it('Otras cargas: si el motor no responde, el slot lo dice en vez de callar', async () => {
+    const SLOTS = parseIntakeConfig({
+      slots: [{
+        id: 'saldos', label: 'Antigüedad de saldos', domain: 'cartera', maxBytes: 1024,
+        target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' },
+        trigger: { processRef: 'PIPE-HUERFANO' },
+      }],
+    })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => [],
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      intakeStatus: async () => { throw new Error('fabric caído') },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('No se pudo consultar el estado de la conversión')
   })
 
   it('Aplicar cadencia: POST con CSRF llama al reconciliador y redirige con mensaje', async () => {
