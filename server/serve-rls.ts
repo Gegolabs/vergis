@@ -80,6 +80,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
+import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, type PiVerdict } from './engines/fabric'
 import { fail, readJsonBody } from './http-util'
 import { annSign as annSignHmac, verifyAnnToken } from './annotations'
 import { createRequestHandler } from './routes'
@@ -149,8 +150,12 @@ const connections = process.env['VERGIS_CONNECTIONS']
   ? (JSON.parse(process.env['VERGIS_CONNECTIONS']) as Record<string, SqlConnectionProfile>)
   : null
 
+// `ready` es SOLO el gate del arranque en frío (nada evaluado aún). Después, la servibilidad es
+// POR PI (issue #52): `piState` guarda el veredicto por slug (engine=fabric); en clickhouse la
+// réplica es una sola y el estado sigue siendo global.
 let ready = false
 let lastErr: string | null = null
+const piState = new Map<string, PiVerdict>()
 let servingCap: Capability // la Capability de query enforcing (el conector)
 let bootstrapAll: () => Promise<void>
 
@@ -231,35 +236,33 @@ if (ENGINE === 'clickhouse') {
   const dwh = createExecuteSqlDwh(connections, { injections })
   servingCap = dwh
 
-  // FAIL-CLOSED: cada tabla gobernada que sirva un PI DEBE tener RLS nativa habilitada en la fuente.
-  // Sin eso, push-down devolvería todas las filas (fuga). Si falta, no se marca ready.
+  // FAIL-CLOSED POR PI (issue #52): cada tabla gobernada que sirva un PI DEBE tener RLS nativa en la
+  // fuente (sin eso, push-down devolvería todas las filas → fuga). La verificación es por PI y consulta
+  // SOLO las conexiones en uso: un PI que no verifica no se sirve (503 con motivo en SU ruta) y los
+  // demás siguen. La lógica pura vive en ./engines/fabric (testeada); acá solo el plumbing.
   bootstrapAll = async () => {
-    const needed = new Set<string>()
-    for (const r of discover()) for (const t of r.tables) {
-      const pol = store.get(t)
-      // INVARIANTE: toda tabla SERVIDA (gobernada O pública) debe tener artefacto nativo. Una pública
-      // se manifiesta con su SECURITY POLICY allow-all (doc 018) → "sin artefacto" = sin gobierno (fuga),
-      // no "público". Las que no tienen entrada en el store ya no se sirven (canServe → deny).
-      if (pol) needed.add(t)
-    }
-    const sysSql =
-      `SELECT OBJECT_SCHEMA_NAME(pr.target_object_id) AS sch, OBJECT_NAME(pr.target_object_id) AS tbl ` +
-      `FROM sys.security_policies p JOIN sys.security_predicates pr ON pr.object_id = p.object_id WHERE p.is_enabled = 1`
-    const protectedTables = new Set<string>()
-    for (const ref of Object.keys(connections)) {
-      const out = (await dwh.execute({ database_ref: ref, sql: sysSql }, { agent: 'vergis' })) as { rows: { sch: string; tbl: string }[] }
-      for (const row of out.rows) protectedTables.add(`${row.sch}.${row.tbl}`)
-    }
-    const missing = [...needed].filter((t) => !protectedTables.has(t))
-    if (missing.length) {
-      throw new Error(
-        `Fail-closed (engine=fabric): estas tablas servidas NO tienen artefacto SECURITY POLICY en la fuente ` +
-          `(gobernada → predicado-filtro; pública → allow-all): ${missing.join(', ')}. ` +
-          `Aplica la SECURITY POLICY (deploy/fabric-pushdown/, regenerada desde la política) antes de servir.`,
-      )
-    }
-    console.log(`[vergis-rls] push-down OK: ${[...needed].length} tabla(s) gobernada(s) con RLS nativa verificada.`)
-    ready = true; lastErr = null
+    const reports = discover()
+    const { state, usedRefs, refErrors } = await verifyFabricServability({
+      pis: reports.map((r) => ({ slug: r.slug, tables: r.tables, databaseRefs: r.databaseRefs })),
+      store,
+      protectedTablesOf: async (ref) => {
+        const out = (await dwh.execute({ database_ref: ref, sql: SYS_SECURITY_POLICIES_SQL }, { agent: 'vergis' })) as { rows: { sch: string; tbl: string }[] }
+        return new Set(out.rows.map((row) => `${row.sch}.${row.tbl}`))
+      },
+      previous: piState,
+    })
+    // Swap tras evaluar TODO (validate-before-swap): el estado vivo nunca queda a medias.
+    piState.clear()
+    for (const [slug, v] of state) piState.set(slug, v)
+    ready = true // frío superado: de acá en adelante el estado es por-PI
+    const degraded = [...state].filter(([, v]) => !v.ok) as [string, { ok: false; reason: string }][]
+    for (const [slug, v] of degraded) console.error(`[vergis-rls] PI '${slug}' NO servible (fail-closed): ${v.reason}`)
+    for (const [ref, err] of refErrors) console.error(`[vergis-rls] conexión '${ref}' no verificable: ${err}`)
+    console.log(`[vergis-rls] push-down: ${state.size - degraded.length}/${state.size} PI con RLS nativa verificada (${usedRefs.length} conexión(es) en uso).`)
+    lastErr = degraded.length ? `${degraded.length} de ${state.size} PI no servibles` : null
+    // Lanzar mantiene el RETRY con backoff del arranque (self-healing: al aplicar el artefacto o
+    // revivir la conexión, la próxima pasada re-sirve sola). El estado por-PI YA quedó swapeado.
+    if (degraded.length || refErrors.size) throw new Error(lastErr ?? `conexión(es) no verificables: ${[...refErrors.keys()].join(', ')}`)
   }
 }
 
@@ -510,6 +513,17 @@ const server = createServer(
     indexReports,
     renderIndexPage,
     canOpenPi,
+    // Servibilidad POR PI (issue #52, engine=fabric): motivo del bloqueo o null. Un PI descubierto
+    // pero aún no verificado (spec recién añadida en caliente) queda fail-closed hasta la próxima
+    // pasada de verificación. En clickhouse el estado sigue siendo global (gate `ready`).
+    piBlocked: (report: Report): string | null => {
+      if (ENGINE !== 'fabric') return null
+      const v = piState.get(report.slug)
+      if (!v) return 'pendiente de verificación de su RLS nativa (reintenta en unos segundos).'
+      return v.ok ? null : v.reason
+    },
+    healthSummary: () =>
+      ENGINE === 'fabric' ? { total: piState.size, serving: [...piState.values()].filter((v) => v.ok).length } : null,
   }),
 )
 
@@ -827,13 +841,21 @@ function reloadGovernance(reason: string): void {
   if (typeof cached.clear === 'function') cached.clear()
   const r = discovery.rebuild()
   console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${discover().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
-  // Fail-closed en el reload: si el re-bootstrap falla (fabric: falta SECURITY POLICY nativa para una
-  // tabla recién gobernada; CH: recompilación/ingesta fallida), NO se sigue sirviendo con las
-  // invariantes viejas — ready=false → healthz 503 hasta que un reload exitoso lo restablezca.
+  // Fail-closed en el reload, con radio de daño POR MOTOR (issue #52):
+  // · clickhouse: la réplica es una sola → si el re-bootstrap falla NO se sigue sirviendo con las
+  //   invariantes viejas — ready=false → healthz 503 hasta que un reload exitoso lo restablezca.
+  // · fabric: el veredicto es POR PI y ya quedó swapeado dentro de bootstrapAll (el PI que no verifica
+  //   se bloquea con motivo; los que ya servían y verifican siguen). Degradar el nodo entero acá era
+  //   justamente el radio de daño que este issue elimina.
   void bootstrapAll().catch((e) => {
-    ready = false
-    lastErr = e instanceof Error ? e.message : String(e)
-    console.error(`[hot-reload] re-bootstrap (${reason}) falló → ready=false (fail-closed): ${lastErr}`)
+    const msg = e instanceof Error ? e.message : String(e)
+    if (ENGINE === 'clickhouse') {
+      ready = false
+      lastErr = msg
+      console.error(`[hot-reload] re-bootstrap (${reason}) falló → ready=false (fail-closed): ${msg}`)
+      return
+    }
+    console.error(`[hot-reload] verificación por-PI (${reason}) con degradados: ${msg} — los PI sanos siguen sirviendo.`)
   })
 }
 if (HOT_RELOAD) {
@@ -841,6 +863,11 @@ if (HOT_RELOAD) {
   watchPaths(specTargets, () => {
     const r = discovery.rebuild()
     console.log(r.ok ? `[hot-reload] specs recargadas: ${discover().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
+    // fabric: un PI recién descubierto nace fail-closed («pendiente de verificación») — re-verificar
+    // acá lo sirve sin esperar un reload de gobierno. Los degradados quedan logueados, el resto sigue.
+    if (ENGINE === 'fabric' && r.ok && ready) {
+      void bootstrapAll().catch((e) => console.error(`[hot-reload] verificación por-PI (watch:specs) con degradados: ${e instanceof Error ? e.message : String(e)}`))
+    }
   })
   if (POLICY_PATHS.length) watchPaths(POLICY_PATHS.map((p) => resolve(p)), () => reloadGovernance('watch:policies'))
   process.on('SIGHUP', () => reloadGovernance('SIGHUP'))
