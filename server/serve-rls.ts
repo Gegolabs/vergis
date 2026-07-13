@@ -50,6 +50,8 @@ import {
   parseIntakeConfig,
   createTokenProvider,
   createOneLakeIntake,
+  createOneLakeReader,
+  slotLogPath,
   createFabricJobs,
   createFabricJobStatus,
   createFabricEngineClient,
@@ -629,7 +631,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; engine?: IngestionEngineClient } => {
+    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; engine?: IngestionEngineClient } => {
       if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
@@ -646,9 +648,16 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // issue #50) y uno agregado en caliente debe encontrar su ejecutor listo.
       const onelake = createOneLakeIntake(tokens)
       const jobs = createFabricJobs(tokens)
+      const reader = createOneLakeReader(tokens)
       return {
         runner: { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) },
         status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
+        // Log de la última conversión del slot (issue #55): lo escribe el proceso en el landing;
+        // Frescura lo expone para reconfirmar una carga sin acceso a Fabric. null = sin log.
+        logOf: (slot) => {
+          const p = slotLogPath(slot)
+          return p ? reader.read(slot.target, p) : Promise.resolve(null)
+        },
         engine,
       }
     })()
@@ -718,6 +727,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       intakeSlots,
       intake: fabricWiring.runner,
       intakeStatus: fabricWiring.status,
+      intakeLog: fabricWiring.logOf,
       signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
       groupStore: govStore,
