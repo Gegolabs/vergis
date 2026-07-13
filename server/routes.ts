@@ -32,6 +32,12 @@ export interface RouteDeps {
   renderIndexPage: (visible: Report[], identity: IdentityContext) => Promise<string>
   /** Gate de ARTEFACTO por-PI: ¿la identidad puede abrir este PI? (la RLS de datos aplica igual). */
   canOpenPi: (report: Report, identity: IdentityContext) => Promise<boolean>
+  /** Servibilidad POR PI (issue #52): motivo por el que este PI NO se sirve, o null si sirve. Un PI
+   * bloqueado responde 503 con su motivo; los demás siguen sirviendo. Ausente = solo el gate global. */
+  piBlocked?: (report: Report) => string | null
+  /** Conteo para /healthz (sin slugs ni mensajes — healthz corre sin gate y se mantiene reducido).
+   * null = el motor no distingue servibilidad por PI (clickhouse). */
+  healthSummary?: () => { total: number; serving: number } | null
 }
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -40,9 +46,14 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
   return (req, res) => {
     const url = (req.url ?? '/').split('?')[0]
     if (url === '/healthz') {
-      const ok = deps.isReady()
-      res.writeHead(ok ? 200 : 503, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok, engine: deps.engine }))
+      // Distingue ARRANCANDO (nada evaluado aún → 503) de N-de-M DEGRADADOS (el proceso está sano y
+      // sirve el resto → 200, ok:false). Solo CONTEOS: healthz corre sin gate y se mantiene reducido
+      // (sin slugs ni mensajes de error).
+      const ready = deps.isReady()
+      const pis = deps.healthSummary?.() ?? null
+      const degraded = pis ? pis.total - pis.serving : 0
+      res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: ready && degraded === 0, engine: deps.engine, phase: !ready ? 'starting' : degraded ? 'degraded' : 'serving', ...(pis ? { pis } : {}) }))
       return
     }
     // A10 · gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).
@@ -66,13 +77,18 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
         .catch((e) => fail(res, 500, `Error en configuración del PI: ${errMsg(e)}`))
       return
     }
+    // Gate GLOBAL solo para el ARRANQUE EN FRÍO (nada evaluado aún). Después, la servibilidad es
+    // por-PI (`piBlocked`): un PI degradado responde 503 con motivo y los demás siguen (issue #52).
     if (!deps.isReady()) return fail(res, 503, 'Inicializando…')
     const all = deps.discover()
+    const blockedReason = (report: Report): string | null => deps.piBlocked?.(report) ?? null
     // POST /<slug>/annotations — escritura de anotación (único surface mutable; gateado por HMAC).
     if (req.method === 'POST') {
       const m = url.match(/^\/([^/]+)\/annotations\/?$/)
       const report = m && all.find((r) => r.slug === m[1].toLowerCase())
       if (!report) return fail(res, 404, 'Ruta no encontrada')
+      const blocked = blockedReason(report)
+      if (blocked) return fail(res, 503, `Producto de Información no disponible: ${blocked}`)
       deps.handleAnnotationWrite(report, req, res).catch((e) => fail(res, 500, `Error al guardar anotación: ${errMsg(e)}`))
       return
     }
@@ -97,6 +113,8 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
     const report = all.find((r) => r.slug === slug)
     if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
+    const blocked = blockedReason(report)
+    if (blocked) return fail(res, 503, `Producto de Información no disponible: ${blocked}`)
     // Gate de ARTEFACTO (si ACL encendida). La RLS de datos aplica igual al render.
     deps
       .canOpenPi(report, identity)

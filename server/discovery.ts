@@ -24,6 +24,9 @@ export interface Report {
   name: string
   specPath: string
   tables: string[]
+  /** Conexiones (`database_ref`) que las data-entries del PI referencian — la verificación de
+   * servibilidad por PI (engine=fabric) consulta SOLO estas, no todas las declaradas (issue #52). */
+  databaseRefs: string[]
 }
 
 export interface DiscoveryDeps {
@@ -63,7 +66,7 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
   function discoverRaw(): Report[] {
     const out: Report[] = []
     for (const p of deps.specPaths()) {
-      let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string } }> }
+      let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string; database_ref?: string } }> }
       try {
         spec = parseSpec(readSpec(p)) as typeof spec
       } catch {
@@ -100,7 +103,8 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
         // Antes pasaba en silencio; ahora se avisa. Usar un identity.code distinto.
         log(`[vergis-rls] '${p}' colisiona en slug '${slug}' con un PI ya descubierto — el segundo queda inalcanzable. Diferenciar identity.code.`)
       }
-      out.push({ code, slug, name: spec.identity?.display_name ?? code, specPath: p, tables })
+      const databaseRefs = [...new Set(Object.values(data).map((d) => d.params?.database_ref ?? '').filter(Boolean))]
+      out.push({ code, slug, name: spec.identity?.display_name ?? code, specPath: p, tables, databaseRefs })
     }
     return out
   }

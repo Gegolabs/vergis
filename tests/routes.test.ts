@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createRequestHandler, type RouteDeps } from '../server/routes'
 import type { Report } from '../server/discovery'
 
-const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specPath: '/a.yaml', tables: ['t'] }
+const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
 
 function mkReq(url: string, method = 'GET', headers: Record<string, string> = {}): IncomingMessage {
   return { url, method, headers } as unknown as IncomingMessage
@@ -46,18 +46,64 @@ function deps(over: Partial<RouteDeps> = {}): RouteDeps {
 }
 
 describe('routes · /healthz', () => {
-  it('ready → 200 {ok:true, engine}', () => {
+  it('ready → 200 {ok:true, engine, phase:serving}', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps({ isReady: () => true }))(mkReq('/healthz'), res)
     expect(calls.status).toBe(200)
-    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse' })
+    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse', phase: 'serving' })
   })
-  it('no-ready → 503 y NO expone slugs/lastErr', () => {
+  it('no-ready → 503 phase:starting y NO expone slugs/lastErr', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps({ isReady: () => false }))(mkReq('/healthz'), res)
     expect(calls.status).toBe(503)
+    expect(JSON.parse(calls.body).phase).toBe('starting')
     expect(calls.body).not.toContain('slug')
     expect(calls.body).not.toContain('qw-04')
+  })
+  // Issue #52: distinguir «arrancando» (503) de «N de M degradados» (el proceso sirve el resto → 200).
+  it('ready con PIs degradados → 200 {ok:false, phase:degraded, pis:{total,serving}} — solo conteos', () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(deps({ isReady: () => true, healthSummary: () => ({ total: 3, serving: 2 }) }))(mkReq('/healthz'), res)
+    expect(calls.status).toBe(200)
+    expect(JSON.parse(calls.body)).toEqual({ ok: false, engine: 'clickhouse', phase: 'degraded', pis: { total: 3, serving: 2 } })
+    expect(calls.body).not.toContain('qw-04') // sin slugs ni motivos: healthz corre sin gate
+  })
+  it('ready con todos los PIs sirviendo → 200 {ok:true, phase:serving, pis}', () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(deps({ isReady: () => true, healthSummary: () => ({ total: 2, serving: 2 }) }))(mkReq('/healthz'), res)
+    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse', phase: 'serving', pis: { total: 2, serving: 2 } })
+  })
+})
+
+describe('routes · servibilidad por PI (issue #52)', () => {
+  const r2: Report = { ...REPORT, slug: 'qw-05', code: 'QW-05' }
+  const blockQw04 = (r: Report): string | null => (r.slug === 'qw-04' ? 'tabla dbo.saldos sin artefacto SECURITY POLICY' : null)
+
+  it('el PI bloqueado responde 503 con su MOTIVO; el sano sigue sirviendo 200', async () => {
+    const make = () => createRequestHandler(deps({ discover: () => [REPORT, r2], piBlocked: blockQw04 }))
+    const a = mkRes()
+    make()(mkReq('/qw-04'), a.res)
+    await a.done
+    expect(a.calls.status).toBe(503)
+    expect(a.calls.body).toContain('SECURITY POLICY') // motivo accionable, no «Inicializando…» genérico
+    const b = mkRes()
+    make()(mkReq('/qw-05'), b.res)
+    await b.done
+    expect(b.calls.status).toBe(200)
+    expect(b.calls.body).toBe('<html>PI</html>')
+  })
+  it('POST de anotación a un PI bloqueado → 503 (no llega al write)', async () => {
+    const handleAnnotationWrite = vi.fn(async () => {})
+    const { res, calls } = mkRes()
+    createRequestHandler(deps({ piBlocked: blockQw04, handleAnnotationWrite }))(mkReq('/qw-04/annotations', 'POST'), res)
+    expect(calls.status).toBe(503)
+    expect(handleAnnotationWrite).not.toHaveBeenCalled()
+  })
+  it('sin piBlocked inyectado (clickhouse) → comportamiento previo intacto', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(deps())(mkReq('/qw-04'), res)
+    await done
+    expect(calls.status).toBe(200)
   })
 })
 
