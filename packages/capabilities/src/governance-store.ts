@@ -16,7 +16,7 @@ import {
   type PiVisibility,
   type PrincipalType,
 } from './pi-authz'
-import { durationToSeconds } from './freshness'
+import { durationToSeconds, validateOferta } from './freshness'
 
 /**
  * `GovernanceStore` — el store ÚNICO del estado de gobierno del runtime (modelo de tres estados):
@@ -266,7 +266,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     }
     // Semilla del registro de fuentes (instancia)
     for (const s of seed.sources ?? []) {
-      durationToSeconds(s.oferta) // valida
+      validateOferta(s.oferta) // valida (duración ISO o `evento`)
       db.run(
         `INSERT INTO source (source_id, label, oferta, domain, connected_by) VALUES (?,?,?,?,?)
          ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
@@ -534,7 +534,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
   async upsertSource(id: string, label: string, oferta: string, opts: { domain?: string; connectedBy?: string } = {}): Promise<void> {
     const sid = id.trim().toLowerCase()
     if (!SLUG_RE.test(sid)) throw new Error(`Id de fuente inválido '${id}'.`)
-    durationToSeconds(oferta) // valida la oferta como duración ISO
+    validateOferta(oferta) // valida la oferta (duración ISO o `evento` para fuentes event-driven)
     // COALESCE en domain: un upsert sin domain no borra el tag ya registrado.
     this.db.run(
       `INSERT INTO source (source_id, label, oferta, domain, connected_by) VALUES (?,?,?,?,?)

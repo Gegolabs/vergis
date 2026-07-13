@@ -6,6 +6,8 @@ import {
   isDemandaWithinCeiling,
   requiredCadenceSeconds,
   deriveIngestionMap,
+  deriveEntityFreshness,
+  validateOferta,
   SqliteGovernanceStore,
 } from '@vergis/capabilities'
 
@@ -101,5 +103,56 @@ describe('SourceRegistryStore · fuentes, mapeos y ofertas-por-tabla', () => {
     await expect(g.upsertSource('Mal Id', 'x', 'P1D')).rejects.toThrow(/inválido/)
     await expect(g.upsertSource('s', 'x', 'cada día')).rejects.toThrow(/ISO/)
     await g.close()
+  })
+})
+
+// oferta: evento — fuentes EVENT-DRIVEN (cada llegada es un evento, sin cadencia; caso B2B Sodimac).
+describe('oferta: evento (fuentes event-driven)', () => {
+  const SRC = [{ id: 'b2b', oferta: 'evento' }, { id: 'sap', oferta: 'P1W' }]
+  const PROCS = [
+    { id: 'p_oc', label: 'OC crossdocking', sourceId: 'b2b' },
+    { id: 'p_saldos', label: 'Saldos', sourceId: 'sap' },
+  ]
+  const OUTS = [
+    { processId: 'p_oc', tableRef: 'dbo.fct_despacho' },
+    { processId: 'p_saldos', tableRef: 'dbo.fact_saldos' },
+  ]
+  const PI_TABLES = [
+    { piCode: 'PI-07', tables: ['dbo.fct_despacho'] },
+    { piCode: 'PI-01', tables: ['dbo.fact_saldos'] },
+  ]
+
+  it('validateOferta: acepta ISO y `evento`; rechaza lo demás', () => {
+    expect(() => validateOferta('P1W')).not.toThrow()
+    expect(() => validateOferta('evento')).not.toThrow()
+    expect(() => validateOferta('EVENTO')).not.toThrow()
+    expect(() => validateOferta('cuando llegue')).toThrow()
+  })
+
+  it('deriveIngestionMap: el proceso event-driven NO entra al mapa del reconciliador (nada que agendar)', () => {
+    const map = deriveIngestionMap({ sources: SRC, processes: PROCS, processOutputs: OUTS, piTables: PI_TABLES, piDemandas: [] })
+    expect(map.map((m) => m.processId)).toEqual(['p_saldos'])
+  })
+
+  it('deriveEntityFreshness: la entidad event-driven aparece con oferta `evento`, sin cadencia ni insatisfacible', () => {
+    const rows = deriveEntityFreshness({ sources: SRC, processes: PROCS, processOutputs: OUTS, piTables: PI_TABLES, piDemandas: [] })
+    const oc = rows.find((r) => r.entity === 'dbo.fct_despacho')!
+    expect(oc.oferta).toBe('evento')
+    expect(oc.requiredCadence).toBeNull()
+    expect(oc.unsatisfiable).toBe(false)
+    expect(oc.dependentPis).toEqual(['PI-07'])
+  })
+
+  it('deriveEntityFreshness: con demanda declarada, la cadencia requerida ES la demanda (sin piso de oferta)', () => {
+    const rows = deriveEntityFreshness({ sources: SRC, processes: PROCS, processOutputs: OUTS, piTables: PI_TABLES, piDemandas: [{ piCode: 'PI-07', maxAge: 'P1D' }] })
+    const oc = rows.find((r) => r.entity === 'dbo.fct_despacho')!
+    expect(oc.requiredCadenceSeconds).toBe(86400)
+    expect(oc.unsatisfiable).toBe(false) // evento jamás pone piso
+  })
+
+  it('demandaCeilingSeconds ignora las ofertas evento (no imponen techo a la demanda)', () => {
+    expect(demandaCeilingSeconds(['evento', 'P1W'])).toBe(7 * 86400)
+    expect(demandaCeilingSeconds(['evento'])).toBe(0)
+    expect(isDemandaWithinCeiling('PT1H', ['evento'])).toBe(true)
   })
 })
