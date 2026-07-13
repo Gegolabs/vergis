@@ -81,6 +81,7 @@ import {
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
+import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
 import { fail, readJsonBody } from './http-util'
@@ -631,7 +632,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; engine?: IngestionEngineClient } => {
+    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; engine?: IngestionEngineClient } => {
       if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
@@ -658,6 +659,51 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           const p = slotLogPath(slot)
           return p ? reader.read(slot.target, p) : Promise.resolve(null)
         },
+        // Consola de cargas (issue #58). El padre del dir del slot ancla las convenciones del ciclo:
+        // `<padre>/_processed` (lo archivado por el pipeline) y `<padre>/_retirado` (retiros manuales).
+        cargas: (() => {
+          const parentDir = (p: string): string => (p.includes('/') ? p.replace(/\/[^/]*$/, '') : p)
+          return {
+            history: async (slot, limit) => {
+              let text = ''
+              try { text = readFileSync(`${OUT}/admin-audit.log`, 'utf8') } catch { return [] }
+              const lines = text.split('\n')
+              const out: IntakeUploadEvent[] = []
+              for (let i = lines.length - 1; i >= 0 && out.length < limit; i -= 1) {
+                const l = lines[i].trim()
+                if (!l) continue
+                try {
+                  const e = JSON.parse(l) as { type?: string; slot?: string; filename?: string; bytes?: number; by?: string; ok?: boolean; triggered?: boolean; ts?: string }
+                  if (e.type === 'intake' && e.slot === slot.id) {
+                    out.push({ ts: e.ts ?? '', filename: e.filename ?? '', bytes: e.bytes ?? 0, by: e.by ?? '', ok: e.ok !== false, triggered: e.triggered === true })
+                  }
+                } catch { /* línea no-JSON del log: se ignora */ }
+              }
+              return out
+            },
+            runs: (slot, top) =>
+              slot.trigger ? jobStatus.listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, top) : Promise.resolve([]),
+            log: (slot) => {
+              const p = slotLogPath(slot)
+              return p ? reader.read(slot.target, p) : Promise.resolve(null)
+            },
+            landing: (slot) => reader.list(slot.target, slot.target.path),
+            archived: (slot) => reader.list(slot.target, `${parentDir(slot.target.path)}/_processed`, { recursive: true }),
+            rerun: async (slot) => {
+              if (!slot.trigger) throw new Error('El slot no dispara conversión (land-only).')
+              await jobs.runNow(slot.trigger, slot.target)
+            },
+            retire: async (slot, filename) => {
+              const from = `${slot.target.path}/${filename}`
+              await reader.copy(slot.target, from, `${parentDir(slot.target.path)}/_retirado/${Date.now()}-${filename}`)
+              await reader.remove(slot.target, from)
+            },
+            restore: async (slot, archivedPath) => {
+              const base = archivedPath.split('/').pop() ?? archivedPath
+              await reader.copy(slot.target, archivedPath, `${slot.target.path}/${base}`)
+            },
+          } satisfies CargasOps
+        })(),
         engine,
       }
     })()
@@ -728,6 +774,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       intake: fabricWiring.runner,
       intakeStatus: fabricWiring.status,
       intakeLog: fabricWiring.logOf,
+      cargas: fabricWiring.cargas,
       signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
       groupStore: govStore,
