@@ -67,9 +67,11 @@ describe('discovery · descubrimiento y catálogo de serving', () => {
 })
 
 describe('discovery · gate de gobernanza fail-closed (fabric)', () => {
-  it('fabric: omite un PI que lee una tabla SIN política (fuga en push-down)', () => {
+  it('fabric: un PI con tabla SIN política SÍ se descubre — el veredicto lo da la verificación por-PI (issues #52/#54)', () => {
+    // Antes se omitía acá (404 silencioso). Ahora el PI existe y queda BLOQUEADO por piState hasta que
+    // la verificación del bootstrap decida: sin política ni herencia de vista → 503 con motivo.
     const d = mk({ engine: 'fabric', specs: { '/a.yaml': specYaml('X', 'SELECT * FROM dbo.secreta', 'execute-sql-dwh') }, servingCaps: new Set(['execute-sql-dwh']) })
-    expect(d.discover()).toHaveLength(0)
+    expect(d.discover()).toHaveLength(1)
   })
 
   it('fabric: omite un PI con tabla de UNA sola parte (no verificable contra el store)', () => {
@@ -109,5 +111,27 @@ describe('discovery · canAccess / visibleFor', () => {
     ]
     expect(d.visibleFor(reports, {}).map((r) => r.code)).toEqual(['A'])
     expect(d.visibleFor(reports, { groups: ['ventas'] }).map((r) => r.code)).toEqual(['A', 'B'])
+  })
+
+  // Issue #54: una vista-contrato sin entrada propia hereda la política de sus bases para la
+  // visibilidad del índice, vía el linaje VIVO que puebla la verificación del bootstrap.
+  it('canAccess hereda por linaje: la vista es accesible ssi TODAS sus bases lo son', () => {
+    const lineage = new Map<string, string[]>([
+      ['dbo.v_saldos', ['dbo.saldos']],
+      ['dbo.v_mix', ['dbo.saldos', 'qw04.areas']], // gobernada + pública
+      ['dbo.v_huerfana', ['staging.raw']], // base sin política ni linaje
+      ['dbo.v2', ['dbo.v_saldos']], // transitiva (vista sobre vista)
+      ['dbo.va', ['dbo.vb']], // ciclo defensivo
+      ['dbo.vb', ['dbo.va']],
+    ])
+    const dv = mk({ engine: 'fabric', specs: {}, servingCaps: new Set(['execute-sql-dwh']), resolveBases: (t) => lineage.get(t) })
+    const conClaim: ClaimSet = { groups: ['ventas'] }
+    expect(dv.canAccess('dbo.v_saldos', conClaim)).toBe(true)
+    expect(dv.canAccess('dbo.v_saldos', {})).toBe(false) // hereda también el deny
+    expect(dv.canAccess('dbo.v_mix', conClaim)).toBe(true)
+    expect(dv.canAccess('dbo.v_mix', {})).toBe(false) // una base gobernada sin claim niega el conjunto
+    expect(dv.canAccess('dbo.v_huerfana', conClaim)).toBe(false) // sin certeza no hay herencia
+    expect(dv.canAccess('dbo.v2', conClaim)).toBe(true) // transitiva
+    expect(dv.canAccess('dbo.va', conClaim)).toBe(false) // ciclo → deny, sin colgarse
   })
 })

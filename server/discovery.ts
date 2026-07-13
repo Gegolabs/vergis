@@ -39,6 +39,10 @@ export interface DiscoveryDeps {
   specPaths: () => string[]
   /** Lee el contenido de una spec (default: FS). */
   readSpec?: (path: string) => string
+  /** Linaje vista→bases directo (referencia VIVA, poblado por la verificación del bootstrap): permite
+   * que `canAccess` herede la política de las bases para una vista-contrato sin entrada propia
+   * (issue #54). Ausente o sin entrada → sin herencia (deny, como siempre). */
+  resolveBases?: (table: string) => string[] | undefined
   log?: (msg: string) => void
 }
 
@@ -90,11 +94,10 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
           log(`[vergis-rls] '${p}' no servible: referencia tabla(s) sin esquema (no verificables contra el policy store): ${unqualified.join(', ')} — omitido. Calificarlas como schema.tabla.`)
           continue
         }
-        const ungoverned = tables.filter((t) => !store.has(t))
-        if (ungoverned.length > 0) {
-          log(`[vergis-rls] '${p}' no servible: lee tabla(s) sin política → fuga en push-down: ${ungoverned.join(', ')} — omitido`)
-          continue
-        }
+        // Una tabla sin política ya NO omite el PI acá: puede ser una vista-contrato que HEREDA el
+        // gobierno de su base (issue #54), y el linaje solo es observable en la fuente. El veredicto
+        // lo da la verificación por-PI del bootstrap (engines/fabric): sin política NI herencia
+        // derivable, el PI queda bloqueado con motivo (503) — el fail-closed no se mueve, se muda.
       }
       const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
       const slug = slugify(code)
@@ -111,9 +114,18 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
 
   const specReg = createCachedScanner(discoverRaw)
 
-  function canAccess(table: string, claims: ClaimSet): boolean {
+  function canAccess(table: string, claims: ClaimSet, seen?: Set<string>): boolean {
     const policy = store.get(table)
-    if (!policy) return false // sin política → deny
+    if (!policy) {
+      // Sin política propia: ¿vista-contrato con herencia (issue #54)? Accesible solo si TODAS sus
+      // bases lo son (la vista compone sus bases: la RLS más restrictiva manda). Sin linaje → deny.
+      const bases = deps.resolveBases?.(table)
+      if (!bases?.length) return false
+      const s = seen ?? new Set<string>()
+      if (s.has(table)) return false // ciclo defensivo
+      s.add(table)
+      return bases.every((b) => canAccess(b, claims, s))
+    }
     if (isPublic(policy)) return true // grant: all
     return policy.predicates.some((pred) => claimValues(claims, pred.claim).length > 0)
   }
