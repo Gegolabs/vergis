@@ -20,6 +20,6 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
 
 ### Pendientes de sesión 2026-06-11
 
-- [ ] **Habilitar la app de Renovate** en el repo/org Gegolabs — `renovate.json` no opera sin la app instalada en GitHub
-- [ ] **Redesplegar la VM con la imagen 0.2.2** — PI-01/04/12 corren la imagen anterior; la nueva cambia el arranque (`node dist/serve-rls.mjs`, non-root) y conviene verificar el deploy en vivo
-- [ ] **Verificar render de charts con vega 6 en un PI real** — la suite no cubre SVG exacto de `distribution`; mirar un dashboard vivo tras el redeploy
+- [ ] **Habilitar la app de Renovate** en el repo/org Gegolabs — `renovate.json` no opera sin la app instalada en GitHub (acción de admin GitHub, humano)
+- [x] **Redesplegar la VM** — **HECHO 2026-07-13**: PROD corre 0.6.0 (tren 0.4.0→0.5.0→0.6.0 en un día, cada release ensayado en el QA `vm-vergis-qa` antes de PROD); verificación estándar 6/6 PIs
+- [x] **Verificar render de charts con vega 6 en un PI real** — **HECHO 2026-07-13**: los 6 PIs (incl. dashboards con charts) rinden 200 con contenido en PROD 0.6.0
