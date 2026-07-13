@@ -199,6 +199,33 @@ describe('render · control de cabecera default=max', () => {
     const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
     expect(clientes.params?.['ctx_semana']).toBe('W20')
   })
+
+  it('el onchange del selector sobrevive al scoping de handler inline (document.URL sombrea a URL)', async () => {
+    // En un handler inline el browser mete a `document` en la cadena de scope: `URL` resuelve a
+    // `document.URL` (un STRING), no al constructor global → `new URL(…)` lanza «URL is not a
+    // constructor» y el selector del Inspector queda muerto. El handler debe usar `window.URL`.
+    // Este test EJECUTA el handler generado bajo ese scoping (with(document)), no solo su sintaxis.
+    const { out } = await render(YAML)
+    const html = out.html ?? ''
+    const m = html.match(/<select class="vt-ctl-select"[^>]*onchange="([^"]*)"/)
+    expect(m).not.toBeNull()
+    const code = m![1]
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+    const assigned: string[] = []
+    const loc = { href: 'https://mira.example/pi-ctrl-test?ctx.semana=W21', assign: (u: string) => assigned.push(u) }
+    const documentLike = { URL: loc.href } // como en el browser: document.URL es un string
+    const windowLike = { URL: globalThis.URL }
+    const select = { value: 'W16' }
+    const fn = new Function('document', 'location', 'window', 'event', `with(document){ ${code} }`)
+    fn.call(select, documentLike, loc, windowLike, {}) // con `new URL` pelado: TypeError
+    expect(assigned).toHaveLength(1)
+    expect(assigned[0]).toContain('page=clientes')
+    expect(assigned[0]).toContain('ctx.semana=W16')
+  })
 })
 
 // PI de UNA vista (piece, sin pages) con controles: el `:ctx.<id>` DEBE reescribirse igual que en

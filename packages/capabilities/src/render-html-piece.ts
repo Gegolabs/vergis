@@ -128,8 +128,10 @@ function renderControlsSection(controls: ControlResolved[], activePage: string |
     .map((c) => {
       // Prefijo común del handler: reconstruir el query con la página activa + el carry (menos este
       // control; multi-valor se repite con append). Robusto: no depende del estado previo de la URL.
+      // `window.URL` es obligatorio: en un handler inline la cadena de scope incluye `document`, y
+      // `document.URL` (string) sombrea al constructor global — `new URL(…)` lanza TypeError.
       const base =
-        `var u=new URL(location.href);u.search='';` +
+        `var u=new window.URL(location.href);u.search='';` +
         (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
         Object.entries(carry)
           .filter(([k]) => k !== c.id)
