@@ -49,6 +49,7 @@ import {
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { readMultipart } from './multipart'
+import { cargasBody, type CargasOps, type SlotCargas } from './admin-cargas'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
 interface Chrome {
@@ -99,6 +100,8 @@ export interface AdminDeps {
   /** Log de la última conversión del slot (issue #55): reconfirma una carga (filas, semana, commit)
    * sin acceso a Fabric. null = sin log (slot sin convención de log o archivo inexistente). Opcional. */
   intakeLog?: (slot: IntakeSlot) => Promise<string | null>
+  /** Consola de cargas (issue #58): historial + landing + retiro/reactivación + re-run. Opcional. */
+  cargas?: CargasOps
   /** Grupos gestionados por Mira (sección «Grupos»). Opcional. */
   groupStore?: GroupStore
   /** Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional. */
@@ -228,6 +231,27 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         if (section === 'intake' && slotId && req.method === 'POST') {
           await handleIntake(deps, nav, domain, slotId, req, res, token, email)
+          return true
+        }
+        // Consola de CARGAS (issue #58): historial + landing + retiro/reactivación + re-run. Stewards.
+        if (section === 'cargas' && deps.cargas && req.method === 'GET') {
+          send(res, 200, await cargasPage(deps, nav, domain, token, url.searchParams.get('msg') ?? undefined))
+          return true
+        }
+        if (section === 'cargas' && deps.cargas && req.method === 'POST') {
+          const f = await readForm(req)
+          requireCsrf(f, token)
+          const slot = (deps.intakeSlots ?? []).find((s) => s.id === (f['slot'] ?? '') && (s.domain ?? '') === domain.id)
+          let msg: string
+          if (!slot) msg = 'Error: slot desconocido.'
+          else {
+            try {
+              msg = await handleCargasAccion(deps, slot, f, email)
+            } catch (e) {
+              msg = `Error: ${errMsg(e)}`
+            }
+          }
+          redirect(res, `/admin/dominio/${domain.id}/cargas?msg=${encodeURIComponent(msg)}`)
           return true
         }
         // Frescura del dominio (por entidad): vista + «aplicar cadencia» (reconciliador). Abierta a stewards.
@@ -464,6 +488,9 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
           if (inMaestra) s += ents.map((e) => lvl(`/admin/e/${e.id}`, e.label, active === `${base}/maestra/${e.id}`, 'l3')).join('')
         }
         if (deps.domainFreshness) s += lvl(`/admin/dominio/${d.id}/frescura`, 'Frescura', active === `${base}/frescura`, 'l2')
+        if (deps.cargas && (deps.intakeSlots ?? []).some((sl) => (sl.domain ?? '') === d.id)) {
+          s += lvl(`/admin/dominio/${d.id}/cargas`, 'Cargas', active === `${base}/cargas`, 'l2')
+        }
       }
     }
   }
@@ -586,9 +613,12 @@ async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): Pro
   const frescura = deps.domainFreshness
     ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/frescura">Frescura</a><div class="sub">Por entidad: qué tan fresca está vs. lo que demandan sus PIs, sus corridas y su cadencia — y <b>alimentarla</b> (subir archivo) o aplicar su cadencia.</div></li>`
     : ''
+  const cargas = deps.cargas && (deps.intakeSlots ?? []).some((s) => (s.domain ?? '') === domain.id)
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/cargas">Cargas</a><div class="sub">La operación completa de las cargas: historial y estado de cada conversión con su log, y el ciclo del landing — retirar, reactivar, re-correr.</div></li>`
+    : ''
 
-  const gestion = maestra || frescura
-    ? `<h2>Gestión del dominio</h2><ul class="cards">${maestra}${frescura}</ul>`
+  const gestion = maestra || frescura || cargas
+    ? `<h2>Gestión del dominio</h2><ul class="cards">${maestra}${frescura}${cargas}</ul>`
     : '<p class="sub">Este dominio aún no tiene facetas habilitadas.</p>'
 
   // Facetas previstas del dominio (roadmap visible, deshabilitadas) — ver work/041 §4.
@@ -703,6 +733,55 @@ function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
      </form>`
 }
 
+/** Consola de CARGAS de un dominio (issue #58): arma los datos por slot (paralelo, tolerante a
+ * fallos) y delega el render puro a admin-cargas. Gate de steward: lo aplica el ruteo del dominio. */
+async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, msg?: string): Promise<string> {
+  const ops = deps.cargas!
+  const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
+  // #56 · procesos registrados (para la coherencia trigger↔proceso). Tolerante: sin registro, no acusa.
+  const engineIds = new Set<string>(
+    deps.sourceRegistry ? (await deps.sourceRegistry().catch(() => ({ processes: [] as ProcessRow[] }))).processes.map((p) => p.engine?.itemId ?? '').filter(Boolean) : [],
+  )
+  const data: SlotCargas[] = await Promise.all(slots.map(async (slot) => ({
+    slot,
+    runs: await ops.runs(slot, 20).catch(() => 'error' as const),
+    history: await ops.history(slot, 30).catch(() => 'error' as const),
+    log: await ops.log(slot).catch(() => null),
+    landing: await ops.landing(slot).catch(() => 'error' as const),
+    archived: await ops.archived(slot).catch(() => 'error' as const),
+    procesoRegistrado: !slot.trigger || engineIds.size === 0 || engineIds.has(slot.trigger.processRef),
+  })))
+  const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
+  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, data, token, (s) => uploadForm(domain.id, s, token)))
+}
+
+/** Despacha una acción POST de la consola de cargas. Devuelve el mensaje PRG. Todo auditado. */
+async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<string, string>, by: string): Promise<string> {
+  const ops = deps.cargas!
+  const accion = f['accion'] ?? ''
+  if (accion === 'rerun') {
+    if (!slot.trigger) throw new ValidationError('Este slot no dispara conversión (land-only).')
+    await ops.rerun(slot, by)
+    deps.audit({ type: 'intake-rerun', slot: slot.id, domain: slot.domain ?? '', by })
+    return 'Conversión disparada — el resultado aparece en «Actividad» en ~1-3 min.'
+  }
+  if (accion === 'retire') {
+    const archivo = f['archivo'] ?? ''
+    if (!archivo || archivo.includes('/') || archivo.includes('..')) throw new ValidationError('Nombre de archivo inválido.')
+    await ops.retire(slot, archivo, by)
+    deps.audit({ type: 'intake-retire', slot: slot.id, domain: slot.domain ?? '', filename: archivo, by })
+    return `«${archivo}» retirado del landing (respaldado en _retirado/). Corré la conversión para re-materializar sin él.`
+  }
+  if (accion === 'restore') {
+    const ruta = f['archivo'] ?? ''
+    if (!ruta || ruta.includes('..') || !/\/_processed\//.test('/' + ruta)) throw new ValidationError('Solo se reactivan archivos del histórico _processed/.')
+    await ops.restore(slot, ruta, by)
+    deps.audit({ type: 'intake-restore', slot: slot.id, domain: slot.domain ?? '', filename: ruta, by })
+    return `«${ruta.split('/').pop()}» reactivado en el landing. Corré la conversión para materializarlo.`
+  }
+  throw new ValidationError(`Acción desconocida: ${accion}`)
+}
+
 /** Faceta FRESCURA de un dominio (página propia): el contrato de frescura entity-anchored — brecha
  * demanda↔oferta · corridas · schedule + «aplicar cadencia» (refresco AUTOMÁTICO) · **carga de archivo**
  * (refresco MANUAL, plegado acá). Las dos caras de mantener la entidad fresca, en un solo lugar. */
@@ -718,6 +797,18 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   // Slots de ingesta del dominio: la carga manual se pliega acá. Una entidad casa con su slot por el item
   // del motor (slot.trigger.processRef === engine_ref.itemId del proceso que la produce).
   const domSlots = deps.intake ? (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id) : []
+  // #56 · coherencia declarativa: un slot con trigger cuyo proceso NO está registrado en Fuentes queda
+  // huérfano en silencio (sin fila de entidad, sin salud, sin monitor). Acusarlo acá, ruidosamente.
+  let coherenciaAlert = ''
+  if (deps.sourceRegistry && domSlots.some((s) => s.trigger)) {
+    const engineIds = new Set(
+      (await deps.sourceRegistry().catch(() => ({ processes: [] as ProcessRow[] }))).processes.map((p) => p.engine?.itemId ?? '').filter(Boolean),
+    )
+    const huerfanos = engineIds.size ? domSlots.filter((s) => s.trigger && !engineIds.has(s.trigger.processRef)) : []
+    if (huerfanos.length) {
+      coherenciaAlert = `<p class="msg err">⚠ ${huerfanos.length === 1 ? 'El slot' : 'Los slots'} ${huerfanos.map((s) => `<b>${escapeHtml(s.label)}</b> (dispara <code>${escapeHtml(s.trigger!.processRef)}</code>)`).join(', ')} no ${huerfanos.length === 1 ? 'tiene' : 'tienen'} su proceso registrado en <a href="/admin/sources">Fuentes</a> → sin fila de entidad, sin salud, sin monitor. Registrarlo en <code>sources.yaml</code>.</p>`
+    }
+  }
   // Log de la última conversión por slot (issue #55): la reconfirmación de una carga (filas, semana,
   // commit, archivado) legible sin acceso a Fabric. Tolerante a fallos: sin log → sin sección.
   const slotLogs = new Map<string, string>()
@@ -798,7 +889,7 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
        <tbody>${body}</tbody></table>`
     : ''
   return adminPage(deps, nav, title,
-    `${feedback}${migAlert}${back}
+    `${feedback}${migAlert}${coherenciaAlert}${back}
      <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El refresco es de dos formas: <b>automático</b> (el «schedule motor»; «Aplicar» lo alinea a la cadencia requerida) y <b>manual</b> (subir archivo en «Alimentar»). «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
      ${guia}
      ${table}
