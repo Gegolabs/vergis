@@ -70,26 +70,95 @@ async function dfsError(stage: string, res: Response, url: string): Promise<Erro
   return new Error(`onelake-intake: ${stage} falló (${res.status}) en ${url.replace(/\?.*$/, '')}: ${text.slice(0, 300)}`)
 }
 
-/** Lectura de un archivo del Lakehouse (p. ej. el LOG del proceso de conversión — issue #55). */
+/** Entrada de un listado del Lakehouse (relativa al lakehouse, p. ej. `Files/intake/oc/x.xlsx`). */
+export interface OneLakeEntry {
+  path: string
+  isDirectory: boolean
+  size: number
+  /** ISO-8601 (del `Last-Modified` DFS). */
+  lastModified: string
+}
+
+/** Operaciones de ARCHIVOS del Lakehouse para la consola de cargas (#55/#57/#58): leer el log,
+ * listar el landing, retirar/reactivar archivos (copy+remove — el rename DFS es quisquilloso). */
 export interface OneLakeReader {
   /** Contenido del archivo, o null si no existe (404). Otros fallos lanzan. */
   read(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string, opts?: { maxBytes?: number }): Promise<string | null>
+  /** Bytes crudos del archivo, o null si no existe. */
+  readBytes(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string): Promise<Uint8Array | null>
+  /** Entradas bajo `dir` (no recursivo salvo opts.recursive). `[]` si el dir no existe. */
+  list(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, dir: string, opts?: { recursive?: boolean }): Promise<OneLakeEntry[]>
+  /** Copia intra-lakehouse (read → create/append/flush). */
+  copy(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, from: string, to: string): Promise<void>
+  /** Borra un archivo. No-op silencioso si no existe. */
+  remove(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string): Promise<void>
 }
 
 export function createOneLakeReader(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): OneLakeReader {
   const doFetch = opts.fetch ?? fetch
+  const auth = async (): Promise<Record<string, string>> => ({ authorization: `Bearer ${await tokens.getToken(SCOPE_ONELAKE)}` })
+  const enc = (p: string): string => p.replace(/^\/+|\/+$/g, '').split('/').map(encodeURIComponent).join('/')
+  const base = (t: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>): string =>
+    `${ONELAKE_HOST}/${encodeURIComponent(t.workspaceId)}/${encodeURIComponent(t.lakehouseId)}`
+
+  async function readBytes(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string): Promise<Uint8Array | null> {
+    const url = `${base(target)}/${enc(path)}`
+    const res = await doFetch(url, { headers: await auth(), signal: AbortSignal.timeout(30_000) })
+    if (res.status === 404) return null
+    if (!res.ok) throw await dfsError('leer', res, url)
+    return new Uint8Array(await res.arrayBuffer())
+  }
+
   return {
     async read(target, path, o = {}): Promise<string | null> {
-      const token = await tokens.getToken(SCOPE_ONELAKE)
-      const rel = path.replace(/^\/+|\/+$/g, '').split('/').map(encodeURIComponent).join('/')
-      const url = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}/${encodeURIComponent(target.lakehouseId)}/${rel}`
-      const res = await doFetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
+      const url = `${base(target)}/${enc(path)}`
+      const res = await doFetch(url, { headers: await auth(), signal: AbortSignal.timeout(30_000) })
       if (res.status === 404) return null
       if (!res.ok) throw await dfsError('leer', res, url)
       const text = await res.text()
       // Cola del archivo (el diagnóstico vive al final): tope defensivo para logs largos.
       const max = o.maxBytes ?? 64 * 1024
       return text.length > max ? text.slice(-max) : text
+    },
+    readBytes,
+    async list(target, dir, o = {}): Promise<OneLakeEntry[]> {
+      // ADLS list: el FILESYSTEM es el workspace; `directory` lleva el lakehouse como primer segmento.
+      const dirWithLh = `${target.lakehouseId}/${dir.replace(/^\/+|\/+$/g, '')}`
+      const url = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}?resource=filesystem&recursive=${o.recursive ? 'true' : 'false'}&directory=${encodeURIComponent(dirWithLh)}`
+      const res = await doFetch(url, { headers: await auth(), signal: AbortSignal.timeout(30_000) })
+      if (res.status === 404) return []
+      if (!res.ok) throw await dfsError('listar', res, url)
+      const body = (await res.json().catch(() => ({}))) as { paths?: { name?: string; isDirectory?: string | boolean; contentLength?: string | number; lastModified?: string }[] }
+      const lhPrefix = `${target.lakehouseId}/`
+      return (body.paths ?? []).map((p) => ({
+        path: (p.name ?? '').startsWith(lhPrefix) ? (p.name ?? '').slice(lhPrefix.length) : p.name ?? '',
+        isDirectory: p.isDirectory === true || p.isDirectory === 'true',
+        size: Number(p.contentLength ?? 0),
+        lastModified: p.lastModified ? new Date(p.lastModified).toISOString() : '',
+      }))
+    },
+    async copy(target, from, to): Promise<void> {
+      const bytes = await readBytes(target, from)
+      if (!bytes) throw new Error(`onelake-intake: copy — el origen '${from}' no existe.`)
+      const dst = `${base(target)}/${enc(to)}`
+      const headers = await auth()
+      const created = await doFetch(`${dst}?resource=file`, { method: 'PUT', headers, signal: AbortSignal.timeout(30_000) })
+      if (!created.ok) throw await dfsError('crear', created, dst)
+      const appended = await doFetch(`${dst}?action=append&position=0`, {
+        method: 'PATCH',
+        headers: { ...headers, 'content-type': 'application/octet-stream' },
+        body: bytes as unknown as RequestInit['body'],
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!appended.ok) throw await dfsError('append', appended, dst)
+      const flushed = await doFetch(`${dst}?action=flush&position=${bytes.byteLength}`, { method: 'PATCH', headers, signal: AbortSignal.timeout(30_000) })
+      if (!flushed.ok) throw await dfsError('flush', flushed, dst)
+    },
+    async remove(target, path): Promise<void> {
+      const url = `${base(target)}/${enc(path)}`
+      const res = await doFetch(url, { method: 'DELETE', headers: await auth(), signal: AbortSignal.timeout(30_000) })
+      if (res.status === 404) return
+      if (!res.ok) throw await dfsError('borrar', res, url)
     },
   }
 }
