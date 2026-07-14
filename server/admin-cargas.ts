@@ -25,6 +25,10 @@ export interface IntakeUploadEvent {
   by: string
   ok: boolean
   triggered: boolean
+  /** SHA-256 del contenido (issue #62): identidad de la carga, independiente del nombre. */
+  sha256?: string
+  /** Si el contenido es idéntico a una carga previa del slot: `<filename> · <ts>` de aquella. */
+  dupOf?: string
 }
 
 /** Operaciones de la consola — las inyecta el wiring (serve-rls) y las consume admin.ts. */
@@ -37,6 +41,10 @@ export interface CargasOps {
   rerun(slot: IntakeSlot, by: string): Promise<void>
   retire(slot: IntakeSlot, filename: string, by: string): Promise<void>
   restore(slot: IntakeSlot, archivedPath: string, by: string): Promise<void>
+  /** «Revertir esta carga» (issue #63): saca el archivo de `_processed/<clave>/` a `_retirado/`; si la
+   *  clave tiene versión previa archivada, la reactiva al landing y re-corre la conversión (last-wins
+   *  restaura el estado anterior). `compensada=false` = clave sin versión previa (dato queda sin origen). */
+  revert?(slot: IntakeSlot, archivedPath: string, by: string): Promise<{ clave: string; compensada: boolean; reactivado?: string }>
 }
 
 /** Todo lo que la página necesita de UN slot, ya fetcheado (tolerante: 'error' no rompe la página). */
@@ -102,7 +110,7 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
     for (const h of history) {
       items.push({
         ts: h.ts,
-        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span></td><td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}</td>`,
+        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td><td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}</td>`,
       })
     }
   }
@@ -139,8 +147,11 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
       ? `<p class="msg err">⚠ El trigger de este slot (<code>${escapeHtml(s.trigger.processRef)}</code>) no está registrado como proceso en <a href="/admin/sources">Fuentes</a> → la entidad no aparece en Frescura ni la vigila el monitor. Registrarlo en <code>sources.yaml</code>.</p>`
       : ''
 
+    // #62 (capa «delta neto cero»): el pipeline emite `[delta] sin cambios en el dato` en su log
+    // cuando la corrida dejó el dato idéntico (convención del contrato de ingesta) → badge honesto.
+    const sinCambios = last?.status === 'Completed' && !!sc.log && sc.log.includes('[delta] sin cambios en el dato')
     const estado = last
-      ? `${badge(last.status)} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${last.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
+      ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${last.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
       : sc.runs === 'error' ? '<span class="sub">motor no respondió</span>' : '<span class="sub">sin corridas</span>'
 
     const rerun = s.trigger ? postForm(action, token, { slot: s.id, accion: 'rerun' }, 'Correr conversión de nuevo', 'La conversión re-procesará TODOS los archivos del landing. ¿Continuar?') : ''
@@ -159,7 +170,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     const archivedRows = sc.archived === 'error'
       ? `<tr><td colspan="4" class="sub">No se pudo listar el archivo de procesados.</td></tr>`
       : sc.archived.filter((e) => !e.isDirectory).slice(0, 60).map((e) =>
-          `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)}</td></tr>`,
+          `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert', archivo: e.path }, 'Revertir', `Revertir la carga «${baseName(e.path)}»: sale del histórico a _retirado/ y, si su clave tiene versión previa, se re-materializa el estado anterior. ¿Continuar?`)}</td></tr>`,
         ).join('') || `<tr><td colspan="4" class="sub">Sin procesados archivados todavía.</td></tr>`
 
     return `<h2>${escapeHtml(s.label)} <span class="sub c">${escapeHtml(s.id)}</span></h2>
