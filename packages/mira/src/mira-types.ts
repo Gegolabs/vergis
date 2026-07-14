@@ -14,10 +14,21 @@ export interface PagesNav {
 /** Control de cabecera ya resuelto: opciones + valor(es) seleccionado(s). Viaja al render. */
 export interface ControlResolved {
   id: string
+  /**
+   * Clave de contexto que este control FIJA (default = `id`). Dos controles con el mismo `param` son
+   * llaves alternativas del MISMO alcance: eligen por campos distintos, escriben el mismo `ctx.<param>`.
+   */
+  param?: string
   label: string
-  options: string[]
-  /** Valor para display (multi: los valores unidos por ", "). */
+  /**
+   * Opciones del selector: pares `{value, label}` (`value` = la llave que se escribe en `ctx.<param>`,
+   * `label` = el texto que se ve). El render tolera también `string[]` (label = value) por compat.
+   */
+  options: (string | { value: string; label: string })[]
+  /** Valor VIGENTE (la llave; multi: los valores unidos por ", "). */
   value: string
+  /** Etiqueta del valor vigente para el print/summary (default = `value`). */
+  displayLabel?: string
   /** Solo multi-select: los valores seleccionados. */
   values?: string[]
   /** `true` si el control es multi-select (`single: false` en el DSL). */

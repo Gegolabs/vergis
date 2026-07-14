@@ -383,6 +383,17 @@ export interface MiraControl {
   label?: string
   /** Origen de las opciones: `data.<dataset>.<field>`. Sus valores distintos pueblan el selector. */
   source: string
+  /**
+   * A qué parámetro de contexto ESCRIBE el control (default = `id`). Dos controles con el mismo `param`
+   * son LLAVES ALTERNATIVAS del mismo alcance: eligen por campos distintos, fijan el mismo `ctx.<param>`
+   * (deben compartir dataset y ser `single`). Deja `:ctx.<param>` intacto en las queries.
+   */
+  param?: string
+  /**
+   * Campo del MISMO dataset de `source` que se muestra como ETIQUETA de las opciones (default = el campo
+   * de `source`). El valor escrito sigue siendo el de `source`; solo cambia el texto visible.
+   */
+  display?: string
   /** Valor inicial cuando no llega `ctx.<id>` en la URL: el mayor / menor / primero de las opciones. */
   default?: 'max' | 'min' | 'first'
   /**
@@ -492,6 +503,18 @@ function validateControls(spec: MiraSpec): void {
         remediation: `Declarar '${srcField}' en shape.fields o corregir source.`,
       })
     }
+    // El campo de `display` (la etiqueta) debe existir en el MISMO dataset: un typo dejaría la etiqueta
+    // cayendo al value en silencio. Mismo criterio que el campo de source.
+    if (c.display && cds?.shape?.fields && !(c.display in cds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-display-field-dangling',
+        path: `controls[${c.id}].display`,
+        value: c.display,
+        message: `El control '${c.id}' muestra el campo '${c.display}' de '${dataset}', que no está declarado en data.${dataset}.shape.fields.`,
+        remediation: `Declarar '${c.display}' en shape.fields o corregir display.`,
+      })
+    }
     if (c.default != null && !['max', 'min', 'first'].includes(c.default)) {
       throw new VergisError({
         error: 'mira/spec-invalid',
@@ -504,6 +527,39 @@ function validateControls(spec: MiraSpec): void {
     }
     // `single: false` (multi-select) es válido: el control se renderiza como grupo de checkboxes,
     // los valores viajan repetidos en la URL y Mira expande `:ctx.<id>` a N binds (ver MiraControl).
+  }
+  // Params COMPARTIDOS (llaves alternativas del mismo alcance): mismo dataset + single obligatorio.
+  const byParam = new Map<string, MiraControl[]>()
+  for (const c of controls) {
+    const p = c.param ?? c.id
+    const g = byParam.get(p)
+    if (g) g.push(c)
+    else byParam.set(p, [c])
+  }
+  for (const [param, group] of byParam) {
+    if (group.length < 2) continue
+    const datasets = new Set(group.map((c) => stripDataRef(c.source).split('.')[0]))
+    if (datasets.size > 1) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-param-dataset-mismatch',
+        path: `controls[param=${param}].source`,
+        value: [...datasets].join(', '),
+        message: `Los controles que comparten param '${param}' (${group.map((c) => c.id).join(', ')}) apuntan a datasets distintos (${[...datasets].join(', ')}); las llaves alternativas deben leer del MISMO dataset.`,
+        remediation: 'Unificar el dataset de source de todos los controles del mismo param.',
+      })
+    }
+    const multi = group.find((c) => c.single === false)
+    if (multi) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-param-multi',
+        path: `controls[${multi.id}].single`,
+        value: 'false',
+        message: `El control '${multi.id}' es multi-select (single: false) pero comparte el param '${param}'; las llaves alternativas requieren single: true en esta fase.`,
+        remediation: 'Declarar single: true (u omitirlo) en todos los controles que comparten un param.',
+      })
+    }
   }
 }
 
