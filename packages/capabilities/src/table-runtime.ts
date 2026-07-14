@@ -338,6 +338,8 @@ function vtBootstrap(root){
         '<select class="vt-group-add"></select>' +
         '<div class="vt-group-actions"><button type="button" class="vt-expand-all">Expandir todo</button><button type="button" class="vt-collapse-all">Colapsar todo</button></div></div>'
       ) : '') +
+      '<div class="vt-ctl-grp"><div class="faceta-title">Descargar</div>' +
+      '<button type="button" class="vt-export" title="Exporta las filas visibles (con los filtros aplicados) a CSV, abrible en Excel">Descargar CSV (vista actual)</button></div>' +
       '<div class="vt-ctl-grp"><button type="button" class="vt-clear-all">Limpiar todo</button>' +
       '<span class="vt-count" role="status" aria-live="polite"></span></div>';
     trayWrap.appendChild(sec);
@@ -347,6 +349,24 @@ function vtBootstrap(root){
     // las pulsaciones y se renderiza una vez que el usuario pausa (el value del input sigue instantáneo).
     var gsTimer; gs.addEventListener('input', function(){ clearTimeout(gsTimer); gsTimer=setTimeout(function(){ state.globalSearch=gs.value; render(); }, 150); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
+    // Export CSV (issue #61 / TX-01): exporta la VISTA ACTUAL (filtros/búsqueda aplicados), columnas
+    // visibles sin anotaciones (#60: las anotaciones no viajan). Separador ';' (Excel es-CL usa coma
+    // decimal) + BOM UTF-8 para que Excel abra tildes correcto. Sin dependencias: Blob + download.
+    var expBtn = sec.querySelector('.vt-export');
+    if(expBtn) expBtn.addEventListener('click', function(){
+      var rc = renderCols().filter(function(c){ return !c.annotation; });
+      var view = vtApply(rows, state);
+      var cell = function(v){ var s = (v==null?'':String(v)); return /[";\\n\\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+      var lines = [rc.map(function(c){ return cell(c.label||c.field); }).join(';')];
+      view.forEach(function(r){ lines.push(rc.map(function(c){ return cell(r[c.field]); }).join(';')); });
+      var blob = new Blob(['\\ufeff'+lines.join('\\r\\n')], {type:'text/csv;charset=utf-8'});
+      var a = document.createElement('a');
+      a.href = window.URL.createObjectURL(blob);
+      var base = (document.title||'tabla').trim().replace(/[^\\wÀ-ÿ -]+/g,'').replace(/\\s+/g,'-').toLowerCase() || 'tabla';
+      a.download = base + '-' + new Date().toISOString().slice(0,10) + '.csv';
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ window.URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    });
     if(addSel){
       addSel.addEventListener('change', function(){ if(!addSel.value) return; state.groupLevels.push(addSel.value); state.collapsed={}; renderGroupUI(); render(); });
       levelsEl.addEventListener('click', function(e){ var rm=e.target.closest('.vt-gl-rm'); if(!rm) return; var f=rm.getAttribute('data-field'); state.groupLevels=state.groupLevels.filter(function(x){return x!==f;}); state.collapsed={}; renderGroupUI(); render(); });
