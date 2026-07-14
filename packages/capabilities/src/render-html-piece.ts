@@ -44,19 +44,18 @@ export const renderHtmlPiece: Capability = {
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false }
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry, signals }
-    // LINEAMIENTO: los controles NO van en el cuerpo del reporte — viven en el INSPECTOR (gaveta),
-    // tab Controles, junto a las facetas/búsqueda. El cuerpo es solo la pieza + la nav de vistas.
-    const controlsSection = controls && controls.length ? renderControlsSection(controls, pages?.active, carry) : ''
-    // Barra de CONTEXTO ACTIVO (sticky arriba): el valor vigente de cada control (p.ej. la semana)
-    // visible en todo momento. El control editable sigue en la gaveta; esto es solo lectura.
-    const contextStrip = controls && controls.length ? renderContextStrip(controls) : ''
+    // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
+    // el control), no en la gaveta. La gaveta queda para la maquinaria (facetas de dashboard /
+    // runtime de tabla, guardados, config). Un PI cuyo único contenido de gaveta eran los controles
+    // queda SIN gaveta.
+    const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
     let body = contextStrip + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
-    // GAVETA COMÚN (un solo shell por documento) para cualquier PI con controles o interactividad.
-    // 3 tabs: Controles · Guardados · Config. En el tab Controles van, de arriba a abajo: los
-    // controles de cabecera (server-side) + las facetas del dashboard / los controles del runtime de tabla.
-    const hasTray = !!interactive || hasTable || !!controlsSection
+    // GAVETA COMÚN (un solo shell por documento) para PI con interactividad de dashboard o de tabla.
+    // 3 tabs: Controles · Guardados · Config. El tab «Controles» reúne las facetas del dashboard /
+    // los controles del runtime de tabla (los selectores de alcance viven en la banda, no aquí).
+    const hasTray = !!interactive || hasTable
     // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
     const piLabel = meta?.code
       ? `${meta.code}${meta.version ? ' · v' + meta.version : ''}`
@@ -65,10 +64,10 @@ export const renderHtmlPiece: Capability = {
         : ''
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
     if (interactive) {
-      body = renderTrayShell(controlsSection + renderDashboardFacets(interactive), theme.palettes, palette, piLabel) + body
+      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette, piLabel) + body
       tail += renderInteractiveScript(interactive)
     } else if (hasTray) {
-      body = renderTrayShell(controlsSection, theme.palettes, palette, piLabel) + body
+      body = renderTrayShell('', theme.palettes, palette, piLabel) + body
     }
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
@@ -77,7 +76,6 @@ export const renderHtmlPiece: Capability = {
     if (hasTray) css += TRAY_CSS
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (pages) css += PAGES_NAV_CSS
-    if (controlsSection) css += CONTROLS_BAR_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
@@ -108,76 +106,87 @@ function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}): string {
   return `<nav class="vpages" role="tablist">${tabs}</nav>`
 }
 
-/** CSS de los controles de cabecera — viven en el INSPECTOR (gaveta), no en el cuerpo. */
-const CONTROLS_BAR_CSS = `
-.tray .vt-ctl{margin-bottom:18px}
-.tray .vt-ctl .faceta-title{margin-bottom:6px}
-.tray .vt-ctl-select{width:100%;box-sizing:border-box;padding:7px 9px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937);cursor:pointer}
-.tray .vt-ctl-select:hover{border-color:var(--green,#2563eb)}
+/** CSS de la banda de CONTEXTO ACTIVO (sticky arriba) — la superficie estándar del selector de
+ * alcance (TX-11 «cara = estado»): el sello muestra el valor vigente y ES clickeable (single =
+ * `<select>` estilizado; multi = `<details>` con checkboxes). En print (`.vctx-print`) degrada a
+ * texto plano y el widget (`.vctx-screen`) se oculta. Variables del theme con fallback claro. */
+const CONTEXT_BAR_CSS = `
+.vctxbar{position:sticky;top:0;z-index:8;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:8px 14px;margin:0 0 16px;background:var(--panel,var(--bg,#fff));border:1px solid var(--border,#e2e8f0);border-radius:8px;font-size:12px}
+.vctxbar .vctx-item{display:inline-flex;align-items:center;gap:6px}
+.vctxbar .vctx-k{color:var(--fg-dim,#64748b);text-transform:uppercase;letter-spacing:.04em;font-size:10px;margin-right:2px}
+.vctxbar .vctx-v{color:var(--fg,#1f2937);font-weight:700}
+.vctxbar select.vctx-sel{font:inherit;font-weight:700;color:var(--fg,#1f2937);background-color:var(--bg,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;padding:3px 22px 3px 8px;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%2364748b' stroke-width='1.4'/></svg>");background-repeat:no-repeat;background-position:right 7px center}
+.vctxbar select.vctx-sel:hover{border-color:var(--green,#2563eb)}
+.vctxbar .vctx-multi{position:relative;display:inline-block}
+.vctxbar .vctx-multi>summary{list-style:none;cursor:pointer;font-weight:700;color:var(--fg,#1f2937);background:var(--bg,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;padding:3px 10px 3px 8px}
+.vctxbar .vctx-multi>summary::-webkit-details-marker{display:none}
+.vctxbar .vctx-multi>summary::after{content:"▾";margin-left:6px;color:var(--fg-dim,#64748b);font-size:10px}
+.vctxbar .vctx-multi[open]>summary{border-color:var(--green,#2563eb)}
+.vctxbar .vctx-pop{position:absolute;z-index:20;top:calc(100% + 4px);left:0;min-width:150px;display:flex;flex-direction:column;gap:4px;padding:8px;background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.18)}
+.vctxbar .vctx-pop label{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;white-space:nowrap;cursor:pointer;color:var(--fg,#1f2937)}
+.vctx-print{display:none}
+@media print{.vctxbar{position:static;border:none;padding:0;margin:0 0 10px;gap:12px;font-size:11px}.vctxbar .vctx-screen{display:none!important}.vctxbar .vctx-print{display:inline!important;font-weight:700}}
 `
 
 /**
- * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Un control single es un `<select>`;
- * uno MULTI (`single: false`) es un grupo de checkboxes (mismo estilo que las facetas del dashboard).
- * El cambio recarga la página fijando `?ctx.<id>=<valor>` (repetido por valor en multi) y preservando
- * `page` + el resto del contexto (carry). Server-side: lo elegido reentra como `:ctx.<id>` en las
- * queries → cambia el dato, no solo la vista. LINEAMIENTO: los controles NO van en el cuerpo.
+ * Prefijo común del handler de navegación de un sello (banda) o control: reconstruye el query con
+ * la página activa + el carry (menos ESTE control; un valor multi se repite con append). `window.URL`
+ * es obligatorio: en un handler inline `document.URL` (string) sombrea al constructor global y
+ * `new URL(…)` lanzaría TypeError (ver test controls-multidrill, ejecutado bajo `with(document)`).
  */
-function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
-  return controls
+function ctxNavBase(cId: string, activePage: string | undefined, carry: CarryCtx): string {
+  return (
+    `var u=new window.URL(location.href);u.search='';` +
+    (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
+    Object.entries(carry)
+      .filter(([k]) => k !== cId)
+      .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((val) => `u.searchParams.append('ctx.${escapeHtml(k)}',${JSON.stringify(String(val))});`))
+      .join('')
+  )
+}
+
+/**
+ * Banda de contexto activo = EL selector de alcance (TX-11 WP1). Por control con valor vigente emite
+ * un sello clickeable: single → `<select>` nativo estilizado (a11y gratis) con las mismas opciones y
+ * navegación que el control histórico de la gaveta; multi → `<details>` cuyo summary muestra el valor
+ * unido y cuyo popover reúne los checkboxes existentes. Por ítem se emite además `.vctx-print` (texto
+ * plano) — en print el widget `.vctx-screen` se oculta y queda el texto (el sello impreso es «OC …»).
+ */
+function renderContextStrip(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
+  const items = controls
+    .filter((c) => c.value != null && c.value !== '')
     .map((c) => {
-      // Prefijo común del handler: reconstruir el query con la página activa + el carry (menos este
-      // control; multi-valor se repite con append). Robusto: no depende del estado previo de la URL.
-      // `window.URL` es obligatorio: en un handler inline la cadena de scope incluye `document`, y
-      // `document.URL` (string) sombrea al constructor global — `new URL(…)` lanza TypeError.
-      const base =
-        `var u=new window.URL(location.href);u.search='';` +
-        (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
-        Object.entries(carry)
-          .filter(([k]) => k !== c.id)
-          .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((val) => `u.searchParams.append('ctx.${escapeHtml(k)}',${JSON.stringify(String(val))});`))
-          .join('')
+      const label = escapeHtml(c.label)
+      const printVal = `<span class="vctx-v vctx-print">${escapeHtml(String(c.value))}</span>`
       if (c.multi) {
-        // Multi-select: al cambiar cualquier checkbox del grupo se recolectan TODOS los marcados y se
-        // navega con `ctx.<id>` repetido por valor (`?ctx.w=a&ctx.w=b` — navFromUrl los acumula).
+        // Multi: al cambiar cualquier checkbox se recolectan los marcados y se navega con `ctx.<id>`
+        // repetido por valor (mismo contrato que el control histórico, misma navegación por URL).
         const onchange =
-          base +
-          `var g=this.closest('.vt-ctl');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
+          ctxNavBase(c.id, activePage, carry) +
+          `var g=this.closest('.vctx-multi');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
         const selected = new Set(c.values ?? [])
         const checks = c.options
           .map((v) => `<label><input type="checkbox" value="${escapeHtml(v)}"${selected.has(v) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(v)}</label>`)
           .join('')
         return (
-          `<div class="faceta vt-ctl vt-ctl-multi" data-ctl="${escapeHtml(c.id)}"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
-          `<div class="faceta-options" role="group" aria-label="${escapeHtml(c.label)}">${checks}</div></div>`
+          `<span class="vctx-item"><span class="vctx-k">${label}</span>` +
+          `<details class="vctx-multi vctx-screen" data-ctl="${escapeHtml(c.id)}"><summary class="vctx-v vctx-sum">${escapeHtml(String(c.value))}</summary>` +
+          `<div class="vctx-pop" role="group" aria-label="${label}">${checks}</div></details>` +
+          printVal +
+          `</span>`
         )
       }
-      const onchange = base + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
+      const onchange = ctxNavBase(c.id, activePage, carry) + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
       const opts = c.options
         .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
         .join('')
       return (
-        `<div class="faceta vt-ctl"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
-        `<select class="vt-ctl-select" aria-label="${escapeHtml(c.label)}" onchange="${escapeHtml(onchange)}">${opts}</select></div>`
+        `<span class="vctx-item"><span class="vctx-k">${label}</span>` +
+        `<select class="vctx-v vctx-sel vctx-screen" aria-label="${label}" onchange="${escapeHtml(onchange)}">${opts}</select>` +
+        printVal +
+        `</span>`
       )
     })
-    .join('')
-}
-
-/** CSS de la barra de CONTEXTO ACTIVO (sticky arriba): muestra el valor vigente de cada control
- * (p.ej. «Semana · W24») en todo momento, incluso al hacer scroll. Read-only; cambiar el valor sigue
- * siendo el control de la gaveta. */
-const CONTEXT_BAR_CSS = `
-.vctxbar{position:sticky;top:0;z-index:8;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:8px 14px;margin:0 0 16px;background:var(--panel,var(--bg,#fff));border:1px solid var(--border,#e2e8f0);border-radius:8px;font-size:12px}
-.vctxbar .vctx-k{color:var(--fg-dim,#64748b);text-transform:uppercase;letter-spacing:.04em;font-size:10px;margin-right:4px}
-.vctxbar .vctx-v{color:var(--fg,#1f2937);font-weight:700}
-`
-
-/** Barra de contexto activo: un chip read-only por control con su valor vigente (de `carry`/control). */
-function renderContextStrip(controls: ControlResolved[]): string {
-  const items = controls
-    .filter((c) => c.value != null && c.value !== '')
-    .map((c) => `<span class="vctx-item"><span class="vctx-k">${escapeHtml(c.label)}</span><span class="vctx-v">${escapeHtml(String(c.value))}</span></span>`)
     .join('')
   return items ? `<div class="vctxbar">${items}</div>` : ''
 }

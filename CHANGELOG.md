@@ -4,6 +4,27 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.8.0 — 2026-07-14
+
+**Superficie de estado** (TX-11) — convención de plataforma: *cara = estado · gaveta = maquinaria ·
+print = estado como texto*. Cambio de comportamiento visible en todos los PI, 100 % de superficie
+(cero cambio al DSL, a los specs, al camino de datos ni a la semántica de URL — los links `?ctx.*`
+compartidos siguen idénticos). Doc: [`docs/superficie-de-estado.md`](docs/superficie-de-estado.md).
+
+- **El sello de alcance es clickeable** — la banda de contexto (`vctxbar`) deja de ser solo-lectura y
+  se vuelve EL selector: un control single es un `<select>` nativo estilizado como sello; uno multi,
+  un `<details>` con los checkboxes. Una cosa, un lugar: el control sale de la gaveta. En print, el
+  sello degrada a texto plano.
+- **Chips de filtro imprimibles como letra chica** — los filtros activos aparecen como chip removible
+  en la cara solo al aplicarse, y en print se imprimen como texto discreto («Filtros: …»), ocultando
+  solo la acción (la ✕). Agrupar-por no imprime chips. La maquinaria (pickers, búsqueda, agrupar,
+  export, config) jamás se imprime.
+- **Afordancias proporcionales y atribuibles** — una tabla que rinde 1 fila (single_row) es display
+  puro: sin runtime, sin iconos de filtro, sin kit. El kit de afordancias (buscar · agrupar ·
+  descargar · limpiar) es ÚNICO en el Inspector, con selector de objetivo solo si hay ≥2 tablas
+  interactivas (jamás kits apilados). El contador de filas sale del kit y pasa a pie discreto de cada
+  tabla en la cara (se imprime).
+
 ## 0.7.0 — 2026-07-13
 
 - **Descargar CSV de la vista actual** (#61) — botón en la gaveta de tabla: exporta la vista

@@ -18,11 +18,14 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   // Las señales las marca quien emite la feature (no un sniff del HTML de salida): drills → celdas
   // `vt-actions`; tabla interactiva (default salvo `interactive:false`) → runtime + gaveta + CSS.
   if (drills.length > 0) opts.signals.drillActions = true
-  if (node.interactive !== false) opts.signals.interactiveTable = true
 
-  // Auto-on por defecto: la tabla es interactiva salvo `interactive: false` (kill switch).
-  if (node.interactive === false) {
-    // Estática: sin runtime que complete después → el tbody lleva TODAS las filas.
+  // Heurística de plataforma (TX-11 WP4·1): una tabla DISPLAY —single_row, o que rinde 1 fila— es
+  // presentación pura, no recibe maquinaria (runtime interactivo, iconos de filtro por columna, kit
+  // del Inspector). `interactive: true` explícito la conserva; una tabla con anotación también (su
+  // propósito es editar, no filtrar). El kill-switch `interactive: false` fuerza estática igual.
+  const displayByRows = node.interactive !== true && !node.annotation && rows.length === 1
+  if (node.interactive === false || displayByRows) {
+    // Estática/display: sin runtime que complete después → el tbody lleva TODAS las filas.
     const tbody = renderTableBody(cols, rows, ranges, drills, carry)
     const head =
       cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
@@ -32,6 +35,8 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
       `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
     )
   }
+  // Interactiva (auto-on): recién aquí se prende la señal → runtime + gaveta + CSS interactivo.
+  opts.signals.interactiveTable = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
   const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry)
   return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
@@ -142,10 +147,13 @@ function renderInteractiveTable(
   //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
   const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry, ssrComplete }).replace(/</g, '\\u003c')
 
+  // Pie con el contador de filas (TX-11 WP4·3): información del documento, no control — vive en la
+  // CARA de cada tabla interactiva (el runtime lo puebla) y se imprime (estado honesto).
   return (
     `<section class="table vtable">${titleHtml}${chips}` +
     `<div class="vt-scroll"><table><thead><tr class="vt-head-row">${headCells}</tr></thead>` +
     `<tbody>${tbody}</tbody></table></div>` +
+    `<div class="vt-count-foot" role="status" aria-live="polite"></div>` +
     `<script type="application/json" class="vtable-data">${payload}</script></section>`
   )
 }
