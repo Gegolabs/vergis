@@ -41,6 +41,8 @@ export interface ServerConfig {
   gateClaims: Record<string, string>
   /** Secreto HMAC de tokens de anotación; `random` indica que se generó por arranque (no persistente). */
   annotationSecret: { value: string; ephemeral: boolean }
+  /** Miranda — el agente conversacional de especificación de PIs (cluster 077). Todo detrás del flag. */
+  miranda: MirandaConfig
   /** Rutas/valores crudos que los consumidores cargan (archivos de config, conexiones, CH, etc.). */
   paths: {
     connections: string | undefined
@@ -56,6 +58,29 @@ export interface ServerConfig {
     sources: string | undefined
     piOwners: string | undefined
   }
+}
+
+/**
+ * Config de Miranda. Con `enabled=false` (default) NADA se activa: ni rutas, ni nav, ni la dependencia
+ * de la API. Con `enabled=true` la API key es OBLIGATORIA — su ausencia aborta el arranque con un
+ * error claro (no un fallo runtime sorpresa al primer mensaje).
+ */
+export interface MirandaConfig {
+  enabled: boolean
+  model: string
+  apiKey: string
+  /** Directorio con el DSL (`dsl.md`) y la rúbrica QC① (`qc1/…`) que se montan al system prompt. */
+  rubricDir: string | undefined
+  /** Turnos internos (tool-use) máximos por mensaje del usuario. */
+  maxTurns: number
+  /** Presupuesto de tokens por sesión (corta con mensaje claro al excederse). */
+  tokenBudget: number
+  /** Ruta/JSON del allowlist de catálogo (tablas/vistas que las probes pueden tocar). */
+  catalogPath: string | undefined
+  /** Grupo de Mira que concede el scope `miranda` (además de los admins). */
+  scopeGroup: string
+  /** Webhook opcional para anunciar la publicación de un PI (patrón espejo Slack; no-fatal). */
+  announceWebhook: string | undefined
 }
 
 type Env = Record<string, string | undefined>
@@ -113,6 +138,7 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
   const envSecret = env['VERGIS_ANNOTATION_SECRET']
   return {
     engine,
+    miranda: mirandaConfig(env),
     port: num(env, 'PORT', 8080),
     refreshMs: num(env, 'VERGIS_REFRESH_MS', 0),
     dataCacheTtlMs: num(env, 'VERGIS_DATA_CACHE_TTL_MS', 0),
@@ -144,6 +170,26 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
       sources: env['VERGIS_SOURCES'],
       piOwners: env['VERGIS_PI_OWNERS'],
     },
+  }
+}
+
+/** Parsea y VALIDA la config de Miranda. Con el flag encendido, la key es obligatoria (aborta si falta). */
+function mirandaConfig(env: Env): MirandaConfig {
+  const enabled = TRUTHY.has((env['MIRANDA_ENABLED'] ?? '').toLowerCase())
+  const apiKey = env['ANTHROPIC_API_KEY'] ?? ''
+  if (enabled && !apiKey) {
+    throw new Error('MIRANDA_ENABLED está encendido pero falta ANTHROPIC_API_KEY. Define la key (env/KV) o apaga MIRANDA_ENABLED.')
+  }
+  return {
+    enabled,
+    model: env['MIRANDA_MODEL'] ?? 'claude-sonnet-5',
+    apiKey,
+    rubricDir: env['MIRANDA_RUBRIC_DIR'],
+    maxTurns: num(env, 'MIRANDA_MAX_TURNS', 40),
+    tokenBudget: num(env, 'MIRANDA_TOKEN_BUDGET', 500_000),
+    catalogPath: env['MIRANDA_CATALOG'],
+    scopeGroup: (env['MIRANDA_SCOPE_GROUP'] ?? 'miranda').trim().toLowerCase(),
+    announceWebhook: env['MIRANDA_ANNOUNCE_WEBHOOK'],
   }
 }
 

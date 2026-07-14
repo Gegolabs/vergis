@@ -93,6 +93,7 @@ import { configFromEnv } from './config'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
+import type { MirandaHandler } from './miranda'
 import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from './deployment-check'
 import {
   isPublic,
@@ -363,6 +364,8 @@ const parseIntakeFile = (): IntakeSlot[] =>
   process.env['VERGIS_INTAKE'] ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8'))) : []
 let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
+// Miranda (cluster 077): null salvo que MIRANDA_ENABLED esté encendido (se construye más abajo).
+let miranda: MirandaHandler | null = null
 let piAclEnabled = false
 let piOwners: Record<string, string> = {}
 let defaultCollabGroups: string[] = []
@@ -543,6 +546,7 @@ const server = createServer(
     isReady: () => ready,
     getAdmin: () => admin,
     getPiConfig: () => piConfig,
+    getMiranda: () => miranda,
     discover,
     identityFor,
     renderReport,

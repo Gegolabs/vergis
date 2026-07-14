@@ -17,6 +17,13 @@ import {
   type PrincipalType,
 } from './pi-authz'
 import { durationToSeconds, validateOferta } from './freshness'
+import {
+  canTransition,
+  isMirandaState,
+  type MirandaSessionState,
+  type MirandaMessageRole,
+  type MirandaArtifactKind,
+} from './miranda-session'
 
 /**
  * `GovernanceStore` — el store ÚNICO del estado de gobierno del runtime (modelo de tres estados):
@@ -142,7 +149,60 @@ export interface PlatformSettingStore {
   setSetting(key: string, value: string, updatedBy?: string): Promise<void>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore {
+/** Sesión de Miranda (el agente que autora specs conversando, cluster 077). */
+export interface MirandaSession {
+  id: string
+  title: string
+  state: MirandaSessionState
+  createdBy?: string
+  /** Código PI-NNN asignado al publicar (null hasta entonces). */
+  piCode?: string
+  createdAt?: string
+  updatedAt?: string
+}
+/** Un turno de la conversación (o resultado de tool). `content` es JSON serializado. */
+export interface MirandaMessage {
+  seq: number
+  role: MirandaMessageRole
+  content: string
+  tokens: number
+  createdAt?: string
+}
+/** Artefacto de sesión APPEND-ONLY con versión (procedencia del PI): draft vN nunca pisa vN-1. */
+export interface MirandaArtifact {
+  kind: MirandaArtifactKind
+  version: number
+  content: string
+  createdAt?: string
+}
+
+/**
+ * Store de las sesiones de Miranda: sesiones + mensajes + artefactos versionados + la secuencia de
+ * códigos PI (semilla 101). ES el ledger/procedencia de los PIs nacidos por chat. Los artefactos son
+ * append-only con versión (versionado no destructivo). La máquina de estados se hace cumplir acá:
+ * una transición ilegal se rechaza (GovernanceConflict).
+ */
+export interface MirandaStore {
+  createSession(id: string, title: string, createdBy?: string): Promise<MirandaSession>
+  getMirandaSession(id: string): Promise<MirandaSession | null>
+  listMirandaSessions(createdBy?: string): Promise<MirandaSession[]>
+  /** Cambia el estado; rechaza transiciones ilegales (ver miranda-session). */
+  setMirandaState(id: string, state: MirandaSessionState): Promise<void>
+  setMirandaTitle(id: string, title: string): Promise<void>
+  setMirandaPiCode(id: string, piCode: string): Promise<void>
+  appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number): Promise<number>
+  listMirandaMessages(sessionId: string): Promise<MirandaMessage[]>
+  /** Tokens acumulados de la sesión (para el presupuesto). */
+  mirandaSessionTokens(sessionId: string): Promise<number>
+  /** Añade un artefacto (versión auto-incremental por kind). Devuelve la versión asignada. */
+  appendMirandaArtifact(sessionId: string, kind: MirandaArtifactKind, content: string): Promise<number>
+  latestMirandaArtifact(sessionId: string, kind: MirandaArtifactKind): Promise<MirandaArtifact | null>
+  listMirandaArtifacts(sessionId: string, kind?: MirandaArtifactKind): Promise<MirandaArtifact[]>
+  /** Asigna el próximo código PI (secuencia semilla 101) e incrementa. Atómico bajo el lock del db. */
+  nextMirandaPiCode(): Promise<number>
+}
+
+export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore {
   close(): Promise<void>
 }
 
@@ -215,6 +275,40 @@ function ensureColumns(db: SqlDb, table: string, cols: string[]): void {
 const PROCESS_OUTPUT_DDL = `CREATE TABLE IF NOT EXISTS process_output (
   process_id TEXT NOT NULL, table_ref TEXT NOT NULL, PRIMARY KEY (process_id, table_ref)
 );`
+// ── Miranda (cluster 077): sesiones + mensajes + artefactos versionados + secuencia de códigos PI ──
+const MIRANDA_SESSION_DDL = `CREATE TABLE IF NOT EXISTS miranda_session (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'explorando',
+  created_by TEXT,
+  pi_code TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);`
+const MIRANDA_MESSAGE_DDL = `CREATE TABLE IF NOT EXISTS miranda_message (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  PRIMARY KEY (session_id, seq)
+);`
+const MIRANDA_ARTIFACT_DDL = `CREATE TABLE IF NOT EXISTS miranda_artifact (
+  session_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT,
+  PRIMARY KEY (session_id, kind, version)
+);`
+// Secuencia de códigos PI de Miranda: una sola fila. `next_code` = el próximo código a asignar
+// (semilla 101 — decisión de César 2026-07-14; serie separada de los códigos Jira, sin colisión).
+const MIRANDA_SEQ_DDL = `CREATE TABLE IF NOT EXISTS miranda_seq (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  next_code INTEGER NOT NULL
+);`
+const MIRANDA_SEQ_SEED = 101
 
 export interface GovernanceSeed {
   admins?: string[]
@@ -248,6 +342,12 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(PROCESS_DDL)
     ensureColumns(db, 'ingestion_process', ['engine_workspace TEXT', 'engine_item TEXT', 'engine_job_type TEXT'])
     db.run(PROCESS_OUTPUT_DDL)
+    db.run(MIRANDA_SESSION_DDL)
+    db.run(MIRANDA_MESSAGE_DDL)
+    db.run(MIRANDA_ARTIFACT_DDL)
+    db.run(MIRANDA_SEQ_DDL)
+    // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
+    db.run(`INSERT OR IGNORE INTO miranda_seq (id, next_code) VALUES (1, ?)`, [MIRANDA_SEQ_SEED])
     for (const g of seed.groups ?? []) {
       const id = g.id.trim().toLowerCase()
       if (!SLUG_RE.test(id)) throw new Error(`governance: id de grupo semilla inválido '${g.id}'.`)
@@ -646,6 +746,174 @@ export class SqliteGovernanceStore implements GovernanceStore {
       [key, value, normEmail(updatedBy) || null, now()],
     )
     this.persist()
+  }
+
+  // ── MirandaStore (sesiones del agente que autora specs, cluster 077) ──
+  private mirandaSessionRow(r: Record<string, unknown>): MirandaSession {
+    return {
+      id: String(r['id']),
+      title: String(r['title']),
+      state: String(r['state']) as MirandaSessionState,
+      createdBy: r['created_by'] == null ? undefined : String(r['created_by']),
+      piCode: r['pi_code'] == null ? undefined : String(r['pi_code']),
+      createdAt: r['created_at'] == null ? undefined : String(r['created_at']),
+      updatedAt: r['updated_at'] == null ? undefined : String(r['updated_at']),
+    }
+  }
+
+  async createSession(id: string, title: string, createdBy?: string): Promise<MirandaSession> {
+    const sid = id.trim()
+    if (!sid) throw new Error('createSession: id vacío.')
+    if (await this.getMirandaSession(sid)) throw new GovernanceConflict(`Ya existe una sesión de Miranda '${sid}'.`)
+    const ts = now()
+    this.db.run(`INSERT INTO miranda_session (id, title, state, created_by, pi_code, created_at, updated_at) VALUES (?,?,?,?,NULL,?,?)`, [
+      sid,
+      title.trim() || 'Sesión sin título',
+      'explorando',
+      normEmail(createdBy) || null,
+      ts,
+      ts,
+    ])
+    this.persist()
+    return { id: sid, title: title.trim() || 'Sesión sin título', state: 'explorando', createdBy: normEmail(createdBy) || undefined, createdAt: ts, updatedAt: ts }
+  }
+
+  async getMirandaSession(id: string): Promise<MirandaSession | null> {
+    const stmt = this.db.prepare(`SELECT id, title, state, created_by, pi_code, created_at, updated_at FROM miranda_session WHERE id = ?`)
+    stmt.bind([id.trim()])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const r = stmt.getAsObject()
+    stmt.free()
+    return this.mirandaSessionRow(r)
+  }
+
+  async listMirandaSessions(createdBy?: string): Promise<MirandaSession[]> {
+    const by = normEmail(createdBy)
+    const rows = by
+      ? (() => {
+          const stmt = this.db.prepare(`SELECT id, title, state, created_by, pi_code, created_at, updated_at FROM miranda_session WHERE created_by = ? ORDER BY updated_at DESC`)
+          stmt.bind([by])
+          const out: Record<string, unknown>[] = []
+          while (stmt.step()) out.push(stmt.getAsObject())
+          stmt.free()
+          return out
+        })()
+      : selectAll(this.db, `SELECT id, title, state, created_by, pi_code, created_at, updated_at FROM miranda_session ORDER BY updated_at DESC`)
+    return rows.map((r) => this.mirandaSessionRow(r))
+  }
+
+  async setMirandaState(id: string, state: MirandaSessionState): Promise<void> {
+    if (!isMirandaState(state)) throw new Error(`Estado de Miranda inválido: '${state}'.`)
+    const s = await this.getMirandaSession(id)
+    if (!s) throw new Error(`No existe la sesión de Miranda '${id}'.`)
+    if (s.state === state) return // no-op (self-loop trivial)
+    if (!canTransition(s.state, state)) {
+      throw new GovernanceConflict(`Transición ilegal de sesión Miranda: ${s.state} → ${state}.`)
+    }
+    this.db.run(`UPDATE miranda_session SET state = ?, updated_at = ? WHERE id = ?`, [state, now(), id.trim()])
+    this.persist()
+  }
+
+  async setMirandaTitle(id: string, title: string): Promise<void> {
+    this.db.run(`UPDATE miranda_session SET title = ?, updated_at = ? WHERE id = ?`, [title.trim() || 'Sesión sin título', now(), id.trim()])
+    this.persist()
+  }
+
+  async setMirandaPiCode(id: string, piCode: string): Promise<void> {
+    this.db.run(`UPDATE miranda_session SET pi_code = ?, updated_at = ? WHERE id = ?`, [piCode.trim(), now(), id.trim()])
+    this.persist()
+  }
+
+  async appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens = 0): Promise<number> {
+    const sid = sessionId.trim()
+    const seq = this.nextSeq(`SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM miranda_message WHERE session_id = ?`, sid)
+    this.db.run(`INSERT INTO miranda_message (session_id, seq, role, content, tokens, created_at) VALUES (?,?,?,?,?,?)`, [sid, seq, role, content, Math.max(0, Math.trunc(tokens)), now()])
+    this.db.run(`UPDATE miranda_session SET updated_at = ? WHERE id = ?`, [now(), sid])
+    this.persist()
+    return seq
+  }
+
+  async listMirandaMessages(sessionId: string): Promise<MirandaMessage[]> {
+    const stmt = this.db.prepare(`SELECT seq, role, content, tokens, created_at FROM miranda_message WHERE session_id = ? ORDER BY seq ASC`)
+    stmt.bind([sessionId.trim()])
+    const out: MirandaMessage[] = []
+    while (stmt.step()) {
+      const r = stmt.getAsObject()
+      out.push({ seq: Number(r['seq']), role: String(r['role']) as MirandaMessageRole, content: String(r['content']), tokens: Number(r['tokens'] ?? 0), createdAt: r['created_at'] == null ? undefined : String(r['created_at']) })
+    }
+    stmt.free()
+    return out
+  }
+
+  async mirandaSessionTokens(sessionId: string): Promise<number> {
+    const stmt = this.db.prepare(`SELECT COALESCE(SUM(tokens), 0) AS n FROM miranda_message WHERE session_id = ?`)
+    stmt.bind([sessionId.trim()])
+    stmt.step()
+    const n = Number((stmt.getAsObject() as { n: number }).n ?? 0)
+    stmt.free()
+    return n
+  }
+
+  async appendMirandaArtifact(sessionId: string, kind: MirandaArtifactKind, content: string): Promise<number> {
+    const sid = sessionId.trim()
+    const stmt = this.db.prepare(`SELECT COALESCE(MAX(version), 0) + 1 AS n FROM miranda_artifact WHERE session_id = ? AND kind = ?`)
+    stmt.bind([sid, kind])
+    stmt.step()
+    const version = Number((stmt.getAsObject() as { n: number }).n)
+    stmt.free()
+    this.db.run(`INSERT INTO miranda_artifact (session_id, kind, version, content, created_at) VALUES (?,?,?,?,?)`, [sid, kind, version, content, now()])
+    this.db.run(`UPDATE miranda_session SET updated_at = ? WHERE id = ?`, [now(), sid])
+    this.persist()
+    return version
+  }
+
+  async latestMirandaArtifact(sessionId: string, kind: MirandaArtifactKind): Promise<MirandaArtifact | null> {
+    const stmt = this.db.prepare(`SELECT kind, version, content, created_at FROM miranda_artifact WHERE session_id = ? AND kind = ? ORDER BY version DESC LIMIT 1`)
+    stmt.bind([sessionId.trim(), kind])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const r = stmt.getAsObject()
+    stmt.free()
+    return { kind: String(r['kind']) as MirandaArtifactKind, version: Number(r['version']), content: String(r['content']), createdAt: r['created_at'] == null ? undefined : String(r['created_at']) }
+  }
+
+  async listMirandaArtifacts(sessionId: string, kind?: MirandaArtifactKind): Promise<MirandaArtifact[]> {
+    const stmt = kind
+      ? this.db.prepare(`SELECT kind, version, content, created_at FROM miranda_artifact WHERE session_id = ? AND kind = ? ORDER BY kind ASC, version ASC`)
+      : this.db.prepare(`SELECT kind, version, content, created_at FROM miranda_artifact WHERE session_id = ? ORDER BY kind ASC, version ASC`)
+    stmt.bind(kind ? [sessionId.trim(), kind] : [sessionId.trim()])
+    const out: MirandaArtifact[] = []
+    while (stmt.step()) {
+      const r = stmt.getAsObject()
+      out.push({ kind: String(r['kind']) as MirandaArtifactKind, version: Number(r['version']), content: String(r['content']), createdAt: r['created_at'] == null ? undefined : String(r['created_at']) })
+    }
+    stmt.free()
+    return out
+  }
+
+  async nextMirandaPiCode(): Promise<number> {
+    const stmt = this.db.prepare(`SELECT next_code FROM miranda_seq WHERE id = 1`)
+    stmt.step()
+    const assigned = Number((stmt.getAsObject() as { next_code: number }).next_code)
+    stmt.free()
+    this.db.run(`UPDATE miranda_seq SET next_code = next_code + 1 WHERE id = 1`)
+    this.persist()
+    return assigned
+  }
+
+  /** Próximo entero de una secuencia MAX+1 con parámetro (helper de appendMirandaMessage). */
+  private nextSeq(sql: string, param: string): number {
+    const stmt = this.db.prepare(sql)
+    stmt.bind([param])
+    stmt.step()
+    const n = Number((stmt.getAsObject() as { n: number }).n)
+    stmt.free()
+    return n
   }
 
   async close(): Promise<void> {
