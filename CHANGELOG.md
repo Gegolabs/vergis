@@ -4,6 +4,21 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.7.0 — 2026-07-13
+
+- **Descargar CSV de la vista actual** (#61) — botón en la gaveta de tabla: exporta la vista
+  (filtros/búsqueda/facetas aplicados), columnas visibles sin anotaciones, separador `;`
+  (Excel es-CL) y BOM UTF-8. Decisión de instancia: CSV es la resolución del export (xlsx
+  descartado; PDF server-side es #65).
+- **Dedup de carga por contenido** (#62) — SHA-256 al subir vs historial del slot (el nombre no
+  participa): idéntico → aviso sin bloquear + tag «contenido idéntico a X» en Actividad; el hash
+  queda en el audit event. Badge **«sin cambios en el dato»** cuando el log de la corrida trae el
+  marcador `[delta] sin cambios en el dato` (la emisión es del pipeline de la instancia).
+- **«Revertir esta carga»** (#63, fase 1) — acción por archivo del histórico `_processed/<clave>/`
+  (el layout es el ledger carga→clave): revertido → `_retirado/`; con versión previa de la clave,
+  se reactiva y re-corre (last-wins restaura el estado anterior); sin versión previa, aviso honesto
+  de dato sin origen (compensación del pipeline = fase 2). Auditado `intake-revert`.
+
 ## 0.6.1 — 2026-07-13
 
 - **fix(render): los controles del Inspector navegan de nuevo** — el `onchange` generado usaba
