@@ -1,5 +1,6 @@
 export { MiraBotlet, createMiraBotlet, DEFAULT_INTERACTIVE_MAX_ROWS } from './mira'
-export { resolveControlValue, resolveControlValues } from './controls'
+export { resolveControlValue, resolveControlValues, buildControlOptions, trimIsoLabel, labelForValue } from './controls'
+export type { ControlOption } from './controls'
 export { resolveActiveView } from './views'
 export type { MiraOptions, MiraOutput } from './mira'
 export type { CtxValues, PagesNav, ControlResolved } from './mira-types'
