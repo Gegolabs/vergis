@@ -22,10 +22,15 @@ export interface PagesNav {
 /** Control de cabecera ya resuelto por Mira: opciones + valor(es) seleccionado(s). */
 export interface ControlResolved {
   id: string
+  /** Clave de contexto que fija (default = `id`); dos controles con igual `param` = llaves alternativas. */
+  param?: string
   label: string
-  options: string[]
-  /** Valor para display (multi: los valores unidos por ", "). */
+  /** Opciones: pares `{value, label}` (el render tolera `string[]` con label = value por compat). */
+  options: (string | { value: string; label: string })[]
+  /** Valor VIGENTE (la llave; multi: los valores unidos por ", "). */
   value: string
+  /** Etiqueta del valor vigente para el print/summary (default = `value`). */
+  displayLabel?: string
   /** Solo multi-select: los valores seleccionados. */
   values?: string[]
   /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
