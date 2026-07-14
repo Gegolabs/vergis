@@ -11,3 +11,17 @@ export { repr, type ToolResult } from './tools/tools'
 export type { MirandaToolContext, CatalogEntry, SpecRef } from './tools/context'
 export { validateIntentSummary, normalizeIntent, type IntentSummary } from './intent'
 export { hasBlockingGaps, VEREDICTOS, SEVERIDADES, type Veredicto, type Severidad, type Brecha, type SelfCheckResult } from './qc'
+export {
+  fetchAnthropicTransport,
+  usageTotal,
+  type AnthropicTransport,
+  type AnthropicRequest,
+  type AnthropicResponse,
+  type AnthropicMessage,
+  type AnthropicContentBlock,
+  type ToolUseBlock,
+  type TextBlock,
+  type ToolResultBlock,
+} from './transport'
+export { buildSystemPrompt, MIRANDA_HARD_RULES, type SystemPromptOptions } from './prompt'
+export { runAgentTurn, TokenBudgetExceeded, MaxTurnsExceeded, type AgentDeps, type AgentTurnResult, type AgentEvent } from './agent'
