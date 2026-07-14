@@ -67,3 +67,64 @@ tabla renderizada.
 El DSL, los specs, `serve-rls`, `applyCtx`, la resolución de controles y la semántica de URL
 (`?ctx.<id>=…` + `page`) quedan **idénticos**: un link compartido antes de esta convención renderiza
 igual después. La convención es de superficie; el gate es la versión (**0.8.0**), sin feature flag.
+
+## 7 · Relaciones entre controles (llaves alternativas y cascada)
+
+Un mismo **alcance** puede tener más de una **llave** para elegirlo. En PI-07, una recepción se
+identifica por su **OC** *o* por su **Fecha Fin Recepción**: dos campos, un solo alcance. La superficie
+lo modela separando dos roles que hasta 0.8.0 estaban fundidos en cada entrada de `controls:`:
+
+| Rol | DSL | Default | Qué controla |
+|---|---|---|---|
+| **`param`** | `param: <clave>` | el `id` del control | a qué `ctx.<param>` ESCRIBE el sello (la llave de alcance) |
+| **`display`** | `display: <campo>` | el campo de `source` | qué campo del MISMO dataset se ve como ETIQUETA de las opciones |
+
+El **valor** de cada opción sale del campo de `source` (la llave que viaja a `ctx`); la **etiqueta**
+sale del campo de `display`. Las opciones se construyen como pares `{value, label}` **fila a fila del
+mismo dataset**, lo que garantiza el mapeo 1:1 (nunca un par inválido). Sin `param`/`display`, un
+control se comporta exactamente como en 0.8.0 (`param = id`, `label = value`).
+
+### 7·1 · (i) Llaves alternativas — dos sellos, un alcance
+
+Dos controles que declaran el **mismo `param`** son **llaves alternativas**: eligen por campos
+distintos pero fijan el **mismo `ctx.<param>`**. Al cambiar cualquiera de los dos sellos, el re-render
+pinta **ambos coherentes** (elegir la fecha equivale a elegir su OC). Reglas de resolución:
+
+- **Dueño del `param`.** El **primer** control que declara un `param` es su dueño: aplica su `default`
+  (`max`/`min`/`first`). Los demás controles del mismo `param` heredan el valor vigente de
+  `ctx.<param>` (no aplican default propio).
+- **Mismo dataset, `single` obligatorio.** Todos los controles de un `param` compartido deben leer del
+  **mismo dataset** de `source` y ser `single` (validación con error claro si no; multi-valor + llaves
+  alternativas queda fuera de alcance en esta fase).
+- **Etiquetas de fecha.** Si el campo `display` es un datetime ISO (`YYYY-MM-DDThh:mm…`), la etiqueta se
+  recorta a `YYYY-MM-DD` (regla general de presentación).
+- **Colisión de etiqueta.** Si dos values distintos producen la misma etiqueta (dos OCs con igual
+  fecha), ambas opciones se desambiguan con `label (value)` — «2026-07-14 (17400358)». Es la
+  **limitación declarada de (i)** y el disparador natural de (ii).
+
+La URL no cambia: la llave sigue siendo `?ctx.<param>=…` (p. ej. `?ctx.oc=17400358`), venga la elección
+del sello-OC o del sello-fecha.
+
+### 7·2 · (ii) Cascada `narrows:` — un control acota a otro (diseño, no construido)
+
+La colisión de etiquetas de (i) muestra su límite: cuando una llave no es única por sí sola (varias OCs
+comparten fecha), no basta con desambiguar el texto — se necesita que **una elección acote las opciones
+de la otra**. Ese es el rol de un vocabulario futuro, aún **no implementado**:
+
+```yaml
+controls:
+  - { id: semana, label: "Semana", source: data.semanas.semana, default: max }
+  - { id: oc, label: "OC", source: data.ocs.oc, narrows: semana }   # ← (ii): las OCs se limitan a la semana elegida
+```
+
+- **Semántica.** `narrows: <id>` declara que este control **depende** del valor de otro: sus opciones se
+  recomputan filtrando su `source` por el `ctx.<param>` del control referenciado (un `WHERE` implícito o
+  un `source` parametrizado por `:ctx.<param>`). El control referenciado es el «padre» de la cascada; el
+  que declara `narrows` es el «hijo». Cambiar el padre invalida y recomputa al hijo.
+- **Por qué `param`/`display` es la base común de (i) y (ii).** Ambas semánticas necesitan lo mismo:
+  desacoplar *qué se escribe* (la llave, `param`) de *qué se ve* (la etiqueta, `display`), y construir
+  las opciones como pares `{value, label}` derivados del dato. (i) hace que **dos controles escriban el
+  mismo `param`**; (ii) hace que **un control lea el `param` de otro para acotar sus opciones**. La misma
+  primitiva de opciones-como-pares sostiene las dos; (ii) solo agrega la **arista de dependencia**
+  (`narrows:`) y la re-derivación del hijo. Por eso (i) se construye ahora y (ii) queda diseñada sobre la
+  misma base, sin deuda: cuando llegue, no reescribe la resolución de controles, la extiende.
