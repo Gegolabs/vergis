@@ -47,9 +47,9 @@ export const renderHtmlPiece: Capability = {
     // LINEAMIENTO: los controles NO van en el cuerpo del reporte — viven en el INSPECTOR (gaveta),
     // tab Controles, junto a las facetas/búsqueda. El cuerpo es solo la pieza + la nav de vistas.
     const controlsSection = controls && controls.length ? renderControlsSection(controls, pages?.active, carry) : ''
-    // Barra de CONTEXTO ACTIVO (sticky arriba): el valor vigente de cada control (p.ej. la semana)
-    // visible en todo momento. El control editable sigue en la gaveta; esto es solo lectura.
-    const contextStrip = controls && controls.length ? renderContextStrip(controls) : ''
+    // Banda de CONTEXTO ACTIVO (sticky arriba) = LA superficie del selector de alcance (TX-11):
+    // el valor vigente de cada control, visible siempre, y ADEMÁS clickeable (el sello ES el control).
+    const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
     let body = contextStrip + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
@@ -164,20 +164,87 @@ function renderControlsSection(controls: ControlResolved[], activePage: string |
     .join('')
 }
 
-/** CSS de la barra de CONTEXTO ACTIVO (sticky arriba): muestra el valor vigente de cada control
- * (p.ej. «Semana · W24») en todo momento, incluso al hacer scroll. Read-only; cambiar el valor sigue
- * siendo el control de la gaveta. */
+/** CSS de la banda de CONTEXTO ACTIVO (sticky arriba) — la superficie estándar del selector de
+ * alcance (TX-11 «cara = estado»): el sello muestra el valor vigente y ES clickeable (single =
+ * `<select>` estilizado; multi = `<details>` con checkboxes). En print (`.vctx-print`) degrada a
+ * texto plano y el widget (`.vctx-screen`) se oculta. Variables del theme con fallback claro. */
 const CONTEXT_BAR_CSS = `
 .vctxbar{position:sticky;top:0;z-index:8;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:8px 14px;margin:0 0 16px;background:var(--panel,var(--bg,#fff));border:1px solid var(--border,#e2e8f0);border-radius:8px;font-size:12px}
-.vctxbar .vctx-k{color:var(--fg-dim,#64748b);text-transform:uppercase;letter-spacing:.04em;font-size:10px;margin-right:4px}
+.vctxbar .vctx-item{display:inline-flex;align-items:center;gap:6px}
+.vctxbar .vctx-k{color:var(--fg-dim,#64748b);text-transform:uppercase;letter-spacing:.04em;font-size:10px;margin-right:2px}
 .vctxbar .vctx-v{color:var(--fg,#1f2937);font-weight:700}
+.vctxbar select.vctx-sel{font:inherit;font-weight:700;color:var(--fg,#1f2937);background-color:var(--bg,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;padding:3px 22px 3px 8px;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%2364748b' stroke-width='1.4'/></svg>");background-repeat:no-repeat;background-position:right 7px center}
+.vctxbar select.vctx-sel:hover{border-color:var(--green,#2563eb)}
+.vctxbar .vctx-multi{position:relative;display:inline-block}
+.vctxbar .vctx-multi>summary{list-style:none;cursor:pointer;font-weight:700;color:var(--fg,#1f2937);background:var(--bg,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;padding:3px 10px 3px 8px}
+.vctxbar .vctx-multi>summary::-webkit-details-marker{display:none}
+.vctxbar .vctx-multi>summary::after{content:"▾";margin-left:6px;color:var(--fg-dim,#64748b);font-size:10px}
+.vctxbar .vctx-multi[open]>summary{border-color:var(--green,#2563eb)}
+.vctxbar .vctx-pop{position:absolute;z-index:20;top:calc(100% + 4px);left:0;min-width:150px;display:flex;flex-direction:column;gap:4px;padding:8px;background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.18)}
+.vctxbar .vctx-pop label{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;white-space:nowrap;cursor:pointer;color:var(--fg,#1f2937)}
+.vctx-print{display:none}
+@media print{.vctxbar{position:static;border:none;padding:0;margin:0 0 10px;gap:12px;font-size:11px}.vctxbar .vctx-screen{display:none!important}.vctxbar .vctx-print{display:inline!important;font-weight:700}}
 `
 
-/** Barra de contexto activo: un chip read-only por control con su valor vigente (de `carry`/control). */
-function renderContextStrip(controls: ControlResolved[]): string {
+/**
+ * Prefijo común del handler de navegación de un sello (banda) o control: reconstruye el query con
+ * la página activa + el carry (menos ESTE control; un valor multi se repite con append). `window.URL`
+ * es obligatorio: en un handler inline `document.URL` (string) sombrea al constructor global y
+ * `new URL(…)` lanzaría TypeError (ver test controls-multidrill, ejecutado bajo `with(document)`).
+ */
+function ctxNavBase(cId: string, activePage: string | undefined, carry: CarryCtx): string {
+  return (
+    `var u=new window.URL(location.href);u.search='';` +
+    (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
+    Object.entries(carry)
+      .filter(([k]) => k !== cId)
+      .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((val) => `u.searchParams.append('ctx.${escapeHtml(k)}',${JSON.stringify(String(val))});`))
+      .join('')
+  )
+}
+
+/**
+ * Banda de contexto activo = EL selector de alcance (TX-11 WP1). Por control con valor vigente emite
+ * un sello clickeable: single → `<select>` nativo estilizado (a11y gratis) con las mismas opciones y
+ * navegación que el control histórico de la gaveta; multi → `<details>` cuyo summary muestra el valor
+ * unido y cuyo popover reúne los checkboxes existentes. Por ítem se emite además `.vctx-print` (texto
+ * plano) — en print el widget `.vctx-screen` se oculta y queda el texto (el sello impreso es «OC …»).
+ */
+function renderContextStrip(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
   const items = controls
     .filter((c) => c.value != null && c.value !== '')
-    .map((c) => `<span class="vctx-item"><span class="vctx-k">${escapeHtml(c.label)}</span><span class="vctx-v">${escapeHtml(String(c.value))}</span></span>`)
+    .map((c) => {
+      const label = escapeHtml(c.label)
+      const printVal = `<span class="vctx-v vctx-print">${escapeHtml(String(c.value))}</span>`
+      if (c.multi) {
+        // Multi: al cambiar cualquier checkbox se recolectan los marcados y se navega con `ctx.<id>`
+        // repetido por valor (mismo contrato que el control histórico, misma navegación por URL).
+        const onchange =
+          ctxNavBase(c.id, activePage, carry) +
+          `var g=this.closest('.vctx-multi');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
+        const selected = new Set(c.values ?? [])
+        const checks = c.options
+          .map((v) => `<label><input type="checkbox" value="${escapeHtml(v)}"${selected.has(v) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(v)}</label>`)
+          .join('')
+        return (
+          `<span class="vctx-item"><span class="vctx-k">${label}</span>` +
+          `<details class="vctx-multi vctx-screen" data-ctl="${escapeHtml(c.id)}"><summary class="vctx-v vctx-sum">${escapeHtml(String(c.value))}</summary>` +
+          `<div class="vctx-pop" role="group" aria-label="${label}">${checks}</div></details>` +
+          printVal +
+          `</span>`
+        )
+      }
+      const onchange = ctxNavBase(c.id, activePage, carry) + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
+      const opts = c.options
+        .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
+        .join('')
+      return (
+        `<span class="vctx-item"><span class="vctx-k">${label}</span>` +
+        `<select class="vctx-v vctx-sel vctx-screen" aria-label="${label}" onchange="${escapeHtml(onchange)}">${opts}</select>` +
+        printVal +
+        `</span>`
+      )
+    })
     .join('')
   return items ? `<div class="vctxbar">${items}</div>` : ''
 }
