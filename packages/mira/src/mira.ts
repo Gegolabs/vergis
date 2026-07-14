@@ -9,7 +9,7 @@ import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { applyAnnotations, type AnnotationContext } from './annotations'
 import { expectString, expectRows } from './contract'
 import type { CtxValues, PagesNav, ControlResolved } from './mira-types'
-import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues } from './controls'
+import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues, buildControlOptions, labelForValue } from './controls'
 import { resolveActiveView, normalizeCtx, watermarkDatasetOf, isMultiControl, asSingle } from './views'
 import { parseSpec } from './dsl/parse'
 import { collectDataRefs, collectDatasetKeys, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
@@ -223,8 +223,15 @@ export class MiraBotlet implements Botlet {
   ): Promise<{ controlsResolved: ControlResolved[]; carryCtx: CtxValues }> {
     const controlsResolved: ControlResolved[] = []
     const carryCtx: CtxValues = {}
+    // Params ya "poseídos": el PRIMER control que declara un `param` es su DUEÑO (aplica su default);
+    // los siguientes con el mismo `param` (llaves alternativas) solo renderizan el valor vigente.
+    const paramOwned = new Set<string>()
     for (const c of spec.controls ?? []) {
       const [dsName, field] = stripCtrlSource(c.source)
+      // `param` (default = id): a qué `ctx.<param>` escribe. `display` (default = campo de source): qué
+      // campo del MISMO dataset se muestra como etiqueta. Separar ambos roles habilita llaves alternativas.
+      const param = c.param ?? c.id
+      const displayField = c.display ?? field
       if (!results[dsName]) {
         const ds = spec.data[dsName]
         if (ds) {
@@ -235,25 +242,33 @@ export class MiraBotlet implements Botlet {
           host.log({ type: 'mira-control-source', botletId: this.id, control: c.id, dataset: dsName, rows: results[dsName].rows.length })
         }
       }
-      const options = [...new Set((results[dsName]?.rows ?? []).map((r) => String(r[field] ?? '')).filter((v) => v !== ''))]
+      // Opciones como pares {value,label}: value del campo de source, label del campo de display.
+      const options = buildControlOptions(results[dsName]?.rows ?? [], field, displayField)
+      const optionValues = options.map((o) => o.value)
+      const isOwner = !paramOwned.has(param)
+      paramOwned.add(param)
+      // El valor vigente es el de `ctx.<param>` (compartido por todas las llaves alternativas); el
+      // default lo aplica SOLO el dueño (los demás heredan el valor que el dueño ya fijó).
+      const def = isOwner ? c.default : undefined
       if (isMultiControl(c)) {
         // Multi-select: los valores de la URL se filtran contra las opciones; sin ninguno válido,
         // aplica el default (un solo valor, como en single). Se colapsa a string cuando queda uno
         // (los binds y la URL no distinguen un multi de un single de un valor).
-        const values = resolveControlValues(ctxValues[c.id], options, c.default)
+        const values = resolveControlValues(ctxValues[param], optionValues, def)
         if (values.length > 0) {
           const v = values.length === 1 ? values[0] : values
-          ctxValues[c.id] = v
-          carryCtx[c.id] = v
+          ctxValues[param] = v
+          carryCtx[param] = v
         }
-        controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value: values.join(', '), values, multi: true })
+        const displayLabel = values.map((v) => labelForValue(options, v)).join(', ')
+        controlsResolved.push({ id: c.id, param, label: c.label ?? c.id, options, value: values.join(', '), values, multi: true, displayLabel })
       } else {
-        const value = resolveControlValue(asSingle(ctxValues[c.id]), options, c.default)
+        const value = resolveControlValue(asSingle(ctxValues[param]), optionValues, def)
         if (value !== '') {
-          ctxValues[c.id] = value
-          carryCtx[c.id] = value
+          ctxValues[param] = value
+          carryCtx[param] = value
         }
-        controlsResolved.push({ id: c.id, label: c.label ?? c.id, options, value })
+        controlsResolved.push({ id: c.id, param, label: c.label ?? c.id, options, value, displayLabel: labelForValue(options, value) })
       }
     }
     return { controlsResolved, carryCtx }

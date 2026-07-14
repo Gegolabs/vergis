@@ -4,6 +4,28 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.9.0 — 2026-07-14
+
+**Selectores de alcance por llave alternativa** (work/079) — extensión aditiva del sello de alcance de
+0.8.0: un mismo alcance puede elegirse por **más de una llave**. Cada entrada de `controls:` gana dos
+roles opcionales; sin ellos, el comportamiento es **idéntico a 0.8.0** (cero cambio a specs,
+`serve-rls`, `applyCtx` ni a la semántica de URL). Doc:
+[`docs/superficie-de-estado.md` §7](docs/superficie-de-estado.md).
+
+- **`param`** (default = `id`) — a qué `ctx.<param>` escribe el control. Dos controles con el mismo
+  `param` son **llaves alternativas** del mismo alcance: eligen por campos distintos, fijan el mismo
+  `ctx.<param>` y la banda pinta **ambos sellos sincronizados** (elegir la fecha equivale a elegir su
+  OC). URL intacta (`?ctx.<param>=…`).
+- **`display`** (default = el campo de `source`) — qué campo del MISMO dataset se muestra como etiqueta.
+  Las opciones se resuelven como pares `{value, label}` fila a fila (mapeo 1:1). Datetime ISO en la
+  etiqueta → recortado a `YYYY-MM-DD`; colisión de etiqueta entre values distintos → desambiguada con
+  `label (value)`.
+- **Resolución y validación** — el **dueño** del `param` (1er control que lo declara) aplica el
+  `default`; los demás heredan el valor vigente. Params compartidos exigen **mismo dataset** y `single`
+  (rechazo con error claro si no); `display` colgante se rechaza como el `source` colgante.
+- **(ii) cascada `narrows:`** — *diseñada, no construida*: el diseño de un control que acota las opciones
+  de otro queda documentado en §7·2 sobre la misma base de opciones-como-pares.
+
 ## 0.8.0 — 2026-07-14
 
 **Superficie de estado** (TX-11) — convención de plataforma: *cara = estado · gaveta = maquinaria ·

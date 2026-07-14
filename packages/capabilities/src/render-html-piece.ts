@@ -157,28 +157,37 @@ function renderContextStrip(controls: ControlResolved[], activePage: string | un
     .filter((c) => c.value != null && c.value !== '')
     .map((c) => {
       const label = escapeHtml(c.label)
-      const printVal = `<span class="vctx-v vctx-print">${escapeHtml(String(c.value))}</span>`
+      // Opciones normalizadas a pares {value,label}: la resolución emite pares (value = la llave que se
+      // escribe en ctx, label = el texto visible); un `string[]` legado se lee como label = value.
+      const pairs = c.options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o))
+      // Llave de contexto que el sello ESCRIBE: `param` (default id). Dos controles con el mismo `param`
+      // fijan el MISMO `ctx.<param>` → al elegir por cualquiera, el re-render pinta ambos sellos
+      // coherentes (llaves alternativas sincronizadas). `ctxNavBase(param)` excluye ESE param del carry
+      // para que el valor fresco lo reemplace. El texto de print/summary es la ETIQUETA (`displayLabel`).
+      const param = c.param ?? c.id
+      const printText = c.displayLabel ?? String(c.value)
+      const printVal = `<span class="vctx-v vctx-print">${escapeHtml(printText)}</span>`
       if (c.multi) {
-        // Multi: al cambiar cualquier checkbox se recolectan los marcados y se navega con `ctx.<id>`
+        // Multi: al cambiar cualquier checkbox se recolectan los marcados y se navega con `ctx.<param>`
         // repetido por valor (mismo contrato que el control histórico, misma navegación por URL).
         const onchange =
-          ctxNavBase(c.id, activePage, carry) +
-          `var g=this.closest('.vctx-multi');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
+          ctxNavBase(param, activePage, carry) +
+          `var g=this.closest('.vctx-multi');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(param)}',b.value);});location.assign(u.pathname+u.search);`
         const selected = new Set(c.values ?? [])
-        const checks = c.options
-          .map((v) => `<label><input type="checkbox" value="${escapeHtml(v)}"${selected.has(v) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(v)}</label>`)
+        const checks = pairs
+          .map((o) => `<label><input type="checkbox" value="${escapeHtml(o.value)}"${selected.has(o.value) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(o.label)}</label>`)
           .join('')
         return (
           `<span class="vctx-item"><span class="vctx-k">${label}</span>` +
-          `<details class="vctx-multi vctx-screen" data-ctl="${escapeHtml(c.id)}"><summary class="vctx-v vctx-sum">${escapeHtml(String(c.value))}</summary>` +
+          `<details class="vctx-multi vctx-screen" data-ctl="${escapeHtml(c.id)}"><summary class="vctx-v vctx-sum">${escapeHtml(printText)}</summary>` +
           `<div class="vctx-pop" role="group" aria-label="${label}">${checks}</div></details>` +
           printVal +
           `</span>`
         )
       }
-      const onchange = ctxNavBase(c.id, activePage, carry) + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
-      const opts = c.options
-        .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
+      const onchange = ctxNavBase(param, activePage, carry) + `u.searchParams.set('ctx.${escapeHtml(param)}',this.value);location.assign(u.pathname+u.search);`
+      const opts = pairs
+        .map((o) => `<option value="${escapeHtml(o.value)}"${o.value === c.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`)
         .join('')
       return (
         `<span class="vctx-item"><span class="vctx-k">${label}</span>` +
