@@ -56,6 +56,8 @@ export const TABLE_INTERACTIVE_CSS = `
 .tray .vt-group-actions button:hover{color:var(--green,#2563eb);border-color:var(--green,#2563eb)}
 .tray .vt-tray-section .vt-clear-all{width:100%;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;cursor:pointer}
 .tray .vt-tray-section .vt-clear-all:hover{color:var(--red,#dc2626);border-color:var(--red,#dc2626)}
+.tray .vt-tray-section .vt-export{width:100%;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;cursor:pointer}
+.tray .vt-tray-section .vt-export:hover{color:var(--green,#16a34a);border-color:var(--green,#16a34a)}
 .tray .vt-tray-section .vt-count{display:block;margin-top:8px;font-size:12px;color:var(--fg-dim,#64748b)}
 .tray .vt-ann-toggle{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--fg,#1f2937);cursor:pointer}
 .vtable .vt-ann-hint{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;margin-bottom:10px;background:var(--card,#fffbeb);border:1px solid var(--yellow,#d97706);border-radius:8px;font-size:12px;color:var(--fg,#1f2937)}

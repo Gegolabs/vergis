@@ -15,6 +15,7 @@
  * por-identidad; cada mutación se asienta en el log append-only de auditoría (quién · qué · cuándo).
  * Independiente del motor de datos: la Administración no sirve dato gobernado, lo edita/ingesta.
  */
+import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   coerceRow,
@@ -49,7 +50,7 @@ import {
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { readMultipart } from './multipart'
-import { cargasBody, type CargasOps, type SlotCargas } from './admin-cargas'
+import { cargasBody, type CargasOps, type SlotCargas, type IntakeUploadEvent } from './admin-cargas'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
 interface Chrome {
@@ -418,15 +419,28 @@ async function handleIntake(
       return
     }
   }
+  // Dedup por CONTENIDO (issue #62): SHA-256 de los bytes vs cargas previas del slot — el NOMBRE no
+  // participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
+  // re-procesar idéntico es legítimo (re-materialización); lo que se elimina es la sorpresa.
+  const previas = deps.cargas ? await deps.cargas.history(slot, 500).catch(() => [] as IntakeUploadEvent[]) : []
+  const dupDe = (sha: string): string | null => {
+    const p = previas.find((e) => e.ok && e.sha256 === sha)
+    return p ? `${p.filename} · ${p.ts.slice(0, 16).replace('T', ' ')} UTC` : null
+  }
   // UN SOLO disparo por LOTE (no uno por archivo: N triggers = N corridas = throttling de capacidad).
   const willTrigger = !!(slot.trigger && deps.intake.runNow)
   // Aterriza cada crudo en la landing zone OneLake (staging). El pipeline/SJD lee de ahí y transforma.
+  const duplicados: string[] = []
   for (const u of uploads) {
+    const sha256 = createHash('sha256').update(u.bytes).digest('hex')
+    const dupOf = dupDe(sha256)
+    if (dupOf) duplicados.push(`«${u.filename}» es idéntico a ${dupOf}`)
     await deps.intake.put(slot.target, u.filename, u.bytes)
-    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger })
+    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}) })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
-  redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent(`${uploads.length} archivo(s) recibido(s).${willTrigger ? ' La carga está corriendo — seguila en «Última corrida».' : ''}`)}`)
+  const aviso = duplicados.length ? ` ⚠ Contenido ya procesado antes: ${duplicados.join('; ')} — re-procesarlo no cambiará el dato.` : ''
+  redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent(`${uploads.length} archivo(s) recibido(s).${aviso}${willTrigger ? ' La carga está corriendo — seguila en «Última corrida».' : ''}`)}`)
 }
 
 async function handleEntityWrite(
@@ -778,6 +792,20 @@ async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<s
     await ops.restore(slot, ruta, by)
     deps.audit({ type: 'intake-restore', slot: slot.id, domain: slot.domain ?? '', filename: ruta, by })
     return `«${ruta.split('/').pop()}» reactivado en el landing. Corré la conversión para materializarlo.`
+  }
+  if (accion === 'revert') {
+    // «Revertir esta carga» (issue #63): compensación derivada del layout `_processed/<clave>/` —
+    // el directorio ES el ledger carga→clave. El archivo revertido va a _retirado/ (tag revertido);
+    // si la clave tiene versión previa archivada, se reactiva y se re-corre (last-wins restaura).
+    const ruta = f['archivo'] ?? ''
+    if (!ruta || ruta.includes('..') || !/\/_processed\//.test('/' + ruta)) throw new ValidationError('Solo se revierten cargas del histórico _processed/.')
+    if (!ops.revert) throw new ValidationError('La reversión no está disponible en esta instancia.')
+    const r = await ops.revert(slot, ruta, by)
+    deps.audit({ type: 'intake-revert', slot: slot.id, domain: slot.domain ?? '', filename: ruta, by, clave: r.clave, compensada: r.compensada, reactivado: r.reactivado ?? '' })
+    if (r.compensada) {
+      return `Carga revertida: «${ruta.split('/').pop()}» → _retirado/. Se reactivó la versión previa de la clave «${r.clave}» (${r.reactivado}) y la conversión está corriendo — el dato vuelve al estado anterior.`
+    }
+    return `Carga revertida: «${ruta.split('/').pop()}» → _retirado/. ⚠ La clave «${r.clave || '—'}» no tiene versión previa archivada: el dato materializado queda sin origen y su retiro del warehouse requiere compensación del pipeline (correr la conversión NO lo elimina).`
   }
   throw new ValidationError(`Acción desconocida: ${accion}`)
 }
