@@ -12,7 +12,9 @@ async function render(piece: unknown): Promise<string> {
 }
 
 const cols = [{ field: 'a', label: 'A' }]
-const rows = [{ a: '1' }]
+// ≥2 filas: una tabla que rinde 1 fila es display puro (TX-11 WP4·1); aquí probamos el gating por
+// señales de una tabla interactiva, así que necesita al menos 2 filas.
+const rows = [{ a: '1' }, { a: '2' }]
 
 describe('render · gating por señales', () => {
   it('tabla interactiva (default) → incluye el runtime de tabla y el shell de gaveta', async () => {
