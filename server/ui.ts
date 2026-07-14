@@ -101,6 +101,8 @@ export function avatarMenu(opts: {
   email: string
   isAdmin: boolean
   hasDomains: boolean
+  /** ¿Mostrar la entrada «Miranda» (el agente que autora specs)? Solo con scope (cluster 077). */
+  hasMiranda?: boolean
   signoutRd?: string
 }): string {
   const { email, isAdmin, hasDomains } = opts
@@ -112,6 +114,7 @@ export function avatarMenu(opts: {
   m += it('/', 'Catálogo de PIs')
   m += `<div class="sep"></div>`
   m += it('/admin/perfil', 'Perfil')
+  if (opts.hasMiranda) m += it('/miranda', 'Miranda')
   if (hasDomains) m += it('/admin', 'Gestión')
   if (isAdmin) m += it('/admin/plataforma', 'Configuración')
   m += `<div class="sep"></div>`
