@@ -187,3 +187,107 @@ describe('admin-cargas · consola por dominio (issue #58)', () => {
     expect(res.statusCode).toBe(403)
   })
 })
+
+// ─── Dedup por contenido (issue #62) + badge «sin cambios en el dato» ───────
+const mpOne = (fields: Record<string, string>, filename: string, bytes: Buffer): { body: Buffer; ct: string } => {
+  const B = 'testboundary62'
+  const parts: Buffer[] = []
+  for (const [k, v] of Object.entries(fields)) parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`))
+  parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`), bytes, Buffer.from('\r\n'))
+  parts.push(Buffer.from(`--${B}--\r\n`))
+  return { body: Buffer.concat(parts), ct: `multipart/form-data; boundary=${B}` }
+}
+const mockReqBuf = (method: string, url: string, user: string, body: Buffer, ct: string): IncomingMessage => {
+  const r = Readable.from([body]) as unknown as IncomingMessage & { url: string; method: string; headers: Record<string, string> }
+  r.url = url; r.method = method; r.headers = { 'x-test-user': user, 'content-type': ct }
+  return r
+}
+
+describe('admin-cargas · dedup por contenido (issue #62)', () => {
+  it('carga idéntica a una previa → audit con sha256 + dupOf y aviso en el redirect (sin bloquear)', async () => {
+    const bytes = Buffer.from('mismo-contenido-exacto')
+    const { createHash } = await import('node:crypto')
+    const sha = createHash('sha256').update(bytes).digest('hex')
+    const audit: LogEventInput[] = []
+    const o = ops({ history: async () => [{ ...HISTORY[0], sha256: sha }] })
+    const admin = await mkAdmin(o, audit)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const mp = mpOne({ _csrf: token }, 'copia (1) (1).xlsx', bytes)
+    const res = await go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303) // avisa, NO bloquea: la carga entra igual
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('idéntico a saldos VH WK28.xlsx')
+    const ev = audit.find((e) => (e as { type?: string }).type === 'intake') as { sha256?: string; dupOf?: string }
+    expect(ev.sha256).toBe(sha)
+    expect(ev.dupOf).toContain('saldos VH WK28.xlsx')
+  })
+
+  it('carga con contenido NUEVO → sha256 registrado, sin dupOf ni aviso', async () => {
+    const audit: LogEventInput[] = []
+    const o = ops({ history: async () => [{ ...HISTORY[0], sha256: 'otra-cosa' }] })
+    const admin = await mkAdmin(o, audit)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const mp = mpOne({ _csrf: token }, 'nuevo.xlsx', Buffer.from('contenido-distinto'))
+    const res = await go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
+    expect(decodeURIComponent(res.headers['location'] ?? '')).not.toContain('idéntico')
+    const ev = audit.find((e) => (e as { type?: string }).type === 'intake') as { sha256?: string; dupOf?: string }
+    expect(ev.sha256).toHaveLength(64)
+    expect(ev.dupOf).toBeUndefined()
+  })
+
+  it('timeline marca la carga duplicada con el aviso', () => {
+    const t = timeline([{ ...HISTORY[0], dupOf: 'original.xlsx · 2026-07-13 16:17 UTC' }], [])
+    expect(t[0].html).toContain('contenido idéntico a original.xlsx')
+    expect(t[0].html).toContain('re-procesarlo no cambia el dato')
+  })
+
+  it('badge «sin cambios en el dato» cuando el log de la corrida Completed trae el marcador [delta]', async () => {
+    const admin = await mkAdmin(ops({ log: async () => '[ingest] DONE commit\n[delta] sin cambios en el dato' }))
+    const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    expect(res.body).toContain('sin cambios en el dato')
+  })
+})
+
+// ─── «Revertir esta carga» (issue #63) ──────────────────────────────────────
+describe('admin-cargas · revertir esta carga (issue #63)', () => {
+  const RUTA = 'Files/intake/_processed/W28/saldos VH WK28.xlsx'
+
+  it('revert compensada: ejecuta ops.revert, audita intake-revert y anuncia la re-materialización', async () => {
+    const audit: LogEventInput[] = []
+    const o = ops({ revert: vi.fn(async () => ({ clave: 'W28', compensada: true, reactivado: 'saldos-v1.xlsx' })) })
+    const admin = await mkAdmin(o, audit)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=revert&archivo=${encodeURIComponent(RUTA)}`, 'application/x-www-form-urlencoded'))
+    const msg = decodeURIComponent(res.headers['location'] ?? '')
+    expect(msg).toContain('Carga revertida')
+    expect(msg).toContain('estado anterior')
+    expect(o.revert).toHaveBeenCalledWith(SLOTS[0], RUTA, STEWARD)
+    const ev = audit.find((e) => (e as { type?: string }).type === 'intake-revert') as { clave?: string; compensada?: boolean }
+    expect(ev.clave).toBe('W28')
+    expect(ev.compensada).toBe(true)
+  })
+
+  it('revert sin versión previa → aviso honesto de dato sin origen', async () => {
+    const o = ops({ revert: vi.fn(async () => ({ clave: 'W28', compensada: false })) })
+    const admin = await mkAdmin(o)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=revert&archivo=${encodeURIComponent(RUTA)}`, 'application/x-www-form-urlencoded'))
+    const msg = decodeURIComponent(res.headers['location'] ?? '')
+    expect(msg).toContain('sin origen')
+    expect(msg).toContain('compensación del pipeline')
+  })
+
+  it('revert con traversal o fuera de _processed/ → rechazado sin llegar a ops', async () => {
+    const o = ops({ revert: vi.fn(async () => ({ clave: '', compensada: false })) })
+    const admin = await mkAdmin(o)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=revert&archivo=${encodeURIComponent('Files/otra/cosa.xlsx')}`, 'application/x-www-form-urlencoded'))
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Error')
+    expect(o.revert).not.toHaveBeenCalled()
+  })
+
+  it('la consola ofrece el botón Revertir en el histórico de procesados', async () => {
+    const admin = await mkAdmin(ops({ revert: async () => ({ clave: '', compensada: false }) }))
+    const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    expect(res.body).toContain('>Revertir</button>')
+  })
+})
