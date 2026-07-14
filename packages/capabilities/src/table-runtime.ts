@@ -319,15 +319,22 @@ function vtBootstrap(root){
   var rendered = false; // ¿render() ya corrió? (p.ej. una vista pinneada aplicada vía applySnapshot)
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
+  var footEl = root.querySelector('.vt-count-foot'); // pie de la CARA de esta tabla (contador de filas)
   var badge = document.getElementById('vergis-count'); // uña/pestaña de la gaveta común
   var SEP = '~|~'; // separador de path de grupo (token improbable en datos reales)
   function colLabel(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?(c.label||c.field):field; }
 
-  // ---- Controles globales en la GAVETA COMÚN (.tray-sections): búsqueda global, agrupar (multinivel), limpiar ----
-  var gs=null, countEl=null, levelsEl=null, addSel=null, groupActions=null;
+  // ---- KIT de afordancias en la GAVETA COMÚN (.tray-sections): buscar, agrupar (multinivel),
+  //      descargar, limpiar. El contador de filas YA NO vive aquí: es pie de la CARA (footEl). El kit
+  //      se marca (.vt-kit + label + nº filas) para que el coordinador imponga UN kit por página
+  //      (con selector de objetivo si hay ≥2 tablas interactivas) — TX-11 WP4·2. ----
+  var gs=null, levelsEl=null, addSel=null, groupActions=null;
   var trayWrap = document.querySelector('.tray-sections');
   if(trayWrap){
-    var sec=document.createElement('div'); sec.className='faceta vt-tray-section';
+    var h3=root.querySelector('h3');
+    var kitLabel=(h3 && (h3.textContent||'').trim()) || (cols[0] ? (cols[0].label||cols[0].field) : 'Tabla');
+    var sec=document.createElement('div'); sec.className='faceta vt-tray-section vt-kit';
+    sec.setAttribute('data-kit-label', kitLabel); sec.setAttribute('data-kit-rows', String(rows.length));
     // Cada control en su grupo lógico (label pegado a su campo; grupos separados entre sí).
     sec.innerHTML =
       '<div class="vt-ctl-grp"><div class="faceta-title">Buscar</div>' +
@@ -340,10 +347,9 @@ function vtBootstrap(root){
       ) : '') +
       '<div class="vt-ctl-grp"><div class="faceta-title">Descargar</div>' +
       '<button type="button" class="vt-export" title="Exporta las filas visibles (con los filtros aplicados) a CSV, abrible en Excel">Descargar CSV (vista actual)</button></div>' +
-      '<div class="vt-ctl-grp"><button type="button" class="vt-clear-all">Limpiar todo</button>' +
-      '<span class="vt-count" role="status" aria-live="polite"></span></div>';
+      '<div class="vt-ctl-grp"><button type="button" class="vt-clear-all">Limpiar todo</button></div>';
     trayWrap.appendChild(sec);
-    gs=sec.querySelector('.vt-global-search'); countEl=sec.querySelector('.vt-count');
+    gs=sec.querySelector('.vt-global-search');
     levelsEl=sec.querySelector('.vt-group-levels'); addSel=sec.querySelector('.vt-group-add'); groupActions=sec.querySelector('.vt-group-actions');
     // Debounce (~150ms): en una tabla grande, re-renderizar en CADA tecla trababa el input. Se acumulan
     // las pulsaciones y se renderiza una vez que el usuario pausa (el value del input sigue instantáneo).
@@ -565,7 +571,7 @@ function vtBootstrap(root){
     }
     // Mostrar/ocultar la columna de anotación (header th + body se mueven juntos).
     if(ann){ var ath=root.querySelector('th[data-field="'+ann.valueField+'"]'); if(ath) ath.style.display = annShown ? '' : 'none'; }
-    if(countEl) countEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
+    if(footEl) footEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){
       var f=th.getAttribute('data-field'); var ind=th.querySelector('.vt-sort-ind');
       if(ind) ind.textContent = (state.sort.field===f) ? (state.sort.dir==='asc'?'▲':'▼') : '';
@@ -590,13 +596,30 @@ function vtBootstrap(root){
   if(!rendered){
     // Con 0 filas NO se salta: render() pinta la fila «Sin resultados» (el tbody servido va vacío).
     if(payload.ssrComplete && stateEmpty && !ann && rows.length){
-      if(countEl) countEl.textContent = rows.length + (rows.length===1?' fila':' filas');
+      if(footEl) footEl.textContent = rows.length + (rows.length===1?' fila':' filas');
     } else {
       render();
     }
   }
 }
 Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
+// ---- Kit ÚNICO en el Inspector (TX-11 WP4·2): con 1 tabla interactiva, su kit va tal cual. Con ≥2
+//      (raro tras la heurística display), un solo kit visible + selector de objetivo (default = la de
+//      más filas) — jamás kits apilados. Cada tabla ya cableó su propio kit; aquí solo se impone la
+//      visibilidad y el conmutador. ----
+(function(){
+  var tray=document.querySelector('.tray-sections'); if(!tray) return;
+  var kits=Array.prototype.slice.call(tray.querySelectorAll('.vt-kit'));
+  if(kits.length<2) return;
+  var def=0; for(var i=1;i<kits.length;i++){ if((+kits[i].getAttribute('data-kit-rows'))>(+kits[def].getAttribute('data-kit-rows'))) def=i; }
+  var bar=document.createElement('div'); bar.className='faceta vt-kit-target';
+  bar.innerHTML='<div class="faceta-title">Tabla</div><select class="vt-kit-target-sel" aria-label="Tabla objetivo del panel">'+kits.map(function(k,i){return '<option value="'+i+'">'+vtEsc(k.getAttribute('data-kit-label'))+'</option>';}).join('')+'</select>';
+  tray.insertBefore(bar, tray.firstChild);
+  var sel=bar.querySelector('select');
+  function show(i){ for(var j=0;j<kits.length;j++){ kits[j].style.display=(j===i)?'':'none'; } sel.value=String(i); }
+  sel.addEventListener('change', function(){ show(+sel.value); });
+  show(def);
+})();
 `
 
 export const TABLE_RUNTIME_SOURCE: string =
