@@ -4,3 +4,10 @@
  * paquete es el motor: tools, loop del agente, self-check QC① y publicación.
  */
 export const MIRANDA_VERSION = '0.1.0'
+
+export { guardProbeSql, referencedTables, SqlGuardError, type SqlGuardOptions, type GuardedProbe } from './tools/sql-guard'
+export { buildToolRegistry, type ToolRegistry, type ToolDefinition } from './tools/registry'
+export { repr, type ToolResult } from './tools/tools'
+export type { MirandaToolContext, CatalogEntry, SpecRef } from './tools/context'
+export { validateIntentSummary, normalizeIntent, type IntentSummary } from './intent'
+export { hasBlockingGaps, VEREDICTOS, SEVERIDADES, type Veredicto, type Severidad, type Brecha, type SelfCheckResult } from './qc'
