@@ -72,7 +72,7 @@ export const TABLE_INTERACTIVE_CSS = `
 .vtable tbody tr.vt-selected td{background:var(--card,#e0e7ff)}
 .vtable tbody tr.vt-selected td:first-child{box-shadow:inset 3px 0 0 var(--green,#2563eb)}
 .vtable td.vt-drill-arrow{color:var(--green,#2563eb);font-weight:700;text-align:center;width:1.6em}
-@media print{.vtable .vt-chips,.vtable .vt-filter-btn,.vtable .vt-ann-hint,.vtable td.vt-drill-arrow{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}}
+@media print{.vtable .vt-filter-btn,.vtable .vt-ann-hint,.vtable td.vt-drill-arrow,.vtable .vt-chip-x{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}.vtable .vt-chips{display:block;margin:0 0 6px;font-size:10px;color:var(--fg-dim,#64748b)}.vtable .vt-chips::before{content:"Filtros: ";font-weight:600}.vtable .vt-chip{display:inline;background:none!important;border:none!important;padding:0;border-radius:0;margin:0;color:var(--fg-dim,#64748b);cursor:default}.vtable .vt-chip:not(:first-child)::before{content:"· "}}
 `
 
 /** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
