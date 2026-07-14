@@ -673,9 +673,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
                 const l = lines[i].trim()
                 if (!l) continue
                 try {
-                  const e = JSON.parse(l) as { type?: string; slot?: string; filename?: string; bytes?: number; by?: string; ok?: boolean; triggered?: boolean; ts?: string }
+                  const e = JSON.parse(l) as { type?: string; slot?: string; filename?: string; bytes?: number; by?: string; ok?: boolean; triggered?: boolean; ts?: string; sha256?: string; dupOf?: string }
                   if (e.type === 'intake' && e.slot === slot.id) {
-                    out.push({ ts: e.ts ?? '', filename: e.filename ?? '', bytes: e.bytes ?? 0, by: e.by ?? '', ok: e.ok !== false, triggered: e.triggered === true })
+                    out.push({ ts: e.ts ?? '', filename: e.filename ?? '', bytes: e.bytes ?? 0, by: e.by ?? '', ok: e.ok !== false, triggered: e.triggered === true, sha256: e.sha256, dupOf: e.dupOf })
                   }
                 } catch { /* línea no-JSON del log: se ignora */ }
               }
@@ -701,6 +701,33 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             restore: async (slot, archivedPath) => {
               const base = archivedPath.split('/').pop() ?? archivedPath
               await reader.copy(slot.target, archivedPath, `${slot.target.path}/${base}`)
+            },
+            // «Revertir esta carga» (issue #63): el layout `_processed/<clave>/` ES el ledger
+            // carga→clave del contrato de ingesta — la compensación se deriva de él.
+            revert: async (slot, archivedPath) => {
+              const parent = parentDir(slot.target.path)
+              const base = archivedPath.split('/').pop() ?? archivedPath
+              const rel = archivedPath.replace(/^.*_processed\//, '')
+              const clave = rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : ''
+              // 1 · el archivo revertido sale del histórico → _retirado/ con tag «revertido»
+              await reader.copy(slot.target, archivedPath, `${parent}/_retirado/${Date.now()}-revertido-${base}`)
+              await reader.remove(slot.target, archivedPath)
+              // 2 · versión previa de la clave = el archivo más reciente que QUEDA en _processed/<clave>/
+              let reactivado: string | undefined
+              if (clave) {
+                const restantes = (await reader.list(slot.target, `${parent}/_processed/${clave}`).catch(() => [] as import('@vergis/capabilities').OneLakeEntry[]))
+                  .filter((e) => !e.isDirectory)
+                  .sort((a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified))
+                if (restantes.length) {
+                  const prev = restantes[0]
+                  const prevBase = prev.path.split('/').pop() ?? prev.path
+                  await reader.copy(slot.target, prev.path, `${slot.target.path}/${prevBase}`)
+                  reactivado = prevBase
+                }
+              }
+              // 3 · re-materializar (last-wins restaura el estado anterior de la clave)
+              if (slot.trigger && reactivado) await jobs.runNow(slot.trigger, slot.target)
+              return { clave, compensada: !!reactivado, reactivado }
             },
           } satisfies CargasOps
         })(),
