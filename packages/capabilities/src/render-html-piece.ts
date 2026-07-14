@@ -44,19 +44,18 @@ export const renderHtmlPiece: Capability = {
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false }
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry, signals }
-    // LINEAMIENTO: los controles NO van en el cuerpo del reporte — viven en el INSPECTOR (gaveta),
-    // tab Controles, junto a las facetas/búsqueda. El cuerpo es solo la pieza + la nav de vistas.
-    const controlsSection = controls && controls.length ? renderControlsSection(controls, pages?.active, carry) : ''
-    // Banda de CONTEXTO ACTIVO (sticky arriba) = LA superficie del selector de alcance (TX-11):
-    // el valor vigente de cada control, visible siempre, y ADEMÁS clickeable (el sello ES el control).
+    // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
+    // el control), no en la gaveta. La gaveta queda para la maquinaria (facetas de dashboard /
+    // runtime de tabla, guardados, config). Un PI cuyo único contenido de gaveta eran los controles
+    // queda SIN gaveta.
     const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
     let body = contextStrip + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
-    // GAVETA COMÚN (un solo shell por documento) para cualquier PI con controles o interactividad.
-    // 3 tabs: Controles · Guardados · Config. En el tab Controles van, de arriba a abajo: los
-    // controles de cabecera (server-side) + las facetas del dashboard / los controles del runtime de tabla.
-    const hasTray = !!interactive || hasTable || !!controlsSection
+    // GAVETA COMÚN (un solo shell por documento) para PI con interactividad de dashboard o de tabla.
+    // 3 tabs: Controles · Guardados · Config. El tab «Controles» reúne las facetas del dashboard /
+    // los controles del runtime de tabla (los selectores de alcance viven en la banda, no aquí).
+    const hasTray = !!interactive || hasTable
     // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
     const piLabel = meta?.code
       ? `${meta.code}${meta.version ? ' · v' + meta.version : ''}`
@@ -65,10 +64,10 @@ export const renderHtmlPiece: Capability = {
         : ''
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
     if (interactive) {
-      body = renderTrayShell(controlsSection + renderDashboardFacets(interactive), theme.palettes, palette, piLabel) + body
+      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette, piLabel) + body
       tail += renderInteractiveScript(interactive)
     } else if (hasTray) {
-      body = renderTrayShell(controlsSection, theme.palettes, palette, piLabel) + body
+      body = renderTrayShell('', theme.palettes, palette, piLabel) + body
     }
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
@@ -77,7 +76,6 @@ export const renderHtmlPiece: Capability = {
     if (hasTray) css += TRAY_CSS
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (pages) css += PAGES_NAV_CSS
-    if (controlsSection) css += CONTROLS_BAR_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
@@ -106,62 +104,6 @@ function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}): string {
     )
     .join('')
   return `<nav class="vpages" role="tablist">${tabs}</nav>`
-}
-
-/** CSS de los controles de cabecera — viven en el INSPECTOR (gaveta), no en el cuerpo. */
-const CONTROLS_BAR_CSS = `
-.tray .vt-ctl{margin-bottom:18px}
-.tray .vt-ctl .faceta-title{margin-bottom:6px}
-.tray .vt-ctl-select{width:100%;box-sizing:border-box;padding:7px 9px;font-size:13px;border:1px solid var(--border,#e2e8f0);border-radius:7px;background:var(--bg,#fff);color:var(--fg,#1f2937);cursor:pointer}
-.tray .vt-ctl-select:hover{border-color:var(--green,#2563eb)}
-`
-
-/**
- * Controles de cabecera para el INSPECTOR (gaveta, tab Controles). Un control single es un `<select>`;
- * uno MULTI (`single: false`) es un grupo de checkboxes (mismo estilo que las facetas del dashboard).
- * El cambio recarga la página fijando `?ctx.<id>=<valor>` (repetido por valor en multi) y preservando
- * `page` + el resto del contexto (carry). Server-side: lo elegido reentra como `:ctx.<id>` en las
- * queries → cambia el dato, no solo la vista. LINEAMIENTO: los controles NO van en el cuerpo.
- */
-function renderControlsSection(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
-  return controls
-    .map((c) => {
-      // Prefijo común del handler: reconstruir el query con la página activa + el carry (menos este
-      // control; multi-valor se repite con append). Robusto: no depende del estado previo de la URL.
-      // `window.URL` es obligatorio: en un handler inline la cadena de scope incluye `document`, y
-      // `document.URL` (string) sombrea al constructor global — `new URL(…)` lanza TypeError.
-      const base =
-        `var u=new window.URL(location.href);u.search='';` +
-        (activePage ? `u.searchParams.set('page',${JSON.stringify(activePage)});` : '') +
-        Object.entries(carry)
-          .filter(([k]) => k !== c.id)
-          .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((val) => `u.searchParams.append('ctx.${escapeHtml(k)}',${JSON.stringify(String(val))});`))
-          .join('')
-      if (c.multi) {
-        // Multi-select: al cambiar cualquier checkbox del grupo se recolectan TODOS los marcados y se
-        // navega con `ctx.<id>` repetido por valor (`?ctx.w=a&ctx.w=b` — navFromUrl los acumula).
-        const onchange =
-          base +
-          `var g=this.closest('.vt-ctl');Array.prototype.forEach.call(g.querySelectorAll('input[type=checkbox]:checked'),function(b){u.searchParams.append('ctx.${escapeHtml(c.id)}',b.value);});location.assign(u.pathname+u.search);`
-        const selected = new Set(c.values ?? [])
-        const checks = c.options
-          .map((v) => `<label><input type="checkbox" value="${escapeHtml(v)}"${selected.has(v) ? ' checked' : ''} onchange="${escapeHtml(onchange)}"> ${escapeHtml(v)}</label>`)
-          .join('')
-        return (
-          `<div class="faceta vt-ctl vt-ctl-multi" data-ctl="${escapeHtml(c.id)}"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
-          `<div class="faceta-options" role="group" aria-label="${escapeHtml(c.label)}">${checks}</div></div>`
-        )
-      }
-      const onchange = base + `u.searchParams.set('ctx.${escapeHtml(c.id)}',this.value);location.assign(u.pathname+u.search);`
-      const opts = c.options
-        .map((v) => `<option value="${escapeHtml(v)}"${v === c.value ? ' selected' : ''}>${escapeHtml(v)}</option>`)
-        .join('')
-      return (
-        `<div class="faceta vt-ctl"><div class="faceta-title">${escapeHtml(c.label)}</div>` +
-        `<select class="vt-ctl-select" aria-label="${escapeHtml(c.label)}" onchange="${escapeHtml(onchange)}">${opts}</select></div>`
-      )
-    })
-    .join('')
 }
 
 /** CSS de la banda de CONTEXTO ACTIVO (sticky arriba) — la superficie estándar del selector de

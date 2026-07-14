@@ -120,12 +120,15 @@ describe('applyCtx · expansión de lista a N binds dentro del IN', () => {
   })
 })
 
-describe('render · control multi como grupo de checkboxes en la gaveta', () => {
-  it('checkboxes con los seleccionados marcados y onchange que repite ctx.<id>', async () => {
+describe('render · control multi como sello con popover en la banda de contexto (TX-11)', () => {
+  it('sello <details> con checkboxes marcados y onchange que repite ctx.<id>', async () => {
     const { out } = await render({ semana: ['W20', 'W21'] })
     const html = out.html ?? ''
-    expect(html).toContain('vt-ctl-multi') // grupo de checkboxes, no <select>
+    // El multi vive en la BANDA como sello <details> con checkboxes (WP1), no en la gaveta.
+    expect(html).toContain('class="vctxbar"')
+    expect(html).toContain('vctx-multi')
     expect(html).toContain('data-ctl="semana"')
+    expect(html).not.toContain('vt-ctl-multi') // ya no vive en la gaveta (WP2)
     // Los valores seleccionados vienen marcados.
     expect(html).toMatch(/value="W20" checked/)
     expect(html).toMatch(/value="W21" checked/)
@@ -133,7 +136,7 @@ describe('render · control multi como grupo de checkboxes en la gaveta', () => 
     // El onchange recolecta los marcados y APPENDEA ctx.semana por valor (parámetro repetido).
     expect(html).toContain('ctx.semana')
     expect(html).toContain('searchParams.append')
-    // La barra de contexto muestra los valores unidos.
+    // El summary del sello muestra los valores unidos.
     expect(html).toContain('W20, W21')
   })
 })
