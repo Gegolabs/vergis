@@ -317,7 +317,9 @@ describe('render-html-piece · tabla interactiva', () => {
   it('payload escapa < para no romper el </script>', async () => {
     const p: ResolvedNode = {
       ...piece,
-      rows: [{ id: 1, nombre: '<script>x</script>', area: 'A', estado: 'P' }],
+      // ≥2 filas: una tabla de 1 fila es display puro (TX-11 WP4·1) → sin payload que escapar; aquí
+      // el punto es el escape de `<` en el payload embebido, que solo existe en tabla interactiva.
+      rows: [{ id: 1, nombre: '<script>x</script>', area: 'A', estado: 'P' }, { id: 2, nombre: 'Beto', area: 'B', estado: 'A' }],
       columnsSpec: piece.columnsSpec,
     }
     const { html } = (await renderHtmlPiece.execute({ piece: p, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
