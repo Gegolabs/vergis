@@ -4,6 +4,35 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.13.0 — 2026-07-15
+
+**Miranda habla NEGOCIO + censo de fuentes multi-nivel** (work/094, cluster 077). Miranda deja de
+hablar en «espacio de spec» (nombres de vistas, tools, modelo operativo del equipo) frente a un
+interlocutor que debe tratarse como usuario de negocio: internamente razona sobre un **modelo de 6
+niveles de acceso al dato** y de cara al usuario proyecta solo la **expectativa de entrega**. Cambio de
+capacidad (catálogo) + doctrina de voz (prompt); apila sobre el arco de UI 089–093 (intacto, con sus
+tests). Feature flag `MIRANDA_ENABLED` sin cambios.
+
+- **Catálogo multi-nivel** (`packages/miranda/src/catalog.ts`, nuevo): cada fuente del censo gana
+  `nivel` ∈ {gestionado, conectado, conectable, alcanzable, elicitable} + campos por nivel
+  (`sistema`, `dueno`, `artefacto`, `quien_sabe`, `dominio`, `descripcion` de negocio). El 6º nivel
+  (desconocido) no se cataloga: es la ausencia de match. **Compat**: una entrada sin `nivel` es
+  `gestionado` (el `catalog.json` histórico sigue válido sin tocarlo). `parseCatalog` tolera y avisa.
+- **Regla de seguridad**: SOLO el nivel `gestionado` es probeable. `describe_table`/`profile_column`
+  rechazan las demás con error claro (sin filtrar el nombre del nivel a la voz); el sql-guard de
+  `run_probe` allowlista solo las fuentes gestionadas → no hay más «Invalid object name» por sondear
+  una fuente no servible. `catalog_tables` expone todas las fuentes con su nivel + `probeable`.
+- **`create_data_request`** gana `nivel` y `accion_de_cierre` (curar/conectar/intake-recurrente/
+  levantar/descubrir): el handoff interno queda accionable. El request sigue siendo interno.
+- **Voz de negocio en el prompt** (`prompt.ts`): sección VOZ con la tabla de proyección nivel→frase de
+  entrega + caveat, y las prohibiciones duras (jamás vistas/tablas/tools/personas/nombres de nivel al
+  usuario). Matices: la ETA no es monótona en el nivel; una-vez vs recurrente (dependencia de
+  frescura); ETA cualitativa, no SLA; escotilla técnica a demanda. La regla «jamás prometas datos que
+  el catálogo no respalde» se refina: prometer con la ETA del nivel; «no» honesto solo si no existe
+  fuente identificada.
+- Tests: +17 (parseCatalog/niveles/compat, rechazo por nivel, `data_request` con nivel/acción, voz
+  ensamblada, e2e multi-nivel). 803/803 verdes, cero tests del arco de UI tocados.
+
 ## 0.12.5 — 2026-07-15
 
 **Miranda — la columna derecha se lee como una GAVETA: divisor punteado + tirador en el borde**
