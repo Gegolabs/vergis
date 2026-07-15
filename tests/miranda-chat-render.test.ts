@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat } from '../server/miranda'
+import { mdInline, renderChat, youInitialsOf } from '../server/miranda'
 
 /** Cuenta ocurrencias no solapadas de `needle` en `hay`. */
 function count(hay: string, needle: string): number {
@@ -93,7 +93,8 @@ describe('renderChat · burbujas y Markdown', () => {
     expect(html).toContain('<strong>clave</strong>')
     expect(html).toContain('<code>dbo.v_saldos</code>')
     expect(html).not.toContain('**clave**')
-    expect(html).toContain('Miranda:')
+    expect(html).toContain('>Miranda<') // el nombre va como caption, no como línea «Miranda:»
+    expect(html).not.toContain('Miranda:')
   })
   it('inyección en el texto del mensaje queda neutralizada', () => {
     const html = renderChat([assistantText('<script>alert(1)</script>')])
@@ -139,5 +140,40 @@ describe('renderChat · colapso de la traza de herramientas', () => {
     ]
     const html = renderChat(rows)
     expect(count(html, 'exploró los datos')).toBe(2)
+  })
+})
+
+describe('renderChat · lados de la burbuja (sensación de chat)', () => {
+  it('la burbuja del asistente lleva la marca de lado izquierdo (Miranda)', () => {
+    const html = renderChat([assistantText('Hola')])
+    expect(html).toContain('turn--miranda')
+    expect(html).not.toContain('turn--you')
+    expect(html).toContain('class="bubble"')
+  })
+  it('la burbuja del usuario lleva la marca de lado derecho (Tú)', () => {
+    const html = renderChat([row('user', 'quiero un PI de saldos')])
+    expect(html).toContain('turn--you')
+    expect(html).not.toContain('turn--miranda')
+  })
+  it('un intercambio user→assistant produce un lado de cada tipo, en orden', () => {
+    const html = renderChat([row('user', 'hola'), assistantText('hola, ¿qué PI?')])
+    expect(count(html, 'turn--you')).toBe(1)
+    expect(count(html, 'turn--miranda')).toBe(1)
+    expect(html.indexOf('turn--you')).toBeLessThan(html.indexOf('turn--miranda'))
+  })
+  it('las iniciales de «Tú» se inyectan en el avatar (ya escapadas)', () => {
+    const html = renderChat([row('user', 'hola')], { youInitials: 'CO' })
+    expect(html).toContain('>CO<')
+  })
+})
+
+describe('youInitialsOf', () => {
+  it('deriva iniciales del email (local separado por . _ -)', () => {
+    expect(youInitialsOf('carlos.ortiz@consultora.test')).toBe('CO')
+    expect(youInitialsOf('especificador@consultora.test')).toBe('C')
+  })
+  it('sin email → «Tú»', () => {
+    expect(youInitialsOf(undefined)).toBe('Tú')
+    expect(youInitialsOf('')).toBe('Tú')
   })
 })

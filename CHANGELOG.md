@@ -4,6 +4,32 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.12.2 — 2026-07-15
+
+**Miranda — pase de diseño: la conversación se lee como un chat** (work/090, 2ª iteración de
+evolución). Cambio puramente de **presentación** en `server/miranda.ts` (`renderChat` + layout de la
+página de sesión) y `server/ui.ts` (CSS + shell); cero cambio a agente, tools, self-check o store. No
+regresa `0.12.1`: `mdInline`/`formatSpans` y el colapso de tools quedan intactos (escapar-primero-
+formatear-después sin tocar).
+
+- **Burbujas con lado.** Cada turno es una burbuja alineada: **Tú** a la derecha con tinte `--accent`
+  (`color-mix` 14%) y cola inferior-derecha; **Miranda** a la izquierda sobre `--card` y cola inferior-
+  izquierda. El nombre pasó de una línea `<b>Miranda:</b>` a un **caption chico** (`--muted`) sobre la
+  burbuja, con avatar circular (Miranda = «M»; Tú = iniciales del email, como el menú de identidad).
+  Ritmo vertical con `gap` y ancho de burbuja acotado (68%/78%).
+- **Espacio rebalanceado.** La vista de sesión usa un contenedor ancho (`body.chat`, 1180px) con grid
+  de dos columnas: conversación protagonista (`minmax(0,1fr)`) + panel de intención como **sidebar
+  angosto** (380px, `position:sticky`). El sidebar es **discreto cuando está vacío** (marco punteado,
+  atenuado). Responsivo: bajo 900px apila (chat arriba, intención abajo).
+- **Composer sticky.** La caja de mensaje queda fija al pie de la conversación (`position:sticky`),
+  siempre accesible tras respuestas largas, con degradado de fundido superior.
+- **Traza de tools** (colapsada desde `0.12.1`): re-estilada como separador inline discreto (`.trace`,
+  líneas flanqueantes) entre turnos, sin regresar al ruido por-paso.
+- Ambos temas (Gruvbox oscuro default + `data-theme="blanco"`) vía las CSS vars existentes; nada
+  hardcodeado. `page()` acepta un `bodyClass` opcional para la vista ancha. Tests:
+  `tests/miranda-chat-render.test.ts` (23 casos: los 17 de `0.12.1` + 6 nuevos que verifican la marca de
+  lado `turn--you`/`turn--miranda`, el orden del intercambio y las iniciales del avatar).
+
 ## 0.12.1 — 2026-07-15
 
 **Miranda — render del chat: Markdown seguro + traza de herramientas colapsada + aire** (work/089,

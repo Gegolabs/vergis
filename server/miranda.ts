@@ -78,7 +78,7 @@ const IDENT_RE = /^[A-Za-z0-9_]+$/
 
 export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   const csrf = csrfFactory(deps.secret)
-  const pg = (title: string, body: string) => page(`${deps.brandTitle ?? 'Vergis'} · Miranda`, title, body)
+  const pg = (title: string, body: string, bodyClass = '') => page(`${deps.brandTitle ?? 'Vergis'} · Miranda`, title, body, bodyClass)
 
   /** Contexto de tools para una sesión + identidad. */
   function toolContext(sessionId: string, email: string | undefined): MirandaToolContext {
@@ -317,33 +317,38 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     )
   }
 
-  async function sessionPage(sessionId: string, _email: string, token: string): Promise<string> {
+  async function sessionPage(sessionId: string, email: string, token: string): Promise<string> {
     const s = await deps.gov.getMirandaSession(sessionId)
     if (!s) return pg('No encontrada', `<p class="msg err">Sesión no encontrada.</p>`)
     const messages = await deps.gov.listMirandaMessages(sessionId)
-    const chat = renderChat(messages)
+    const chat = renderChat(messages, { youInitials: youInitialsOf(email) })
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
     const intentPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content)
     const composer = s.state === 'publicado'
-      ? `<p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p>`
-      : `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/message" class="grid">
-           <input type="hidden" name="_csrf" value="${token}">
-           <textarea name="text" rows="3" placeholder="Escríbele a Miranda…" style="width:100%;resize:vertical" required></textarea>
-           <button class="add">Enviar</button>
-         </form>`
+      ? `<div class="mir-composer"><p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p></div>`
+      : `<div class="mir-composer">
+           <form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/message" class="mir-send">
+             <input type="hidden" name="_csrf" value="${token}">
+             <textarea name="text" rows="2" placeholder="Escríbele a Miranda…" required></textarea>
+             <button class="add">Enviar</button>
+           </form>
+         </div>`
+    // El sidebar es discreto mientras no haya un resumen de intención que mostrar.
+    const intentEmpty = !intentArt
     return pg(
-      escapeHtml(s.title),
+      s.title,
       `<p><a href="/miranda">← Sesiones</a> · <span class="tag">${escapeHtml(STATE_LABEL[s.state] ?? s.state)}</span></p>
-       <div style="display:flex;gap:24px;flex-wrap:wrap">
-         <div style="flex:1;min-width:320px">
+       <div class="mir-cols">
+         <section class="mir-conv">
            <h2>Conversación</h2>
-           ${chat}
+           <div class="mir-thread">${chat}</div>
            ${composer}
-         </div>
-         <div style="flex:1;min-width:320px">${intentPanel}</div>
+         </section>
+         <aside class="mir-intent${intentEmpty ? ' mir-intent--empty' : ''}">${intentPanel}</aside>
        </div>`,
+      'chat',
     )
   }
 
@@ -490,15 +495,27 @@ function formatSpans(escaped: string): string {
   return s
 }
 
-/** Renderiza la conversación: texto de user/assistant con Markdown seguro; las trazas de
- *  herramientas consecutivas se colapsan en UNA sola señal compacta. */
-export function renderChat(rows: { role: string; content: string }[]): string {
+/** Iniciales (≤2 chars) para el avatar de «Tú», derivadas del email como el menú de identidad.
+ *  Sin email → 'Tú'. */
+export function youInitialsOf(email: string | undefined): string {
+  const local = (email ?? '').split('@')[0]
+  if (!local) return 'Tú'
+  const parts = local.split(/[._-]/).filter(Boolean)
+  const ini = (parts.slice(0, 2).map((p) => p[0]).join('') || local[0] || '').toUpperCase()
+  return ini || 'Tú'
+}
+
+/** Renderiza la conversación como un chat: burbujas con lado (Tú a la derecha con tinte accent,
+ *  Miranda a la izquierda sobre `--card`), nombre como caption chico y avatar. Texto con Markdown
+ *  seguro (`mdInline`); las trazas de herramientas consecutivas se colapsan en UNA señal discreta. */
+export function renderChat(rows: { role: string; content: string }[], opts: { youInitials?: string } = {}): string {
+  const youIni = opts.youInitials ?? 'Tú'
   const parts: string[] = []
   let i = 0
   while (i < rows.length) {
     const r = rows[i]
     const c = safeParse(r.content)
-    // Colapsar una racha de señales de herramienta en una sola línea.
+    // Colapsar una racha de señales de herramienta en una sola señal (separador inline discreto).
     if (isToolSignal(r.role, c)) {
       let steps = 0
       let runRows = 0
@@ -510,18 +527,20 @@ export function renderChat(rows: { role: string; content: string }[]): string {
         i += 1
       }
       if (steps === 0) steps = runRows
-      parts.push(`<div class="sub" style="margin:6px 0">🔧 Miranda exploró los datos (${steps} ${steps === 1 ? 'paso' : 'pasos'})</div>`)
+      parts.push(`<div class="trace"><span>🔧 Miranda exploró los datos (${steps} ${steps === 1 ? 'paso' : 'pasos'})</span></div>`)
       continue
     }
     const text = extractText(c)
-    const who = r.role === 'assistant' ? 'Miranda' : 'Tú'
-    const bg = r.role === 'assistant' ? 'var(--card)' : 'transparent'
+    const isMiranda = r.role === 'assistant'
+    const side = isMiranda ? 'miranda' : 'you'
+    const who = isMiranda ? 'Miranda' : 'Tú'
+    const ini = isMiranda ? 'M' : youIni
     parts.push(
-      `<div style="margin:8px 0;padding:10px 12px;border-radius:10px;background:${bg};border:1px solid var(--border)"><b>${who}:</b> ${mdInline(text)}</div>`,
+      `<div class="turn turn--${side}"><div class="av2" aria-hidden="true">${escapeHtml(ini)}</div><div class="turn-b"><div class="cap">${who}</div><div class="bubble">${mdInline(text)}</div></div></div>`,
     )
     i += 1
   }
-  return parts.join('') || '<p class="sub">Sin mensajes aún. Dile a Miranda qué PI quieres crear.</p>'
+  return parts.join('') || '<p class="mir-empty">Sin mensajes aún. Dile a Miranda qué PI quieres crear.</p>'
 }
 
 /** Ensambla el contexto de realizabilidad para el self-check desde los tool_result de la sesión

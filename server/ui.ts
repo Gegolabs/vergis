@@ -63,11 +63,45 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
 .tile{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 18px;min-width:96px}
 .tile .n{font-size:26px;font-weight:700;line-height:1.1}.tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
-.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}${AVATAR_CSS}`
+.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}
+/* ── Miranda · superficie de chat (server-rendered, sin framework) ── */
+body.chat{max-width:1180px}
+.mir-cols{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:34px;align-items:start;margin-top:6px}
+.mir-conv{display:flex;flex-direction:column;min-width:0}
+.mir-thread{display:flex;flex-direction:column;gap:16px;padding:4px 2px}
+.turn{display:flex;gap:10px;align-items:flex-start;max-width:82%}
+.turn--miranda{align-self:flex-start}
+.turn--you{align-self:flex-end;flex-direction:row-reverse}
+.turn .av2{width:30px;height:30px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;line-height:1;box-sizing:border-box;margin-top:18px}
+.turn--miranda .av2{background:var(--card);border:1px solid var(--border);color:var(--muted)}
+.turn--you .av2{background:var(--accent);color:#1d2021}
+.turn-b{display:flex;flex-direction:column;min-width:0}
+.turn--you .turn-b{align-items:flex-end}
+.turn .cap{font-size:11px;color:var(--muted);margin:0 6px 4px;letter-spacing:.02em}
+.bubble{padding:10px 14px;border-radius:15px;line-height:1.55;border:1px solid var(--border);font-size:14px;word-wrap:break-word;overflow-wrap:anywhere}
+.bubble>:first-child{margin-top:0}.bubble>:last-child{margin-bottom:0}
+.bubble p{margin:0 0 8px}.bubble ul,.bubble ol{margin:6px 0;padding-left:20px}.bubble li{margin:2px 0}
+.bubble code{background:color-mix(in srgb,var(--muted) 20%,transparent);padding:1px 4px;border-radius:5px}
+.turn--miranda .bubble{background:var(--card);border-bottom-left-radius:5px}
+.turn--you .bubble{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:color-mix(in srgb,var(--accent) 30%,var(--border));border-bottom-right-radius:5px}
+.trace{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11.5px;margin:2px 8px}
+.trace::before,.trace::after{content:"";flex:1;height:1px;background:var(--border);opacity:.55}
+.mir-empty{color:var(--muted);font-size:13px;text-align:center;padding:34px 0}
+.mir-composer{position:sticky;bottom:0;background:var(--bg);padding:14px 0 6px;margin-top:8px}
+.mir-composer::before{content:"";position:absolute;left:0;right:0;top:-20px;height:20px;background:linear-gradient(to top,var(--bg),transparent);pointer-events:none}
+.mir-send{display:flex;gap:10px;align-items:flex-end;background:var(--card);border:1px solid var(--border);border-radius:15px;padding:8px 8px 8px 12px}
+.mir-send textarea{flex:1;background:transparent;border:none;color:var(--fg);font-family:inherit;font-size:14px;line-height:1.5;resize:none;padding:6px 4px;min-height:38px;max-height:180px;box-sizing:border-box}
+.mir-send textarea:focus{outline:none}
+.mir-send button{flex:none}
+.mir-intent{position:sticky;top:24px;min-width:0}
+.mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
+@media (max-width:900px){body.chat{max-width:920px}.mir-cols{grid-template-columns:1fr;gap:20px}.mir-intent{position:static}.turn{max-width:92%}}
+${AVATAR_CSS}`
 
-/** Shell de página SSR con tema oscuro/blanco persistido. */
-export function page(brand: string, title: string, body: string): string {
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${PAGE_CSS}</style></head><body>
+/** Shell de página SSR con tema oscuro/blanco persistido. `bodyClass` amplía la vista (p. ej.
+ * `chat` para la superficie de Miranda: contenedor ancho). */
+export function page(brand: string, title: string, body: string, bodyClass = ''): string {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${PAGE_CSS}</style></head><body${bodyClass ? ` class="${bodyClass}"` : ''}>
 <button type="button" class="tsw" title="Tema" onclick="(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()">◐</button>
 <div class="bc">${escapeHtml(brand)}</div>
 <h1>${escapeHtml(title)}</h1>
