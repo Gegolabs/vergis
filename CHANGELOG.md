@@ -4,6 +4,82 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.10.0 — 2026-07-14
+
+**Trío de primitivas del catálogo DSL** (work/081) — tres elementos de pieza nuevos con demanda real,
+100 % aditivos (los specs existentes renderizan idéntico). Doc:
+[`docs/catalogo-elementos.md`](docs/catalogo-elementos.md).
+
+- **`dato`** (#71) — atributo rotulado (etiqueta + valor). Es contenido/estado, no una medida:
+  tipografía de texto (distinto del `kpi`), se imprime tal cual y **jamás es interactivo**. El valor
+  se resuelve por el mismo path que `kpi.metric`; `format: date` recorta ISO/`Date` a `YYYY-MM-DD`
+  (reusa el helper de 0.9.0). Origen TX-12.
+- **`distribution` multi-métrica** (#70) — `metrics` (2+ series) reemplaza a `metric` (singular) para
+  **barras agrupadas**. El singular queda intacto; declarar ambos es error. `fold` + `color` por serie
+  + `xOffset`/`yOffset`. La cota top-N ordena categorías por la suma de las series y colapsa «(otros)»
+  sumando **cada serie por separado** (el total por serie cuadra). Origen TX-13.
+- **`series`** (#69) — líneas de 1..N series sobre un eje. Formato wide + `fold`; `mark: line` con
+  puntos. El eje x es ordinal en el **orden de llegada de las filas** (el SQL manda; no se re-ordena
+  alfabético). Desviación vs doc §4.1: `time_field`/`granularity`/`range` NO se implementan — el eje
+  lo modela la query (Gold-in-query), `x` reemplaza a `time_field`. Origen PI-17.
+- **Themes** — token `chartSeries` (paleta categórica) en `default` y `arbol`, con fallback en
+  render-chart. Charts multi-serie ciclan la paleta.
+- **`narrative` / `alert` / `comparison`** — *diseñados, no construidos*: narrative lo definirá
+  Miranda; alert requiere subsistema de delivery (su rol visual lo cubre `semaforo`); comparison simple
+  ya lo cubre `kpi.comparison`. Ver `docs/catalogo-elementos.md` §4.
+
+## 0.9.1 — 2026-07-14
+
+- **Fix: etiqueta de display con `Date` del driver** — el driver mssql/tedious devuelve las columnas
+  datetime como **objetos `Date` de JS**; `String(dateObj)` produce la forma larga («Tue May 26 2026
+  00:00:00 GMT+0000 …») que esquivaba el recorte ISO→`YYYY-MM-DD` (visto en el sello-fecha de PI-07
+  vivo). La normalización de etiquetas (`trimIsoLabel`/`buildControlOptions`) ahora trata
+  `value instanceof Date` → `toISOString().slice(0, 10)` — aplica a las opciones del sello Y al span
+  print de cualquier control cuyo `display` sea datetime.
+
+## 0.9.0 — 2026-07-14
+
+**Selectores de alcance por llave alternativa** (work/079) — extensión aditiva del sello de alcance de
+0.8.0: un mismo alcance puede elegirse por **más de una llave**. Cada entrada de `controls:` gana dos
+roles opcionales; sin ellos, el comportamiento es **idéntico a 0.8.0** (cero cambio a specs,
+`serve-rls`, `applyCtx` ni a la semántica de URL). Doc:
+[`docs/superficie-de-estado.md` §7](docs/superficie-de-estado.md).
+
+- **`param`** (default = `id`) — a qué `ctx.<param>` escribe el control. Dos controles con el mismo
+  `param` son **llaves alternativas** del mismo alcance: eligen por campos distintos, fijan el mismo
+  `ctx.<param>` y la banda pinta **ambos sellos sincronizados** (elegir la fecha equivale a elegir su
+  OC). URL intacta (`?ctx.<param>=…`).
+- **`display`** (default = el campo de `source`) — qué campo del MISMO dataset se muestra como etiqueta.
+  Las opciones se resuelven como pares `{value, label}` fila a fila (mapeo 1:1). Datetime ISO en la
+  etiqueta → recortado a `YYYY-MM-DD`; colisión de etiqueta entre values distintos → desambiguada con
+  `label (value)`.
+- **Resolución y validación** — el **dueño** del `param` (1er control que lo declara) aplica el
+  `default`; los demás heredan el valor vigente. Params compartidos exigen **mismo dataset** y `single`
+  (rechazo con error claro si no); `display` colgante se rechaza como el `source` colgante.
+- **(ii) cascada `narrows:`** — *diseñada, no construida*: el diseño de un control que acota las opciones
+  de otro queda documentado en §7·2 sobre la misma base de opciones-como-pares.
+
+## 0.8.0 — 2026-07-14
+
+**Superficie de estado** (TX-11) — convención de plataforma: *cara = estado · gaveta = maquinaria ·
+print = estado como texto*. Cambio de comportamiento visible en todos los PI, 100 % de superficie
+(cero cambio al DSL, a los specs, al camino de datos ni a la semántica de URL — los links `?ctx.*`
+compartidos siguen idénticos). Doc: [`docs/superficie-de-estado.md`](docs/superficie-de-estado.md).
+
+- **El sello de alcance es clickeable** — la banda de contexto (`vctxbar`) deja de ser solo-lectura y
+  se vuelve EL selector: un control single es un `<select>` nativo estilizado como sello; uno multi,
+  un `<details>` con los checkboxes. Una cosa, un lugar: el control sale de la gaveta. En print, el
+  sello degrada a texto plano.
+- **Chips de filtro imprimibles como letra chica** — los filtros activos aparecen como chip removible
+  en la cara solo al aplicarse, y en print se imprimen como texto discreto («Filtros: …»), ocultando
+  solo la acción (la ✕). Agrupar-por no imprime chips. La maquinaria (pickers, búsqueda, agrupar,
+  export, config) jamás se imprime.
+- **Afordancias proporcionales y atribuibles** — una tabla que rinde 1 fila (single_row) es display
+  puro: sin runtime, sin iconos de filtro, sin kit. El kit de afordancias (buscar · agrupar ·
+  descargar · limpiar) es ÚNICO en el Inspector, con selector de objetivo solo si hay ≥2 tablas
+  interactivas (jamás kits apilados). El contador de filas sale del kit y pasa a pie discreto de cada
+  tabla en la cara (se imprime).
+
 ## 0.7.0 — 2026-07-13
 
 - **Descargar CSV de la vista actual** (#61) — botón en la gaveta de tabla: exporta la vista

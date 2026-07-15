@@ -64,6 +64,66 @@ export function resolveControlValue(current: string | undefined, options: string
 }
 
 /**
+ * Recorta una etiqueta datetime a solo su fecha (`YYYY-MM-DD`). Regla GENERAL de presentación (no
+ * per-spec): el sello muestra la fecha, no la hora. Dos formas de datetime llegan hasta aquí:
+ *  - un STRING ISO (`YYYY-MM-DDThh:mm…`) — p. ej. de un mock o de un driver que serializa;
+ *  - un OBJETO `Date` de JS — el driver mssql/tedious devuelve las columnas datetime así, y
+ *    `String(dateObj)` produce la forma larga («Tue May 26 2026 00:00:00 GMT+0000 …») que esquivaba
+ *    el recorte (bug visto en PI-07 vivo) → se toma la fecha UTC de `toISOString()`.
+ * Cualquier otro valor pasa intacto.
+ */
+export function trimIsoLabel(v: string | Date): string {
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? String(v) : v.toISOString().slice(0, 10)
+  }
+  const m = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/.exec(v)
+  return m ? m[1] : v
+}
+
+/** Opción de un control: `value` es la llave que se escribe en `ctx.<param>`, `label` lo que se ve. */
+export interface ControlOption {
+  value: string
+  label: string
+}
+
+/**
+ * Construye los pares {value,label} de un control desde las filas del dataset fuente:
+ *  - `value` = campo de `source` (la LLAVE que se fija en `ctx.<param>`),
+ *  - `label` = campo de `display` (recortado si es ISO-datetime); si el display viene vacío/null,
+ *    cae al propio value (nunca una etiqueta en blanco).
+ * Dedup por value (1ª aparición gana), orden numeric-aware por value. Si dos values DISTINTOS producen
+ * la MISMA etiqueta (dos OCs con igual fecha), ambas se desambiguan con « label (value) » — es la
+ * limitación declarada de (i) llaves-alternativas y el disparador natural de (ii) cascada `narrows:`.
+ */
+export function buildControlOptions(
+  rows: Record<string, unknown>[],
+  valueField: string,
+  displayField: string,
+): ControlOption[] {
+  const seen = new Set<string>()
+  const pairs: ControlOption[] = []
+  for (const r of rows) {
+    const value = String(r[valueField] ?? '')
+    if (value === '' || seen.has(value)) continue
+    seen.add(value)
+    const raw = r[displayField]
+    // El Date del driver se pasa TAL CUAL a trimIsoLabel (String(dateObj) daría la forma larga).
+    const label = raw == null || raw === '' ? trimIsoLabel(value) : trimIsoLabel(raw instanceof Date ? raw : String(raw))
+    pairs.push({ value, label })
+  }
+  pairs.sort((a, b) => cmpVals(a.value, b.value))
+  const labelCount = new Map<string, number>()
+  for (const p of pairs) labelCount.set(p.label, (labelCount.get(p.label) ?? 0) + 1)
+  for (const p of pairs) if ((labelCount.get(p.label) ?? 0) > 1) p.label = `${p.label} (${p.value})`
+  return pairs
+}
+
+/** La etiqueta del `value` vigente dentro de un juego de pares (para el print/summary del sello). */
+export function labelForValue(pairs: ControlOption[], value: string): string {
+  return pairs.find((p) => p.value === value)?.label ?? value
+}
+
+/**
  * Valores de un control MULTI-SELECT: los de la URL se filtran contra las opciones (solo valores del
  * catálogo — injection/typo-safe); si no queda ninguno válido, aplica el default (un solo valor,
  * la misma semántica que el control single).
