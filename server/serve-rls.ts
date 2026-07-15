@@ -92,7 +92,7 @@ import { annSign as annSignHmac, verifyAnnToken } from './annotations'
 import { createRequestHandler } from './routes'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
-import { configFromEnv } from './config'
+import { configFromEnv, decideDevIdentity } from './config'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -120,6 +120,17 @@ const REFRESH_MS = config.refreshMs
 // un store efímero, se avisa RUIDOSAMENTE (y en modo strict se aborta) en vez de degradar en silencio
 // —el modo de falla del incidente del avatar (2026-07)—. Ver deploy/compose.reference.yml.
 reportDeploymentConfig(checkDeploymentConfig(process.env), configCheckMode(process.env))
+
+// DEV IDENTITY (fail-safe) — aviso prominente al arranque. La decisión ya la tomó `decideDevIdentity`
+// (jamás activa con gate real); acá solo se comunica. `active` en producción es imposible por diseño.
+const devDecision = decideDevIdentity(process.env)
+if (devDecision.mode === 'active') {
+  console.warn(`⚠ DEV IDENTITY ACTIVA (${devDecision.identity.user}) — NO USAR EN PRODUCCIÓN`)
+} else if (devDecision.mode === 'ignored-gate') {
+  console.warn('VERGIS_DEV_IDENTITY ignorado: hay gate real (VERGIS_GATE_SECRET presente).')
+} else if (devDecision.mode === 'invalid') {
+  console.warn(`VERGIS_DEV_IDENTITY ignorado: valor inválido ('${devDecision.raw}') — usa 'email' o 'email:grupo1,grupo2'.`)
+}
 
 // El catálogo de serving (hardening, charter §2b): SOLO la Capability enforcing del motor activo.
 // En fabric, `execute-sql-dwh` es enforcing PORQUE hay push-down (la RLS vive en la fuente).
@@ -346,7 +357,8 @@ const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = p
   : null
 
 // Identidad del gate + claims enriquecidos desde el directorio: extraído y testeado en ./identity.
-const identityFor = createIdentity(gateClaims, IDENTITY_MAP).identityFor
+// El 3er argumento (dev identity) es null salvo en dev sin gate real — imposible de activar en prod.
+const identityFor = createIdentity(gateClaims, IDENTITY_MAP, config.devIdentity).identityFor
 
 // ANOTACIONES — enriquecimiento de la capa de viz. Store embebido (SQLite) reemplazable por externo.
 // Lectura: solo se fusionan anotaciones sobre las filas RLS-filtradas que el usuario ya ve.
