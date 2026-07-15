@@ -208,6 +208,81 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     }
   }
 
+  // 2·ter · Elemento `series` (líneas de N series): `data` es un dataset (data.<dataset>), `x` y las
+  // series de `metrics` son CAMPOS pelados del dataset (no rutas data.*), por eso el barrido de refs
+  // no valida esos campos. Exigir `data`/`x`/`metrics[≥1]` y que los campos existan en shape (un typo
+  // dejaría el eje o una serie vacía en silencio — mismo criterio dangling que controles/filtros).
+  for (const se of pieces.flatMap((pc) => collectSeries(pc))) {
+    const dataRef = se['data']
+    if (typeof dataRef !== 'string' || !dataRef.startsWith('data.') || !stripDataRef(dataRef).split('.')[0]) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-data-not-qualified',
+        path: 'piece -> series.data',
+        value: (dataRef ?? null) as never,
+        message: `Un elemento series debe declarar 'data: data.<dataset>' (el dataset cuyas filas son los puntos del eje); recibió ${JSON.stringify(dataRef ?? null)}.`,
+        remediation: `Escribir 'data: data.<dataset>'.`,
+      })
+    }
+    const dsName = stripDataRef(dataRef).split('.')[0]
+    const sds = s.data[dsName]
+    const x = se['x']
+    if (typeof x !== 'string' || !x) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-x-missing',
+        path: 'piece -> series.x',
+        value: (x ?? null) as never,
+        message: `Un elemento series requiere 'x' (el campo del eje; cada fila del dataset es un punto).`,
+        remediation: `Declarar 'x: <campo>' (un campo del dataset de 'data').`,
+      })
+    }
+    if (sds?.shape?.fields && !(x in sds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-x-dangling',
+        path: 'piece -> series.x',
+        value: x,
+        message: `El eje 'x' de series usa el campo '${x}', que no está declarado en data.${dsName}.shape.fields.`,
+        remediation: `Declarar '${x}' en shape.fields de '${dsName}' o corregir x.`,
+      })
+    }
+    const metrics = se['metrics']
+    if (!Array.isArray(metrics) || metrics.length === 0) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-metrics-missing',
+        path: 'piece -> series.metrics',
+        value: (metrics ?? null) as never,
+        message: `Un elemento series requiere 'metrics' con al menos una serie ({ field, label }).`,
+        remediation: `Declarar metrics: [{ field: <campo>, label: "..." }, ...] (una columna por serie).`,
+      })
+    }
+    for (const [i, m] of (metrics as { field?: unknown; label?: unknown }[]).entries()) {
+      const field = m && typeof m.field === 'string' ? m.field : ''
+      if (!field) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'series-metrics-field-missing',
+          path: `piece -> series.metrics[${i}].field`,
+          value: (m?.field ?? null) as never,
+          message: `Cada serie requiere 'field' (una columna del dataset de 'data').`,
+          remediation: `Declarar 'field' en cada entrada de metrics.`,
+        })
+      }
+      if (sds?.shape?.fields && !(field in sds.shape.fields)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'series-metrics-field-dangling',
+          path: `piece -> series.metrics[${i}].field`,
+          value: field,
+          message: `La serie '${field}' no está declarada en data.${dsName}.shape.fields.`,
+          remediation: `Declarar '${field}' en shape.fields de '${dsName}' o corregir el campo de la serie.`,
+        })
+      }
+    }
+  }
+
   // 3 · Capabilities catalogadas
   for (const [name, ds] of Object.entries(s.data)) {
     if (!ctx.capabilities.includes(ds.capability)) {
@@ -609,7 +684,7 @@ function validateControls(spec: MiraSpec): void {
 }
 
 /** Tipos de elemento de contenido válidos en una pieza (los que `composePiece`/el render reconocen). */
-const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'dato', 'semaforo', 'distribution', 'table'])
+const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'dato', 'semaforo', 'distribution', 'series', 'table'])
 
 /**
  * Valida recursivamente un nodo de pieza: o es un layout (`layout` + `elements`) o declara EXACTAMENTE
@@ -690,6 +765,21 @@ export function collectDatasetKeys(node: unknown, acc: Set<string> = new Set()):
     for (const v of Object.values(obj)) collectDatasetKeys(v, acc)
   }
   return [...acc]
+}
+
+/** Recolecta todos los nodos `series` (su objeto de config) presentes en el subárbol de piece. */
+export function collectSeries(node: unknown, acc: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (node == null) return acc
+  if (Array.isArray(node)) {
+    for (const child of node) collectSeries(child, acc)
+  } else if (typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    if (obj['series'] && typeof obj['series'] === 'object') {
+      acc.push(obj['series'] as Record<string, unknown>)
+    }
+    for (const v of Object.values(obj)) collectSeries(v, acc)
+  }
+  return acc
 }
 
 /** Recolecta todos los nodos `distribution` (su objeto de config) presentes en el subárbol de piece. */

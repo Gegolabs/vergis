@@ -183,6 +183,43 @@ async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens
 }
 
 
+/**
+ * `series` — líneas de N series sobre un eje. Vega-Lite con `fold` (wide→long) + `color` por serie;
+ * el eje x es ORDINAL en el orden de llegada de las filas (`sort: null` — el SQL manda, NO se
+ * re-ordena alfabético). Marca de línea con puntos, leyenda abajo, paleta del theme. Mismo LRU.
+ */
+export async function renderSeries(node: ResolvedNode, tokens: ThemeTokens): Promise<string> {
+  const rows = node.rows ?? []
+  const x = node.xField ?? 'x'
+  const series = node.seriesSpec ?? []
+  // Datos re-etiquetados por LABEL (clave = etiqueta de la serie); el fold opera sobre los labels.
+  const labels = series.map((s) => s.label)
+  const values = rows.map((r) => {
+    const o: Record<string, unknown> = { [x]: r[x] }
+    for (const s of series) o[s.label] = Number(r[s.field])
+    return o
+  })
+  const colors = seriesColors(tokens, Math.max(1, series.length))
+  const spec: TopLevelSpec = {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    background: 'transparent',
+    width: 640,
+    height: 240,
+    data: { values },
+    transform: [{ fold: labels, as: ['serie', 'valor'] }],
+    mark: { type: 'line', point: true },
+    encoding: {
+      // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
+      x: { field: x, type: 'ordinal', sort: null, title: null },
+      y: { field: 'valor', type: 'quantitative', title: null },
+      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: { orient: 'bottom', title: null } },
+    },
+    config: chartAxisConfig(tokens),
+  }
+  const svg = await cachedSvg(spec)
+  return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
+}
+
 async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
   const vgSpec = compile(spec).spec
   const view = new vega.View(vega.parse(vgSpec as vega.Spec), { renderer: 'none' })
