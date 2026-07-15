@@ -138,7 +138,22 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // clave `data:` colgante, que delata que la fuente quedó sin cablear. (La existencia del dataset
   // y del campo la cubren los pasos 2 y 4 una vez que el eje es un data.<...> recolectable.)
   for (const d of pieces.flatMap((pc) => collectDistributions(pc))) {
-    for (const axis of ['dimension', 'metric'] as const) {
+    const hasMetrics = Array.isArray(d['metrics']) && (d['metrics'] as unknown[]).length > 0
+    const hasMetric = d['metric'] != null
+    // `metric` (una serie) y `metrics` (varias, agrupadas) son mutuamente excluyentes.
+    if (hasMetric && hasMetrics) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'distribution-metric-metrics-collision',
+        path: 'piece -> distribution',
+        message: `Un gráfico distribution declara 'metric' (una serie) y 'metrics' (varias) a la vez; son mutuamente excluyentes.`,
+        remediation: `Dejar solo 'metric: data.<dataset>.<campo>' (una barra por categoría) o solo 'metrics: [{ field, label }, ...]' (barras agrupadas).`,
+      })
+    }
+    // `dimension` SIEMPRE es una ruta completa data.<dataset>.<campo>; en modo singular, `metric`
+    // también. En modo agrupado, `metric` no aplica y las series viven en `metrics`.
+    const axes: ('dimension' | 'metric')[] = hasMetrics ? ['dimension'] : ['dimension', 'metric']
+    for (const axis of axes) {
       const v = d[axis]
       if (typeof v !== 'string' || !v.startsWith('data.') || stripDataRef(v).split('.').length < 2) {
         throw new VergisError({
@@ -151,6 +166,36 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         })
       }
     }
+    // Modo agrupado: cada serie de `metrics` es un CAMPO pelado del dataset de `dimension` (no una
+    // ruta data.*, por eso el barrido de refs no lo alcanza). Exigir `field` y, si el dataset declara
+    // shape, que el campo exista — un typo dejaría la serie en 0/vacía en silencio.
+    if (hasMetrics) {
+      const dsName = stripDataRef(String(d['dimension'])).split('.')[0]
+      const cds = dsName ? s.data[dsName] : undefined
+      for (const [i, m] of (d['metrics'] as { field?: unknown; label?: unknown }[]).entries()) {
+        const field = m && typeof m.field === 'string' ? m.field : ''
+        if (!field) {
+          throw new VergisError({
+            error: 'mira/spec-invalid',
+            code: 'distribution-metrics-field-missing',
+            path: `piece -> distribution.metrics[${i}].field`,
+            value: (m?.field ?? null) as never,
+            message: `Cada serie de un distribution agrupado requiere 'field' (un campo del dataset de dimension).`,
+            remediation: `Declarar 'field' en cada entrada de metrics, p.ej. metrics: [{ field: plantas_base, label: "Base" }].`,
+          })
+        }
+        if (cds?.shape?.fields && !(field in cds.shape.fields)) {
+          throw new VergisError({
+            error: 'mira/spec-invalid',
+            code: 'distribution-metrics-field-dangling',
+            path: `piece -> distribution.metrics[${i}].field`,
+            value: field,
+            message: `La serie '${field}' del distribution agrupado no está declarada en data.${dsName}.shape.fields.`,
+            remediation: `Declarar '${field}' en shape.fields de '${dsName}' o corregir el campo de la serie.`,
+          })
+        }
+      }
+    }
     if ('data' in d) {
       throw new VergisError({
         error: 'mira/spec-invalid',
@@ -160,6 +205,81 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         message: `Un gráfico distribution no lee la clave 'data:'; su dataset sale de dimension/metric. Su presencia indica que la fuente no quedó cableada y el gráfico saldría vacío.`,
         remediation: `Quitar 'data:' y dejar dimension/metric como rutas completas data.<dataset>.<campo>.`,
       })
+    }
+  }
+
+  // 2·ter · Elemento `series` (líneas de N series): `data` es un dataset (data.<dataset>), `x` y las
+  // series de `metrics` son CAMPOS pelados del dataset (no rutas data.*), por eso el barrido de refs
+  // no valida esos campos. Exigir `data`/`x`/`metrics[≥1]` y que los campos existan en shape (un typo
+  // dejaría el eje o una serie vacía en silencio — mismo criterio dangling que controles/filtros).
+  for (const se of pieces.flatMap((pc) => collectSeries(pc))) {
+    const dataRef = se['data']
+    if (typeof dataRef !== 'string' || !dataRef.startsWith('data.') || !stripDataRef(dataRef).split('.')[0]) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-data-not-qualified',
+        path: 'piece -> series.data',
+        value: (dataRef ?? null) as never,
+        message: `Un elemento series debe declarar 'data: data.<dataset>' (el dataset cuyas filas son los puntos del eje); recibió ${JSON.stringify(dataRef ?? null)}.`,
+        remediation: `Escribir 'data: data.<dataset>'.`,
+      })
+    }
+    const dsName = stripDataRef(dataRef).split('.')[0]
+    const sds = s.data[dsName]
+    const x = se['x']
+    if (typeof x !== 'string' || !x) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-x-missing',
+        path: 'piece -> series.x',
+        value: (x ?? null) as never,
+        message: `Un elemento series requiere 'x' (el campo del eje; cada fila del dataset es un punto).`,
+        remediation: `Declarar 'x: <campo>' (un campo del dataset de 'data').`,
+      })
+    }
+    if (sds?.shape?.fields && !(x in sds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-x-dangling',
+        path: 'piece -> series.x',
+        value: x,
+        message: `El eje 'x' de series usa el campo '${x}', que no está declarado en data.${dsName}.shape.fields.`,
+        remediation: `Declarar '${x}' en shape.fields de '${dsName}' o corregir x.`,
+      })
+    }
+    const metrics = se['metrics']
+    if (!Array.isArray(metrics) || metrics.length === 0) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-metrics-missing',
+        path: 'piece -> series.metrics',
+        value: (metrics ?? null) as never,
+        message: `Un elemento series requiere 'metrics' con al menos una serie ({ field, label }).`,
+        remediation: `Declarar metrics: [{ field: <campo>, label: "..." }, ...] (una columna por serie).`,
+      })
+    }
+    for (const [i, m] of (metrics as { field?: unknown; label?: unknown }[]).entries()) {
+      const field = m && typeof m.field === 'string' ? m.field : ''
+      if (!field) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'series-metrics-field-missing',
+          path: `piece -> series.metrics[${i}].field`,
+          value: (m?.field ?? null) as never,
+          message: `Cada serie requiere 'field' (una columna del dataset de 'data').`,
+          remediation: `Declarar 'field' en cada entrada de metrics.`,
+        })
+      }
+      if (sds?.shape?.fields && !(field in sds.shape.fields)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'series-metrics-field-dangling',
+          path: `piece -> series.metrics[${i}].field`,
+          value: field,
+          message: `La serie '${field}' no está declarada en data.${dsName}.shape.fields.`,
+          remediation: `Declarar '${field}' en shape.fields de '${dsName}' o corregir el campo de la serie.`,
+        })
+      }
     }
   }
 
@@ -383,6 +503,17 @@ export interface MiraControl {
   label?: string
   /** Origen de las opciones: `data.<dataset>.<field>`. Sus valores distintos pueblan el selector. */
   source: string
+  /**
+   * A qué parámetro de contexto ESCRIBE el control (default = `id`). Dos controles con el mismo `param`
+   * son LLAVES ALTERNATIVAS del mismo alcance: eligen por campos distintos, fijan el mismo `ctx.<param>`
+   * (deben compartir dataset y ser `single`). Deja `:ctx.<param>` intacto en las queries.
+   */
+  param?: string
+  /**
+   * Campo del MISMO dataset de `source` que se muestra como ETIQUETA de las opciones (default = el campo
+   * de `source`). El valor escrito sigue siendo el de `source`; solo cambia el texto visible.
+   */
+  display?: string
   /** Valor inicial cuando no llega `ctx.<id>` en la URL: el mayor / menor / primero de las opciones. */
   default?: 'max' | 'min' | 'first'
   /**
@@ -492,6 +623,18 @@ function validateControls(spec: MiraSpec): void {
         remediation: `Declarar '${srcField}' en shape.fields o corregir source.`,
       })
     }
+    // El campo de `display` (la etiqueta) debe existir en el MISMO dataset: un typo dejaría la etiqueta
+    // cayendo al value en silencio. Mismo criterio que el campo de source.
+    if (c.display && cds?.shape?.fields && !(c.display in cds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-display-field-dangling',
+        path: `controls[${c.id}].display`,
+        value: c.display,
+        message: `El control '${c.id}' muestra el campo '${c.display}' de '${dataset}', que no está declarado en data.${dataset}.shape.fields.`,
+        remediation: `Declarar '${c.display}' en shape.fields o corregir display.`,
+      })
+    }
     if (c.default != null && !['max', 'min', 'first'].includes(c.default)) {
       throw new VergisError({
         error: 'mira/spec-invalid',
@@ -505,10 +648,43 @@ function validateControls(spec: MiraSpec): void {
     // `single: false` (multi-select) es válido: el control se renderiza como grupo de checkboxes,
     // los valores viajan repetidos en la URL y Mira expande `:ctx.<id>` a N binds (ver MiraControl).
   }
+  // Params COMPARTIDOS (llaves alternativas del mismo alcance): mismo dataset + single obligatorio.
+  const byParam = new Map<string, MiraControl[]>()
+  for (const c of controls) {
+    const p = c.param ?? c.id
+    const g = byParam.get(p)
+    if (g) g.push(c)
+    else byParam.set(p, [c])
+  }
+  for (const [param, group] of byParam) {
+    if (group.length < 2) continue
+    const datasets = new Set(group.map((c) => stripDataRef(c.source).split('.')[0]))
+    if (datasets.size > 1) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-param-dataset-mismatch',
+        path: `controls[param=${param}].source`,
+        value: [...datasets].join(', '),
+        message: `Los controles que comparten param '${param}' (${group.map((c) => c.id).join(', ')}) apuntan a datasets distintos (${[...datasets].join(', ')}); las llaves alternativas deben leer del MISMO dataset.`,
+        remediation: 'Unificar el dataset de source de todos los controles del mismo param.',
+      })
+    }
+    const multi = group.find((c) => c.single === false)
+    if (multi) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-param-multi',
+        path: `controls[${multi.id}].single`,
+        value: 'false',
+        message: `El control '${multi.id}' es multi-select (single: false) pero comparte el param '${param}'; las llaves alternativas requieren single: true en esta fase.`,
+        remediation: 'Declarar single: true (u omitirlo) en todos los controles que comparten un param.',
+      })
+    }
+  }
 }
 
 /** Tipos de elemento de contenido válidos en una pieza (los que `composePiece`/el render reconocen). */
-const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'semaforo', 'distribution', 'table'])
+const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'dato', 'semaforo', 'distribution', 'series', 'table'])
 
 /**
  * Valida recursivamente un nodo de pieza: o es un layout (`layout` + `elements`) o declara EXACTAMENTE
@@ -589,6 +765,21 @@ export function collectDatasetKeys(node: unknown, acc: Set<string> = new Set()):
     for (const v of Object.values(obj)) collectDatasetKeys(v, acc)
   }
   return [...acc]
+}
+
+/** Recolecta todos los nodos `series` (su objeto de config) presentes en el subárbol de piece. */
+export function collectSeries(node: unknown, acc: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (node == null) return acc
+  if (Array.isArray(node)) {
+    for (const child of node) collectSeries(child, acc)
+  } else if (typeof node === 'object') {
+    const obj = node as Record<string, unknown>
+    if (obj['series'] && typeof obj['series'] === 'object') {
+      acc.push(obj['series'] as Record<string, unknown>)
+    }
+    for (const v of Object.values(obj)) collectSeries(v, acc)
+  }
+  return acc
 }
 
 /** Recolecta todos los nodos `distribution` (su objeto de config) presentes en el subárbol de piece. */

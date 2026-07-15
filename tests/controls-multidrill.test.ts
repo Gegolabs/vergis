@@ -166,12 +166,13 @@ describe('render · control de cabecera default=max', () => {
     const { out, calls } = await render(YAML)
     expect(out.ok).toBe(true)
     const html = out.html ?? ''
-    // Control de semana en el INSPECTOR (gaveta), no en el cuerpo, con W21 seleccionada.
-    expect(html).toContain('vt-ctl-select')
+    // TX-11: el selector de alcance vive en la BANDA de contexto (el sello ES el control), como
+    // <select> estilizado, con W21 seleccionada — YA NO en la gaveta (sin vt-ctl-select).
+    expect(html).toContain('class="vctxbar"')
+    expect(html).toContain('vctx-sel') // sello clickeable (<select> nativo estilizado)
     expect(html).toContain('<option value="W21" selected>W21</option>')
-    // Lineamiento: el <select> del control vive DENTRO de la gaveta (después de .tray-sections),
-    // NO en el cuerpo. (El primer 'vt-ctl-select' es la regla CSS; acá medimos el elemento.)
-    expect(html.indexOf('<select class="vt-ctl-select"')).toBeGreaterThan(html.indexOf('class="tray-sections"'))
+    expect(html).not.toContain('vt-ctl-select') // el control salió de la gaveta (WP2)
+    expect(html).toMatch(/<select class="[^"]*vctx-sel[^"]*"/)
     // La query de clientes se bindeó con @ctx_semana = 'W21' (injection-safe, sin :ctx.).
     const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
     expect(clientes.sql).toContain('@ctx_semana')
@@ -207,7 +208,7 @@ describe('render · control de cabecera default=max', () => {
     // Este test EJECUTA el handler generado bajo ese scoping (with(document)), no solo su sintaxis.
     const { out } = await render(YAML)
     const html = out.html ?? ''
-    const m = html.match(/<select class="vt-ctl-select"[^>]*onchange="([^"]*)"/)
+    const m = html.match(/<select class="[^"]*vctx-sel[^"]*"[^>]*onchange="([^"]*)"/)
     expect(m).not.toBeNull()
     const code = m![1]
       .replace(/&quot;/g, '"')

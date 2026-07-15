@@ -105,8 +105,14 @@ export interface ResolvedNode {
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
+  /** `distribution` multi-métrica: 2+ series agrupadas. Presente ⇒ modo agrupado. */
+  metricsSpec?: { field: string; label: string }[]
   orientation?: string
   title?: string
+  /** `series`: campo del eje x (el SQL manda el orden de las filas). */
+  xField?: string
+  /** `series`: 1..N series (formato wide, una columna por serie). */
+  seriesSpec?: { field: string; label: string }[]
   columnsSpec?: TableColumn[]
   labelField?: string
   presentField?: string
@@ -233,6 +239,18 @@ export function composePiece(
       size: kpi.size,
     }
   }
+  if (node['dato']) {
+    // `dato` (TX-12): atributo rotulado (etiqueta + valor). El valor se resuelve por el MISMO
+    // mecanismo de path que `kpi.metric` (resolvePath sobre data.<dataset>.<campo>). NO es una
+    // medida (tarjeta grande): es contenido/estado, se imprime tal cual y jamás es interactivo.
+    const dt = node['dato'] as { label?: string; value?: string; format?: string }
+    return {
+      type: 'dato',
+      label: dt.label,
+      value: resolvePath(String(dt.value ?? ''), results, spec),
+      format: dt.format,
+    }
+  }
   if (node['semaforo']) {
     const s = node['semaforo'] as {
       data?: string
@@ -276,16 +294,42 @@ export function composePiece(
     const d = node['distribution'] as {
       dimension?: string
       metric?: string
+      metrics?: { field?: string; label?: string }[]
       orientation?: string
       sort?: string
       title?: string
     }
     const dataset = stripData(String(d.dimension ?? '')).split('.')[0]
     const dimensionField = stripData(String(d.dimension ?? '')).split('.')[1]
+    // Modo AGRUPADO (multi-métrica): `metrics` (≥1) reemplaza a `metric`. Las series son columnas del
+    // MISMO dataset (campos pelados, no rutas data.*). El orden de las categorías y la cota top-N los
+    // resuelve el render (por la suma de las series). No se pre-ordena acá (la validación exige que
+    // metric y metrics no coexistan).
+    if (Array.isArray(d.metrics) && d.metrics.length > 0) {
+      const metricsSpec = d.metrics.map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
+      const rows = [...(results[dataset]?.rows ?? [])]
+      return { type: 'distribution', rows, dimensionField, metricsSpec, orientation: d.orientation, title: d.title }
+    }
     const metricField = stripData(String(d.metric ?? '')).split('.')[1]
     let rows = [...(results[dataset]?.rows ?? [])]
     rows = sortRows(rows, d.sort, metricField)
     return { type: 'distribution', rows, dimensionField, metricField, orientation: d.orientation, title: d.title }
+  }
+  if (node['series']) {
+    // `series` — líneas de N series sobre un eje. El dataset sale de `data` (data.<dataset>); cada
+    // fila es un punto del eje x. El SQL manda el ORDEN de las filas (no se re-ordena acá ni en el
+    // render). Las series (`metrics`) son columnas del dataset (formato wide).
+    const se = node['series'] as {
+      data?: string
+      x?: string
+      metrics?: { field?: string; label?: string }[]
+      format?: string
+      title?: string
+    }
+    const dataset = stripData(String(se.data ?? '')).split('.')[0]
+    const rows = [...(results[dataset]?.rows ?? [])]
+    const seriesSpec = (se.metrics ?? []).map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
+    return { type: 'series', rows, xField: se.x, seriesSpec, format: se.format, title: se.title }
   }
   if (node['table']) {
     const t = node['table'] as {

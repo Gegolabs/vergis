@@ -49,6 +49,8 @@
           "id": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
           "label": { "type": "string" },
           "source": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$" },
+          "param": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Parámetro de ctx que fija (default = id); dos controles con el mismo param = llaves alternativas del mismo alcance." },
+          "display": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Campo del mismo dataset que se muestra como etiqueta (default = el campo de source)." },
           "default": { "enum": ["max", "min", "first"] },
           "single": { "type": "boolean" }
         }

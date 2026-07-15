@@ -4,7 +4,12 @@ import type { Theme } from './index'
 /** Theme claro por defecto (el look base de v0.1). */
 export const defaultTheme: Theme = {
   name: 'default',
-  tokens: { chartBar: '#2563eb', chartText: '#334155', chartAxis: '#e2e8f0' },
+  tokens: {
+    chartBar: '#2563eb',
+    chartText: '#334155',
+    chartAxis: '#e2e8f0',
+    chartSeries: ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ea580c', '#65a30d'],
+  },
   wrap({ title, body, controls }) {
     // El theme default es claro y sin paletas conmutables; `palette` no aplica.
     const header = controls ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">${controls}</div>` : ''
@@ -47,6 +52,9 @@ export const defaultTheme: Theme = {
   .kpi-value { font-size: 30px; font-weight: 700; line-height: 1.1; }
   .kpi-label { font-size: 12px; color: #64748b; margin-top: 4px; text-transform: uppercase; letter-spacing: .03em; }
   .kpi-comparison { color: #94a3b8; text-transform: none; letter-spacing: 0; }
+  .dato { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }
+  .dato-k { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .03em; }
+  .dato-v { font-size: 14px; color: #1f2937; font-weight: 600; }
   .chart, .table, .semaforo { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }

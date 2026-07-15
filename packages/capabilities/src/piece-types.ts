@@ -22,10 +22,15 @@ export interface PagesNav {
 /** Control de cabecera ya resuelto por Mira: opciones + valor(es) seleccionado(s). */
 export interface ControlResolved {
   id: string
+  /** Clave de contexto que fija (default = `id`); dos controles con igual `param` = llaves alternativas. */
+  param?: string
   label: string
-  options: string[]
-  /** Valor para display (multi: los valores unidos por ", "). */
+  /** Opciones: pares `{value, label}` (el render tolera `string[]` con label = value por compat). */
+  options: (string | { value: string; label: string })[]
+  /** Valor VIGENTE (la llave; multi: los valores unidos por ", "). */
   value: string
+  /** Etiqueta del valor vigente para el print/summary (default = `value`). */
+  displayLabel?: string
   /** Solo multi-select: los valores seleccionados. */
   values?: string[]
   /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
@@ -93,8 +98,14 @@ export interface ResolvedNode {
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
+  /** `distribution` multi-métrica: 2+ series agrupadas (barras). Presente ⇒ modo agrupado. */
+  metricsSpec?: { field: string; label: string }[]
   orientation?: string
   title?: string
+  /** `series`: campo del eje x (categórico/ordinal; el SQL manda el orden de las filas). */
+  xField?: string
+  /** `series`: 1..N series (formato wide, una columna por serie). */
+  seriesSpec?: { field: string; label: string }[]
   columnsSpec?: TableColumn[]
   labelField?: string
   presentField?: string

@@ -27,7 +27,8 @@ describe('render · barra de contexto activo (#1 — semana siempre visible)', (
 describe('render · headers de tabla congelados (#2 — inmovilizar panel)', () => {
   it('la tabla queda en un scroll-box con max-height y thead sticky', async () => {
     const html = await render({
-      piece: { type: 'table', columnsSpec: [{ field: 'a', label: 'A' }, { field: 'b', label: 'B' }], rows: [{ a: 1, b: 2 }] },
+      // ≥2 filas: una tabla que rinde 1 fila es display puro (TX-11 WP4·1) → sin runtime ni scroll-box.
+      piece: { type: 'table', columnsSpec: [{ field: 'a', label: 'A' }, { field: 'b', label: 'B' }], rows: [{ a: 1, b: 2 }, { a: 3, b: 4 }] },
       title: 'Tabla',
     })
     expect(html).toContain('class="table vtable"')
