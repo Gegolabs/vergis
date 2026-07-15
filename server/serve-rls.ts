@@ -25,16 +25,19 @@
  *  - PORT
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { watchPaths, swapRecordInPlace } from './hot-reload'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
-import { resolve, join } from 'node:path'
+import { resolve, join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
-import { type AnnotationContext } from '@vergis/mira'
+import { type AnnotationContext, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec } from '@vergis/mira'
+import { createMiranda, type MirandaServerDeps } from './miranda'
+import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
   bootstrapClickHouse,
   createIngestClickHouse,
@@ -93,6 +96,7 @@ import { configFromEnv } from './config'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
+import type { MirandaHandler } from './miranda'
 import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from './deployment-check'
 import {
   isPublic,
@@ -363,6 +367,8 @@ const parseIntakeFile = (): IntakeSlot[] =>
   process.env['VERGIS_INTAKE'] ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8'))) : []
 let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
+// Miranda (cluster 077): null salvo que MIRANDA_ENABLED esté encendido (se construye más abajo).
+let miranda: MirandaHandler | null = null
 let piAclEnabled = false
 let piOwners: Record<string, string> = {}
 let defaultCollabGroups: string[] = []
@@ -524,7 +530,9 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
     const ug = await governance.groupsOf(emailLc)
     hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
   }
-  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, signoutRd: SIGNOUT_RD || '/' })
+  // Entrada «Miranda» en el menú: solo si el flag está ON y la identidad tiene el scope (admin o grupo).
+  const hasMiranda = config.miranda.enabled && governance ? isAdmin || (await governance.isMember(config.miranda.scopeGroup, emailLc)) : false
+  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, signoutRd: SIGNOUT_RD || '/' })
   const govByCode: GovByCode = new Map()
   if (governance) {
     const groups = await governance.listGroups()
@@ -543,6 +551,7 @@ const server = createServer(
     isReady: () => ready,
     getAdmin: () => admin,
     getPiConfig: () => piConfig,
+    getMiranda: () => miranda,
     discover,
     identityFor,
     renderReport,
@@ -900,6 +909,139 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     console.error(`[vergis-rls] administración deshabilitada: ${e instanceof Error ? e.message : String(e)}`)
   }
 }
+// ── MIRANDA (cluster 077) — el agente conversacional que autora specs. TODO detrás del flag ────────
+// MIRANDA_ENABLED. Con el flag apagado nada de esto corre: `miranda` queda null → superficie cero.
+if (config.miranda.enabled) {
+  try {
+    // Store: reusa el de gobierno si existe; si no, abre uno (Miranda necesita persistir sesiones).
+    const govForMiranda = governance ?? (await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, { admins: ADMIN_SEED }))
+    // Catálogo (allowlist de probes) — config de instancia (JSON: lista o {catalog:[…]}).
+    const catalog: CatalogEntry[] = (() => {
+      const p = config.miranda.catalogPath
+      if (!p) return []
+      try {
+        const parsed = JSON.parse(readFileSync(resolve(p), 'utf8')) as CatalogEntry[] | { catalog?: CatalogEntry[] }
+        return Array.isArray(parsed) ? parsed : (parsed.catalog ?? [])
+      } catch (e) {
+        console.error(`[vergis-rls] Miranda: catálogo no cargado (${e instanceof Error ? e.message : e}). Sin catálogo, las probes quedan sin objetos.`)
+        return []
+      }
+    })()
+    // Schema del DSL (para validar drafts) — mismos candidatos que runSpec.
+    const mirandaSchema = (() => {
+      for (const c of [resolve(dirname(fileURLToPath(import.meta.url)), '../schema/mira-spec.schema.json'), resolve(process.cwd(), 'schema/mira-spec.schema.json')]) {
+        try {
+          return JSON.parse(readFileSync(c, 'utf8')) as object
+        } catch {
+          /* siguiente candidato */
+        }
+      }
+      return null
+    })()
+    // DSL doc + rúbrica QC① montados desde MIRANDA_RUBRIC_DIR (la instancia decide la versión).
+    const readIf = (p: string): string | undefined => {
+      try {
+        return readFileSync(p, 'utf8')
+      } catch {
+        return undefined
+      }
+    }
+    const rubricDir = config.miranda.rubricDir
+    const dslDoc = rubricDir ? readIf(join(resolve(rubricDir), 'dsl.md')) : undefined
+    const rubric = rubricDir ? readIf(join(resolve(rubricDir), 'qc1.md')) : undefined
+    const systemPrompt = buildSystemPrompt({ dslDoc })
+    // Capacidades válidas de un draft (dato = conector enforcing; canales = render/publish/entrega).
+    const MIRANDA_VALIDATE_CAPS = [...SERVING_CAPS, 'publicar-artefacto', 'render-html-piece', 'render-csv-piece', 'send-email', 'send-slack']
+    const PROBE_REF = process.env['MIRANDA_PROBE_DB'] ?? (connections ? Object.keys(connections)[0] : '')
+    // Identidad simplificada de la probe (Fase 1: audiencia interna, dominios grant:all). TODO Fase 2:
+    // ligar la probe a la identidad autoritativa del autor (claims), como el serving.
+    const probeIdentityOf = (email: string | undefined): IdentityContext => ({ agent: 'miranda-probe', user: email })
+
+    const mirandaDeps: MirandaServerDeps = {
+      gov: govForMiranda,
+      transport: fetchAnthropicTransport({ apiKey: config.miranda.apiKey }),
+      model: config.miranda.model,
+      systemPrompt,
+      rubric,
+      maxTurns: config.miranda.maxTurns,
+      tokenBudget: config.miranda.tokenBudget,
+      catalog,
+      identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
+      hasScope: async (email) => (await govForMiranda.isAdmin(email)) || (await govForMiranda.isMember(config.miranda.scopeGroup, email)),
+      probe: async (sql, email) => {
+        const out = (await servingCap.execute({ database_ref: PROBE_REF, sql }, probeIdentityOf(email))) as { rows: Record<string, unknown>[] }
+        return { rows: out.rows ?? [] }
+      },
+      columnsOf: async (table) => {
+        const [a, b] = table.includes('.') ? table.split('.') : [null, table]
+        const sql = a
+          ? `SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @s AND TABLE_NAME = @t ORDER BY ORDINAL_POSITION`
+          : `SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t ORDER BY ORDINAL_POSITION`
+        const out = (await servingCap.execute({ database_ref: PROBE_REF, sql, params: a ? { s: a, t: b } : { t: b } }, probeIdentityOf(undefined))) as { rows: Record<string, unknown>[] }
+        return (out.rows ?? []).map((r) => ({ name: String(r['name']), type: String(r['type']) }))
+      },
+      validateDraft: (yaml) => {
+        if (!mirandaSchema) return { ok: false, error: 'Schema del DSL no disponible en el server.' }
+        try {
+          validateMiraSpec(parseMiraSpec(yaml), { capabilities: MIRANDA_VALIDATE_CAPS, schema: mirandaSchema })
+          return { ok: true }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          return { ok: false, error: msg }
+        }
+      },
+      listSpecs: (): SpecRef[] => discover().map((r) => ({ code: r.code, name: r.name })),
+      readSpec: (code) => {
+        const r = discover().find((x) => x.code === code || x.slug === code.toLowerCase())
+        if (!r) return null
+        try {
+          return readFileSync(r.specPath, 'utf8')
+        } catch {
+          return null
+        }
+      },
+      writeSpec: async (filename, content) => {
+        if (!SPECS_DIR) throw new Error('Miranda requiere VERGIS_SPECS_DIR para publicar (no hay directorio de specs).')
+        writeFileSync(join(resolve(SPECS_DIR), filename), content)
+      },
+      renderPreviewHtml: async (draftYaml, headers) => {
+        const tmp = join(OUT, `.miranda-preview-${randomBytes(8).toString('hex')}.yaml`)
+        writeFileSync(tmp, draftYaml)
+        try {
+          const out = await runSpec({
+            specPath: tmp,
+            identity: identityFor(headers as GateHeaders),
+            baseDir: OUT,
+            registerStarters: false,
+            extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
+            interactiveMaxRows: INTERACTIVE_MAX_ROWS,
+          })
+          if (!out.ok) throw new Error(out.fallback?.reason ?? 'la preview no renderizó')
+          return out.html ?? ''
+        } finally {
+          try {
+            unlinkSync(tmp)
+          } catch {
+            /* noop */
+          }
+        }
+      },
+      secret: ANN_SECRET,
+      brandTitle: INDEX_TITLE,
+      announce: config.miranda.announceWebhook
+        ? async (message: string) => {
+            await fetch(config.miranda.announceWebhook!, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: message }) })
+          }
+        : undefined,
+    }
+    miranda = createMiranda(mirandaDeps)
+    console.log(`[vergis-rls] Miranda ACTIVA · modelo=${config.miranda.model} · catálogo=${catalog.length} objeto(s) · scope=${config.miranda.scopeGroup}`)
+  } catch (e) {
+    console.error(`[vergis-rls] Miranda deshabilitada por error de arranque: ${e instanceof Error ? e.message : String(e)}`)
+    throw e // el flag está ON: un fallo de arranque no debe degradar en silencio.
+  }
+}
+
 server.listen(PORT, () => {
   const r = discover()
   console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
