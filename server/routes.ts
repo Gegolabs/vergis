@@ -12,6 +12,7 @@ import { fail } from './http-util'
 import type { Report } from './discovery'
 import type { AdminHandler } from './admin'
 import type { PiConfigHandler } from './pi-config'
+import type { MirandaHandler } from './miranda'
 
 export interface RouteDeps {
   engine: string
@@ -20,6 +21,9 @@ export interface RouteDeps {
   isReady: () => boolean
   getAdmin: () => AdminHandler | null
   getPiConfig: () => PiConfigHandler | null
+  /** Handler de Miranda (cluster 077) o null si el flag `MIRANDA_ENABLED` está apagado (default).
+   * null ⇒ `/miranda*` cae al 404 normal: con el flag apagado la superficie es idéntica a hoy. */
+  getMiranda?: () => MirandaHandler | null
   discover: () => Report[]
   identityFor: (headers: GateHeaders) => IdentityContext
   /** Render por-consumidor de un PI (con RLS). */
@@ -75,6 +79,19 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
           if (!handled) fail(res, 404, 'Ruta no encontrada')
         })
         .catch((e) => fail(res, 500, `Error en configuración del PI: ${errMsg(e)}`))
+      return
+    }
+    // MIRANDA (cluster 077) — gateada por scope DENTRO del handler. Va antes del gate `ready` (es una
+    // superficie de gestión; la preview de un draft sí sirve dato gobernado, pero por serve-rls). Con el
+    // flag apagado `getMiranda` es undefined/null → `/miranda*` cae al slug-lookup normal → 404 de hoy.
+    const miranda = deps.getMiranda?.() ?? null
+    if (miranda && (url === '/miranda' || url.startsWith('/miranda/'))) {
+      miranda
+        .tryHandle(req, res)
+        .then((handled) => {
+          if (!handled) fail(res, 404, 'Ruta no encontrada')
+        })
+        .catch((e) => fail(res, 500, `Error en Miranda: ${errMsg(e)}`))
       return
     }
     // Gate GLOBAL solo para el ARRANQUE EN FRÍO (nada evaluado aún). Después, la servibilidad es
