@@ -36,7 +36,7 @@ export {
   type TextBlock,
   type ToolResultBlock,
 } from './transport'
-export { buildSystemPrompt, MIRANDA_HARD_RULES, type SystemPromptOptions } from './prompt'
+export { buildSystemPrompt, MIRANDA_HARD_RULES, MIRANDA_VOICE, type SystemPromptOptions } from './prompt'
 export { runAgentTurn, TokenBudgetExceeded, MaxTurnsExceeded, type AgentDeps, type AgentTurnResult, type AgentEvent } from './agent'
 export { runSelfCheck, buildJudgeSystem, mergeFormaCross, type SelfCheckDeps } from './self-check'
 export { publishSpec, slugify, PublishBlocked, type PublishDeps, type PublishStore, type PublishResult } from './publish'
