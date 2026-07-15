@@ -105,8 +105,14 @@ export interface ResolvedNode {
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
+  /** `distribution` multi-métrica: 2+ series agrupadas. Presente ⇒ modo agrupado. */
+  metricsSpec?: { field: string; label: string }[]
   orientation?: string
   title?: string
+  /** `series`: campo del eje x (el SQL manda el orden de las filas). */
+  xField?: string
+  /** `series`: 1..N series (formato wide, una columna por serie). */
+  seriesSpec?: { field: string; label: string }[]
   columnsSpec?: TableColumn[]
   labelField?: string
   presentField?: string
@@ -288,12 +294,22 @@ export function composePiece(
     const d = node['distribution'] as {
       dimension?: string
       metric?: string
+      metrics?: { field?: string; label?: string }[]
       orientation?: string
       sort?: string
       title?: string
     }
     const dataset = stripData(String(d.dimension ?? '')).split('.')[0]
     const dimensionField = stripData(String(d.dimension ?? '')).split('.')[1]
+    // Modo AGRUPADO (multi-métrica): `metrics` (≥1) reemplaza a `metric`. Las series son columnas del
+    // MISMO dataset (campos pelados, no rutas data.*). El orden de las categorías y la cota top-N los
+    // resuelve el render (por la suma de las series). No se pre-ordena acá (la validación exige que
+    // metric y metrics no coexistan).
+    if (Array.isArray(d.metrics) && d.metrics.length > 0) {
+      const metricsSpec = d.metrics.map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
+      const rows = [...(results[dataset]?.rows ?? [])]
+      return { type: 'distribution', rows, dimensionField, metricsSpec, orientation: d.orientation, title: d.title }
+    }
     const metricField = stripData(String(d.metric ?? '')).split('.')[1]
     let rows = [...(results[dataset]?.rows ?? [])]
     rows = sortRows(rows, d.sort, metricField)
