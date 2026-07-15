@@ -419,24 +419,109 @@ function safeParse(s: string): string | AnthropicMessage['content'] {
   }
 }
 
-/** Renderiza la conversación (muestra texto de user/assistant; las tools van compactas). */
-function renderChat(rows: { role: string; content: string }[]): string {
-  const bubbles = rows
-    .map((r) => {
-      const c = safeParse(r.content)
-      if (r.role === 'tool') {
-        return `<div class="sub" style="margin:6px 0">⚙️ (resultado de herramienta)</div>`
+/** Extrae el texto de usuario/asistente de un contenido de mensaje ya parseado. */
+function extractText(c: string | AnthropicMessage['content']): string {
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) {
+    return c
+      .filter((b) => (b as { type: string }).type === 'text')
+      .map((b) => (b as { text: string }).text)
+      .join('\n')
+  }
+  return ''
+}
+
+/** ¿Es esta fila una señal de traza de herramienta (a colapsar)? Un `tool_result` (role `tool`),
+ *  o un turno del asistente que SOLO usó herramientas (tool_use sin texto para el usuario). */
+function isToolSignal(role: string, c: string | AnthropicMessage['content']): boolean {
+  if (role === 'tool') return true
+  if (role === 'assistant' && Array.isArray(c)) {
+    const hasToolUse = c.some((b) => (b as { type: string }).type === 'tool_use')
+    return hasToolUse && !extractText(c).trim()
+  }
+  return false
+}
+
+/** Cuenta los `tool_use` (pasos reales de herramienta) en un contenido de mensaje. */
+function countToolUse(c: string | AnthropicMessage['content']): number {
+  if (!Array.isArray(c)) return 0
+  return c.filter((b) => (b as { type: string }).type === 'tool_use').length
+}
+
+/**
+ * Renderiza un subconjunto SEGURO de Markdown inline. Regla de oro: **escapar HTML primero,
+ * formatear después** — el texto del modelo jamás puede inyectar HTML/JS. Soporta negrita `**x**`,
+ * código `` `x` ``, párrafos (doble salto → `<p>`), saltos simples (`<br>`) y listas (`- `/`N. `).
+ * NO soporta links/imágenes/HTML embebido (superficie de ataque innecesaria para el texto de Miranda).
+ */
+export function mdInline(raw: string): string {
+  const escaped = escapeHtml(raw) // 1) escapar SIEMPRE primero
+  const paragraphs = escaped.split(/\n{2,}/)
+  return paragraphs
+    .map((para) => {
+      const lines = para.split('\n')
+      const isUl = lines.length > 0 && lines.every((l) => /^\s*-\s+/.test(l))
+      const isOl = lines.length > 0 && lines.every((l) => /^\s*\d+\.\s+/.test(l))
+      if (isUl) {
+        return `<ul>${lines.map((l) => `<li>${formatSpans(l.replace(/^\s*-\s+/, ''))}</li>`).join('')}</ul>`
       }
-      const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => (b as { type: string }).type === 'text').map((b) => (b as { text: string }).text).join('\n') : ''
-      const who = r.role === 'assistant' ? 'Miranda' : 'Tú'
-      const bg = r.role === 'assistant' ? 'var(--card)' : 'transparent'
-      if (!text.trim() && Array.isArray(c) && c.some((b) => (b as { type: string }).type === 'tool_use')) {
-        return `<div class="sub" style="margin:6px 0">🔧 Miranda usó una herramienta…</div>`
+      if (isOl) {
+        return `<ol>${lines.map((l) => `<li>${formatSpans(l.replace(/^\s*\d+\.\s+/, ''))}</li>`).join('')}</ol>`
       }
-      return `<div style="margin:8px 0;padding:10px 12px;border-radius:10px;background:${bg};border:1px solid var(--border)"><b>${who}:</b> ${escapeHtml(text)}</div>`
+      return `<p>${formatSpans(para).replace(/\n/g, '<br>')}</p>`
     })
     .join('')
-  return bubbles || '<p class="sub">Sin mensajes aún. Dile a Miranda qué PI quieres crear.</p>'
+}
+
+/** Formateo inline (negrita, código) sobre texto YA escapado. El código se protege primero para que
+ *  un `**` dentro de un backtick no se interprete como negrita. */
+function formatSpans(escaped: string): string {
+  const codes: string[] = []
+  // 2a) proteger spans de codigo con un centinela del area de uso privado Unicode (U+E000/U+E001):
+  //     no colisiona con digitos del texto y no sobrevive como HTML. El contenido va verbatim en <code>.
+  let s = escaped.replace(/`([^`]+)`/g, (_m, code) => {
+    codes.push(code)
+    return `\uE000${codes.length - 1}\uE001`
+  })
+  // 2b) negrita.
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  // 2c) restaurar los spans de codigo.
+  s = s.replace(/\uE000(\d+)\uE001/g, (_m, i) => `<code>${codes[Number(i)]}</code>`)
+  return s
+}
+
+/** Renderiza la conversación: texto de user/assistant con Markdown seguro; las trazas de
+ *  herramientas consecutivas se colapsan en UNA sola señal compacta. */
+export function renderChat(rows: { role: string; content: string }[]): string {
+  const parts: string[] = []
+  let i = 0
+  while (i < rows.length) {
+    const r = rows[i]
+    const c = safeParse(r.content)
+    // Colapsar una racha de señales de herramienta en una sola línea.
+    if (isToolSignal(r.role, c)) {
+      let steps = 0
+      let runRows = 0
+      while (i < rows.length) {
+        const cc = safeParse(rows[i].content)
+        if (!isToolSignal(rows[i].role, cc)) break
+        steps += countToolUse(cc)
+        runRows += 1
+        i += 1
+      }
+      if (steps === 0) steps = runRows
+      parts.push(`<div class="sub" style="margin:6px 0">🔧 Miranda exploró los datos (${steps} ${steps === 1 ? 'paso' : 'pasos'})</div>`)
+      continue
+    }
+    const text = extractText(c)
+    const who = r.role === 'assistant' ? 'Miranda' : 'Tú'
+    const bg = r.role === 'assistant' ? 'var(--card)' : 'transparent'
+    parts.push(
+      `<div style="margin:8px 0;padding:10px 12px;border-radius:10px;background:${bg};border:1px solid var(--border)"><b>${who}:</b> ${mdInline(text)}</div>`,
+    )
+    i += 1
+  }
+  return parts.join('') || '<p class="sub">Sin mensajes aún. Dile a Miranda qué PI quieres crear.</p>'
 }
 
 /** Ensambla el contexto de realizabilidad para el self-check desde los tool_result de la sesión

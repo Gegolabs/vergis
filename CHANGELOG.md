@@ -4,6 +4,25 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.12.1 — 2026-07-15
+
+**Miranda — render del chat: Markdown seguro + traza de herramientas colapsada + aire** (work/089,
+1ª iteración de evolución). Cambio puramente de presentación en `server/miranda.ts` → `renderChat`; el
+comportamiento del agente, tools, self-check y store no se tocan.
+
+- **Seguridad (requisito #1): escapar-primero-formatear-después.** Helper nuevo `mdInline` que escapa
+  TODO el HTML del texto del modelo con `escapeHtml` y **luego** aplica un subconjunto acotado de Markdown
+  sobre el texto ya escapado — es imposible que el modelo inyecte HTML/JS. Subconjunto: negrita `**x**`
+  (`<strong>`), código `` `x` `` (`<code>`, contenido verbatim), párrafos por doble salto (`<p>`), saltos
+  simples (`<br>`) y listas `- `/`N. ` (`<ul>`/`<ol>`). Sin links/imágenes/HTML embebido (superficie de
+  ataque innecesaria). Los spans de código se protegen con un centinela del área de uso privado Unicode
+  para que un `**` dentro de backticks no se interprete y para no confundir dígitos del texto.
+- **Traza de herramientas colapsada.** Las filas `tool_use`/`tool_result` consecutivas dejan de emitir una
+  línea de ruido por paso; se agrupan en UNA sola señal compacta `🔧 Miranda exploró los datos (N pasos)`.
+- Antes las burbujas mostraban `**`/backticks crudos y el muro de texto sin párrafos; ahora la conversación
+  se lee con negrita/código reales y aire. Tests: `tests/miranda-chat-render.test.ts` (17 casos, incluye
+  `<script>`/`<img onerror>`/`**<b>**` neutralizados y el colapso de tools).
+
 ## 0.12.0 — 2026-07-15
 
 **`VERGIS_DEV_IDENTITY` — identidad de desarrollo inyectable (fail-safe)** (work/087). En un despliegue
