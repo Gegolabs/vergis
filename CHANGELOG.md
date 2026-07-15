@@ -4,6 +4,30 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.10.0 — 2026-07-14
+
+**Trío de primitivas del catálogo DSL** (work/081) — tres elementos de pieza nuevos con demanda real,
+100 % aditivos (los specs existentes renderizan idéntico). Doc:
+[`docs/catalogo-elementos.md`](docs/catalogo-elementos.md).
+
+- **`dato`** (#71) — atributo rotulado (etiqueta + valor). Es contenido/estado, no una medida:
+  tipografía de texto (distinto del `kpi`), se imprime tal cual y **jamás es interactivo**. El valor
+  se resuelve por el mismo path que `kpi.metric`; `format: date` recorta ISO/`Date` a `YYYY-MM-DD`
+  (reusa el helper de 0.9.0). Origen TX-12.
+- **`distribution` multi-métrica** (#70) — `metrics` (2+ series) reemplaza a `metric` (singular) para
+  **barras agrupadas**. El singular queda intacto; declarar ambos es error. `fold` + `color` por serie
+  + `xOffset`/`yOffset`. La cota top-N ordena categorías por la suma de las series y colapsa «(otros)»
+  sumando **cada serie por separado** (el total por serie cuadra). Origen TX-13.
+- **`series`** (#69) — líneas de 1..N series sobre un eje. Formato wide + `fold`; `mark: line` con
+  puntos. El eje x es ordinal en el **orden de llegada de las filas** (el SQL manda; no se re-ordena
+  alfabético). Desviación vs doc §4.1: `time_field`/`granularity`/`range` NO se implementan — el eje
+  lo modela la query (Gold-in-query), `x` reemplaza a `time_field`. Origen PI-17.
+- **Themes** — token `chartSeries` (paleta categórica) en `default` y `arbol`, con fallback en
+  render-chart. Charts multi-serie ciclan la paleta.
+- **`narrative` / `alert` / `comparison`** — *diseñados, no construidos*: narrative lo definirá
+  Miranda; alert requiere subsistema de delivery (su rol visual lo cubre `semaforo`); comparison simple
+  ya lo cubre `kpi.comparison`. Ver `docs/catalogo-elementos.md` §4.
+
 ## 0.9.1 — 2026-07-14
 
 - **Fix: etiqueta de display con `Date` del driver** — el driver mssql/tedious devuelve las columnas
