@@ -4,6 +4,34 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.11.0 — 2026-07-14
+
+**Miranda — agente conversacional que autora specs de PI** (cluster 077, Fase 1). Capacidad nueva del
+Producto (`@vergis/miranda` + superficie `server/miranda.ts`): un especificador crea un PI nuevo
+end-to-end conversando, sin tocar YAML — Miranda elicita → compila DSL → se auto-chequea (QC①
+interiorizado, juez ≠ autor) → previsualiza con RLS real → publica. Doc:
+[`docs/miranda.md`](docs/miranda.md).
+
+- **Todo detrás del feature flag `MIRANDA_ENABLED` (default off)** — con el flag apagado, cero
+  superficie nueva (ni rutas, ni nav, ni dependencias activas; `GET /miranda` = 404 idéntico a hoy).
+- **Envs nuevos** — `MIRANDA_ENABLED`, `MIRANDA_MODEL` (default `claude-sonnet-5`),
+  `ANTHROPIC_API_KEY`, `MIRANDA_RUBRIC_DIR` (monta `dsl.md`/`qc1.md`), `MIRANDA_CATALOG` (allowlist de
+  probes), `MIRANDA_MAX_TURNS` (40), `MIRANDA_TOKEN_BUDGET` (500k/sesión), `MIRANDA_SCOPE_GROUP`
+  (`miranda`), `MIRANDA_ANNOUNCE_WEBHOOK`. Scope `miranda` (403 sin él); autorización de la capacidad
+  independiente de la RLS del dato (preview y serving pasan por el mismo `serve-rls`).
+- **Sesiones en el governance store** — `miranda_session`/`miranda_message`/`miranda_artifact`
+  (append-only, versión por artefacto) + `miranda_seq` (semilla **PI-101**). La sesión es el ledger
+  de procedencia del PI, exportable a git.
+- **`forma` por vista en el resumen de intención** (ajuste post-diseño, hallazgo PI-17/F-01) — el
+  resumen que el usuario valida lleva `vistas[]` (`{nombre, forma: tabla|dashboard|mixta, piezas:
+  [tarjetas|graficos|tabla]}`), haciendo la intención visual validable sin leer el DSL. El self-check
+  cruza la forma declarada contra las piezas reales del draft (KPI/dato→tarjetas, chart/series/
+  distribution→graficos, table→tabla): divergencia = brecha M. Enforcement en código
+  (`crossCheckForma`), no solo prompt.
+- **Gates en código** (no solo prompt): publish solo desde `autochequeado`, sin brechas B/M, con draft
+  que valida contra el DSL; probes SQL por guardia (solo SELECT, TOP 500, allowlist de catálogo);
+  authz-blind; secretos jamás en logs/transcripts.
+
 ## 0.10.0 — 2026-07-14
 
 **Trío de primitivas del catálogo DSL** (work/081) — tres elementos de pieza nuevos con demanda real,
