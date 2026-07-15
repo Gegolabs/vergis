@@ -16,7 +16,7 @@ export class TokenBudgetExceeded extends Error {
     public used: number,
     public budget: number,
   ) {
-    super(`Presupuesto de tokens de la sesión agotado (${used}/${budget}). Pide a César ampliarlo para continuar.`)
+    super(`El presupuesto de esta sesión se agotó (${used}/${budget}); pide al administrador ampliarlo o inicia una sesión nueva.`)
     this.name = 'TokenBudgetExceeded'
   }
 }

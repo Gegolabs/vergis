@@ -81,6 +81,8 @@ export interface MirandaConfig {
   maxTurns: number
   /** Presupuesto de tokens por sesión (corta con mensaje claro al excederse). */
   tokenBudget: number
+  /** Umbral (ms) tras el cual un marcador de turno se considera huérfano (watchdog anti «pensando» eterno). */
+  orphanTurnMs: number
   /** Ruta/JSON del allowlist de catálogo (tablas/vistas que las probes pueden tocar). */
   catalogPath: string | undefined
   /** Grupo de Mira que concede el scope `miranda` (además de los admins). */
@@ -250,6 +252,7 @@ function mirandaConfig(env: Env): MirandaConfig {
     rubricDir: env['MIRANDA_RUBRIC_DIR'],
     maxTurns: num(env, 'MIRANDA_MAX_TURNS', 40),
     tokenBudget: num(env, 'MIRANDA_TOKEN_BUDGET', 500_000),
+    orphanTurnMs: num(env, 'MIRANDA_ORPHAN_TURN_MS', 10 * 60_000),
     catalogPath: env['MIRANDA_CATALOG'],
     scopeGroup: (env['MIRANDA_SCOPE_GROUP'] ?? 'miranda').trim().toLowerCase(),
     announceWebhook: env['MIRANDA_ANNOUNCE_WEBHOOK'],

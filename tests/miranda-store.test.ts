@@ -66,6 +66,22 @@ describe('MirandaStore · mensajes y presupuesto de tokens', () => {
   })
 })
 
+describe('MirandaStore · marcador de turno asíncrono', () => {
+  it('begin marca «procesando» con timestamp; end lo limpia', async () => {
+    const s = await store()
+    await s.createSession('m', 't', 'a@x.com')
+    expect((await s.getMirandaSession('m'))?.turnState).toBeUndefined()
+    await s.beginMirandaTurn('m')
+    const inTurn = await s.getMirandaSession('m')
+    expect(inTurn?.turnState).toBe('procesando')
+    expect(inTurn?.turnStartedAt).toBeTruthy()
+    await s.endMirandaTurn('m')
+    const done = await s.getMirandaSession('m')
+    expect(done?.turnState).toBeUndefined()
+    expect(done?.turnStartedAt).toBeUndefined()
+  })
+})
+
 describe('MirandaStore · artefactos append-only con versión', () => {
   it('cada append de un kind incrementa su versión; latest devuelve la mayor', async () => {
     const s = await store()

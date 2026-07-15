@@ -105,6 +105,22 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-send textarea{flex:1;background:transparent;border:none;color:var(--fg);font-family:inherit;font-size:14px;line-height:1.5;resize:none;padding:6px 4px;min-height:38px;max-height:180px;box-sizing:border-box}
 .mir-send textarea:focus{outline:none}
 .mir-send button{flex:none}
+/* Turno asíncrono: burbuja «pensando» (puntos animados CSS-only) mientras el turno corre en background. */
+.mir-thinking .bubble{display:inline-flex;align-items:center;gap:5px;color:var(--muted)}
+.mir-dots{display:inline-flex;gap:4px}
+.mir-dots i{width:6px;height:6px;border-radius:50%;background:var(--muted);display:inline-block;animation:mir-blink 1.2s infinite ease-in-out both}
+.mir-dots i:nth-child(2){animation-delay:.2s}
+.mir-dots i:nth-child(3){animation-delay:.4s}
+@keyframes mir-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.mir-dots i{animation:none;opacity:.6}}
+/* Composer deshabilitado mientras Miranda responde. */
+.mir-composer--busy{opacity:.6}
+.mir-composer .mir-busy-note{font-size:12px;color:var(--muted);margin:0 0 8px;text-align:center}
+/* Línea de presupuesto de la sesión — maquinaria, vive en la gaveta (convención work/093). */
+.mir-budget{font-size:12px;color:var(--muted);margin:14px 0 2px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:10px}
+.mir-budget b{color:var(--fg);font-weight:600}
+.mir-budget--warn{color:var(--err)}
+.mir-budget--warn b{color:var(--err)}
 .mir-intent{position:sticky;top:24px;min-width:0;display:flex;flex-direction:column}
 .mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
 /* Gaveta de intención (work/093): divisor punteado = borde de la gaveta + tirador sobre él. CSS-only:
@@ -129,8 +145,8 @@ ${AVATAR_CSS}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. `bodyClass` amplía la vista (p. ej.
  * `chat` para la superficie de Miranda: contenedor ancho). */
-export function page(brand: string, title: string, body: string, bodyClass = ''): string {
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${PAGE_CSS}</style></head><body${bodyClass ? ` class="${bodyClass}"` : ''}>
+export function page(brand: string, title: string, body: string, bodyClass = '', headExtra = ''): string {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${headExtra}<title>${escapeHtml(title)}</title><style>${PAGE_CSS}</style></head><body${bodyClass ? ` class="${bodyClass}"` : ''}>
 <button type="button" class="tsw" title="Tema" onclick="(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()">◐</button>
 <div class="bc">${escapeHtml(brand)}</div>
 <h1>${escapeHtml(title)}</h1>

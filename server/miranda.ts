@@ -32,6 +32,8 @@ import { page, readForm, redirect, send, csrfFactory, requireCsrf, CsrfError } f
 
 export interface MirandaHandler {
   tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
+  /** Espera a que terminen los turnos en background en curso (seam de tests + apagado ordenado). */
+  whenIdle(): Promise<void>
 }
 
 /** Dependencias que el server cablea (todas seams testeables). */
@@ -63,7 +65,13 @@ export interface MirandaServerDeps {
   secret: string
   brandTitle?: string
   announce?: (message: string) => Promise<void>
+  /** Umbral (ms) tras el cual un marcador de turno se considera huérfano (proceso reiniciado a mitad
+   *  de turno). Default 10 min: mayor que un turno legítimo (que puede tardar varios minutos). */
+  orphanTurnMs?: number
 }
+
+/** Marcador viejo que ningún proceso vivo sostiene ⇒ huérfano. Default 10 min. */
+const DEFAULT_ORPHAN_TURN_MS = 10 * 60_000
 
 const STATE_LABEL: Record<string, string> = {
   explorando: 'Explorando',
@@ -79,7 +87,13 @@ const IDENT_RE = /^[A-Za-z0-9_]+$/
 
 export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   const csrf = csrfFactory(deps.secret)
-  const pg = (title: string, body: string, bodyClass = '') => page(`${deps.brandTitle ?? 'Vergis'} · Miranda`, title, body, bodyClass)
+  const pg = (title: string, body: string, bodyClass = '', headExtra = '') =>
+    page(`${deps.brandTitle ?? 'Vergis'} · Miranda`, title, body, bodyClass, headExtra)
+  const orphanTurnMs = deps.orphanTurnMs ?? DEFAULT_ORPHAN_TURN_MS
+  // Turnos in-process en vuelo por sesión (fire-and-forget). Seam de `whenIdle` para tests + apagado.
+  const inflight = new Map<string, Promise<void>>()
+  /** Texto del error de sistema estándar (mismo prefijo ⚠️ que el resto). */
+  const systemError = (note: string): string => JSON.stringify([{ type: 'text', text: `⚠️ ${note}` }])
 
   /** Contexto de tools para una sesión + identidad. */
   function toolContext(sessionId: string, email: string | undefined): MirandaToolContext {
@@ -238,13 +252,50 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   }
 
   // ── Acciones ──
+  /**
+   * Turno ASÍNCRONO: persiste el mensaje del usuario + marca «turno en proceso» y dispara el
+   * procesamiento en background (promise in-process, NO bloqueante) — el POST puede redirigir de
+   * inmediato. Guardas: un solo turno por sesión (si ya hay uno en curso, no-op → el POST solo
+   * redirige a la página que muestra «pensando»); watchdog de huérfanos antes de decidir.
+   */
   async function handleMessage(sessionId: string, email: string, text: string): Promise<void> {
     const session = await deps.gov.getMirandaSession(sessionId)
     if (!session || !text) return
+    if (session.state === 'publicado') return
+    const fresh = await reapOrphan(session)
+    // Un-turno-por-sesión: si ya hay un turno vivo, este POST no arranca otro (el composer ya sale
+    // deshabilitado; esto cubre el caso de una recarga o un doble-submit).
+    if (fresh.turnState === 'procesando') return
+    await startTurn(sessionId, email, text)
+  }
+
+  /** Arranca el turno: captura el historial (ANTES de persistir el mensaje nuevo, para no duplicarlo
+   *  en el contexto del modelo), persiste el mensaje del usuario, marca el turno y despacha el fondo. */
+  async function startTurn(sessionId: string, email: string, text: string): Promise<void> {
     const history = reconstructHistory(await deps.gov.listMirandaMessages(sessionId))
-    const tools = buildToolRegistry(toolContext(sessionId, email))
     const tokensUsedBefore = await deps.gov.mirandaSessionTokens(sessionId)
+    await deps.gov.appendMirandaMessage(sessionId, 'user', JSON.stringify(text), 0)
+    await deps.gov.beginMirandaTurn(sessionId)
+    const p = runTurnBackground(sessionId, email, text, history, tokensUsedBefore)
+    inflight.set(sessionId, p)
+    p.finally(() => {
+      if (inflight.get(sessionId) === p) inflight.delete(sessionId)
+    }).catch(() => {})
+  }
+
+  /** Procesamiento del turno en background: exactamente lo que antes corría inline (`runAgentTurn` +
+   *  persistencia). El mensaje del usuario YA está persistido, así que se omite el 1er `newMessage`.
+   *  El error (incluido presupuesto agotado) se persiste como error de sistema — nunca se pierde. Al
+   *  terminar (éxito o error) limpia el marcador de turno (jamás un «pensando» eterno). */
+  async function runTurnBackground(
+    sessionId: string,
+    email: string,
+    text: string,
+    history: AnthropicMessage[],
+    tokensUsedBefore: number,
+  ): Promise<void> {
     try {
+      const tools = buildToolRegistry(toolContext(sessionId, email))
       const result = await runAgentTurn({
         transport: deps.transport,
         model: deps.model,
@@ -256,17 +307,42 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         tokenBudget: deps.tokenBudget,
         tokensUsedBefore,
       })
-      // Persistir los mensajes nuevos; los tokens del turno se anotan en el 1er mensaje (user).
-      for (let i = 0; i < result.newMessages.length; i += 1) {
-        const m = result.newMessages[i]
-        const role = roleOf(m)
-        await deps.gov.appendMirandaMessage(sessionId, role, JSON.stringify(m.content), i === 0 ? result.tokensUsed : 0)
+      // El mensaje del usuario (newMessages[0]) ya está persistido; se anotan los del asistente/tool.
+      // Los tokens del turno se anclan en el 1er mensaje persistido (el usuario quedó en 0).
+      const rest = result.newMessages.slice(1)
+      for (let i = 0; i < rest.length; i += 1) {
+        const m = rest[i]
+        await deps.gov.appendMirandaMessage(sessionId, roleOf(m), JSON.stringify(m.content), i === 0 ? result.tokensUsed : 0)
       }
     } catch (e) {
       const note = e instanceof TokenBudgetExceeded ? e.message : `Error del sistema al conversar con Miranda: ${e instanceof Error ? e.message : String(e)}`
-      await deps.gov.appendMirandaMessage(sessionId, 'user', JSON.stringify(text), 0)
-      await deps.gov.appendMirandaMessage(sessionId, 'assistant', JSON.stringify([{ type: 'text', text: `⚠️ ${note}` }]), 0)
+      await deps.gov.appendMirandaMessage(sessionId, 'assistant', systemError(note), 0)
+    } finally {
+      try {
+        await deps.gov.endMirandaTurn(sessionId)
+      } catch {
+        /* el marcador se reapará por watchdog si el store falló acá */
+      }
     }
+  }
+
+  /** Watchdog de huérfanos: un marcador «procesando» más viejo que `orphanTurnMs` sin un turno vivo
+   *  en `inflight` (proceso reiniciado a mitad de turno) se considera muerto → limpia el marcador y
+   *  persiste el error de sistema estándar. Devuelve la sesión fresca (con el marcador ya limpio). */
+  async function reapOrphan(session: MirandaSession): Promise<MirandaSession> {
+    if (session.turnState !== 'procesando') return session
+    if (inflight.has(session.id)) return session // turno vivo en este proceso: no es huérfano
+    const startedAt = session.turnStartedAt ? Date.parse(session.turnStartedAt) : NaN
+    const age = Number.isNaN(startedAt) ? Infinity : Date.now() - startedAt
+    if (age < orphanTurnMs) return session // aún dentro de la ventana: se deja pensar
+    await deps.gov.endMirandaTurn(session.id)
+    await deps.gov.appendMirandaMessage(
+      session.id,
+      'assistant',
+      systemError('Error del sistema: el turno se interrumpió (posible reinicio del servidor). Vuelve a enviar tu mensaje.'),
+      0,
+    )
+    return (await deps.gov.getMirandaSession(session.id)) ?? session
   }
 
   async function handlePublish(sessionId: string, res: ServerResponse): Promise<boolean> {
@@ -323,37 +399,86 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   }
 
   async function sessionPage(sessionId: string, email: string, token: string): Promise<string> {
-    const s = await deps.gov.getMirandaSession(sessionId)
-    if (!s) return pg('No encontrada', `<p class="msg err">Sesión no encontrada.</p>`)
+    const s0 = await deps.gov.getMirandaSession(sessionId)
+    if (!s0) return pg('No encontrada', `<p class="msg err">Sesión no encontrada.</p>`)
+    // Watchdog: si el marcador quedó huérfano (reinicio a mitad de turno), se reapa acá antes de pintar.
+    const s = await reapOrphan(s0)
+    const pending = s.turnState === 'procesando'
     const messages = await deps.gov.listMirandaMessages(sessionId)
-    const chat = renderChat(messages, { youInitials: youInitialsOf(email) })
+    let chat = renderChat(messages, { youInitials: youInitialsOf(email) })
+    // Mientras piensa: el mensaje del usuario ya está en el hilo; se añade la burbuja «pensando».
+    if (pending) chat += thinkingBubble()
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
     const intentPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content)
-    const composer = s.state === 'publicado'
-      ? `<div class="mir-composer"><p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p></div>`
-      : `<div class="mir-composer">
+    const tokensUsed = await deps.gov.mirandaSessionTokens(sessionId)
+    const aside = `${intentPanel}${renderBudgetLine(tokensUsed, deps.tokenBudget)}`
+    let composer: string
+    if (s.state === 'publicado') {
+      composer = `<div class="mir-composer"><p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p></div>`
+    } else if (pending) {
+      // Composer DESHABILITADO mientras hay turno en proceso (un-turno-por-sesión).
+      composer = `<div class="mir-composer mir-composer--busy">
+           <p class="mir-busy-note">Miranda está respondiendo… la página se actualiza sola.</p>
+           <div class="mir-send" aria-disabled="true">
+             <textarea rows="2" placeholder="Miranda está respondiendo…" disabled></textarea>
+             <button class="add" disabled>Enviar</button>
+           </div>
+         </div>`
+    } else {
+      composer = `<div class="mir-composer">
            <form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/message" class="mir-send">
              <input type="hidden" name="_csrf" value="${token}">
              <textarea name="text" rows="2" placeholder="Escríbele a Miranda…" required></textarea>
              <button class="add">Enviar</button>
            </form>
          </div>`
+    }
     // El sidebar es discreto mientras no haya un resumen de intención que mostrar.
     const intentEmpty = !intentArt
     const convInner = `<h2>Conversación</h2>
            <div class="mir-thread">${chat}</div>
            ${composer}`
+    // Meta-refresh SOLO en estado pendiente (cuando no hay turno, cero refresh — no molestar).
+    const headExtra = pending ? `<meta http-equiv="refresh" content="4">` : ''
     return pg(
       s.title,
       `<p><a href="/miranda">← Sesiones</a> · <span class="tag">${escapeHtml(STATE_LABEL[s.state] ?? s.state)}</span></p>
-       ${renderMirCols(convInner, intentPanel, intentEmpty)}`,
+       ${renderMirCols(convInner, aside, intentEmpty)}`,
       'chat',
+      headExtra,
     )
   }
 
-  return { tryHandle }
+  return {
+    tryHandle,
+    whenIdle: async () => {
+      await Promise.allSettled([...inflight.values()])
+    },
+  }
+}
+
+/** Burbuja «pensando» de Miranda: indicador sobrio con puntos animados (CSS-only, cero JS). */
+export function thinkingBubble(): string {
+  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div><div class="bubble" role="status" aria-label="Miranda está pensando"><span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
+}
+
+/** Compacta un conteo de tokens a una etiqueta corta: 407000 → «407k», 4000000 → «4M». */
+export function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+  }
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(Math.max(0, Math.trunc(n)))
+}
+
+/** Línea de presupuesto de la sesión (maquinaria — vive en la gaveta). Acento de advertencia sobre 80%. */
+export function renderBudgetLine(used: number, budget: number): string {
+  if (!budget || budget <= 0) return ''
+  const warn = used / budget >= 0.8
+  return `<div class="mir-budget${warn ? ' mir-budget--warn' : ''}"><span>Uso de la sesión</span><span><b>${fmtTokens(used)}</b> / ${fmtTokens(budget)}</span></div>`
 }
 
 /**

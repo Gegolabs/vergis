@@ -123,6 +123,7 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
     let r = mkRes()
     await h.tryHandle(mkReq('/miranda/api/s/e2e/message', 'POST', { _csrf: token, text: 'quiero saldos por empresa' }), r.res)
     await r.p
+    await h.whenIdle() // el turno corre en background; esperamos a que termine
     expect((await gov.getMirandaSession('e2e'))?.state).toBe('borrador') // update_intent_summary lo movió
     const intentArt = await gov.latestMirandaArtifact('e2e', 'intent_summary')
     expect(intentArt).not.toBeNull()
@@ -139,6 +140,7 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
     r = mkRes()
     await h.tryHandle(mkReq('/miranda/api/s/e2e/message', 'POST', { _csrf: token, text: 'compón el spec y chequéalo' }), r.res)
     await r.p
+    await h.whenIdle()
     expect(await gov.latestMirandaArtifact('e2e', 'spec_draft')).not.toBeNull()
     const qc = await gov.latestMirandaArtifact('e2e', 'qc_report')
     expect(JSON.parse(qc!.content).veredicto).toBe('APROBADA')

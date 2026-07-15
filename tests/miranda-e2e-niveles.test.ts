@@ -79,6 +79,7 @@ describe('WP3 · e2e multi-nivel + data_request con nivel/acción', () => {
     const r = mkRes()
     await h.tryHandle(mkReq('/miranda/api/s/n1/message', 'POST', { _csrf: token, text: 'quiero un balance consolidado de todas las empresas de SAP' }), r.res)
     await r.p
+    await h.whenIdle()
 
     const art = await gov.latestMirandaArtifact('n1', 'data_request')
     expect(art).not.toBeNull()
@@ -101,6 +102,7 @@ describe('WP3 · e2e multi-nivel + data_request con nivel/acción', () => {
     const r = mkRes()
     await h.tryHandle(mkReq('/miranda/api/s/n2/message', 'POST', { _csrf: token, text: 'describe las fuentes' }), r.res)
     await r.p
+    await h.whenIdle()
     // El turno completó (llegó al texto final) pese al rechazo de la fuente nivel-2 — se manejó como error de tool.
     const msgs = await gov.listMirandaMessages('n2')
     const joined = msgs.map((m) => m.content).join(' ')

@@ -76,7 +76,7 @@ describe('routes · Miranda tras el flag', () => {
       return true
     })
     const { res, calls, done } = mkRes()
-    createRequestHandler(deps({ getMiranda: () => ({ tryHandle }) }))(mkReq('/miranda'), res)
+    createRequestHandler(deps({ getMiranda: () => ({ tryHandle, whenIdle: async () => {} }) }))(mkReq('/miranda'), res)
     await done
     expect(tryHandle).toHaveBeenCalled()
     expect(calls.body).toBe('miranda')
@@ -84,7 +84,7 @@ describe('routes · Miranda tras el flag', () => {
   it('flag ON pero tryHandle no atiende (false) → 404', async () => {
     const tryHandle = vi.fn(async () => false)
     const { res, calls, done } = mkRes()
-    createRequestHandler(deps({ getMiranda: () => ({ tryHandle }) }))(mkReq('/miranda/nope'), res)
+    createRequestHandler(deps({ getMiranda: () => ({ tryHandle, whenIdle: async () => {} }) }))(mkReq('/miranda/nope'), res)
     await done
     expect(calls.status).toBe(404)
   })

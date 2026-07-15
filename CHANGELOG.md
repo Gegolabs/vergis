@@ -4,6 +4,36 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.13.1 — 2026-07-15
+
+**Miranda: turno asíncrono (el navegador no espera colgado) + presupuesto visible en la gaveta**
+(work/098, cluster 077). Un turno de Miranda que tarda minutos ya no deja el navegador en «waiting
+for server»: el POST retorna de inmediato y la página se refresca sola hasta que llega la respuesta.
+Comportamiento de la superficie HTTP; el contrato del agente (`runAgentTurn`, tools, store de
+mensajes) NO cambia — cambia *cuándo* se ejecuta (background) y la superficie. Apila sobre el arco de
+UI 089–093 y voz/niveles 094 (intactos, con sus tests).
+
+- **Turno asíncrono con marcador `procesando`** (`server/miranda.ts`, `governance-store`): el
+  `POST /miranda/api/s/:id/message` persiste el mensaje del usuario, marca la sesión con «turno en
+  proceso» (`miranda_session.turn_state` + `turn_started_at`, migración idempotente) y dispara el
+  procesamiento **en background in-process** (promise no bloqueante) → responde **303 de inmediato**.
+  El fondo hace exactamente lo que antes corría inline (`runAgentTurn` + persistencia) y al terminar
+  (éxito o error) limpia el marcador.
+- **La página mientras piensa**: si hay turno en proceso, el hilo muestra el mensaje del usuario + una
+  burbuja de Miranda «pensando» (puntos animados **CSS-only**, respeta `prefers-reduced-motion`), el
+  composer sale **deshabilitado** y la página lleva `<meta http-equiv="refresh" content="4">` **solo
+  en ese estado** (sin turno pendiente, cero refresh). Sin JS de aplicación, sin SSE, sin dependencias.
+- **Guardas**: un-turno-por-sesión (un 2º POST con turno vivo no arranca otro) y **watchdog de
+  huérfanos** — un marcador más viejo que `MIRANDA_ORPHAN_TURN_MS` (default 10 min) sin turno vivo en
+  el proceso (reinicio a mitad de turno) se limpia y persiste el error de sistema estándar: jamás un
+  «pensando» eterno. Los errores de turno (incluido presupuesto agotado) se persisten y quedan
+  visibles como error de sistema.
+- **Presupuesto de la sesión visible en la GAVETA** (maquinaria — su lugar por convención work/093):
+  una línea sobria «Uso de la sesión: Xk / Yk» con acento de advertencia (`--err`) sobre el 80%.
+- **Mensaje de presupuesto agotado re-redactado**: se quita el nombre propio hardcodeado. Ahora:
+  «El presupuesto de esta sesión se agotó (…); pide al administrador ampliarlo o inicia una sesión
+  nueva.»
+
 ## 0.13.0 — 2026-07-15
 
 **Miranda habla NEGOCIO + censo de fuentes multi-nivel** (work/094, cluster 077). Miranda deja de

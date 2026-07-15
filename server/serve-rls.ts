@@ -980,6 +980,7 @@ if (config.miranda.enabled) {
       rubric,
       maxTurns: config.miranda.maxTurns,
       tokenBudget: config.miranda.tokenBudget,
+      orphanTurnMs: config.miranda.orphanTurnMs,
       catalog,
       identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
       hasScope: async (email) => (await govForMiranda.isAdmin(email)) || (await govForMiranda.isMember(config.miranda.scopeGroup, email)),
