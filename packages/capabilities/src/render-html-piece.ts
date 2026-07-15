@@ -7,7 +7,7 @@ import { getTheme, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
 import { renderTable } from './render-table'
-import { renderDistribution } from './render-chart'
+import { renderDistribution, renderSeries } from './render-chart'
 import { renderInteractiveScript } from './interactive-script'
 import { ctxQuery, formatValue } from './piece-util'
 import type {
@@ -225,8 +225,12 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
       return `<section class="markdown">${renderMarkdown(String(node.content ?? ''))}</section>`
     case 'kpi':
       return renderKpi(node, opts)
+    case 'dato':
+      return renderDato(node)
     case 'distribution':
       return renderDistribution(node, opts.tokens)
+    case 'series':
+      return renderSeries(node, opts.tokens)
     case 'table':
       return renderTable(node, opts)
     case 'semaforo':
@@ -255,6 +259,21 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
     `<div class="kpi-value">${escapeHtml(value)}</div>` +
     `<div class="kpi-label">${escapeHtml(String(node.label ?? ''))}${comparison}</div>` +
     `</section>`
+  )
+}
+
+/**
+ * `dato` (TX-12) — atributo rotulado: etiqueta + valor en tipografía de texto (NO tarjeta-medida).
+ * Es contenido/estado, no una métrica: se imprime tal cual y JAMÁS es interactivo (sin data-attrs de
+ * recompute). El valor ya viene resuelto por compose; acá solo se formatea y escapa.
+ */
+function renderDato(node: ResolvedNode): string {
+  const value = formatValue(node.value, node.format)
+  return (
+    `<div class="dato">` +
+    `<span class="dato-k">${escapeHtml(String(node.label ?? ''))}</span>` +
+    `<span class="dato-v">${escapeHtml(value)}</span>` +
+    `</div>`
   )
 }
 
