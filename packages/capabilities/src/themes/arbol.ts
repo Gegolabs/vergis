@@ -170,6 +170,11 @@ export const arbolTheme: Theme = {
   .kpi[data-accent="purple"] .kpi-value { color: var(--purple); }
   .kpi[data-accent="gray"] .kpi-value { color: var(--gray); }
 
+  /* dato (TX-12): atributo rotulado — tipografía de texto, NO tarjeta-medida (distinto del kpi) */
+  .dato { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }
+  .dato-k { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .04em; }
+  .dato-v { font-size: 14px; color: var(--fg); font-weight: 600; }
+
   .chart, .table, .semaforo { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   .chart svg { max-width: 100%; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }

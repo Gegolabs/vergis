@@ -225,6 +225,8 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
       return `<section class="markdown">${renderMarkdown(String(node.content ?? ''))}</section>`
     case 'kpi':
       return renderKpi(node, opts)
+    case 'dato':
+      return renderDato(node)
     case 'distribution':
       return renderDistribution(node, opts.tokens)
     case 'table':
@@ -255,6 +257,21 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
     `<div class="kpi-value">${escapeHtml(value)}</div>` +
     `<div class="kpi-label">${escapeHtml(String(node.label ?? ''))}${comparison}</div>` +
     `</section>`
+  )
+}
+
+/**
+ * `dato` (TX-12) — atributo rotulado: etiqueta + valor en tipografía de texto (NO tarjeta-medida).
+ * Es contenido/estado, no una métrica: se imprime tal cual y JAMÁS es interactivo (sin data-attrs de
+ * recompute). El valor ya viene resuelto por compose; acá solo se formatea y escapa.
+ */
+function renderDato(node: ResolvedNode): string {
+  const value = formatValue(node.value, node.format)
+  return (
+    `<div class="dato">` +
+    `<span class="dato-k">${escapeHtml(String(node.label ?? ''))}</span>` +
+    `<span class="dato-v">${escapeHtml(value)}</span>` +
+    `</div>`
   )
 }
 
