@@ -4,6 +4,30 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.12.4 — 2026-07-15
+
+**Miranda — se pliega la COLUMNA derecha entera (no la tarjeta); la conversación se expande a ancho
+completo** (work/092, 4ª iteración). Cambio puramente de **presentación** en `server/miranda.ts`
+(`renderIntentPanel` + nuevo `renderMirCols`) y `server/ui.ts` (CSS); **CSS-only, cero JS**; cero cambio
+a agente, tools, self-check o store. Mantiene `0.12.1`/`0.12.2` y **el ítem 1 de `0.12.3`** (traza de
+tools expandible) intactos con sus tests.
+
+- **Revierte el disclosure de la tarjeta de intención (ítem 2 de `0.12.3`).** El «Resumen de intención»
+  vuelve a ser una **tarjeta plana** (`<h2>` + contenido), sin `<details class="mir-intent-d">` envolvente
+  ni hint de estado. No era lo pedido: lo que se pliega es la columna, no la tarjeta.
+- **Plegado de la columna derecha, CSS-only.** Un `<input type="checkbox" class="col-toggle">` oculto
+  (visually-hidden pero **focusable por teclado**) más dos `<label>` como botón; `:has(> .col-toggle:checked)`
+  dirige el grid `.mir-cols` a **una sola columna** y oculta el sidebar `.mir-intent`, de modo que la
+  conversación ocupa **todo el ancho**. Afordancias: «Ocultar ›» en el sidebar (visible al expandir) y una
+  **pestaña «‹ Intención» fija al borde derecho** que reaparece solo al colapsar (afordancia de reapertura
+  siempre visible). `:has()` soportado por el Chrome objetivo; foco visible vía `:focus-visible`.
+- **Sin persistencia entre turnos** (decisión del plan): cada envío recarga la página → default expandido;
+  anotado como posible mejora barata (cookie/param server-rendered).
+- Ambos temas (Gruvbox oscuro default + `data-theme="blanco"`) vía CSS vars existentes; responsivo <900px
+  (ya apila) sigue usable — el toggle oculta el sidebar y la pestaña de reapertura es fija. Tests:
+  `tests/miranda-chat-render.test.ts` (los de traza de `0.12.3` intactos; los del panel de intención
+  reescritos a tarjeta plana; nuevos casos de `renderMirCols` y de `PAGE_CSS` para el plegado de columna).
+
 ## 0.12.3 — 2026-07-15
 
 **Miranda — dos disclosures nativos: traza de tools expandible + panel de intención colapsable**

@@ -105,14 +105,18 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-send textarea{flex:1;background:transparent;border:none;color:var(--fg);font-family:inherit;font-size:14px;line-height:1.5;resize:none;padding:6px 4px;min-height:38px;max-height:180px;box-sizing:border-box}
 .mir-send textarea:focus{outline:none}
 .mir-send button{flex:none}
-.mir-intent{position:sticky;top:24px;min-width:0}
+.mir-intent{position:sticky;top:24px;min-width:0;display:flex;flex-direction:column}
 .mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
-.mir-intent-d>summary{cursor:pointer;list-style:none;display:flex;align-items:center}
-.mir-intent-d>summary::-webkit-details-marker{display:none}
-.mir-intent-d>summary h2{margin:14px 0 10px}
-.mir-intent-d>summary::after{content:"▸";color:var(--muted);font-size:11px;margin-left:auto;transition:transform .15s ease}
-.mir-intent-d[open]>summary::after{transform:rotate(90deg)}
-.mir-hint{color:var(--muted);font-size:11px;text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}
+/* Plegado de la columna derecha, CSS-only: checkbox oculto (accesible por teclado) + labels; :has() dirige el grid. */
+.col-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+.mir-collapse-btn{cursor:pointer;user-select:none;align-self:flex-end;font-size:11.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:3px 9px;margin-bottom:2px}
+.mir-collapse-btn:hover{color:var(--fg);border-color:var(--muted)}
+.mir-reopen{display:none;position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:20;cursor:pointer;user-select:none;writing-mode:vertical-rl;background:var(--card);border:1px solid var(--border);border-right:none;border-radius:9px 0 0 9px;padding:14px 7px;font-size:12px;color:var(--fg);box-shadow:0 2px 12px rgba(0,0,0,.14)}
+.mir-reopen:hover{color:var(--accent)}
+.mir-cols:has(> .col-toggle:checked){grid-template-columns:1fr}
+.mir-cols:has(> .col-toggle:checked) .mir-intent{display:none}
+.mir-cols:has(> .col-toggle:checked) .mir-reopen{display:block}
+.col-toggle:focus-visible ~ .mir-intent .mir-collapse-btn,.col-toggle:focus-visible ~ .mir-reopen{outline:2px solid var(--accent);outline-offset:2px}
 @media (max-width:900px){body.chat{max-width:920px}.mir-cols{grid-template-columns:1fr;gap:20px}.mir-intent{position:static}.turn{max-width:92%}}
 ${AVATAR_CSS}`
 

@@ -337,17 +337,13 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
          </div>`
     // El sidebar es discreto mientras no haya un resumen de intención que mostrar.
     const intentEmpty = !intentArt
+    const convInner = `<h2>Conversación</h2>
+           <div class="mir-thread">${chat}</div>
+           ${composer}`
     return pg(
       s.title,
       `<p><a href="/miranda">← Sesiones</a> · <span class="tag">${escapeHtml(STATE_LABEL[s.state] ?? s.state)}</span></p>
-       <div class="mir-cols">
-         <section class="mir-conv">
-           <h2>Conversación</h2>
-           <div class="mir-thread">${chat}</div>
-           ${composer}
-         </section>
-         <aside class="mir-intent${intentEmpty ? ' mir-intent--empty' : ''}">${intentPanel}</aside>
-       </div>`,
+       ${renderMirCols(convInner, intentPanel, intentEmpty)}`,
       'chat',
     )
   }
@@ -356,10 +352,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
 }
 
 /**
- * Panel de intención de la sesión. El bloque «Resumen de intención» (título + resumen + validar +
- * preview) va dentro de un `<details>` **colapsable**: abierto por default cuando hay resumen, cerrado
- * cuando está vacío (no ocupa el sidebar angosto). El self-check, publicar y el DSL quedan fuera del
- * disclosure, como secciones propias. Función pura (server-rendered, cero JS). */
+ * Panel de intención de la sesión: «Resumen de intención» (título + resumen + validar + preview),
+ * self-check, publicar y el DSL, apilados como tarjeta **plana** (no hay disclosure envolvente — el
+ * plegado ahora es de la COLUMNA entera, ver `renderMirCols`). Función pura (server-rendered, cero JS). */
 export function renderIntentPanel(
   intentJson: string | undefined,
   s: MirandaSession,
@@ -406,11 +401,26 @@ export function renderIntentPanel(
   const dslToggle = draftYaml
     ? `<details style="margin-top:12px"><summary class="sub">ver DSL (read-only)</summary><pre style="overflow:auto;background:var(--card);padding:12px;border-radius:8px;font-size:12px">${escapeHtml(draftYaml)}</pre></details>`
     : ''
-  // Abierto cuando hay resumen; cerrado cuando está vacío. Hint de estado en el summary.
-  const openAttr = intentJson ? ' open' : ''
-  const hint = intentJson ? (s.state === 'borrador' ? '' : ' <span class="mir-hint">(validado)</span>') : ' <span class="mir-hint">(vacío)</span>'
-  const intentBlock = `<details class="mir-intent-d"${openAttr}><summary><h2>Resumen de intención${hint}</h2></summary><div class="mir-intent-body">${summary}${validateBtn}${preview}</div></details>`
-  return `${intentBlock}${qcPanel}${publishBtn}${dslToggle}`
+  return `<h2>Resumen de intención</h2>${summary}${validateBtn}${preview}${qcPanel}${publishBtn}${dslToggle}`
+}
+
+/**
+ * Ensambla la grilla de dos columnas (conversación + sidebar de intención) con el mecanismo de
+ * **plegado de la columna derecha**, CSS-only: un `<input type="checkbox">` oculto (accesible por
+ * teclado) más `<label>` como botón; `:has(> .col-toggle:checked)` en `PAGE_CSS` dirige el grid a una
+ * sola columna y oculta el sidebar, de modo que la conversación se expande a ancho completo. Dos
+ * afordancias `<label for>`: «Ocultar ›» dentro del sidebar (visible al expandir) y una pestaña
+ * «‹ Intención» fija al borde derecho (visible solo al colapsar, para reabrir). Cero JS.
+ * El estado NO persiste entre turnos (cada envío recarga la página → default expandido). */
+export function renderMirCols(convInner: string, asideInner: string, intentEmpty: boolean): string {
+  const id = 'mir-col-toggle'
+  const emptyCls = intentEmpty ? ' mir-intent--empty' : ''
+  return `<div class="mir-cols">
+         <input type="checkbox" class="col-toggle" id="${id}" aria-label="Plegar u ocultar la columna de intención">
+         <section class="mir-conv">${convInner}</section>
+         <aside class="mir-intent${emptyCls}"><label for="${id}" class="mir-collapse-btn" title="Ocultar la columna de intención">Ocultar ›</label>${asideInner}</aside>
+         <label for="${id}" class="mir-reopen" title="Mostrar la columna de intención">‹ Intención</label>
+       </div>`
 }
 
 // ── Helpers puros ──

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, renderTraceDetail, renderIntentPanel, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderIntentPanel, renderMirCols, youInitialsOf } from '../server/miranda'
+import { PAGE_CSS } from '../server/ui'
 import type { MirandaSession } from '@vergis/capabilities'
 
 /** Cuenta ocurrencias no solapadas de `needle` en `hay`. */
@@ -226,7 +227,7 @@ describe('renderChat · disclosure de la traza (detalle por paso)', () => {
   })
 })
 
-describe('renderIntentPanel · panel colapsable', () => {
+describe('renderIntentPanel · tarjeta plana (091 ítem 2 revertido)', () => {
   const session = (state: MirandaSession['state']): MirandaSession => ({ id: 's1', title: 'PI de saldos', state })
   const intent = JSON.stringify({
     titulo: 'Saldos por empresa',
@@ -237,24 +238,48 @@ describe('renderIntentPanel · panel colapsable', () => {
     pendientes_de_datos: [],
   })
 
-  it('el resumen de intención va dentro de un <details> (con summary del título)', () => {
+  it('el resumen de intención es una tarjeta PLANA — sin <details> envolvente', () => {
     const html = renderIntentPanel(intent, session('borrador'), 'tok', 's1')
-    expect(html).toContain('<details class="mir-intent-d"')
-    expect(html).toContain('<summary>')
-    expect(html).toContain('Resumen de intención')
+    expect(html).toContain('<h2>Resumen de intención</h2>')
     expect(html).toContain('Saldos por empresa')
+    // ya NO hay disclosure envolvente en el panel de intención.
+    expect(html).not.toContain('mir-intent-d')
   })
 
-  it('abierto por default cuando HAY resumen', () => {
-    const html = renderIntentPanel(intent, session('borrador'), 'tok', 's1')
-    expect(html).toContain('<details class="mir-intent-d" open>')
-  })
-
-  it('cerrado (sin open) y con hint «(vacío)» cuando NO hay resumen', () => {
+  it('sin resumen, muestra el texto de vacío como tarjeta plana (sin <details> ni hint)', () => {
     const html = renderIntentPanel(undefined, session('borrador'), 'tok', 's1')
-    expect(html).toContain('<details class="mir-intent-d">')
-    expect(html).not.toContain('mir-intent-d" open')
-    expect(html).toContain('(vacío)')
+    expect(html).toContain('<h2>Resumen de intención</h2>')
+    expect(html).not.toContain('mir-intent-d')
+    expect(html).toContain('Aún no hay un resumen de intención')
+  })
+})
+
+describe('renderMirCols · plegado de la columna derecha (CSS-only)', () => {
+  it('trae el checkbox oculto y ambas afordancias (ocultar dentro del sidebar, reabrir en el borde)', () => {
+    const html = renderMirCols('<h2>Conversación</h2>', '<h2>Resumen de intención</h2>', false)
+    // checkbox oculto que dirige el grid vía :has().
+    expect(html).toContain('<input type="checkbox" class="col-toggle" id="mir-col-toggle"')
+    // afordancia para colapsar (dentro del sidebar) y afordancia para reabrir (pestaña de borde).
+    expect(html).toContain('class="mir-collapse-btn"')
+    expect(html).toContain('class="mir-reopen"')
+    // ambos labels apuntan al mismo checkbox.
+    expect(count(html, 'for="mir-col-toggle"')).toBe(2)
+    // el sidebar y la conversación siguen presentes.
+    expect(html).toContain('class="mir-conv"')
+    expect(html).toContain('class="mir-intent')
+  })
+
+  it('marca el sidebar como vacío cuando corresponde', () => {
+    expect(renderMirCols('c', 'a', true)).toContain('mir-intent mir-intent--empty')
+    expect(renderMirCols('c', 'a', false)).not.toContain('mir-intent--empty')
+  })
+
+  it('PAGE_CSS: colapsado ⇒ grid a 1 columna, sidebar oculto y pestaña de reapertura visible', () => {
+    expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked){grid-template-columns:1fr}')
+    expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked) .mir-intent{display:none}')
+    expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked) .mir-reopen{display:block}')
+    // la pestaña de reapertura arranca oculta (solo aparece al colapsar).
+    expect(PAGE_CSS).toContain('.mir-reopen{display:none')
   })
 })
 
