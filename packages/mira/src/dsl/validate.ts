@@ -138,7 +138,22 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   // clave `data:` colgante, que delata que la fuente quedó sin cablear. (La existencia del dataset
   // y del campo la cubren los pasos 2 y 4 una vez que el eje es un data.<...> recolectable.)
   for (const d of pieces.flatMap((pc) => collectDistributions(pc))) {
-    for (const axis of ['dimension', 'metric'] as const) {
+    const hasMetrics = Array.isArray(d['metrics']) && (d['metrics'] as unknown[]).length > 0
+    const hasMetric = d['metric'] != null
+    // `metric` (una serie) y `metrics` (varias, agrupadas) son mutuamente excluyentes.
+    if (hasMetric && hasMetrics) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'distribution-metric-metrics-collision',
+        path: 'piece -> distribution',
+        message: `Un gráfico distribution declara 'metric' (una serie) y 'metrics' (varias) a la vez; son mutuamente excluyentes.`,
+        remediation: `Dejar solo 'metric: data.<dataset>.<campo>' (una barra por categoría) o solo 'metrics: [{ field, label }, ...]' (barras agrupadas).`,
+      })
+    }
+    // `dimension` SIEMPRE es una ruta completa data.<dataset>.<campo>; en modo singular, `metric`
+    // también. En modo agrupado, `metric` no aplica y las series viven en `metrics`.
+    const axes: ('dimension' | 'metric')[] = hasMetrics ? ['dimension'] : ['dimension', 'metric']
+    for (const axis of axes) {
       const v = d[axis]
       if (typeof v !== 'string' || !v.startsWith('data.') || stripDataRef(v).split('.').length < 2) {
         throw new VergisError({
@@ -149,6 +164,36 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
           message: `El eje '${axis}' de un gráfico distribution debe ser una ruta completa data.<dataset>.<campo> (como un kpi); recibió ${JSON.stringify(v ?? null)}.`,
           remediation: `Escribir '${axis}: data.<dataset>.<campo>'. El gráfico NO lee una clave 'data:' separada; su fuente sale de dimension/metric.`,
         })
+      }
+    }
+    // Modo agrupado: cada serie de `metrics` es un CAMPO pelado del dataset de `dimension` (no una
+    // ruta data.*, por eso el barrido de refs no lo alcanza). Exigir `field` y, si el dataset declara
+    // shape, que el campo exista — un typo dejaría la serie en 0/vacía en silencio.
+    if (hasMetrics) {
+      const dsName = stripDataRef(String(d['dimension'])).split('.')[0]
+      const cds = dsName ? s.data[dsName] : undefined
+      for (const [i, m] of (d['metrics'] as { field?: unknown; label?: unknown }[]).entries()) {
+        const field = m && typeof m.field === 'string' ? m.field : ''
+        if (!field) {
+          throw new VergisError({
+            error: 'mira/spec-invalid',
+            code: 'distribution-metrics-field-missing',
+            path: `piece -> distribution.metrics[${i}].field`,
+            value: (m?.field ?? null) as never,
+            message: `Cada serie de un distribution agrupado requiere 'field' (un campo del dataset de dimension).`,
+            remediation: `Declarar 'field' en cada entrada de metrics, p.ej. metrics: [{ field: plantas_base, label: "Base" }].`,
+          })
+        }
+        if (cds?.shape?.fields && !(field in cds.shape.fields)) {
+          throw new VergisError({
+            error: 'mira/spec-invalid',
+            code: 'distribution-metrics-field-dangling',
+            path: `piece -> distribution.metrics[${i}].field`,
+            value: field,
+            message: `La serie '${field}' del distribution agrupado no está declarada en data.${dsName}.shape.fields.`,
+            remediation: `Declarar '${field}' en shape.fields de '${dsName}' o corregir el campo de la serie.`,
+          })
+        }
       }
     }
     if ('data' in d) {

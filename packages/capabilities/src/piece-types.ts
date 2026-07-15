@@ -98,8 +98,14 @@ export interface ResolvedNode {
   rows?: Record<string, unknown>[]
   dimensionField?: string
   metricField?: string
+  /** `distribution` multi-métrica: 2+ series agrupadas (barras). Presente ⇒ modo agrupado. */
+  metricsSpec?: { field: string; label: string }[]
   orientation?: string
   title?: string
+  /** `series`: campo del eje x (categórico/ordinal; el SQL manda el orden de las filas). */
+  xField?: string
+  /** `series`: 1..N series (formato wide, una columna por serie). */
+  seriesSpec?: { field: string; label: string }[]
   columnsSpec?: TableColumn[]
   labelField?: string
   presentField?: string

@@ -11,6 +11,9 @@ export interface ThemeTokens {
   chartText: string
   /** Color de grilla/ejes suaves (opcional). */
   chartAxis?: string
+  /** Paleta categórica para charts multi-serie (líneas de `series`, barras agrupadas de
+   *  `distribution` multi-métrica). Se cicla si hay más series que colores. Fallback en render-chart. */
+  chartSeries?: string[]
 }
 
 export interface DashboardMeta {

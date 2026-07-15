@@ -51,7 +51,13 @@ function formatDateTime(date?: string | Date): string {
  */
 export const arbolTheme: Theme = {
   name: 'arbol',
-  tokens: { chartBar: '#b8bb26', chartText: '#ebdbb2', chartAxis: '#504945' },
+  tokens: {
+    chartBar: '#b8bb26',
+    chartText: '#ebdbb2',
+    chartAxis: '#504945',
+    // Acentos Gruvbox: verde · amarillo · azul · naranja · púrpura · rojo · aqua · gris.
+    chartSeries: ['#b8bb26', '#fabd2f', '#83a598', '#fe8019', '#d3869b', '#fb4934', '#8ec07c', '#a89984'],
+  },
   palettes: [
     { id: 'gruvbox', label: 'Oscuro' },
     { id: 'claro', label: 'Claro' },

@@ -4,7 +4,12 @@ import type { Theme } from './index'
 /** Theme claro por defecto (el look base de v0.1). */
 export const defaultTheme: Theme = {
   name: 'default',
-  tokens: { chartBar: '#2563eb', chartText: '#334155', chartAxis: '#e2e8f0' },
+  tokens: {
+    chartBar: '#2563eb',
+    chartText: '#334155',
+    chartAxis: '#e2e8f0',
+    chartSeries: ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ea580c', '#65a30d'],
+  },
   wrap({ title, body, controls }) {
     // El theme default es claro y sin paletas conmutables; `palette` no aplica.
     const header = controls ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">${controls}</div>` : ''
