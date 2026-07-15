@@ -9,7 +9,8 @@ export { guardProbeSql, referencedTables, SqlGuardError, type SqlGuardOptions, t
 export { buildToolRegistry, type ToolRegistry, type ToolDefinition } from './tools/registry'
 export { repr, type ToolResult } from './tools/tools'
 export type { MirandaToolContext, CatalogEntry, SpecRef } from './tools/context'
-export { validateIntentSummary, normalizeIntent, type IntentSummary } from './intent'
+export { validateIntentSummary, normalizeIntent, normalizeFormaVista, FORMAS, PIEZAS, type IntentSummary, type Forma, type Pieza, type FormaVista } from './intent'
+export { crossCheckForma, derivePiecesFromDraft, formaFromPiezas, type DraftView } from './forma'
 export { hasBlockingGaps, VEREDICTOS, SEVERIDADES, type Veredicto, type Severidad, type Brecha, type SelfCheckResult } from './qc'
 export {
   fetchAnthropicTransport,
@@ -25,5 +26,5 @@ export {
 } from './transport'
 export { buildSystemPrompt, MIRANDA_HARD_RULES, type SystemPromptOptions } from './prompt'
 export { runAgentTurn, TokenBudgetExceeded, MaxTurnsExceeded, type AgentDeps, type AgentTurnResult, type AgentEvent } from './agent'
-export { runSelfCheck, buildJudgeSystem, type SelfCheckDeps } from './self-check'
+export { runSelfCheck, buildJudgeSystem, mergeFormaCross, type SelfCheckDeps } from './self-check'
 export { publishSpec, slugify, PublishBlocked, type PublishDeps, type PublishStore, type PublishResult } from './publish'

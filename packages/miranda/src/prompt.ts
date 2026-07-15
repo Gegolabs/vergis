@@ -46,8 +46,15 @@ const INTENT_FORMAT = `FORMATO DEL RESUMEN DE INTENCIÓN (update_intent_summary)
 Cada campo debe ser VERIFICABLE por el usuario sin saber del DSL, y mapear a una parte del draft.
 Campos: titulo, pregunta_de_negocio, audiencia, fuentes[{vista,rol}], grano,
 medidas[{nombre,definicion,reconciliacion}], dimensiones[], controles[{nombre,tipo,default}],
-reglas[], estados_o_casos_borde[], criterios_de_aceptacion[], fuera_de_alcance[], pendientes_de_datos[].
-La reconciliación de cada medida es cómo se comprueba su cifra contra la fuente (una probe).`
+vistas[{nombre,forma,piezas}], reglas[], estados_o_casos_borde[], criterios_de_aceptacion[],
+fuera_de_alcance[], pendientes_de_datos[].
+La reconciliación de cada medida es cómo se comprueba su cifra contra la fuente (una probe).
+FORMA POR VISTA (obligatoria antes de publicar): por cada vista del PI declara su intención VISUAL de
+modo que el usuario la valide sin ver el DSL — 'forma' ∈ {tabla, dashboard, mixta} y 'piezas' ⊆
+{tarjetas, graficos, tabla} (tarjetas = KPI/dato; graficos = gráficos de línea/barra/distribución;
+tabla = una tabla). La forma declarada DEBE calzar con las piezas del draft: el self-check lo cruza y una
+divergencia es brecha M (es el guard contra la ambigüedad texto-vs-imagen). Un PI de una sola vista tiene
+una entrada; uno multi-vista, una por página.`
 
 export interface SystemPromptOptions {
   /** El documento del DSL (montado por la instancia desde MIRANDA_RUBRIC_DIR/dsl.md). */

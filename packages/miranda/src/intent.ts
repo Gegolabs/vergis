@@ -3,6 +3,27 @@
  * como ficha legible. Regla de oro: cada campo es verificable por el usuario sin saber del DSL, y cada
  * campo mapea a una parte del draft (el self-check cruza ambos). Formato de `2-plan-fase-1-v1.1.md`.
  */
+/** Forma visual de una vista del PI: la clase de ambigüedad texto-vs-imagen (hallazgo PI-17/F-01) que
+ *  debe ser VALIDABLE por el usuario. `tabla` = solo una tabla · `dashboard` = tarjetas y/o gráficos ·
+ *  `mixta` = tabla + tarjetas/gráficos. */
+export type Forma = 'tabla' | 'dashboard' | 'mixta'
+
+/** Pieza visual de una vista (vocabulario del usuario, mapea a elementos del DSL). */
+export type Pieza = 'tarjetas' | 'graficos' | 'tabla'
+
+export const FORMAS: readonly Forma[] = ['tabla', 'dashboard', 'mixta']
+export const PIEZAS: readonly Pieza[] = ['tarjetas', 'graficos', 'tabla']
+
+/** Declaración de forma de UNA vista del PI (el usuario valida su intención visual sin ver el DSL). */
+export interface FormaVista {
+  /** Nombre legible de la vista (una sola vista = el título; multi-vista = nombre de cada página). */
+  nombre: string
+  /** La forma visual declarada. */
+  forma: Forma
+  /** Las piezas que la componen: tarjetas (KPI/dato), gráficos (chart/series/distribution), tabla. */
+  piezas: Pieza[]
+}
+
 export interface IntentSummary {
   titulo: string
   pregunta_de_negocio: string
@@ -12,6 +33,8 @@ export interface IntentSummary {
   medidas: { nombre: string; definicion: string; reconciliacion: string }[]
   dimensiones: string[]
   controles: { nombre: string; tipo: string; default?: string }[]
+  /** Forma visual por vista — hace validable la intención dashboard-vs-tabla (guard anti-F-01). */
+  vistas: FormaVista[]
   reglas: string[]
   estados_o_casos_borde: string[]
   criterios_de_aceptacion: string[]
@@ -53,10 +76,24 @@ export function normalizeIntent(o: Record<string, unknown>): IntentSummary {
       tipo: str((c as Record<string, unknown>)?.['tipo']),
       default: (c as Record<string, unknown>)?.['default'] != null ? str((c as Record<string, unknown>)['default']) : undefined,
     })),
+    vistas: arr('vistas').map((v) => normalizeFormaVista(v as Record<string, unknown>)),
     reglas: arr('reglas').map(str),
     estados_o_casos_borde: arr('estados_o_casos_borde').map(str),
     criterios_de_aceptacion: arr('criterios_de_aceptacion').map(str),
     fuera_de_alcance: arr('fuera_de_alcance').map(str),
     pendientes_de_datos: arr('pendientes_de_datos').map(str),
+  }
+}
+
+/** Normaliza una declaración de forma de vista (tolerante: forma fuera de vocabulario → 'dashboard'
+ *  por defecto; piezas se filtran al vocabulario cerrado y se deduplican). */
+export function normalizeFormaVista(o: Record<string, unknown>): FormaVista {
+  const forma = (FORMAS as readonly string[]).includes(String(o?.['forma'])) ? (o['forma'] as Forma) : 'dashboard'
+  const rawPiezas = Array.isArray(o?.['piezas']) ? (o['piezas'] as unknown[]) : []
+  const piezas = [...new Set(rawPiezas.map((p) => String(p)).filter((p): p is Pieza => (PIEZAS as readonly string[]).includes(p)))]
+  return {
+    nombre: typeof o?.['nombre'] === 'string' ? (o['nombre'] as string) : '',
+    forma,
+    piezas,
   }
 }
