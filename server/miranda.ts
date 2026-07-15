@@ -352,49 +352,65 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     )
   }
 
-  function renderIntentPanel(intentJson: string | undefined, s: MirandaSession, token: string, sessionId: string, qcJson?: string, draftYaml?: string): string {
-    let summary = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
-    if (intentJson) {
-      try {
-        const it = JSON.parse(intentJson) as IntentSummary
-        summary = `<div class="tile" style="min-width:auto">
-          <div class="l">Título</div><div>${escapeHtml(it.titulo)}</div>
-          <div class="l" style="margin-top:8px">Pregunta de negocio</div><div>${escapeHtml(it.pregunta_de_negocio)}</div>
-          <div class="l" style="margin-top:8px">Audiencia</div><div>${escapeHtml(it.audiencia)}</div>
-          <div class="l" style="margin-top:8px">Grano</div><div>${escapeHtml(it.grano)}</div>
-          ${it.medidas.length ? `<div class="l" style="margin-top:8px">Medidas</div><ul>${it.medidas.map((m) => `<li>${escapeHtml(m.nombre)}: ${escapeHtml(m.definicion)}</li>`).join('')}</ul>` : ''}
-          ${it.vistas?.length ? `<div class="l" style="margin-top:8px">Forma por vista</div><ul>${it.vistas.map((v) => `<li>${escapeHtml(v.nombre || 'Vista')}: <b>${escapeHtml(v.forma)}</b>${v.piezas?.length ? ` (${escapeHtml(v.piezas.join(', '))})` : ''}</li>`).join('')}</ul>` : ''}
-          ${it.pendientes_de_datos.length ? `<div class="l" style="margin-top:8px">Pendientes de datos</div><ul>${it.pendientes_de_datos.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul>` : ''}
-        </div>`
-      } catch {
-        summary = '<p class="msg err">Resumen de intención ilegible.</p>'
-      }
-    }
-    const validateBtn =
-      s.state === 'borrador' && intentJson
-        ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/validate-intent"><input type="hidden" name="_csrf" value="${token}"><button class="add">Esto es lo que quiero</button></form>`
-        : ''
-    let qcPanel = ''
-    if (qcJson) {
-      try {
-        const r = JSON.parse(qcJson) as { veredicto: string; brechas: { id: string; sev: string; brecha: string; recomendacion: string }[] }
-        qcPanel = `<h2>Self-check</h2><p>Veredicto: <span class="tag">${escapeHtml(r.veredicto)}</span></p>${r.brechas.length ? `<ul>${r.brechas.map((b) => `<li><b>${escapeHtml(b.sev)}</b> ${escapeHtml(b.brecha)} — ${escapeHtml(b.recomendacion)}</li>`).join('')}</ul>` : '<p class="sub">Sin brechas.</p>'}`
-      } catch {
-        /* ignore */
-      }
-    }
-    const publishBtn =
-      s.state === 'autochequeado'
-        ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
-        : ''
-    const preview = draftYaml ? `<p><a href="/miranda/preview/${escapeHtml(sessionId)}" target="_blank">Ver preview (con tu RLS) ↗</a></p>` : ''
-    const dslToggle = draftYaml
-      ? `<details style="margin-top:12px"><summary class="sub">ver DSL (read-only)</summary><pre style="overflow:auto;background:var(--card);padding:12px;border-radius:8px;font-size:12px">${escapeHtml(draftYaml)}</pre></details>`
-      : ''
-    return `<h2>Resumen de intención</h2>${summary}${validateBtn}${preview}${qcPanel}${publishBtn}${dslToggle}`
-  }
-
   return { tryHandle }
+}
+
+/**
+ * Panel de intención de la sesión. El bloque «Resumen de intención» (título + resumen + validar +
+ * preview) va dentro de un `<details>` **colapsable**: abierto por default cuando hay resumen, cerrado
+ * cuando está vacío (no ocupa el sidebar angosto). El self-check, publicar y el DSL quedan fuera del
+ * disclosure, como secciones propias. Función pura (server-rendered, cero JS). */
+export function renderIntentPanel(
+  intentJson: string | undefined,
+  s: MirandaSession,
+  token: string,
+  sessionId: string,
+  qcJson?: string,
+  draftYaml?: string,
+): string {
+  let summary = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
+  if (intentJson) {
+    try {
+      const it = JSON.parse(intentJson) as IntentSummary
+      summary = `<div class="tile" style="min-width:auto">
+        <div class="l">Título</div><div>${escapeHtml(it.titulo)}</div>
+        <div class="l" style="margin-top:8px">Pregunta de negocio</div><div>${escapeHtml(it.pregunta_de_negocio)}</div>
+        <div class="l" style="margin-top:8px">Audiencia</div><div>${escapeHtml(it.audiencia)}</div>
+        <div class="l" style="margin-top:8px">Grano</div><div>${escapeHtml(it.grano)}</div>
+        ${it.medidas.length ? `<div class="l" style="margin-top:8px">Medidas</div><ul>${it.medidas.map((m) => `<li>${escapeHtml(m.nombre)}: ${escapeHtml(m.definicion)}</li>`).join('')}</ul>` : ''}
+        ${it.vistas?.length ? `<div class="l" style="margin-top:8px">Forma por vista</div><ul>${it.vistas.map((v) => `<li>${escapeHtml(v.nombre || 'Vista')}: <b>${escapeHtml(v.forma)}</b>${v.piezas?.length ? ` (${escapeHtml(v.piezas.join(', '))})` : ''}</li>`).join('')}</ul>` : ''}
+        ${it.pendientes_de_datos.length ? `<div class="l" style="margin-top:8px">Pendientes de datos</div><ul>${it.pendientes_de_datos.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul>` : ''}
+      </div>`
+    } catch {
+      summary = '<p class="msg err">Resumen de intención ilegible.</p>'
+    }
+  }
+  const validateBtn =
+    s.state === 'borrador' && intentJson
+      ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/validate-intent"><input type="hidden" name="_csrf" value="${token}"><button class="add">Esto es lo que quiero</button></form>`
+      : ''
+  let qcPanel = ''
+  if (qcJson) {
+    try {
+      const r = JSON.parse(qcJson) as { veredicto: string; brechas: { id: string; sev: string; brecha: string; recomendacion: string }[] }
+      qcPanel = `<h2>Self-check</h2><p>Veredicto: <span class="tag">${escapeHtml(r.veredicto)}</span></p>${r.brechas.length ? `<ul>${r.brechas.map((b) => `<li><b>${escapeHtml(b.sev)}</b> ${escapeHtml(b.brecha)} — ${escapeHtml(b.recomendacion)}</li>`).join('')}</ul>` : '<p class="sub">Sin brechas.</p>'}`
+    } catch {
+      /* ignore */
+    }
+  }
+  const publishBtn =
+    s.state === 'autochequeado'
+      ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
+      : ''
+  const preview = draftYaml ? `<p><a href="/miranda/preview/${escapeHtml(sessionId)}" target="_blank">Ver preview (con tu RLS) ↗</a></p>` : ''
+  const dslToggle = draftYaml
+    ? `<details style="margin-top:12px"><summary class="sub">ver DSL (read-only)</summary><pre style="overflow:auto;background:var(--card);padding:12px;border-radius:8px;font-size:12px">${escapeHtml(draftYaml)}</pre></details>`
+    : ''
+  // Abierto cuando hay resumen; cerrado cuando está vacío. Hint de estado en el summary.
+  const openAttr = intentJson ? ' open' : ''
+  const hint = intentJson ? (s.state === 'borrador' ? '' : ' <span class="mir-hint">(validado)</span>') : ' <span class="mir-hint">(vacío)</span>'
+  const intentBlock = `<details class="mir-intent-d"${openAttr}><summary><h2>Resumen de intención${hint}</h2></summary><div class="mir-intent-body">${summary}${validateBtn}${preview}</div></details>`
+  return `${intentBlock}${qcPanel}${publishBtn}${dslToggle}`
 }
 
 // ── Helpers puros ──
@@ -515,19 +531,23 @@ export function renderChat(rows: { role: string; content: string }[], opts: { yo
   while (i < rows.length) {
     const r = rows[i]
     const c = safeParse(r.content)
-    // Colapsar una racha de señales de herramienta en una sola señal (separador inline discreto).
+    // Colapsar una racha de señales de herramienta en UN disclosure `<details>`: el `<summary>` es la
+    // señal discreta (separador con el conteo); el cuerpo, abierto a demanda, muestra el detalle por paso.
     if (isToolSignal(r.role, c)) {
       let steps = 0
-      let runRows = 0
+      const runContents: (string | AnthropicMessage['content'])[] = []
       while (i < rows.length) {
         const cc = safeParse(rows[i].content)
         if (!isToolSignal(rows[i].role, cc)) break
         steps += countToolUse(cc)
-        runRows += 1
+        runContents.push(cc)
         i += 1
       }
-      if (steps === 0) steps = runRows
-      parts.push(`<div class="trace"><span>🔧 Miranda exploró los datos (${steps} ${steps === 1 ? 'paso' : 'pasos'})</span></div>`)
+      if (steps === 0) steps = runContents.length
+      const label = `🔧 Miranda exploró los datos (${steps} ${steps === 1 ? 'paso' : 'pasos'})`
+      parts.push(
+        `<details class="trace-d"><summary class="trace"><span class="chev" aria-hidden="true">▸</span><span>${label}</span></summary><div class="trace-body">${renderTraceDetail(runContents)}</div></details>`,
+      )
       continue
     }
     const text = extractText(c)
@@ -541,6 +561,63 @@ export function renderChat(rows: { role: string; content: string }[], opts: { yo
     i += 1
   }
   return parts.join('') || '<p class="mir-empty">Sin mensajes aún. Dile a Miranda qué PI quieres crear.</p>'
+}
+
+// Topes de truncado del detalle de traza: los resultados de un probe pueden traer cientos de filas y
+// un SQL puede ser largo; se muestra lo suficiente para entender el paso, no el volcado completo.
+const TRACE_RESULT_MAX = 800
+const TRACE_INPUT_MAX = 600
+
+/** Trunca un string a `max` caracteres, con marca explícita de corte. */
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}… (truncado)` : s
+}
+
+/**
+ * Detalle expandible de una racha de herramientas: un bloque por paso con el `name` de la tool, sus
+ * argumentos clave (p. ej. `sql`/`why` de run_probe, `name` de describe_table) y el resultado truncado.
+ * REGLA DE SEGURIDAD (igual que `mdInline`): TODO (nombres, inputs, results) se **escapa con `escapeHtml`**
+ * — es dato del QA, no markup; un `<script>` en un tool_result queda neutralizado, jamás como etiqueta real.
+ */
+export function renderTraceDetail(contents: (string | AnthropicMessage['content'])[]): string {
+  const uses: { id: string; name: string; input: unknown }[] = []
+  const results = new Map<string, string>()
+  for (const c of contents) {
+    if (!Array.isArray(c)) continue
+    for (const b of c) {
+      const blk = b as { type: string; id?: string; name?: string; input?: unknown; tool_use_id?: string; content?: unknown }
+      if (blk.type === 'tool_use') {
+        uses.push({ id: blk.id ?? '', name: blk.name ?? '(herramienta)', input: blk.input })
+      } else if (blk.type === 'tool_result') {
+        results.set(blk.tool_use_id ?? '', typeof blk.content === 'string' ? blk.content : JSON.stringify(blk.content))
+      }
+    }
+  }
+  if (uses.length === 0) return '<p class="sub" style="margin:0">Sin detalle de pasos.</p>'
+  return uses
+    .map((u) => {
+      const res = results.get(u.id)
+      const resHtml =
+        res !== undefined ? `<span class="trace-k">resultado</span><pre>${escapeHtml(truncate(res, TRACE_RESULT_MAX))}</pre>` : ''
+      return `<div class="trace-step"><div class="trace-tool"><code>${escapeHtml(u.name)}</code></div>${renderTraceInput(u.input)}${resHtml}</div>`
+    })
+    .join('')
+}
+
+/** Argumentos de un tool_use como pares clave→valor escapados (string verbatim; el resto, JSON). */
+function renderTraceInput(input: unknown): string {
+  if (input === null || input === undefined) return ''
+  if (typeof input !== 'object') {
+    return `<pre>${escapeHtml(truncate(String(input), TRACE_INPUT_MAX))}</pre>`
+  }
+  const entries = Object.entries(input as Record<string, unknown>)
+  if (entries.length === 0) return ''
+  return entries
+    .map(([k, v]) => {
+      const val = typeof v === 'string' ? v : JSON.stringify(v, null, 2)
+      return `<span class="trace-k">${escapeHtml(k)}</span><pre>${escapeHtml(truncate(val, TRACE_INPUT_MAX))}</pre>`
+    })
+    .join('')
 }
 
 /** Ensambla el contexto de realizabilidad para el self-check desde los tool_result de la sesión

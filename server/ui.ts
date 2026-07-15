@@ -84,8 +84,20 @@ body.chat{max-width:1180px}
 .bubble code{background:color-mix(in srgb,var(--muted) 20%,transparent);padding:1px 4px;border-radius:5px}
 .turn--miranda .bubble{background:var(--card);border-bottom-left-radius:5px}
 .turn--you .bubble{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:color-mix(in srgb,var(--accent) 30%,var(--border));border-bottom-right-radius:5px}
-.trace{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11.5px;margin:2px 8px}
-.trace::before,.trace::after{content:"";flex:1;height:1px;background:var(--border);opacity:.55}
+/* Traza de tools: separador discreto (summary) que abre el detalle por paso (disclosure nativo, sin JS). */
+.trace-d{margin:2px 8px}
+.trace{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11.5px}
+summary.trace{cursor:pointer;list-style:none}
+summary.trace::-webkit-details-marker{display:none}
+summary.trace::before,summary.trace::after{content:"";flex:1;height:1px;background:var(--border);opacity:.55}
+summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:none}
+.trace-d[open]>summary.trace .chev{transform:rotate(90deg)}
+.trace-body{margin:9px 2px 2px;display:flex;flex-direction:column;gap:10px}
+.trace-step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 12px;font-size:12px}
+.trace-tool{font-weight:600;margin-bottom:4px}
+.trace-tool code{background:color-mix(in srgb,var(--muted) 20%,transparent);padding:1px 6px;border-radius:5px}
+.trace-k{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin:7px 0 2px}
+.trace-step pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--fg);max-height:280px;overflow:auto}
 .mir-empty{color:var(--muted);font-size:13px;text-align:center;padding:34px 0}
 .mir-composer{position:sticky;bottom:0;background:var(--bg);padding:14px 0 6px;margin-top:8px}
 .mir-composer::before{content:"";position:absolute;left:0;right:0;top:-20px;height:20px;background:linear-gradient(to top,var(--bg),transparent);pointer-events:none}
@@ -95,6 +107,12 @@ body.chat{max-width:1180px}
 .mir-send button{flex:none}
 .mir-intent{position:sticky;top:24px;min-width:0}
 .mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
+.mir-intent-d>summary{cursor:pointer;list-style:none;display:flex;align-items:center}
+.mir-intent-d>summary::-webkit-details-marker{display:none}
+.mir-intent-d>summary h2{margin:14px 0 10px}
+.mir-intent-d>summary::after{content:"▸";color:var(--muted);font-size:11px;margin-left:auto;transition:transform .15s ease}
+.mir-intent-d[open]>summary::after{transform:rotate(90deg)}
+.mir-hint{color:var(--muted);font-size:11px;text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}
 @media (max-width:900px){body.chat{max-width:920px}.mir-cols{grid-template-columns:1fr;gap:20px}.mir-intent{position:static}.turn{max-width:92%}}
 ${AVATAR_CSS}`
 

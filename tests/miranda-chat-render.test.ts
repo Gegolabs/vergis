@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderIntentPanel, youInitialsOf } from '../server/miranda'
+import type { MirandaSession } from '@vergis/capabilities'
 
 /** Cuenta ocurrencias no solapadas de `needle` en `hay`. */
 function count(hay: string, needle: string): number {
@@ -164,6 +165,96 @@ describe('renderChat · lados de la burbuja (sensación de chat)', () => {
   it('las iniciales de «Tú» se inyectan en el avatar (ya escapadas)', () => {
     const html = renderChat([row('user', 'hola')], { youInitials: 'CO' })
     expect(html).toContain('>CO<')
+  })
+})
+
+describe('renderChat · disclosure de la traza (detalle por paso)', () => {
+  // Fixtures con inputs/results reales (no vacíos como el helper de arriba).
+  const probe = (id: string, sql: string) =>
+    row('assistant', [{ type: 'tool_use', id, name: 'run_probe', input: { sql, why: 'validar el grano' } }])
+  const describe_ = (id: string, name: string) =>
+    row('assistant', [{ type: 'tool_use', id, name: 'describe_table', input: { name } }])
+  const result = (id: string, content: string) => row('tool', [{ type: 'tool_result', tool_use_id: id, content }])
+
+  it('la racha de tools va dentro de un <details class="trace-d"> (colapsable), no de un <div> plano', () => {
+    const html = renderChat([probe('t1', 'SELECT 1'), result('t1', '{"rows":[]}')])
+    expect(html).toContain('<details class="trace-d">')
+    expect(html).toContain('<summary class="trace">')
+    // el summary conserva la señal con el conteo (comportamiento de 090).
+    expect(html).toContain('exploró los datos')
+    expect(html).toContain('(1 paso)')
+  })
+
+  it('el detalle muestra los NOMBRES de tool de cada paso al expandir', () => {
+    const html = renderChat([
+      probe('t1', 'SELECT * FROM dbo.v_saldos'),
+      result('t1', '{"rows":[{"empresa":"ACME"}]}'),
+      describe_('t2', 'dbo.v_clientes'),
+      result('t2', '{"columns":["id","nombre"]}'),
+    ])
+    expect(html).toContain('<code>run_probe</code>')
+    expect(html).toContain('<code>describe_table</code>')
+    // los argumentos clave visibles.
+    expect(html).toContain('SELECT * FROM dbo.v_saldos')
+    expect(html).toContain('dbo.v_clientes')
+    // el resultado se muestra.
+    expect(html).toContain('ACME')
+  })
+
+  it('un tool_result con markup queda ESCAPADO (un <script> nunca es etiqueta real)', () => {
+    const html = renderChat([probe('t1', 'SELECT 1'), result('t1', '<script>alert(1)</script>')])
+    expect(html).not.toContain('<script>alert')
+    expect(html).toContain('&lt;script&gt;')
+  })
+
+  it('un resultado LARGO se trunca con marca explícita', () => {
+    const big = 'x'.repeat(5000)
+    const html = renderChat([probe('t1', 'SELECT 1'), result('t1', big)])
+    expect(html).toContain('… (truncado)')
+    // no se vuelca el resultado completo.
+    expect(html).not.toContain('x'.repeat(5000))
+  })
+
+  it('renderTraceDetail: input string arbitrario se escapa (no solo objetos)', () => {
+    const html = renderTraceDetail([
+      [{ type: 'tool_use', id: 't1', name: 'raw_tool', input: '<img onerror=alert(1)>' }],
+      [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }],
+    ] as never)
+    expect(html).toContain('<code>raw_tool</code>')
+    expect(html).toContain('&lt;img')
+    expect(html).not.toContain('<img')
+  })
+})
+
+describe('renderIntentPanel · panel colapsable', () => {
+  const session = (state: MirandaSession['state']): MirandaSession => ({ id: 's1', title: 'PI de saldos', state })
+  const intent = JSON.stringify({
+    titulo: 'Saldos por empresa',
+    pregunta_de_negocio: '¿Cuánto debe cada empresa?',
+    audiencia: 'Finanzas',
+    grano: 'empresa',
+    medidas: [{ nombre: 'saldo', definicion: 'suma de cuentas' }],
+    pendientes_de_datos: [],
+  })
+
+  it('el resumen de intención va dentro de un <details> (con summary del título)', () => {
+    const html = renderIntentPanel(intent, session('borrador'), 'tok', 's1')
+    expect(html).toContain('<details class="mir-intent-d"')
+    expect(html).toContain('<summary>')
+    expect(html).toContain('Resumen de intención')
+    expect(html).toContain('Saldos por empresa')
+  })
+
+  it('abierto por default cuando HAY resumen', () => {
+    const html = renderIntentPanel(intent, session('borrador'), 'tok', 's1')
+    expect(html).toContain('<details class="mir-intent-d" open>')
+  })
+
+  it('cerrado (sin open) y con hint «(vacío)» cuando NO hay resumen', () => {
+    const html = renderIntentPanel(undefined, session('borrador'), 'tok', 's1')
+    expect(html).toContain('<details class="mir-intent-d">')
+    expect(html).not.toContain('mir-intent-d" open')
+    expect(html).toContain('(vacío)')
   })
 })
 

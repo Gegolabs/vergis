@@ -4,6 +4,32 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.12.3 — 2026-07-15
+
+**Miranda — dos disclosures nativos: traza de tools expandible + panel de intención colapsable**
+(work/091, 3ª iteración de evolución). Cambio puramente de **presentación** en `server/miranda.ts`
+(`renderChat` + `renderIntentPanel`) y `server/ui.ts` (CSS); `<details>`/`<summary>` HTML, **cero JS**;
+cero cambio a agente, tools, self-check o store. No regresa `0.12.1`/`0.12.2`: `mdInline`, burbujas con
+lado, sidebar, composer sticky y sus tests quedan intactos.
+
+- **Traza de tools abrible.** La señal «🔧 Miranda exploró los datos (N pasos)» pasó de un `<div>` plano a
+  un `<details class="trace-d">` colapsable (cerrado por default, como hoy). Al expandir muestra **un bloque
+  por paso**: el `name` de la tool (`run_probe`/`describe_table`/…), sus argumentos clave como pares
+  clave→valor (p. ej. `sql`+`why` de un probe, `name` de un describe) y el **resultado truncado** (tope 800
+  car. para el result, 600 para cada input, con marca `… (truncado)` — un probe de 500 filas no se vuelca).
+- **Seguridad escapar-primero extendida al contenido de tools.** TODO (nombres, inputs, results) pasa por
+  `escapeHtml` antes de renderizar — es dato del QA, no markup; un `<script>` en un `tool_result` queda
+  neutralizado (`&lt;script&gt;`), jamás como etiqueta real.
+- **Panel de intención colapsable.** El bloque «Resumen de intención» (título + resumen + validar + preview)
+  va dentro de un `<details class="mir-intent-d">`: **abierto** cuando hay resumen, **cerrado** cuando está
+  vacío (no ocupa el sidebar angosto), con hint de estado en el summary — «(vacío)» / «(validado)». El
+  self-check, publicar y el toggle de DSL quedan fuera del disclosure como secciones propias.
+- Ambos temas (Gruvbox oscuro default + `data-theme="blanco"`) vía las CSS vars existentes; chevrons por
+  CSS (`rotate` en `[open]`), marcadores nativos ocultos. Tests: `tests/miranda-chat-render.test.ts`
+  (31 casos: los 23 de `0.12.2` + 8 nuevos — detalle de traza con nombres de tool, result escapado y
+  truncado, input arbitrario escapado, y el panel de intención dentro de un `<details>` con su default
+  abierto/cerrado). `renderTraceDetail` y `renderIntentPanel` se exportan para test.
+
 ## 0.12.2 — 2026-07-15
 
 **Miranda — pase de diseño: la conversación se lee como un chat** (work/090, 2ª iteración de
