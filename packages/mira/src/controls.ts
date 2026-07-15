@@ -64,11 +64,18 @@ export function resolveControlValue(current: string | undefined, options: string
 }
 
 /**
- * Recorta una etiqueta que sea un datetime ISO (`YYYY-MM-DDThh:mm…`) a solo su fecha (`YYYY-MM-DD`).
- * Regla GENERAL de presentación (no per-spec): el sello muestra la fecha, no la hora. Cualquier valor
- * que no sea ISO-datetime pasa intacto.
+ * Recorta una etiqueta datetime a solo su fecha (`YYYY-MM-DD`). Regla GENERAL de presentación (no
+ * per-spec): el sello muestra la fecha, no la hora. Dos formas de datetime llegan hasta aquí:
+ *  - un STRING ISO (`YYYY-MM-DDThh:mm…`) — p. ej. de un mock o de un driver que serializa;
+ *  - un OBJETO `Date` de JS — el driver mssql/tedious devuelve las columnas datetime así, y
+ *    `String(dateObj)` produce la forma larga («Tue May 26 2026 00:00:00 GMT+0000 …») que esquivaba
+ *    el recorte (bug visto en PI-07 vivo) → se toma la fecha UTC de `toISOString()`.
+ * Cualquier otro valor pasa intacto.
  */
-export function trimIsoLabel(v: string): string {
+export function trimIsoLabel(v: string | Date): string {
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? String(v) : v.toISOString().slice(0, 10)
+  }
   const m = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/.exec(v)
   return m ? m[1] : v
 }
@@ -100,7 +107,8 @@ export function buildControlOptions(
     if (value === '' || seen.has(value)) continue
     seen.add(value)
     const raw = r[displayField]
-    const label = trimIsoLabel(raw == null || raw === '' ? value : String(raw))
+    // El Date del driver se pasa TAL CUAL a trimIsoLabel (String(dateObj) daría la forma larga).
+    const label = raw == null || raw === '' ? trimIsoLabel(value) : trimIsoLabel(raw instanceof Date ? raw : String(raw))
     pairs.push({ value, label })
   }
   pairs.sort((a, b) => cmpVals(a.value, b.value))

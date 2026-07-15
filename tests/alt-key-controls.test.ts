@@ -179,12 +179,12 @@ quality: {}
 delivery: { render: [{ format: html, target: web }] }
 `
 
-function makeMockSql() {
+function makeMockSql(ocsRows: Record<string, unknown>[] = OCS) {
   const cap: Capability = {
     name: 'mock-sql',
     async execute(params: unknown): Promise<unknown> {
       const p = (params ?? {}) as { sql: string; params?: Record<string, unknown> }
-      if (/dbo\.ocs/.test(p.sql)) return { rows: OCS }
+      if (/dbo\.ocs/.test(p.sql)) return { rows: ocsRows }
       const wantOc = String(p.params?.['ctx_oc'] ?? '')
       return { rows: LINEAS.filter((r) => r._oc === wantOc).map(({ _oc, ...r }) => r) }
     },
@@ -192,11 +192,11 @@ function makeMockSql() {
   return cap
 }
 
-async function renderAltKey(ctx?: Record<string, string | string[]>) {
+async function renderAltKey(ctx?: Record<string, string | string[]>, ocsRows: Record<string, unknown>[] = OCS) {
   const dir = mkdtempSync(join(tmpdir(), 'vergis-altkey-'))
   const specPath = join(dir, 'spec.yaml')
   writeFileSync(specPath, ALTKEY_YAML)
-  const out = await runSpec({ specPath, baseDir: dir, extraCapabilities: [makeMockSql()], ctx })
+  const out = await runSpec({ specPath, baseDir: dir, extraCapabilities: [makeMockSql(ocsRows)], ctx })
   return out
 }
 
@@ -238,6 +238,52 @@ describe('WP1/WP2 · dos sellos sincronizados por llave alternativa', () => {
     // El dato refleja la OC elegida por la llave alternativa.
     expect(html).toContain('SKU-1')
     expect(html).not.toContain('SKU-2')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3·bis · Objetos `Date` del driver (0.9.1): mssql/tedious devuelve columnas datetime como Date de
+// JS, no como string ISO — String(dateObj) produce la forma larga («Tue May 26 2026 00:00:00 GMT…»)
+// que esquivaba el recorte (bug visto en PI-07 vivo). El label debe rendir YYYY-MM-DD igual.
+// ─────────────────────────────────────────────────────────────────────────────
+const OCS_DATES = [
+  { oc: '17400358', fecha_fin_recepcion: new Date('2026-05-26T00:00:00Z') },
+  { oc: '17400359', fecha_fin_recepcion: new Date('2026-07-22T00:00:00Z') },
+]
+
+describe('0.9.1 · display datetime como objeto Date (caso del driver mssql/tedious)', () => {
+  it('trimIsoLabel con Date → YYYY-MM-DD (y un Date inválido no revienta)', () => {
+    expect(trimIsoLabel(new Date('2026-05-26T00:00:00Z'))).toBe('2026-05-26')
+    expect(trimIsoLabel(new Date(NaN))).toBe('Invalid Date') // fail-safe: pasa como texto, no lanza
+  })
+
+  it('buildControlOptions con Dates → labels YYYY-MM-DD, jamás la forma larga', () => {
+    expect(buildControlOptions(OCS_DATES, 'oc', 'fecha_fin_recepcion')).toEqual([
+      { value: '17400358', label: '2026-05-26' },
+      { value: '17400359', label: '2026-07-22' },
+    ])
+  })
+
+  it('colisión de etiqueta también con Dates → « YYYY-MM-DD (value) »', () => {
+    const same = [
+      { oc: 'A', f: new Date('2026-05-26T00:00:00Z') },
+      { oc: 'B', f: new Date('2026-05-26T09:30:00Z') },
+    ]
+    expect(buildControlOptions(same, 'oc', 'f')).toEqual([
+      { value: 'A', label: '2026-05-26 (A)' },
+      { value: 'B', label: '2026-05-26 (B)' },
+    ])
+  })
+
+  it('e2e: opciones del sello-fecha Y el span print rinden YYYY-MM-DD con Dates del driver', async () => {
+    const html = (await renderAltKey({ oc: '17400358' }, OCS_DATES)).html ?? ''
+    // Label de la opción = la fecha recortada, value = la OC.
+    expect(html).toContain('<option value="17400358" selected>2026-05-26</option>')
+    expect(html).toContain('<option value="17400359">2026-07-22</option>')
+    // El span print del sello-fecha también es la fecha corta.
+    expect(html).toContain('<span class="vctx-v vctx-print">2026-05-26</span>')
+    // Jamás la forma larga de String(dateObj).
+    expect(html).not.toMatch(/GMT\+0000|Coordinated Universal Time|May 26 2026/)
   })
 })
 
