@@ -7,7 +7,7 @@ import { getTheme, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
 import { renderTable } from './render-table'
-import { renderDistribution } from './render-chart'
+import { renderDistribution, renderSeries } from './render-chart'
 import { renderInteractiveScript } from './interactive-script'
 import { ctxQuery, formatValue } from './piece-util'
 import type {
@@ -229,6 +229,8 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
       return renderDato(node)
     case 'distribution':
       return renderDistribution(node, opts.tokens)
+    case 'series':
+      return renderSeries(node, opts.tokens)
     case 'table':
       return renderTable(node, opts)
     case 'semaforo':

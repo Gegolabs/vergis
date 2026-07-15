@@ -315,6 +315,22 @@ export function composePiece(
     rows = sortRows(rows, d.sort, metricField)
     return { type: 'distribution', rows, dimensionField, metricField, orientation: d.orientation, title: d.title }
   }
+  if (node['series']) {
+    // `series` — líneas de N series sobre un eje. El dataset sale de `data` (data.<dataset>); cada
+    // fila es un punto del eje x. El SQL manda el ORDEN de las filas (no se re-ordena acá ni en el
+    // render). Las series (`metrics`) son columnas del dataset (formato wide).
+    const se = node['series'] as {
+      data?: string
+      x?: string
+      metrics?: { field?: string; label?: string }[]
+      format?: string
+      title?: string
+    }
+    const dataset = stripData(String(se.data ?? '')).split('.')[0]
+    const rows = [...(results[dataset]?.rows ?? [])]
+    const seriesSpec = (se.metrics ?? []).map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
+    return { type: 'series', rows, xField: se.x, seriesSpec, format: se.format, title: se.title }
+  }
   if (node['table']) {
     const t = node['table'] as {
       data?: string
