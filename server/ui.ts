@@ -66,7 +66,7 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}
 /* ── Miranda · superficie de chat (server-rendered, sin framework) ── */
 body.chat{max-width:1180px}
-.mir-cols{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:34px;align-items:start;margin-top:6px}
+.mir-cols{display:grid;grid-template-columns:minmax(0,1fr) auto 380px;gap:30px;align-items:start;margin-top:6px}
 .mir-conv{display:flex;flex-direction:column;min-width:0}
 .mir-thread{display:flex;flex-direction:column;gap:16px;padding:4px 2px}
 .turn{display:flex;gap:10px;align-items:flex-start;max-width:82%}
@@ -107,17 +107,24 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-send button{flex:none}
 .mir-intent{position:sticky;top:24px;min-width:0;display:flex;flex-direction:column}
 .mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
-/* Plegado de la columna derecha, CSS-only: checkbox oculto (accesible por teclado) + labels; :has() dirige el grid. */
+/* Gaveta de intención (work/093): divisor punteado = borde de la gaveta + tirador sobre él. CSS-only:
+   checkbox oculto (accesible por teclado) + labels; :has() dirige el grid. */
 .col-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;white-space:nowrap}
-.mir-collapse-btn{cursor:pointer;user-select:none;align-self:flex-end;font-size:11.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:3px 9px;margin-bottom:2px}
-.mir-collapse-btn:hover{color:var(--fg);border-color:var(--muted)}
-.mir-reopen{display:none;position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:20;cursor:pointer;user-select:none;writing-mode:vertical-rl;background:var(--card);border:1px solid var(--border);border-right:none;border-radius:9px 0 0 9px;padding:14px 7px;font-size:12px;color:var(--fg);box-shadow:0 2px 12px rgba(0,0,0,.14)}
-.mir-reopen:hover{color:var(--accent)}
+/* Divisor vertical punteado entre la conversación y la gaveta; se estira a la altura de la fila. */
+.mir-divider{align-self:stretch;position:relative;border-left:2px dashed var(--border);margin:6px 0;min-height:60px}
+/* Tirador de gaveta anclado sobre el divisor (chevron › = cerrar la gaveta). No vive en la tarjeta. */
+.mir-drawer-pull{position:absolute;top:50%;left:-1px;transform:translate(-50%,-50%);z-index:5;display:flex;align-items:center;justify-content:center;width:22px;height:48px;cursor:pointer;user-select:none;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--muted);font-size:14px;line-height:1;box-shadow:0 1px 8px rgba(0,0,0,.12)}
+.mir-drawer-pull:hover{color:var(--fg);border-color:var(--muted)}
+/* Gaveta cerrada: el divisor punteado queda fijo al borde derecho, con su tirador (chevron ‹ = abrir). */
+.mir-reopen{display:none;position:fixed;right:0;top:0;bottom:0;width:14px;z-index:20;cursor:pointer;user-select:none;border-left:2px dashed var(--border)}
+.mir-reopen .mir-reopen-tab{position:absolute;top:50%;left:-1px;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:22px;height:48px;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--fg);font-size:14px;line-height:1;box-shadow:0 2px 12px rgba(0,0,0,.14)}
+.mir-reopen:hover .mir-reopen-tab{color:var(--accent);border-color:var(--accent)}
 .mir-cols:has(> .col-toggle:checked){grid-template-columns:1fr}
 .mir-cols:has(> .col-toggle:checked) .mir-intent{display:none}
+.mir-cols:has(> .col-toggle:checked) .mir-divider{display:none}
 .mir-cols:has(> .col-toggle:checked) .mir-reopen{display:block}
-.col-toggle:focus-visible ~ .mir-intent .mir-collapse-btn,.col-toggle:focus-visible ~ .mir-reopen{outline:2px solid var(--accent);outline-offset:2px}
-@media (max-width:900px){body.chat{max-width:920px}.mir-cols{grid-template-columns:1fr;gap:20px}.mir-intent{position:static}.turn{max-width:92%}}
+.col-toggle:focus-visible ~ .mir-divider .mir-drawer-pull,.col-toggle:focus-visible ~ .mir-reopen .mir-reopen-tab{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:900px){body.chat{max-width:920px}.mir-cols{grid-template-columns:1fr;gap:16px}.mir-intent{position:static}.turn{max-width:92%}.mir-divider{align-self:auto;border-left:none;border-top:2px dashed var(--border);margin:4px 0;min-height:0;height:0}.mir-drawer-pull{top:-1px;left:50%;transform:translate(-50%,-50%);width:48px;height:22px}}
 ${AVATAR_CSS}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. `bodyClass` amplía la vista (p. ej.

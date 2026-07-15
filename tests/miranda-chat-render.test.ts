@@ -254,19 +254,28 @@ describe('renderIntentPanel · tarjeta plana (091 ítem 2 revertido)', () => {
   })
 })
 
-describe('renderMirCols · plegado de la columna derecha (CSS-only)', () => {
-  it('trae el checkbox oculto y ambas afordancias (ocultar dentro del sidebar, reabrir en el borde)', () => {
+describe('renderMirCols · gaveta con divisor punteado + tirador (CSS-only, work/093)', () => {
+  it('trae el checkbox oculto, el divisor punteado y el tirador SOBRE el divisor (no dentro de la tarjeta)', () => {
     const html = renderMirCols('<h2>Conversación</h2>', '<h2>Resumen de intención</h2>', false)
     // checkbox oculto que dirige el grid vía :has().
     expect(html).toContain('<input type="checkbox" class="col-toggle" id="mir-col-toggle"')
-    // afordancia para colapsar (dentro del sidebar) y afordancia para reabrir (pestaña de borde).
-    expect(html).toContain('class="mir-collapse-btn"')
+    // divisor punteado dedicado = borde de la gaveta.
+    expect(html).toContain('class="mir-divider"')
+    // tirador de gaveta (reubicado al divisor) y afordancia de reapertura (gaveta cerrada).
+    expect(html).toContain('class="mir-drawer-pull"')
     expect(html).toContain('class="mir-reopen"')
-    // ambos labels apuntan al mismo checkbox.
+    // ambos controles apuntan al mismo checkbox.
     expect(count(html, 'for="mir-col-toggle"')).toBe(2)
     // el sidebar y la conversación siguen presentes.
     expect(html).toContain('class="mir-conv"')
     expect(html).toContain('class="mir-intent')
+    // el control de plegado ya NO vive dentro de la tarjeta: desapareció el viejo botón in-card…
+    expect(html).not.toContain('mir-collapse-btn')
+    // …y el tirador aparece ANTES del <aside> de la tarjeta (vive en el divisor, no en la tarjeta).
+    const pullIdx = html.indexOf('mir-drawer-pull')
+    const asideIdx = html.indexOf('<aside class="mir-intent')
+    expect(pullIdx).toBeGreaterThan(-1)
+    expect(pullIdx).toBeLessThan(asideIdx)
   })
 
   it('marca el sidebar como vacío cuando corresponde', () => {
@@ -274,12 +283,17 @@ describe('renderMirCols · plegado de la columna derecha (CSS-only)', () => {
     expect(renderMirCols('c', 'a', false)).not.toContain('mir-intent--empty')
   })
 
-  it('PAGE_CSS: colapsado ⇒ grid a 1 columna, sidebar oculto y pestaña de reapertura visible', () => {
+  it('PAGE_CSS: divisor punteado presente; colapsado ⇒ grid 1 col, gaveta+divisor ocultos, reapertura visible', () => {
+    // divisor vertical punteado.
+    expect(PAGE_CSS).toContain('.mir-divider{')
+    expect(PAGE_CSS).toContain('border-left:2px dashed var(--border)')
+    // el borde de reapertura también es punteado (gaveta cerrada en el borde derecho).
+    expect(PAGE_CSS).toContain('.mir-reopen{display:none')
+    // colapso: una columna, gaveta y divisor ocultos, reapertura visible.
     expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked){grid-template-columns:1fr}')
     expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked) .mir-intent{display:none}')
+    expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked) .mir-divider{display:none}')
     expect(PAGE_CSS).toContain('.mir-cols:has(> .col-toggle:checked) .mir-reopen{display:block}')
-    // la pestaña de reapertura arranca oculta (solo aparece al colapsar).
-    expect(PAGE_CSS).toContain('.mir-reopen{display:none')
   })
 })
 

@@ -405,21 +405,26 @@ export function renderIntentPanel(
 }
 
 /**
- * Ensambla la grilla de dos columnas (conversación + sidebar de intención) con el mecanismo de
- * **plegado de la columna derecha**, CSS-only: un `<input type="checkbox">` oculto (accesible por
- * teclado) más `<label>` como botón; `:has(> .col-toggle:checked)` en `PAGE_CSS` dirige el grid a una
- * sola columna y oculta el sidebar, de modo que la conversación se expande a ancho completo. Dos
- * afordancias `<label for>`: «Ocultar ›» dentro del sidebar (visible al expandir) y una pestaña
- * «‹ Intención» fija al borde derecho (visible solo al colapsar, para reabrir). Cero JS.
+ * Ensambla la grilla (conversación + **gaveta** de intención) con el mecanismo de **plegado de la
+ * columna derecha**, CSS-only: un `<input type="checkbox">` oculto (accesible por teclado) más
+ * `<label>` como controles; `:has(> .col-toggle:checked)` en `PAGE_CSS` dirige el grid a una sola
+ * columna y oculta la gaveta, de modo que la conversación se expande a ancho completo.
+ * La columna derecha se **lee como una gaveta** (convención de plataforma «cara = estado · gaveta =
+ * maquinaria», work/093): un **divisor vertical punteado** (`.mir-divider`) la separa de la
+ * conversación, y el control de plegado vive como **tirador sobre ese divisor** (`.mir-drawer-pull`,
+ * chevron `›` = cerrar la gaveta) — no dentro de la tarjeta de intención, que queda limpia. Colapsada,
+ * queda el **divisor punteado fijo al borde derecho con su tirador** (`.mir-reopen`, chevron `‹` =
+ * abrir), leyéndose como una gaveta cerrada. Cero JS.
  * El estado NO persiste entre turnos (cada envío recarga la página → default expandido). */
 export function renderMirCols(convInner: string, asideInner: string, intentEmpty: boolean): string {
   const id = 'mir-col-toggle'
   const emptyCls = intentEmpty ? ' mir-intent--empty' : ''
   return `<div class="mir-cols">
-         <input type="checkbox" class="col-toggle" id="${id}" aria-label="Plegar u ocultar la columna de intención">
+         <input type="checkbox" class="col-toggle" id="${id}" aria-label="Abrir o cerrar la gaveta de intención">
          <section class="mir-conv">${convInner}</section>
-         <aside class="mir-intent${emptyCls}"><label for="${id}" class="mir-collapse-btn" title="Ocultar la columna de intención">Ocultar ›</label>${asideInner}</aside>
-         <label for="${id}" class="mir-reopen" title="Mostrar la columna de intención">‹ Intención</label>
+         <div class="mir-divider"><label for="${id}" class="mir-drawer-pull" title="Cerrar la gaveta de intención"><span aria-hidden="true">›</span></label></div>
+         <aside class="mir-intent${emptyCls}">${asideInner}</aside>
+         <label for="${id}" class="mir-reopen" title="Abrir la gaveta de intención"><span class="mir-reopen-tab" aria-hidden="true">‹</span></label>
        </div>`
 }
 

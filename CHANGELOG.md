@@ -4,6 +4,33 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.12.5 — 2026-07-15
+
+**Miranda — la columna derecha se lee como una GAVETA: divisor punteado + tirador en el borde**
+(work/093, 5ª iteración). Cambio puramente de **presentación** en `server/miranda.ts` (`renderMirCols`)
+y `server/ui.ts` (CSS); **CSS-only, cero JS**; cero cambio a agente, tools, self-check o store. Reusa el
+mecanismo de colapso `:has()`+checkbox de `0.12.4`; solo cambia **dónde vive** el control y su aspecto,
+más el divisor. Mantiene `0.12.1`/`0.12.2`, el ítem 1 de `0.12.3` (traza de tools) y el colapso de
+`0.12.4` intactos con sus tests. Alinea Miranda con la convención de plataforma **«cara = estado ·
+gaveta = maquinaria»** (TX-11): la columna derecha ES la maquinaria de la sesión → se presenta como gaveta.
+
+- **Divisor vertical punteado** (`.mir-divider`, `border-left:2px dashed var(--border)`) entre la
+  conversación y la columna derecha — el borde de la gaveta —, con aire (gap del grid) a ambos lados. El
+  grid pasa a tres tracks `minmax(0,1fr) auto 380px`.
+- **El control de plegado se reubica al borde como tirador de gaveta** (`.mir-drawer-pull`): un asa
+  pequeña anclada **sobre el divisor** (ya no dentro de la tarjeta de intención), con chevron `›` para
+  cerrar la gaveta. Se lee como «abrir/cerrar este panel lateral», no «ocultar esta tarjeta».
+- **Estado colapsado = gaveta cerrada.** La conversación ocupa todo el ancho; en el borde derecho queda
+  el **divisor punteado fijo** (`.mir-reopen`, re-estilado desde `0.12.4`) con su **tirador** (chevron
+  `‹` = abrir), leyéndose como una gaveta cerrada, no un botón suelto.
+- **La tarjeta de intención queda limpia** — sin control de plegado encima. El header «Resumen de
+  intención» es contenido de la gaveta.
+- Ambos temas (Gruvbox oscuro default + `data-theme="blanco"`) vía CSS vars; punteado y tirador legibles
+  en ambos. Responsivo <900px: el divisor pasa a **horizontal** (`border-top` punteado) con el tirador
+  centrado sobre él; sigue usable. Sin persistencia entre turnos (default expandido). Tests:
+  `tests/miranda-chat-render.test.ts` (el caso de `0.12.4` reescrito — el control ya no está en la tarjeta
+  sino en el divisor; se verifica el divisor punteado y el orden tirador-antes-de-la-tarjeta).
+
 ## 0.12.4 — 2026-07-15
 
 **Miranda — se pliega la COLUMNA derecha entera (no la tarjeta); la conversación se expande a ancho
