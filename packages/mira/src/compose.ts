@@ -233,6 +233,18 @@ export function composePiece(
       size: kpi.size,
     }
   }
+  if (node['dato']) {
+    // `dato` (TX-12): atributo rotulado (etiqueta + valor). El valor se resuelve por el MISMO
+    // mecanismo de path que `kpi.metric` (resolvePath sobre data.<dataset>.<campo>). NO es una
+    // medida (tarjeta grande): es contenido/estado, se imprime tal cual y jamás es interactivo.
+    const dt = node['dato'] as { label?: string; value?: string; format?: string }
+    return {
+      type: 'dato',
+      label: dt.label,
+      value: resolvePath(String(dt.value ?? ''), results, spec),
+      format: dt.format,
+    }
+  }
   if (node['semaforo']) {
     const s = node['semaforo'] as {
       data?: string

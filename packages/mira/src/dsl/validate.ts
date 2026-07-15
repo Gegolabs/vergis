@@ -564,7 +564,7 @@ function validateControls(spec: MiraSpec): void {
 }
 
 /** Tipos de elemento de contenido válidos en una pieza (los que `composePiece`/el render reconocen). */
-const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'semaforo', 'distribution', 'table'])
+const ELEMENT_TYPES = new Set(['markdown_block', 'kpi', 'dato', 'semaforo', 'distribution', 'table'])
 
 /**
  * Valida recursivamente un nodo de pieza: o es un layout (`layout` + `elements`) o declara EXACTAMENTE
