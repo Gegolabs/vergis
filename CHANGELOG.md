@@ -4,6 +4,15 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.9.1 — 2026-07-14
+
+- **Fix: etiqueta de display con `Date` del driver** — el driver mssql/tedious devuelve las columnas
+  datetime como **objetos `Date` de JS**; `String(dateObj)` produce la forma larga («Tue May 26 2026
+  00:00:00 GMT+0000 …») que esquivaba el recorte ISO→`YYYY-MM-DD` (visto en el sello-fecha de PI-07
+  vivo). La normalización de etiquetas (`trimIsoLabel`/`buildControlOptions`) ahora trata
+  `value instanceof Date` → `toISOString().slice(0, 10)` — aplica a las opciones del sello Y al span
+  print de cualquier control cuyo `display` sea datetime.
+
 ## 0.9.0 — 2026-07-14
 
 **Selectores de alcance por llave alternativa** (work/079) — extensión aditiva del sello de alcance de
