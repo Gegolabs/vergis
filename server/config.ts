@@ -43,6 +43,12 @@ export interface ServerConfig {
   annotationSecret: { value: string; ephemeral: boolean }
   /** Miranda — el agente conversacional de especificación de PIs (cluster 077). Todo detrás del flag. */
   miranda: MirandaConfig
+  /**
+   * Identidad de DESARROLLO inyectable (`VERGIS_DEV_IDENTITY`). `null` salvo en un despliegue de dev
+   * SIN gate real. Es fail-safe por construcción: `decideDevIdentity` solo la deja activa cuando el env
+   * está seteado Y NO hay señal de gate real — jamás en producción. Ver `decideDevIdentity`.
+   */
+  devIdentity: DevIdentity | null
   /** Rutas/valores crudos que los consumidores cargan (archivos de config, conexiones, CH, etc.). */
   paths: {
     connections: string | undefined
@@ -81,6 +87,61 @@ export interface MirandaConfig {
   scopeGroup: string
   /** Webhook opcional para anunciar la publicación de un PI (patrón espejo Slack; no-fatal). */
   announceWebhook: string | undefined
+}
+
+/**
+ * Identidad de desarrollo: un `user` (email) y claims fijos (hoy solo `groups`, la llave que puebla
+ * el header `x-forwarded-groups` en producción). Se inyecta a una request que NO trae header de gate,
+ * para manejar Mira/PIs desde el navegador local sin oauth2-proxy ni forjar headers por curl.
+ */
+export interface DevIdentity {
+  user: string
+  claims: Record<string, string[]>
+}
+
+/**
+ * Decisión de activación de `VERGIS_DEV_IDENTITY` — **el núcleo fail-safe**. Puro y testeable.
+ *
+ * - `off`          — el env no está seteado → comportamiento idéntico a hoy (sin cambio alguno).
+ * - `active`       — seteado **∧ NO hay gate real** → se inyecta la identidad en requests sin header.
+ * - `ignored-gate` — seteado **∧ hay gate real** (`VERGIS_GATE_SECRET` presente) → se IGNORA. Config
+ *                    contradictoria: prioriza seguridad, NUNCA inyecta en producción.
+ * - `invalid`      — seteado pero sin un email parseable → se ignora (con aviso).
+ *
+ * La señal de gate real es la presencia (no vacía) de `VERGIS_GATE_SECRET`: el secreto que oauth2-proxy
+ * comparte con vergis para el gate en profundidad (A10). Su sola presencia marca un despliegue con gate.
+ */
+export type DevIdentityDecision =
+  | { mode: 'off' }
+  | { mode: 'active'; identity: DevIdentity }
+  | { mode: 'ignored-gate' }
+  | { mode: 'invalid'; raw: string }
+
+/** Parsea `"email"` o `"email:grupo1,grupo2"` → DevIdentity. `null` si no hay email. */
+export function parseDevIdentity(raw: string): DevIdentity | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const sep = trimmed.indexOf(':')
+  const user = (sep === -1 ? trimmed : trimmed.slice(0, sep)).trim()
+  if (!user) return null
+  const groups = (sep === -1 ? '' : trimmed.slice(sep + 1))
+    .split(',')
+    .map((g) => g.trim())
+    .filter(Boolean)
+  const claims: Record<string, string[]> = {}
+  if (groups.length > 0) claims['groups'] = groups
+  return { user, claims }
+}
+
+/** Decide si `VERGIS_DEV_IDENTITY` se activa. Fail-safe: gate real presente ⇒ jamás activa. */
+export function decideDevIdentity(env: Env): DevIdentityDecision {
+  const raw = (env['VERGIS_DEV_IDENTITY'] ?? '').trim()
+  if (!raw) return { mode: 'off' }
+  // Señal inequívoca de despliegue con gate real → el env de dev se ignora (seguridad primero).
+  if ((env['VERGIS_GATE_SECRET'] ?? '').trim() !== '') return { mode: 'ignored-gate' }
+  const identity = parseDevIdentity(raw)
+  if (!identity) return { mode: 'invalid', raw }
+  return { mode: 'active', identity }
 }
 
 type Env = Record<string, string | undefined>
@@ -136,9 +197,11 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
     throw new Error(`VERGIS_ENGINE inválido: '${engine}' (clickhouse | fabric).`)
   }
   const envSecret = env['VERGIS_ANNOTATION_SECRET']
+  const devDecision = decideDevIdentity(env)
   return {
     engine,
     miranda: mirandaConfig(env),
+    devIdentity: devDecision.mode === 'active' ? devDecision.identity : null,
     port: num(env, 'PORT', 8080),
     refreshMs: num(env, 'VERGIS_REFRESH_MS', 0),
     dataCacheTtlMs: num(env, 'VERGIS_DATA_CACHE_TTL_MS', 0),

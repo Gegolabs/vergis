@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { configFromEnv } from '../server/config'
+import { configFromEnv, decideDevIdentity, parseDevIdentity } from '../server/config'
 
 const fixedSecret = () => 'SECRET-EFIMERO'
 
@@ -55,5 +55,48 @@ describe('configFromEnv · engine, listas, gate y secreto', () => {
   it('VERGIS_PI_ACL=on enciende la ACL; VERGIS_HOT_RELOAD=0 la apaga', () => {
     expect(configFromEnv({ VERGIS_PI_ACL: 'on' }, fixedSecret).piAclEnabled).toBe(true)
     expect(configFromEnv({ VERGIS_HOT_RELOAD: '0' }, fixedSecret).hotReload).toBe(false)
+  })
+})
+
+describe('parseDevIdentity · email o email:grupos', () => {
+  it('solo email → user sin claims', () => {
+    expect(parseDevIdentity('ana@x.com')).toEqual({ user: 'ana@x.com', claims: {} })
+  })
+  it('email:grupos → claim groups como arreglo (limpia espacios y vacíos)', () => {
+    expect(parseDevIdentity('ana@x.com: miranda , admin ,')).toEqual({
+      user: 'ana@x.com',
+      claims: { groups: ['miranda', 'admin'] },
+    })
+  })
+  it('vacío o sin email → null', () => {
+    expect(parseDevIdentity('')).toBeNull()
+    expect(parseDevIdentity('   ')).toBeNull()
+    expect(parseDevIdentity(':miranda')).toBeNull()
+  })
+})
+
+describe('decideDevIdentity · fail-safe (imposible activar con gate real)', () => {
+  it('env ausente → off (comportamiento idéntico a hoy)', () => {
+    expect(decideDevIdentity({})).toEqual({ mode: 'off' })
+    expect(configFromEnv({}, fixedSecret).devIdentity).toBeNull()
+  })
+  it('seteado y SIN gate real → active con la identidad parseada', () => {
+    const d = decideDevIdentity({ VERGIS_DEV_IDENTITY: 'cesar@x.com:miranda' })
+    expect(d).toEqual({ mode: 'active', identity: { user: 'cesar@x.com', claims: { groups: ['miranda'] } } })
+    expect(configFromEnv({ VERGIS_DEV_IDENTITY: 'cesar@x.com:miranda' }, fixedSecret).devIdentity).toEqual({
+      user: 'cesar@x.com',
+      claims: { groups: ['miranda'] },
+    })
+  })
+  it('seteado CON gate real (VERGIS_GATE_SECRET) → ignored-gate, jamás inyecta', () => {
+    const env = { VERGIS_DEV_IDENTITY: 'cesar@x.com:miranda', VERGIS_GATE_SECRET: 'proxy-token' }
+    expect(decideDevIdentity(env)).toEqual({ mode: 'ignored-gate' })
+    expect(configFromEnv(env, fixedSecret).devIdentity).toBeNull()
+  })
+  it('VERGIS_GATE_SECRET vacío NO cuenta como gate real → sigue activo', () => {
+    expect(decideDevIdentity({ VERGIS_DEV_IDENTITY: 'x@x.com', VERGIS_GATE_SECRET: '' }).mode).toBe('active')
+  })
+  it('seteado pero sin email parseable → invalid (se ignora)', () => {
+    expect(decideDevIdentity({ VERGIS_DEV_IDENTITY: ':solo-grupos' })).toEqual({ mode: 'invalid', raw: ':solo-grupos' })
   })
 })
