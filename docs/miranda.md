@@ -102,6 +102,13 @@ rúbrica y el método montados por la instancia + el draft + el resumen de inten
 **mismo vocabulario cerrado** del método: veredicto (`APROBADA · APROBABLE · NO_APROBABLE ·
 NO_REVISABLE`) y brechas (`B · M · m · i`). El gate de `publish` vive en código: rechaza con B/M abiertas.
 
+**Forma por vista (guard anti-F-01).** El resumen de intención lleva `vistas[]`: por cada vista del PI,
+su `forma` (`tabla · dashboard · mixta`) y sus `piezas` (`tarjetas · graficos · tabla`). Es la intención
+VISUAL, validable por el usuario sin leer el DSL. El self-check la cruza contra las piezas reales del
+draft (KPI/dato→tarjetas, chart/series/distribution→graficos, table→tabla): una vista cuya forma o piezas
+declaradas no calzan con lo que dibuja el draft —o un draft visual sin forma declarada— es brecha `M`.
+Este cruce es enforcement en código (`crossCheckForma`), no solo prompt.
+
 ## ¿Qué NO hace Miranda (Fase 1)?
 
 Ejecutar DDL/DML, escribir al terreno, tocar policies, reiniciar servicios, construir datos nuevos

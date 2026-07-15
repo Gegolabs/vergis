@@ -100,6 +100,20 @@ const ENTRIES: ToolEntry[] = [
           medidas: { type: 'array' },
           dimensiones: { type: 'array' },
           controles: { type: 'array' },
+          vistas: {
+            type: 'array',
+            description:
+              'Forma visual POR VISTA (validable sin ver el DSL): una entrada por vista/página con {nombre, forma: tabla|dashboard|mixta, piezas: [tarjetas|graficos|tabla]}. La forma debe calzar con las piezas del draft.',
+            items: {
+              type: 'object',
+              properties: {
+                nombre: { type: 'string' },
+                forma: { type: 'string', enum: ['tabla', 'dashboard', 'mixta'] },
+                piezas: { type: 'array', items: { type: 'string', enum: ['tarjetas', 'graficos', 'tabla'] } },
+              },
+              required: ['nombre', 'forma'],
+            },
+          },
           reglas: { type: 'array' },
           estados_o_casos_borde: { type: 'array' },
           criterios_de_aceptacion: { type: 'array' },

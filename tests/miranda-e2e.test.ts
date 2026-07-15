@@ -82,7 +82,7 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
     const transport = scriptedTransport([
       // turno 1
       tu('catalog_tables', {}),
-      tu('update_intent_summary', { titulo: 'Saldos por empresa', pregunta_de_negocio: '¿Cuánto saldo por empresa?', audiencia: 'Finanzas', grano: 'empresa' }),
+      tu('update_intent_summary', { titulo: 'Saldos por empresa', pregunta_de_negocio: '¿Cuánto saldo por empresa?', audiencia: 'Finanzas', grano: 'empresa', vistas: [{ nombre: 'Saldos por empresa', forma: 'tabla', piezas: ['tabla'] }] }),
       txt('Te propongo ese resumen. Valídalo cuando quieras.'),
       // turno 2
       tu('save_draft', { yaml: GOOD_SPEC }),
@@ -124,7 +124,10 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
     await h.tryHandle(mkReq('/miranda/api/s/e2e/message', 'POST', { _csrf: token, text: 'quiero saldos por empresa' }), r.res)
     await r.p
     expect((await gov.getMirandaSession('e2e'))?.state).toBe('borrador') // update_intent_summary lo movió
-    expect(await gov.latestMirandaArtifact('e2e', 'intent_summary')).not.toBeNull()
+    const intentArt = await gov.latestMirandaArtifact('e2e', 'intent_summary')
+    expect(intentArt).not.toBeNull()
+    // El resumen extendido lleva la forma por vista (guard anti-F-01).
+    expect(JSON.parse(intentArt!.content).vistas).toEqual([{ nombre: 'Saldos por empresa', forma: 'tabla', piezas: ['tabla'] }])
 
     // Validar intención
     r = mkRes()

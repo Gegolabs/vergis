@@ -9,7 +9,9 @@
  */
 import type { AnthropicTransport, ToolUseBlock } from './transport'
 import type { ToolDefinition } from './tools/registry'
-import { VEREDICTOS, SEVERIDADES, type SelfCheckResult, type Veredicto, type Severidad, type Brecha } from './qc'
+import { VEREDICTOS, SEVERIDADES, hasBlockingGaps, type SelfCheckResult, type Veredicto, type Severidad, type Brecha } from './qc'
+import { crossCheckForma } from './forma'
+import { normalizeIntent, type FormaVista } from './intent'
 
 export type { SelfCheckResult, Brecha } from './qc'
 
@@ -108,5 +110,29 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckResult
   })
   const toolUse = (resp.content as { type: string }[]).find((b): b is ToolUseBlock => b.type === 'tool_use') as ToolUseBlock | undefined
   if (!toolUse) return { veredicto: 'NO_REVISABLE', brechas: [{ id: 'G0', sev: 'B', brecha: 'El juez no emitió un reporte estructurado.', donde: 'self-check', recomendacion: 'Reintentar el self-check.' }] }
-  return normalizeReport(toolUse.input)
+  const report = normalizeReport(toolUse.input)
+  return mergeFormaCross(report, deps.intentSummary, deps.draftYaml)
+}
+
+/** Extrae `vistas[]` del resumen de intención serializado (tolerante: JSON ilegible → sin vistas). */
+function declaredVistas(intentJson: string): FormaVista[] | undefined {
+  try {
+    const o = JSON.parse(intentJson) as Record<string, unknown>
+    return normalizeIntent(o).vistas
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Funde el cruce de FORMA por vista (enforcement en código) al reporte del juez. Si el cruce agrega
+ * brechas B/M y el veredicto del juez era APROBADA, se degrada a APROBABLE (una M es incompatible con
+ * APROBADA en el vocabulario del método). IDs `FORMA-N` estables entre rondas.
+ */
+export function mergeFormaCross(report: SelfCheckResult, intentJson: string, draftYaml: string): SelfCheckResult {
+  const formaBrechas = crossCheckForma(declaredVistas(intentJson), draftYaml)
+  if (formaBrechas.length === 0) return report
+  const brechas = [...report.brechas, ...formaBrechas]
+  const veredicto: Veredicto = report.veredicto === 'APROBADA' && hasBlockingGaps(brechas) ? 'APROBABLE' : report.veredicto
+  return { veredicto, brechas }
 }
