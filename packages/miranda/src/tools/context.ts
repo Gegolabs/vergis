@@ -5,14 +5,12 @@
  */
 import type { IntentSummary } from '../intent'
 import type { SelfCheckResult } from '../qc'
+import type { AccionDeCierre, NivelAcceso } from '../catalog'
 
-/** Una entrada del catálogo (allowlist de instancia). */
-export interface CatalogEntry {
-  name: string
-  schema?: string
-  description?: string
-  rows_estimate?: number
-}
+// `CatalogEntry` y el modelo de niveles viven en `../catalog` (fuente única). Se re-exporta acá por
+// compat de imports (`@vergis/miranda` y el server lo tomaban de `context`).
+export type { CatalogEntry, NivelAcceso, AccionDeCierre } from '../catalog'
+import type { CatalogEntry } from '../catalog'
 
 /** Una spec existente, como ejemplar read-only. */
 export interface SpecRef {
@@ -21,10 +19,8 @@ export interface SpecRef {
 }
 
 export interface MirandaToolContext {
-  /** Allowlist de catálogo (lo que las probes pueden tocar). */
+  /** Censo de fuentes multi-nivel. Solo las `gestionado` son probeables (ver `probeableNames`/`nivelForName`). */
   catalog: CatalogEntry[]
-  /** ¿El objeto está en el allowlist? (por hoja del nombre). */
-  isAllowed(table: string): boolean
   /** Ejecuta una probe (ya guardada + `TOP` forzado). `why` se registra para auditoría. */
   runProbe(sql: string, why: string): Promise<{ rows: Record<string, unknown>[] } | { error: string }>
   /** Columnas + tipos de un objeto del catálogo (metadata acotada al objeto allowlisteado). */
@@ -43,8 +39,14 @@ export interface MirandaToolContext {
   saveDraft(yaml: string): Promise<{ version: number }>
   /** Actualiza el resumen de intención (artifact `intent_summary` vN) e invalida `validado`. */
   updateIntent(summary: IntentSummary): Promise<{ version: number }>
-  /** Registra un requerimiento de datos (handoff a César+Claude): artifact `data_request`. */
-  createDataRequest(descripcion: string, tablasFaltantes: string[]): Promise<{ ok: true }>
+  /** Registra un requerimiento de datos (handoff a César+Claude): artifact `data_request`. El `nivel`
+   *  (naturaleza de la brecha) y la `accionDeCierre` (conectar/curar/intake/levantar/descubrir) hacen el
+   *  handoff accionable; el request es interno (el usuario no lo ve nombrado). */
+  createDataRequest(
+    descripcion: string,
+    tablasFaltantes: string[],
+    opts?: { nivel?: NivelAcceso; accionDeCierre?: AccionDeCierre },
+  ): Promise<{ ok: true }>
   /** Registra el último draft como preview efímera y devuelve su URL. */
   renderPreview(): Promise<{ url: string }>
   /** Corre el self-check QC① (llamada separada al modelo) sobre el estado vigente. */

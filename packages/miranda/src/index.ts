@@ -8,7 +8,19 @@ export const MIRANDA_VERSION = '0.1.0'
 export { guardProbeSql, referencedTables, SqlGuardError, type SqlGuardOptions, type GuardedProbe } from './tools/sql-guard'
 export { buildToolRegistry, type ToolRegistry, type ToolDefinition } from './tools/registry'
 export { repr, type ToolResult } from './tools/tools'
-export type { MirandaToolContext, CatalogEntry, SpecRef } from './tools/context'
+export type { MirandaToolContext, SpecRef } from './tools/context'
+export {
+  parseCatalog,
+  nivelOf,
+  isProbeable,
+  probeableNames,
+  nivelForName,
+  NIVELES_ACCESO,
+  ACCIONES_DE_CIERRE,
+  type CatalogEntry,
+  type NivelAcceso,
+  type AccionDeCierre,
+} from './catalog'
 export { validateIntentSummary, normalizeIntent, normalizeFormaVista, FORMAS, PIEZAS, type IntentSummary, type Forma, type Pieza, type FormaVista } from './intent'
 export { crossCheckForma, derivePiecesFromDraft, formaFromPiezas, type DraftView } from './forma'
 export { hasBlockingGaps, VEREDICTOS, SEVERIDADES, type Veredicto, type Severidad, type Brecha, type SelfCheckResult } from './qc'

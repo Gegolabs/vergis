@@ -19,6 +19,7 @@ import {
   TokenBudgetExceeded,
   buildToolRegistry,
   guardProbeSql,
+  probeableNames,
   hasBlockingGaps,
   type AnthropicTransport,
   type AnthropicMessage,
@@ -82,11 +83,11 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
 
   /** Contexto de tools para una sesión + identidad. */
   function toolContext(sessionId: string, email: string | undefined): MirandaToolContext {
-    const allowLeaf = new Set(deps.catalog.map((c) => c.name.split('.').pop()!.toLowerCase()))
-    const isAllowed = (t: string): boolean => allowLeaf.has(t.split('.').pop()!.toLowerCase())
+    // Allowlist de la guardia = SOLO las fuentes gestionadas (probeables). Las tools ya rechazan por
+    // nivel antes de llegar acá (defensa en profundidad); la guardia lo re-afirma sobre el SQL.
+    const probeable = probeableNames(deps.catalog)
     return {
       catalog: deps.catalog,
-      isAllowed,
       runProbe: async (sql, _why) => {
         try {
           return await deps.probe(sql, email)
@@ -96,13 +97,13 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       },
       columnsOf: (table) => deps.columnsOf(table),
       sampleRows: async (table, n) => {
-        const g = guardProbeSql(`SELECT * FROM ${table}`, { allowlist: deps.catalog.map((c) => c.name), topLimit: n })
+        const g = guardProbeSql(`SELECT * FROM ${table}`, { allowlist: probeable, topLimit: n })
         return (await deps.probe(g.sql, email)).rows
       },
       profileColumn: async (table, column, top) => {
         if (!IDENT_RE.test(column)) throw new Error(`Columna inválida: '${column}'.`)
         const g = guardProbeSql(`SELECT ${column} AS value, COUNT(*) AS count FROM ${table} GROUP BY ${column} ORDER BY COUNT(*) DESC`, {
-          allowlist: deps.catalog.map((c) => c.name),
+          allowlist: probeable,
           topLimit: top,
         })
         const rows = (await deps.probe(g.sql, email)).rows
@@ -125,8 +126,12 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         if (s && (s.state === 'validado' || s.state === 'autochequeado')) await deps.gov.setMirandaState(sessionId, 'borrador')
         return { version }
       },
-      createDataRequest: async (descripcion, tablasFaltantes) => {
-        await deps.gov.appendMirandaArtifact(sessionId, 'data_request', JSON.stringify({ descripcion, tablasFaltantes }))
+      createDataRequest: async (descripcion, tablasFaltantes, opts) => {
+        await deps.gov.appendMirandaArtifact(
+          sessionId,
+          'data_request',
+          JSON.stringify({ descripcion, tablasFaltantes, nivel: opts?.nivel, accionDeCierre: opts?.accionDeCierre }),
+        )
         return { ok: true }
       },
       renderPreview: async () => {

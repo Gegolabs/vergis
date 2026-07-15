@@ -136,8 +136,25 @@ const ENTRIES: ToolEntry[] = [
   {
     def: {
       name: 'create_data_request',
-      description: 'Registra un requerimiento de datos (handoff a César+Claude) cuando la intención pide datos que el catálogo NO tiene. Miranda especifica; NO construye datos en esta fase.',
-      input_schema: OBJ({ descripcion: { type: 'string' }, tablas_faltantes: { type: 'array' } }, ['descripcion']),
+      description:
+        'Registra un requerimiento de datos (handoff INTERNO a César+Claude) cuando la intención pide datos que aún no están en la capa servible. Miranda especifica; NO construye datos en esta fase. Clasifica la brecha con `nivel` y su `accion_de_cierre` para que el handoff sea accionable. El request es interno: el usuario NO lo ve nombrado (a él se le habla en expectativa de entrega).',
+      input_schema: OBJ(
+        {
+          descripcion: { type: 'string' },
+          tablas_faltantes: { type: 'array' },
+          nivel: {
+            type: 'string',
+            enum: ['gestionado', 'conectado', 'conectable', 'alcanzable', 'elicitable'],
+            description: 'Naturaleza de la brecha: conectado=sistema con acceso vivo sin curar (SAP/Buk) · conectable=sistema sin conector (Transtecnia) · alcanzable=artefacto manual pedible (Excel) · elicitable=conocimiento de personas sin instrumento.',
+          },
+          accion_de_cierre: {
+            type: 'string',
+            enum: ['curar', 'conectar', 'intake-recurrente', 'levantar', 'descubrir'],
+            description: 'Cómo se cierra la brecha: curar (nivel conectado) · conectar (conectable) · intake-recurrente (alcanzable) · levantar (elicitable) · descubrir (fuente desconocida).',
+          },
+        },
+        ['descripcion'],
+      ),
     },
     fn: createDataRequest,
   },

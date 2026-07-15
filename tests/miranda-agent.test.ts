@@ -35,7 +35,6 @@ function ctx(over: Partial<MirandaToolContext> = {}): MirandaToolContext {
   const catalog = [{ name: 'dbo.v_saldos' }]
   return {
     catalog,
-    isAllowed: () => true,
     runProbe: async () => ({ rows: [{ n: 1 }] }),
     columnsOf: async () => [],
     sampleRows: async () => [],

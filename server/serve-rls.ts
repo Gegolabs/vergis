@@ -37,7 +37,7 @@ import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
 import { type AnnotationContext, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec } from '@vergis/mira'
 import { createMiranda, type MirandaServerDeps } from './miranda'
-import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
+import { fetchAnthropicTransport, buildSystemPrompt, parseCatalog, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
   bootstrapClickHouse,
   createIngestClickHouse,
@@ -927,13 +927,16 @@ if (config.miranda.enabled) {
   try {
     // Store: reusa el de gobierno si existe; si no, abre uno (Miranda necesita persistir sesiones).
     const govForMiranda = governance ?? (await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, { admins: ADMIN_SEED }))
-    // Catálogo (allowlist de probes) — config de instancia (JSON: lista o {catalog:[…]}).
+    // Catálogo (censo de fuentes multi-nivel) — config de instancia (JSON: lista o {catalog:[…]}).
+    // Solo el nivel `gestionado` es probeable; el resto se cataloga para que Miranda razone la
+    // expectativa de entrega. Sin `nivel` ⇒ gestionado (compat con el catalog.json histórico).
     const catalog: CatalogEntry[] = (() => {
       const p = config.miranda.catalogPath
       if (!p) return []
       try {
-        const parsed = JSON.parse(readFileSync(resolve(p), 'utf8')) as CatalogEntry[] | { catalog?: CatalogEntry[] }
-        return Array.isArray(parsed) ? parsed : (parsed.catalog ?? [])
+        const { catalog: entries, warnings } = parseCatalog(JSON.parse(readFileSync(resolve(p), 'utf8')))
+        for (const w of warnings) console.warn(`[vergis-rls] Miranda catálogo: ${w}`)
+        return entries
       } catch (e) {
         console.error(`[vergis-rls] Miranda: catálogo no cargado (${e instanceof Error ? e.message : e}). Sin catálogo, las probes quedan sin objetos.`)
         return []
@@ -1047,7 +1050,8 @@ if (config.miranda.enabled) {
         : undefined,
     }
     miranda = createMiranda(mirandaDeps)
-    console.log(`[vergis-rls] Miranda ACTIVA · modelo=${config.miranda.model} · catálogo=${catalog.length} objeto(s) · scope=${config.miranda.scopeGroup}`)
+    const probeableCount = catalog.filter((c) => (c.nivel ?? 'gestionado') === 'gestionado').length
+    console.log(`[vergis-rls] Miranda ACTIVA · modelo=${config.miranda.model} · catálogo=${catalog.length} fuente(s) (${probeableCount} probeable(s)) · scope=${config.miranda.scopeGroup}`)
   } catch (e) {
     console.error(`[vergis-rls] Miranda deshabilitada por error de arranque: ${e instanceof Error ? e.message : String(e)}`)
     throw e // el flag está ON: un fallo de arranque no debe degradar en silencio.
