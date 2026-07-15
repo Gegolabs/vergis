@@ -82,6 +82,26 @@ pedirle al **CISO** que habilite el reporte X a los usuarios K y Q; lo gestiona 
 se comparte con **grupos de Mira** (listas de correos, sembradas de config, editables en Administración)
 y/o correos individuales.
 
+### Identidad de desarrollo — `VERGIS_DEV_IDENTITY` (solo dev, fail-safe)
+
+En un despliegue de **desarrollo sin gate** (sin oauth2-proxy delante) ninguna request trae los headers
+`x-forwarded-*`, así que la identidad es vacía y toda superficie con scope responde 403 — imposible de
+manejar desde el navegador local. `VERGIS_DEV_IDENTITY` inyecta una identidad fija para **manejar Mira y
+los PIs desde el browser** sin forjar headers por curl. Formato: `email` o `email:grupo1,grupo2` (los
+grupos pueblan el claim `groups`, como lo haría `x-forwarded-groups` en producción).
+
+**Es imposible de activar donde hay gate real** — el requisito de seguridad #1:
+
+| Condición | Comportamiento |
+|--|--|
+| Env **ausente** | Idéntico a hoy: sin identidad de dev, 403 preservado aguas abajo. |
+| Env seteado **∧ SIN** gate real | Se inyecta a las requests **sin** header de gate. Una request **con** header de gate → el header MANDA (permite probar 403/otras identidades por curl). Log de arranque: `⚠ DEV IDENTITY ACTIVA (<email>) — NO USAR EN PRODUCCIÓN`. |
+| Env seteado **∧ CON** gate real | **Se ignora** (nunca inyecta). Señal de gate real: `VERGIS_GATE_SECRET` presente (el secreto que comparte oauth2-proxy). Log: `VERGIS_DEV_IDENTITY ignorado: hay gate real`. |
+
+La decisión de activación es pura y testeada (`decideDevIdentity` en `server/config.ts`); la presencia
+de `VERGIS_GATE_SECRET` gana **siempre**. Como defensa en profundidad, con `VERGIS_GATE_SECRET` definido
+el gate A10 además rechaza (403) toda request sin `x-gate-token` antes de resolver identidad alguna.
+
 ### Bootstrap del ownership
 
 El **dueño inicial** de un PI se siembra de config de instancia (hoy: el dueño del ticket de gestión

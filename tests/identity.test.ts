@@ -42,3 +42,50 @@ describe('createIdentity · enriquecimiento desde el directorio (IdentityMap)', 
     expect(id.claims).toBeUndefined()
   })
 })
+
+describe('createIdentity · dev identity inyectable (los tres caminos)', () => {
+  const DEV = { user: 'cesar@x.com', claims: { groups: ['miranda'] } }
+
+  it('sin header de gate + dev activa → inyecta la identidad de dev', () => {
+    const { identityFor } = createIdentity(CLAIMS, null, DEV)
+    const id = identityFor({}) // browser local: sin headers de gate
+    expect(id.user).toBe('cesar@x.com')
+    expect(id.claims).toEqual({ groups: ['miranda'] })
+  })
+
+  it('CON header de gate + dev activa → el header MANDA (dev se ignora)', () => {
+    const { identityFor } = createIdentity(CLAIMS, null, DEV)
+    const id = identityFor({ 'x-forwarded-email': 'otra@x.com', 'x-forwarded-groups': 'ventas' })
+    expect(id.user).toBe('otra@x.com')
+    expect(id.claims).toEqual({ groups: ['ventas'] })
+  })
+
+  it('header de gate presente aunque solo traiga groups → NO se inyecta dev (el header manda)', () => {
+    const { identityFor } = createIdentity(CLAIMS, null, DEV)
+    const id = identityFor({ 'x-forwarded-groups': 'ventas' })
+    expect(id.user).toBeUndefined()
+    expect(id.claims).toEqual({ groups: ['ventas'] })
+  })
+
+  it('sin dev identity + sin header → identidad vacía (403 preservado, comportamiento de hoy)', () => {
+    const { identityFor } = createIdentity(CLAIMS, null)
+    const id = identityFor({})
+    expect(id.user).toBeUndefined()
+    expect(id.claims).toBeUndefined()
+  })
+
+  it('dev identity solo-email (sin grupos) → user sin claims', () => {
+    const { identityFor } = createIdentity(CLAIMS, null, { user: 'solo@x.com', claims: {} })
+    const id = identityFor({})
+    expect(id.user).toBe('solo@x.com')
+    expect(id.claims).toBeUndefined()
+  })
+
+  it('dev identity + IdentityMap → la inyectada también se enriquece por el directorio', () => {
+    const MAP = { 'cesar@x.com': { viewer_area: 'Producción' } }
+    const { identityFor } = createIdentity(CLAIMS, MAP, DEV)
+    const id = identityFor({})
+    expect(id.user).toBe('cesar@x.com')
+    expect(id.claims).toEqual({ groups: ['miranda'], viewer_area: ['Producción'] })
+  })
+})

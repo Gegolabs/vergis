@@ -4,6 +4,25 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.12.0 — 2026-07-15
+
+**`VERGIS_DEV_IDENTITY` — identidad de desarrollo inyectable (fail-safe)** (work/087). En un despliegue
+de dev **sin gate** (sin oauth2-proxy) ninguna request trae `x-forwarded-*` → identidad vacía → 403 en
+toda superficie con scope, imposible de manejar desde el navegador. Este env inyecta una identidad fija
+para **manejar Mira y los PIs desde el browser local** sin forjar headers por curl. Formato: `email` o
+`email:grupo1,grupo2` (los grupos pueblan el claim `groups`). Doc:
+[`docs/gobierno-permisos.md`](docs/gobierno-permisos.md) §«Identidad de desarrollo».
+
+- **Seguridad (requisito #1): imposible de activar donde hay gate real.** La activación es
+  `seteado ∧ ¬gate-real`; la señal de gate real es la presencia de `VERGIS_GATE_SECRET`. Con gate real
+  presente el env **se ignora** (nunca inyecta) y se emite un warning al arranque — config contradictoria
+  prioriza seguridad. Sin el env, comportamiento **idéntico a hoy** (test de regresión). La decisión vive
+  en una función pura y testeada (`decideDevIdentity`); el header de gate, cuando existe, **siempre gana**.
+- **Los tres caminos** — sin gate + env → una request sin header toma la identidad del env; con header de
+  gate → el header manda (se preserva el 403/otras identidades por curl); sin env → sin cambio alguno.
+- **Defensa en profundidad** — con `VERGIS_GATE_SECRET` definido, el gate A10 rechaza (403) toda request
+  sin `x-gate-token` antes de resolver identidad, además de que el env queda inerte.
+
 ## 0.11.0 — 2026-07-14
 
 **Miranda — agente conversacional que autora specs de PI** (cluster 077, Fase 1). Capacidad nueva del
