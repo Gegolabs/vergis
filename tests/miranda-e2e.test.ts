@@ -163,3 +163,73 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
     expect(content).toContain('code: PI-101')
   })
 })
+
+// Plan 100 · entrega-primero: una petición con parte servible produce resumen + draft + self-check +
+// preview EN EL PRIMER TURNO, sin peaje de validación previa. La preview es efímera (el riel RLS
+// devuelve su URL como resultado de tool, no un artefacto persistido); la validación del usuario y el
+// publish siguen gated aparte. Aquí verificamos que el turno único entrega hasta la preview.
+describe('plan 100 · entrega-primero en el primer turno (sin red)', () => {
+  it('un solo turno: resumen + draft + self-check + preview, sin validate-intent previo', async () => {
+    const gov = await SqliteGovernanceStore.open(null)
+    const writeSpec = vi.fn(async (_f: string, _c: string) => {})
+    // Guion de UN turno: explora, compone el resumen, el draft, corre el self-check (juez emite su
+    // veredicto por el mismo transport), sirve la preview y cierra presentando el resultado.
+    const transport = scriptedTransport([
+      tu('catalog_tables', {}),
+      tu('update_intent_summary', { titulo: 'Saldos por empresa', pregunta_de_negocio: '¿Cuánto saldo por empresa?', audiencia: 'Finanzas', grano: 'empresa', vistas: [{ nombre: 'Saldos por empresa', forma: 'tabla', piezas: ['tabla'] }] }),
+      tu('save_draft', { yaml: GOOD_SPEC }),
+      tu('run_self_check', {}),
+      tu('emit_qc_report', { veredicto: 'APROBADA', brechas: [] }), // juez, mismo transport
+      tu('render_preview', {}),
+      txt('Aquí lo tienes con lo disponible ahora: saldos por empresa. Si lo prefieres con otro corte, dime y lo ajusto.'),
+    ])
+    const deps: MirandaServerDeps = {
+      gov,
+      transport,
+      model: 'm',
+      systemPrompt: 'sys',
+      maxTurns: 10,
+      tokenBudget: 500000,
+      catalog: [{ name: 'dbo.v_saldos' }],
+      configuredRefs: [],
+      identityOf: () => ({ user: EMAIL }),
+      hasScope: async () => true,
+      probe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),
+      columnsOf: async () => [{ name: 'empresa', type: 'nvarchar' }, { name: 'saldo', type: 'int' }],
+      validateDraft: (yaml) => {
+        try {
+          validateSpec(parseSpec(yaml), { capabilities: ['execute-sql-dwh', 'publicar-artefacto'], schema })
+          return { ok: true }
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) }
+        }
+      },
+      listSpecs: () => [],
+      readSpec: () => null,
+      writeSpec,
+      renderPreviewHtml: async () => '<html>PREVIEW</html>',
+      secret: SECRET,
+    }
+    const h = createMiranda(deps)
+    await gov.createSession('ep', 'Saldos por empresa', EMAIL)
+
+    // UN solo turno — nada de validate-intent en el medio (ese es el punto de entrega-primero).
+    const r = mkRes()
+    await h.tryHandle(mkReq('/miranda/api/s/ep/message', 'POST', { _csrf: token, text: 'quiero un estado de resultado por empresa' }), r.res)
+    await r.p
+    await h.whenIdle()
+
+    // El turno compuso el draft y lo auto-chequeó, sin peaje de validación previa.
+    expect(await gov.latestMirandaArtifact('ep', 'spec_draft')).not.toBeNull()
+    const qc = await gov.latestMirandaArtifact('ep', 'qc_report')
+    expect(JSON.parse(qc!.content).veredicto).toBe('APROBADA')
+
+    // La preview se sirvió por el riel RLS: su URL llegó como resultado de tool en el hilo.
+    const messages = await gov.listMirandaMessages('ep')
+    const blob = messages.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n')
+    expect(blob).toContain('/miranda/preview/ep')
+
+    // Sin validación del usuario, publicar sigue gated: el estado NO llegó a autochequeado.
+    expect((await gov.getMirandaSession('ep'))?.state).toBe('borrador')
+  })
+})

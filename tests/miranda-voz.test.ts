@@ -61,9 +61,9 @@ describe('reglas del plan 099 · prompt ensamblado', () => {
     expect(p).toMatch(/DIAGNÓSTICOS INTERNOS/)
   })
 
-  it('regla 3 — decisión-raíz primero; la disponibilidad va como nota breve después; sin meta-preámbulos', () => {
+  it('regla 3 — decisión-raíz primero (condicionada por plan 100); la disponibilidad va como nota breve después; sin meta-preámbulos', () => {
     expect(p).toMatch(/DECISIÓN-RAÍZ PRIMERO/)
-    expect(p).toMatch(/NOTA BREVE DESPUÉS/)
+    expect(p).toMatch(/NOTA\s+BREVE \(≤2 líneas\) DESPUÉS/) // plan 100 detalló la nota (≤2 líneas)
     expect(p).toMatch(/dos cosas que quiero\s+dejarte claras/i) // el meta-preámbulo, citado como prohibido
   })
 })
@@ -103,5 +103,53 @@ describe('voz · artefactos y procesos internos NO se nombran (refinamiento 099)
     expect(MIRANDA_VOICE).toMatch(/tu sistema contable/)
     expect(MIRANDA_VOICE).toMatch(/planilla que mantiene tu\s+equipo/)
     expect(MIRANDA_VOICE).toMatch(/lenguaje de negocio legítimo/i)
+  })
+})
+
+// Plan 100 · entrega-primero: el mayordomo sirve el default servible en el mismo turno (hasta preview
+// por el riel RLS) en vez de negociar alcance; la decisión-raíz queda condicionada a lo no servible; la
+// voz cierra las fugas de vocabulario de método y las paráfrasis de maquinaria, y exige valor por turno.
+describe('reglas del plan 100 · prompt ensamblado', () => {
+  const p = buildSystemPrompt({ dslDoc: 'DSL de ejemplo' })
+
+  it('ELICITATION contiene ENTREGA-PRIMERO (servible → mismo turno hasta preview)', () => {
+    expect(p).toMatch(/ENTREGA-PRIMERO/)
+    expect(p).toMatch(/render_preview/)
+    expect(p).toMatch(/permiso previo para arrancar/i)
+  })
+
+  it('ELICITATION no delega las decisiones operativas (subconjunto/orden), solo eleva las de dominio', () => {
+    expect(p).toMatch(/DECISIONES OPERATIVAS NO SE DELEGAN/)
+    expect(p).toMatch(/decisiones de DOMINIO/)
+  })
+
+  it('ELICITATION deja la DECISIÓN-RAÍZ PRIMERO condicionada a que NADA sea servible', () => {
+    expect(p).toMatch(/DECISIÓN-RAÍZ PRIMERO \(CONDICIONADA\)/)
+    expect(p).toMatch(/cuando NADA es servible/i)
+    expect(p).toMatch(/niveles 3–6/)
+  })
+
+  it('ELICITATION mantiene el gate de publish tras validación explícita del usuario', () => {
+    expect(p).toMatch(/PUBLICAR NO CAMBIA/)
+    expect(p).toMatch(/validación EXPLÍCITA del usuario/)
+    expect(p).toMatch(/NUNCA publica solo/)
+  })
+
+  it('VOZ prohíbe el vocabulario de método interno («decisión raíz», «self-check», …)', () => {
+    expect(MIRANDA_VOICE).toMatch(/VOCABULARIO DE MÉTODO INTERNO/)
+    expect(MIRANDA_VOICE).toMatch(/«decisión raíz»/)
+    expect(MIRANDA_VOICE).toMatch(/«self-check»/)
+  })
+
+  it('VOZ prohíbe las paráfrasis de maquinaria con el test operativo', () => {
+    expect(MIRANDA_VOICE).toMatch(/PARÁFRASIS DE MAQUINARIA/)
+    expect(MIRANDA_VOICE).toMatch(/la capa que alimenta los reportes/)
+    expect(MIRANDA_VOICE).toMatch(/TEST OPERATIVO/)
+    expect(MIRANDA_VOICE).toMatch(/DISPONIBILIDAD\s+NETA/)
+  })
+
+  it('VOZ exige valor por turno (algo en la mano del usuario; prohibido solo-negociar)', () => {
+    expect(MIRANDA_VOICE).toMatch(/VALOR POR TURNO/)
+    expect(MIRANDA_VOICE).toMatch(/EN LA MANO del usuario/)
   })
 })
