@@ -46,3 +46,39 @@ describe('KPI · la comparación respeta el format del KPI', () => {
     expect(html).not.toContain('vs semana pasada 1<')
   })
 })
+
+// Regresión (bug PRE-EXISTENTE del renderer, destapado por entrega-primero del plan 100 al previsualizar
+// specs de Miranda): un KPI con `accent: true` (BOOLEANO — el schema no constriñe `accent`, típico de un
+// autor que quiere «resaltar») reventaba el render con `s.replace is not a function` — `escapeHtml`
+// recibía el booleano en `render-html-piece.ts`. La preview daba 500 → el lienzo de la etapa C embebía un
+// error. Fix: coerción a string en el sitio (accent es contractualmente un nombre de color).
+const ACCENT_YAML = `
+mira_version: "1.0"
+identity: { id: pi-accent, display_name: "Accent", classification: internal }
+piece:
+  kpi:
+    label: "Resultado"
+    format: int_0
+    metric: data.m.total
+    accent: true
+data:
+  m:
+    capability: mock-sql
+    params: { sql: "SELECT total FROM dbo.m" }
+    shape: { type: single_row, fields: { total: number } }
+quality: {}
+delivery: { render: [{ format: html, target: web }] }
+`
+
+describe('KPI · accent booleano NO revienta el render (regresión pre-existente)', () => {
+  it('accent: true → render OK y data-accent="true", sin TypeError', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vergis-accent-'))
+    const specPath = join(dir, 'spec.yaml')
+    writeFileSync(specPath, ACCENT_YAML)
+    const out = await runSpec({ specPath, baseDir: dir, extraCapabilities: [{ name: 'mock-sql', async execute() { return { rows: [{ total: 12345 }] } } } as Capability] })
+    expect(out.ok).toBe(true) // antes: false + fallback agéntico por el TypeError
+    const html = out.html ?? ''
+    expect(html).toContain('data-accent="true"') // el booleano se coacciona, no rompe
+    expect(html).toContain('12.345') // el valor se formatea (int_0)
+  })
+})

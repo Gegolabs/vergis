@@ -242,7 +242,11 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
 
 function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
   const value = formatValue(node.value, node.format)
-  const accent = node.accent ? ` data-accent="${escapeHtml(node.accent)}"` : ''
+  // `accent` es contractualmente un NOMBRE DE COLOR (string: `data-accent="green|blue|…"`), pero un
+  // spec puede traerlo como booleano (`accent: true` — el schema no lo constriñe). Se coacciona a
+  // string como sus vecinas (evita `true.replace is not a function`); un valor sin color match no
+  // aplica acento (degradación limpia), un color válido sigue funcionando.
+  const accent = node.accent ? ` data-accent="${escapeHtml(String(node.accent))}"` : ''
   // Atributos para recompute client-side (interacción declarada acotada).
   let dataAttrs = ''
   if (opts.interactive && node.agg) {
@@ -311,7 +315,7 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
     const sAttr = opts.interactive
       ? ` data-summary="${escapeHtml(JSON.stringify({ dataset: node.summary.dataset, agg: node.summary.agg, format: node.summary.format }))}"`
       : ''
-    const accent = node.summary.accent ? ` data-accent="${escapeHtml(node.summary.accent)}"` : ''
+    const accent = node.summary.accent ? ` data-accent="${escapeHtml(String(node.summary.accent))}"` : '' // mismo guard que renderKpi: accent puede venir booleano
     summaryHtml =
       `<div class="semaforo-summary"${accent}${sAttr}>` +
       `<span class="ss-val">${escapeHtml(formatValue(node.summary.value, node.summary.format))}</span>` +
