@@ -128,6 +128,11 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-budget b{color:var(--fg);font-weight:600}
 .mir-budget--warn{color:var(--err)}
 .mir-budget--warn b{color:var(--err)}
+/* Lienzo (plan 101 etapa C): el reporte embebido es el protagonista de la 2ª columna. */
+.mir-canvas{width:100%;height:min(72vh,680px);border:1px solid var(--border);border-radius:12px;background:var(--bg);display:block}
+.mir-canvas-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+.mir-canvas-detach{font-size:12px;color:var(--muted)}
+.mir-canvas-empty{border:1px dashed var(--border);border-radius:12px;padding:48px 20px;text-align:center;background:var(--card)}
 /* Ficha técnica (plan 101 etapa B): sustento a demanda, disclosure cerrado por defecto, con secciones
    legibles (Intención · Verificación · Definición técnica). CSS-only. */
 .mir-ficha{margin-top:14px;border:1px solid var(--border);border-radius:12px;background:var(--card)}

@@ -444,9 +444,12 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
-    const intentPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content)
+    // Aside = LIENZO (el reporte embebido, protagonista) + ficha técnica (sustento, secundaria) +
+    // presupuesto (maquinaria). El «Publicar» y el link «desprendido» viven junto al lienzo.
+    const canvas = renderCanvas(sessionId, s, token, draft?.content)
+    const fichaPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content)
     const tokensUsed = await deps.gov.mirandaSessionTokens(sessionId)
-    const aside = `${intentPanel}${renderBudgetLine(tokensUsed, deps.tokenBudget)}`
+    const aside = `${canvas}${fichaPanel}${renderBudgetLine(tokensUsed, deps.tokenBudget)}`
     let composer: string
     if (s.state === 'publicado') {
       composer = `<div class="mir-composer"><p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p></div>`
@@ -468,8 +471,8 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
            </form>
          </div>`
     }
-    // El sidebar es discreto mientras no haya un resumen de intención que mostrar.
-    const intentEmpty = !intentArt
+    // El aside se lee «vacío» (borde punteado) mientras no haya reporte que mostrar como lienzo.
+    const intentEmpty = !draft
     const convInner = `<h2>Conversación</h2>
            <div class="mir-thread">${chat}</div>
            ${composer}`
@@ -652,16 +655,31 @@ export function renderIntentPanel(
     ? `<section class="mir-ficha-sec"><h3>Definición técnica</h3><pre class="mir-ficha-dsl">${escapeHtml(draftYaml)}</pre></section>`
     : ''
 
-  // La ficha técnica: disclosure CERRADO por defecto (CSS-only). Guarda la JUSTIFICACIÓN, no las acciones.
-  const ficha = `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}</div></details>`
+  // La ficha técnica: disclosure CERRADO por defecto (CSS-only). Guarda la JUSTIFICACIÓN, no las
+  // acciones — «Publicar» y el link al reporte viven junto al LIENZO (`renderCanvas`, plan 101 etapa C).
+  return `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}</div></details>`
+}
 
-  // Acciones (superficie principal, FUERA de la ficha): el link al reporte y «Publicar».
-  const preview = draftYaml ? `<p><a href="/miranda/preview/${escapeHtml(sessionId)}" target="_blank">Ver reporte (con tu RLS) ↗</a></p>` : ''
+/**
+ * LIENZO (plan 101 etapa C): el reporte generado es el protagonista de la 2ª columna. Se embebe por el
+ * MISMO riel RLS (`/miranda/preview/<sid>`, mismo-origen) en un `<iframe>` — la request del iframe lleva
+ * las cookies del proxy y su identidad se deriva de sus propios headers (`identityFor(req.headers)` en
+ * `handlePreview`/`renderPreviewHtml`), IDÉNTICA a la del standalone: cero canal lateral, misma RLS.
+ * Un link «desprendido» (`target="_blank"`) abre el reporte standalone. «Publicar» se reubica aquí, en la
+ * superficie principal. Sin draft aún → placeholder sobrio (NO la ficha). Server-render, cero JS.
+ */
+export function renderCanvas(sessionId: string, s: MirandaSession, token: string, draftYaml?: string): string {
+  const sid = escapeHtml(sessionId)
+  if (!draftYaml) {
+    return `<div class="mir-canvas-empty"><p class="sub">El reporte aparecerá aquí cuando esté listo.</p></div>`
+  }
+  const iframe = `<iframe class="mir-canvas" src="/miranda/preview/${sid}" title="Reporte" loading="lazy"></iframe>`
+  const detach = `<a class="mir-canvas-detach" href="/miranda/preview/${sid}" target="_blank" rel="noopener noreferrer">Abrir desprendido ↗</a>`
   const publishBtn =
     s.state === 'autochequeado'
-      ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
+      ? `<form method="post" action="/miranda/api/s/${sid}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
       : ''
-  return `${preview}${publishBtn}${ficha}`
+  return `${iframe}<div class="mir-canvas-actions">${detach}${publishBtn}</div>`
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, renderTraceDetail, renderIntentPanel, renderMirCols, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderIntentPanel, renderCanvas, renderMirCols, youInitialsOf } from '../server/miranda'
 import { PAGE_CSS } from '../server/ui'
 import type { MirandaSession } from '@vergis/capabilities'
 
@@ -314,17 +314,12 @@ describe('renderIntentPanel · ficha técnica cerrada por defecto (plan 101 etap
     expect(html.indexOf('Esto es lo que quiero')).toBeGreaterThan(fichaStart)
   })
 
-  it('«Publicar» NO va dentro de la ficha — es una acción de la superficie principal', () => {
+  it('la ficha NO contiene acciones: ni «Publicar» ni el link al reporte (etapa C los mudó al lienzo)', () => {
     const html = renderIntentPanel(intent, session('autochequeado'), 'tok', 's1', qc, draft)
-    expect(html).toContain('/publish') // el botón existe
-    // …pero ANTES de que abra la ficha (fuera del <details>).
-    expect(html.indexOf('/publish')).toBeLessThan(html.indexOf('<details class="mir-ficha">'))
-  })
-
-  it('el link al reporte tampoco va en la ficha (acción, no sustento)', () => {
-    const html = renderIntentPanel(intent, session('autochequeado'), 'tok', 's1', qc, draft)
-    expect(html).toContain('/miranda/preview/s1')
-    expect(html.indexOf('/miranda/preview/s1')).toBeLessThan(html.indexOf('<details class="mir-ficha">'))
+    expect(html).not.toContain('/publish')
+    expect(html).not.toContain('/miranda/preview/s1')
+    // la ficha guarda solo la justificación (sus tres secciones).
+    expect(html.startsWith('<details class="mir-ficha">')).toBe(true)
   })
 
   it('sin resumen, la ficha muestra el texto de vacío en la sección Intención', () => {
@@ -335,6 +330,51 @@ describe('renderIntentPanel · ficha técnica cerrada por defecto (plan 101 etap
     // sin draft: no hay sección Definición técnica ni Verificación.
     expect(html).not.toContain('<h3>Definición técnica</h3>')
     expect(html).not.toContain('<h3>Verificación</h3>')
+  })
+})
+
+// Plan 101 · Etapa C: la 2ª columna es el LIENZO — el reporte generado embebido por el MISMO riel RLS
+// (`/miranda/preview/<sid>`, mismo-origen) + link «desprendido» standalone. Sin draft → placeholder,
+// NO la ficha. «Publicar» se reubica junto al lienzo. Server-render, cero JS.
+describe('renderCanvas · lienzo del reporte (plan 101 etapa C)', () => {
+  const session = (state: MirandaSession['state']): MirandaSession => ({ id: 's1', title: 'PI', state })
+  const draft = 'mira_version: "1.0"\nidentity:\n  id: saldos'
+
+  it('con draft → embebe el preview por el riel RLS en un <iframe> mismo-origen', () => {
+    const html = renderCanvas('s1', session('borrador'), 'tok', draft)
+    expect(html).toContain('<iframe class="mir-canvas" src="/miranda/preview/s1"')
+    // el src apunta al riel RLS (mismo que el standalone) — sin canal lateral.
+    expect(html).toContain('src="/miranda/preview/s1"')
+  })
+
+  it('con draft → link «desprendido» standalone con target="_blank" + rel de seguridad', () => {
+    const html = renderCanvas('s1', session('borrador'), 'tok', draft)
+    expect(html).toContain('href="/miranda/preview/s1"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).toContain('Abrir desprendido')
+  })
+
+  it('sin draft → placeholder sobrio, NO la ficha ni el iframe', () => {
+    const html = renderCanvas('s1', session('borrador'), 'tok', undefined)
+    expect(html).toContain('El reporte aparecerá aquí cuando esté listo')
+    expect(html).not.toContain('<iframe')
+    expect(html).not.toContain('mir-ficha')
+  })
+
+  it('«Publicar» se reubica en el lienzo cuando la sesión está autochequeada', () => {
+    const html = renderCanvas('s1', session('autochequeado'), 'tok', draft)
+    expect(html).toContain('/miranda/api/s/s1/publish')
+    expect(html).toContain('>Publicar</button>')
+  })
+
+  it('publicar solo aparece en el estado autochequeado (no en borrador)', () => {
+    expect(renderCanvas('s1', session('borrador'), 'tok', draft)).not.toContain('/publish')
+  })
+
+  it('sin JS: el lienzo no emite <script> ni handlers on*', () => {
+    const html = renderCanvas('s1', session('autochequeado'), 'tok', draft)
+    expect(html).not.toMatch(/<script|\son\w+=/i)
   })
 })
 
