@@ -174,6 +174,9 @@ export interface MirandaMessage {
   content: string
   tokens: number
   createdAt?: string
+  /** Duración (ms) que tomó procesar el turno del usuario, anclada en la ÚLTIMA respuesta del assistant
+   *  de ese turno (la burbuja visible). undefined en los mensajes que no cierran un turno. */
+  durationMs?: number
 }
 /** Artefacto de sesión APPEND-ONLY con versión (procedencia del PI): draft vN nunca pisa vN-1. */
 export interface MirandaArtifact {
@@ -204,7 +207,7 @@ export interface MirandaStore {
   setMirandaTurnPhase(id: string, phase: string): Promise<void>
   setMirandaTitle(id: string, title: string): Promise<void>
   setMirandaPiCode(id: string, piCode: string): Promise<void>
-  appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number): Promise<number>
+  appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number, durationMs?: number): Promise<number>
   listMirandaMessages(sessionId: string): Promise<MirandaMessage[]>
   /** Tokens acumulados de la sesión (para el presupuesto). */
   mirandaSessionTokens(sessionId: string): Promise<number>
@@ -360,6 +363,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
     // Marcador de turno asíncrono (migración idempotente para DBs ya creadas).
     ensureColumns(db, 'miranda_session', ['turn_state TEXT', 'turn_started_at TEXT', 'turn_phase TEXT'])
     db.run(MIRANDA_MESSAGE_DDL)
+    // Duración del turno por mensaje (migración idempotente para DBs ya creadas) — plan 100 addendum 5.
+    ensureColumns(db, 'miranda_message', ['duration_ms INTEGER'])
     db.run(MIRANDA_ARTIFACT_DDL)
     db.run(MIRANDA_SEQ_DDL)
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
@@ -862,22 +867,23 @@ export class SqliteGovernanceStore implements GovernanceStore {
     this.persist()
   }
 
-  async appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens = 0): Promise<number> {
+  async appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens = 0, durationMs?: number): Promise<number> {
     const sid = sessionId.trim()
     const seq = this.nextSeq(`SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM miranda_message WHERE session_id = ?`, sid)
-    this.db.run(`INSERT INTO miranda_message (session_id, seq, role, content, tokens, created_at) VALUES (?,?,?,?,?,?)`, [sid, seq, role, content, Math.max(0, Math.trunc(tokens)), now()])
+    const dur = durationMs == null || !Number.isFinite(durationMs) ? null : Math.max(0, Math.trunc(durationMs))
+    this.db.run(`INSERT INTO miranda_message (session_id, seq, role, content, tokens, created_at, duration_ms) VALUES (?,?,?,?,?,?,?)`, [sid, seq, role, content, Math.max(0, Math.trunc(tokens)), now(), dur])
     this.db.run(`UPDATE miranda_session SET updated_at = ? WHERE id = ?`, [now(), sid])
     this.persist()
     return seq
   }
 
   async listMirandaMessages(sessionId: string): Promise<MirandaMessage[]> {
-    const stmt = this.db.prepare(`SELECT seq, role, content, tokens, created_at FROM miranda_message WHERE session_id = ? ORDER BY seq ASC`)
+    const stmt = this.db.prepare(`SELECT seq, role, content, tokens, created_at, duration_ms FROM miranda_message WHERE session_id = ? ORDER BY seq ASC`)
     stmt.bind([sessionId.trim()])
     const out: MirandaMessage[] = []
     while (stmt.step()) {
       const r = stmt.getAsObject()
-      out.push({ seq: Number(r['seq']), role: String(r['role']) as MirandaMessageRole, content: String(r['content']), tokens: Number(r['tokens'] ?? 0), createdAt: r['created_at'] == null ? undefined : String(r['created_at']) })
+      out.push({ seq: Number(r['seq']), role: String(r['role']) as MirandaMessageRole, content: String(r['content']), tokens: Number(r['tokens'] ?? 0), createdAt: r['created_at'] == null ? undefined : String(r['created_at']), durationMs: r['duration_ms'] == null ? undefined : Number(r['duration_ms']) })
     }
     stmt.free()
     return out

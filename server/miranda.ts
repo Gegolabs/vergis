@@ -305,6 +305,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     history: AnthropicMessage[],
     tokensUsedBefore: number,
   ): Promise<void> {
+    const t0 = Date.now() // cronómetro del turno (plan 100 addendum 5): mide cuánto tarda este mensaje
     try {
       const tools = buildToolRegistry(toolContext(sessionId, email))
       const result = await runAgentTurn({
@@ -329,15 +330,18 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         },
       })
       // El mensaje del usuario (newMessages[0]) ya está persistido; se anotan los del asistente/tool.
-      // Los tokens del turno se anclan en el 1er mensaje persistido (el usuario quedó en 0).
+      // Los tokens del turno se anclan en el 1er mensaje persistido (el usuario quedó en 0); la
+      // DURACIÓN se ancla en el ÚLTIMO (la burbuja visible del assistant), para que la medición viva
+      // CON el mensaje que midió. Cubre éxito y disculpa por max_tokens (esta vuelve dentro de `result`).
       const rest = result.newMessages.slice(1)
       for (let i = 0; i < rest.length; i += 1) {
         const m = rest[i]
-        await deps.gov.appendMirandaMessage(sessionId, roleOf(m), JSON.stringify(m.content), i === 0 ? result.tokensUsed : 0)
+        const isLast = i === rest.length - 1
+        await deps.gov.appendMirandaMessage(sessionId, roleOf(m), JSON.stringify(m.content), i === 0 ? result.tokensUsed : 0, isLast ? Date.now() - t0 : undefined)
       }
     } catch (e) {
       const note = e instanceof TokenBudgetExceeded ? e.message : `Error del sistema al conversar con Miranda: ${e instanceof Error ? e.message : String(e)}`
-      await deps.gov.appendMirandaMessage(sessionId, 'assistant', systemError(note), 0)
+      await deps.gov.appendMirandaMessage(sessionId, 'assistant', systemError(note), 0, Date.now() - t0)
     } finally {
       try {
         await deps.gov.endMirandaTurn(sessionId)
@@ -428,8 +432,13 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     const messages = await deps.gov.listMirandaMessages(sessionId)
     let chat = renderChat(messages, { youInitials: youInitialsOf(email) })
     // Mientras piensa: el mensaje del usuario ya está en el hilo; se añade la burbuja «pensando» con
-    // la fase actual del turno (cada meta-refresh la re-lee — feedback ocasional, no solo «…»).
-    if (pending) chat += thinkingBubble(s.turnPhase)
+    // la fase actual del turno y el reloj corriendo (cada meta-refresh los re-lee — feedback ocasional,
+    // no solo «…»). El transcurrido se calcula desde turn_started_at (NaN/ausente → sin reloj).
+    if (pending) {
+      const startedMs = s.turnStartedAt ? Date.parse(s.turnStartedAt) : NaN
+      const elapsedMs = Number.isNaN(startedMs) ? undefined : Date.now() - startedMs
+      chat += thinkingBubble(s.turnPhase, elapsedMs)
+    }
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
@@ -502,11 +511,29 @@ export function turnPhaseOf(toolName: string): string | undefined {
   return TOOL_PHASE[toolName]
 }
 
+/**
+ * Formato compacto de una duración: <60s → «47s»; ≥60s → «1m 05s» (segundos con cero a la izquierda).
+ * Un cronómetro es lenguaje universal, no jerga: no viola VOZ. Entrada inválida (NaN/negativa) → «0s».
+ */
+export function fmtDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0s'
+  const totalSec = Math.floor(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const min = Math.floor(totalSec / 60)
+  const sec = totalSec % 60
+  return `${min}m ${String(sec).padStart(2, '0')}s`
+}
+
 /** Burbuja «pensando» de Miranda: indicador sobrio con puntos animados (CSS-only, cero JS). La FRASE
- *  de fase (voz de negocio) acompaña a los puntos y cambia entre meta-refreshes; default «Pensando…». */
-export function thinkingBubble(phase?: string): string {
+ *  de fase (voz de negocio) acompaña a los puntos; con `elapsedMs`, un reloj corriendo junto a la fase
+ *  («Cuadrando las cifras… · 1m 12s»), que el meta-refresh de 4 s avanza en saltos. Sin fase → «Pensando…»;
+ *  sin `elapsedMs` (o NaN) → solo la fase, nunca «NaN». */
+export function thinkingBubble(phase?: string, elapsedMs?: number): string {
   const label = phase && phase.trim() ? phase.trim() : 'Pensando…'
-  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div><div class="bubble" role="status" aria-label="Miranda: ${escapeHtml(label)}"><span class="mir-phase">${escapeHtml(label)}</span> <span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
+  const clock = elapsedMs != null && Number.isFinite(elapsedMs) && elapsedMs >= 0 ? fmtDuration(elapsedMs) : ''
+  const shown = clock ? `${label} · ${clock}` : label
+  const clockHtml = clock ? ` <span class="mir-clock sub">· ${escapeHtml(clock)}</span>` : ''
+  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div><div class="bubble" role="status" aria-label="Miranda: ${escapeHtml(shown)}"><span class="mir-phase">${escapeHtml(label)}</span>${clockHtml} <span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
 }
 
 /** Compacta un conteo de tokens a una etiqueta corta: 407000 → «407k», 4000000 → «4M». */
@@ -714,7 +741,7 @@ export function youInitialsOf(email: string | undefined): string {
 /** Renderiza la conversación como un chat: burbujas con lado (Tú a la derecha con tinte accent,
  *  Miranda a la izquierda sobre `--card`), nombre como caption chico y avatar. Texto con Markdown
  *  seguro (`mdInline`); las trazas de herramientas consecutivas se colapsan en UNA señal discreta. */
-export function renderChat(rows: { role: string; content: string }[], opts: { youInitials?: string } = {}): string {
+export function renderChat(rows: { role: string; content: string; durationMs?: number }[], opts: { youInitials?: string } = {}): string {
   const youIni = opts.youInitials ?? 'Tú'
   const parts: string[] = []
   let i = 0
@@ -745,8 +772,10 @@ export function renderChat(rows: { role: string; content: string }[], opts: { yo
     const side = isMiranda ? 'miranda' : 'you'
     const who = isMiranda ? 'Miranda' : 'Tú'
     const ini = isMiranda ? 'M' : youIni
+    // Meta discreto bajo la burbuja del assistant: cuánto tardó ese mensaje (plan 100 addendum 5).
+    const meta = isMiranda && r.durationMs != null && Number.isFinite(r.durationMs) ? `<div class="mir-took sub">Respondido en ${escapeHtml(fmtDuration(r.durationMs))}</div>` : ''
     parts.push(
-      `<div class="turn turn--${side}"><div class="av2" aria-hidden="true">${escapeHtml(ini)}</div><div class="turn-b"><div class="cap">${who}</div><div class="bubble">${mdInline(text)}</div></div></div>`,
+      `<div class="turn turn--${side}"><div class="av2" aria-hidden="true">${escapeHtml(ini)}</div><div class="turn-b"><div class="cap">${who}</div><div class="bubble">${mdInline(text)}</div>${meta}</div></div>`,
     )
     i += 1
   }

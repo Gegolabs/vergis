@@ -243,5 +243,69 @@ describe('plan 100 · entrega-primero en el primer turno (sin red)', () => {
       'Preparando la vista previa…', // render_preview
     ])
     expect((await gov.getMirandaSession('ep'))?.turnPhase).toBeUndefined()
+
+    // Addendum 5 · camino de ÉXITO: la duración del turno se ancló en el ÚLTIMO mensaje (la burbuja
+    // visible del assistant), no en los intermedios; el resto sin duración.
+    const finalMsgs = await gov.listMirandaMessages('ep')
+    const withDur = finalMsgs.filter((m) => m.durationMs != null)
+    expect(withDur).toHaveLength(1)
+    expect(withDur[0]).toBe(finalMsgs[finalMsgs.length - 1]) // el último mensaje del hilo
+    expect(withDur[0].role).toBe('assistant')
+    expect(withDur[0].durationMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+// Plan 100 addendum 5 · la duración se persiste en los TRES caminos de cierre de runTurnBackground:
+// éxito (arriba), error de sistema, y disculpa por max_tokens (addendum 2). Los tres appendan un
+// assistant final → los tres lo llevan con su duración.
+describe('plan 100 addendum 5 · duración en los caminos de error y max_tokens', () => {
+  function baseDeps(gov: SqliteGovernanceStore, transport: AnthropicTransport): MirandaServerDeps {
+    return {
+      gov, transport, model: 'm', systemPrompt: 'sys', maxTurns: 10, tokenBudget: 500000,
+      catalog: [{ name: 'dbo.v_saldos' }], configuredRefs: ['fabric'],
+      identityOf: () => ({ user: EMAIL }), hasScope: async () => true,
+      probe: async () => ({ rows: [] }), columnsOf: async () => [],
+      validateDraft: () => ({ ok: true }), listSpecs: () => [], readSpec: () => null,
+      writeSpec: async () => {}, renderPreviewHtml: async () => '<html>P</html>', secret: SECRET,
+    }
+  }
+
+  it('error de sistema (transport revienta) → el assistant de error lleva su duración', async () => {
+    const gov = await SqliteGovernanceStore.open(null)
+    const transport: AnthropicTransport = { async createMessage() { throw new Error('API caída') } }
+    const h = createMiranda(baseDeps(gov, transport))
+    await gov.createSession('err', 'X', EMAIL)
+    const r = mkRes()
+    await h.tryHandle(mkReq('/miranda/api/s/err/message', 'POST', { _csrf: token, text: 'hola' }), r.res)
+    await r.p
+    await h.whenIdle()
+    const msgs = await gov.listMirandaMessages('err')
+    const last = msgs[msgs.length - 1]
+    expect(last.role).toBe('assistant')
+    expect(last.content).toContain('Error del sistema') // la burbuja de error
+    expect(last.durationMs).toBeGreaterThanOrEqual(0) // medida y persistida
+    expect((await gov.getMirandaSession('err'))?.turnState).toBeUndefined() // turno cerrado limpio
+  })
+
+  it('disculpa por max_tokens → el assistant de disculpa lleva su duración', async () => {
+    const gov = await SqliteGovernanceStore.open(null)
+    // Un único response truncado por tope de emisión (addendum 2).
+    const transport: AnthropicTransport = {
+      async createMessage() {
+        return { id: 'm', role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'save_draft', input: {} }], stop_reason: 'max_tokens', usage: { input_tokens: 10, output_tokens: 4096 } }
+      },
+    }
+    const h = createMiranda(baseDeps(gov, transport))
+    await gov.createSession('mt', 'X', EMAIL)
+    const r = mkRes()
+    await h.tryHandle(mkReq('/miranda/api/s/mt/message', 'POST', { _csrf: token, text: 'dame un reporte' }), r.res)
+    await r.p
+    await h.whenIdle()
+    const msgs = await gov.listMirandaMessages('mt')
+    const last = msgs[msgs.length - 1]
+    expect(last.role).toBe('assistant')
+    expect(last.content).toContain('a medio camino') // la disculpa MAX_TOKENS_APOLOGY
+    expect(last.durationMs).toBeGreaterThanOrEqual(0)
+    expect((await gov.getMirandaSession('mt'))?.turnState).toBeUndefined()
   })
 })
