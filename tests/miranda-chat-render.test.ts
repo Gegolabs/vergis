@@ -89,6 +89,58 @@ describe('mdInline · seguridad (escapar-primero)', () => {
   })
 })
 
+// Fix de la verificación de la Etapa B (plan 101): con entrega-primero Miranda escribe el link del
+// reporte como markdown `[Ver reporte](/miranda/preview/…)`; sin soporte de links el usuario veía el
+// markdown CRUDO. mdInline ahora los renderiza con un ALLOWLIST DE ESQUEMAS duro (default-deny).
+describe('mdInline · links markdown con allowlist de esquemas', () => {
+  it('link relativo mismo-origen → <a href="/ruta"> que navega en la misma pestaña (sin target)', () => {
+    const out = mdInline('👉 [Ver reporte](/miranda/preview/s1)')
+    expect(out).toContain('<a href="/miranda/preview/s1">Ver reporte</a>')
+    expect(out).not.toContain('target=') // relativo: misma pestaña
+    expect(out).not.toContain('[Ver reporte]') // el markdown crudo desapareció
+  })
+
+  it('link externo http(s) → target="_blank" + rel="noopener noreferrer"', () => {
+    const out = mdInline('[docs](https://ejemplo.com/x)')
+    expect(out).toContain('<a href="https://ejemplo.com/x"')
+    expect(out).toContain('target="_blank"')
+    expect(out).toContain('rel="noopener noreferrer"')
+    expect(out).toContain('>docs</a>')
+  })
+
+  it('esquema peligroso (javascript:) → texto plano, SIN <a> y SIN exponer la url', () => {
+    const out = mdInline('[click](javascript:alert(1))')
+    expect(out).not.toContain('<a')
+    expect(out).not.toContain('javascript:')
+    expect(out).toContain('click') // el label queda como texto plano
+  })
+
+  it('otros esquemas fuera del allowlist (data:, vbscript:, file:, //host) → texto plano sin <a>', () => {
+    for (const url of ['data:text/html,x', 'vbscript:msgbox', 'file:///etc/passwd', '//evil.com/x']) {
+      const out = mdInline(`[x](${url})`)
+      expect(out).not.toContain('<a')
+      expect(out).toContain('x')
+    }
+  })
+
+  it('la url con comillas/&lt;/&gt; queda escapada en el href (escapar-primero intacto)', () => {
+    const out = mdInline('[x](/r?a="1"&b=<2>)')
+    expect(out).toContain('<a href="/r?a=&quot;1&quot;&amp;b=&lt;2&gt;">x</a>')
+    expect(out).not.toContain('"1"') // sin comillas crudas que rompan el atributo
+  })
+
+  it('negrita + link combinados: **[x](/r)** → <strong> envolviendo el <a>', () => {
+    const out = mdInline('**[x](/r)**')
+    expect(out).toContain('<strong><a href="/r">x</a></strong>')
+  })
+
+  it('un link dentro de `código` NO se convierte — queda literal en <code>', () => {
+    const out = mdInline('`[x](/r)`')
+    expect(out).toContain('<code>[x](/r)</code>')
+    expect(out).not.toContain('<a href')
+  })
+})
+
 describe('renderChat · burbujas y Markdown', () => {
   it('mensaje del asistente renderiza negrita/código reales, no crudos', () => {
     const html = renderChat([assistantText('El PI usa `dbo.v_saldos` y es **clave**.')])

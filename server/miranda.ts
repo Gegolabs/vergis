@@ -748,7 +748,9 @@ function countToolUse(c: string | AnthropicMessage['content']): number {
  * Renderiza un subconjunto SEGURO de Markdown inline. Regla de oro: **escapar HTML primero,
  * formatear después** — el texto del modelo jamás puede inyectar HTML/JS. Soporta negrita `**x**`,
  * código `` `x` ``, párrafos (doble salto → `<p>`), saltos simples (`<br>`) y listas (`- `/`N. `).
- * NO soporta links/imágenes/HTML embebido (superficie de ataque innecesaria para el texto de Miranda).
+ * Soporta links `[texto](url)` con un ALLOWLIST DE ESQUEMAS duro (solo relativa mismo-origen `/…` o
+ * `http(s):`; el resto degrada a texto plano — ver `isSafeLinkUrl`). NO soporta imágenes ni HTML
+ * embebido (esa superficie de ataque sigue cerrada).
  */
 export function mdInline(raw: string): string {
   const escaped = escapeHtml(raw) // 1) escapar SIEMPRE primero
@@ -769,8 +771,23 @@ export function mdInline(raw: string): string {
     .join('')
 }
 
-/** Formateo inline (negrita, código) sobre texto YA escapado. El código se protege primero para que
- *  un `**` dentro de un backtick no se interprete como negrita. */
+/**
+ * ¿La URL de un link markdown es SEGURA de renderizar? Allowlist DURA (default-deny): SOLO
+ *  - relativa mismo-origen que empiece con una sola `/` (p. ej. `/miranda/preview/…`; NO `//host`
+ *    protocol-relative, que escaparía del origen), o
+ *  - `http:` / `https:` absoluta.
+ * Todo lo demás (`javascript:`, `data:`, `vbscript:`, `file:`, `mailto:`, esquemas raros) → false, y el
+ *  link se degrada a texto plano (jamás se emite `<a>` ni se expone la URL cruda). La URL llega YA
+ *  escapada por HTML; acá se decide sobre su forma, no se re-escapa. */
+function isSafeLinkUrl(escapedUrl: string): boolean {
+  const u = escapedUrl.trim()
+  if (u.startsWith('/') && !u.startsWith('//')) return true // relativa mismo-origen
+  return /^https?:\/\//i.test(u)
+}
+
+/** Formateo inline (negrita, código, links con allowlist) sobre texto YA escapado. El código y los
+ *  links se protegen con centinela ANTES de la negrita, para que un `**` o un `](url)` dentro de un
+ *  backtick no se reinterprete y para no romper el escapado. */
 function formatSpans(escaped: string): string {
   const codes: string[] = []
   // 2a) proteger spans de codigo con un centinela del area de uso privado Unicode (U+E000/U+E001):
@@ -779,8 +796,22 @@ function formatSpans(escaped: string): string {
     codes.push(code)
     return `\uE000${codes.length - 1}\uE001`
   })
-  // 2b) negrita.
+  // 2b) links markdown `[texto](url)` con ALLOWLIST de esquemas. Se resuelven ANTES de la negrita y se
+  //     protegen con su propio centinela (U+E002/U+E003) para que un `**` en el texto del link siga
+  //     funcionando y para no re-tocar el `href`. URL fuera del allowlist → texto plano (sin `<a>`).
+  const links: string[] = []
+  s = s.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) => {
+    const label = String(text)
+    if (!isSafeLinkUrl(url)) return label // degradar a texto plano; NO exponer la url cruda como link
+    const external = /^https?:\/\//i.test(url.trim())
+    const attrs = external ? ' target="_blank" rel="noopener noreferrer"' : ''
+    links.push(`<a href="${url}"${attrs}>${label}</a>`)
+    return `\uE002${links.length - 1}\uE003`
+  })
+  // 2c) negrita (opera sobre el label del link ya protegido — un **[x](/r)** funciona).
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  // 2d) restaurar los links (su label pudo ganar <strong>; se restaura tras la negrita).
+  s = s.replace(/\uE002(\d+)\uE003/g, (_m, i) => links[Number(i)])
   // 2c) restaurar los spans de codigo.
   s = s.replace(/\uE000(\d+)\uE001/g, (_m, i) => `<code>${codes[Number(i)]}</code>`)
   return s
