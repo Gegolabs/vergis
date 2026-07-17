@@ -122,6 +122,84 @@ describe('tools · run_probe pasa por la guardia', () => {
   })
 })
 
+describe('tools · ruteo por database_ref (plan 099)', () => {
+  // Catálogo multi-dominio: dos fuentes servibles en conexiones distintas + una servible cuya conexión
+  // NO está configurada en este entorno (presupuesto). configuredRefs = las que sí están cableadas.
+  function routingCtx(over: Partial<MirandaToolContext> = {}): MirandaToolContext {
+    return mockCtx({
+      catalog: [
+        { name: 'dbo.v_saldos', nivel: 'gestionado', dominio: 'Finanzas', database_ref: 'finanzas' },
+        { name: 'dbo.v_movimiento', nivel: 'gestionado', dominio: 'Ventas', database_ref: 'ventas' },
+        { name: 'dbo.v_compromiso', nivel: 'gestionado', dominio: 'Presupuesto', database_ref: 'presupuesto' },
+      ],
+      configuredRefs: ['finanzas', 'ventas'], // presupuesto NO está cableada en este entorno
+      ...over,
+    })
+  }
+
+  it('describe_table rutea al database_ref del objeto', async () => {
+    const columnsOf = vi.fn(async () => [{ name: 'empresa', type: 'nvarchar' }])
+    const sampleRows = vi.fn(async () => [{ empresa: 'ACME' }])
+    const reg = buildToolRegistry(routingCtx({ columnsOf, sampleRows }))
+    await reg.invoke('describe_table', { name: 'dbo.v_movimiento' })
+    expect(columnsOf).toHaveBeenCalledWith('dbo.v_movimiento', 'ventas')
+    expect(sampleRows).toHaveBeenCalledWith('dbo.v_movimiento', 3, 'ventas')
+  })
+
+  it('profile_column rutea al database_ref del objeto', async () => {
+    const profileColumn = vi.fn(async () => [{ value: 'x', count: 1 }])
+    const reg = buildToolRegistry(routingCtx({ profileColumn }))
+    await reg.invoke('profile_column', { table: 'dbo.v_saldos', column: 'empresa' })
+    expect(profileColumn).toHaveBeenCalledWith('dbo.v_saldos', 'empresa', 20, 'finanzas')
+  })
+
+  it('describe_table de fuente servible SIN conexión en este entorno → error educativo, DISTINTO de «no existe»', async () => {
+    const columnsOf = vi.fn(async () => [])
+    const reg = buildToolRegistry(routingCtx({ columnsOf }))
+    const r = (await reg.invoke('describe_table', { name: 'dbo.v_compromiso' })) as { error: string }
+    expect(r.error).toMatch(/servible según el catálogo/i)
+    expect(r.error).toMatch(/no está configurada en ESTE entorno/i)
+    expect(r.error).toMatch(/DISTINTO de que el objeto no exista/i)
+    expect(r.error).toMatch(/NO degrades la promesa/i)
+    expect(r.error).not.toMatch(/no está en el catálogo/i) // NO es el error de objeto-no-existe
+    expect(columnsOf).not.toHaveBeenCalled() // ni siquiera intenta sondear
+  })
+
+  it('run_probe de un solo dominio → rutea a su ref', async () => {
+    const runProbe = vi.fn(async () => ({ rows: [{ empresa: 'ACME' }] }))
+    const reg = buildToolRegistry(routingCtx({ runProbe }))
+    const r = (await reg.invoke('run_probe', { sql: 'SELECT empresa FROM dbo.v_movimiento', why: 'x' })) as { row_count: number }
+    expect(runProbe).toHaveBeenCalledWith('SELECT TOP 500 empresa FROM dbo.v_movimiento', 'x', 'ventas')
+    expect(r.row_count).toBe(1)
+  })
+
+  it('run_probe que cruza dos dominios → error «una consulta por dominio», NO llega al runner', async () => {
+    const runProbe = vi.fn(async () => ({ rows: [] }))
+    const reg = buildToolRegistry(routingCtx({ runProbe }))
+    const r = (await reg.invoke('run_probe', { sql: 'SELECT * FROM dbo.v_saldos s JOIN dbo.v_movimiento m ON s.empresa = m.empresa', why: 'x' })) as { error: string }
+    expect(r.error).toMatch(/cruza objetos de 2 dominios/i)
+    expect(r.error).toMatch(/UNA consulta por dominio/i)
+    expect(runProbe).not.toHaveBeenCalled()
+  })
+
+  it('run_probe contra fuente servible SIN conexión en este entorno → error educativo, NO llega al runner', async () => {
+    const runProbe = vi.fn(async () => ({ rows: [] }))
+    const reg = buildToolRegistry(routingCtx({ runProbe }))
+    const r = (await reg.invoke('run_probe', { sql: 'SELECT * FROM dbo.v_compromiso', why: 'x' })) as { error: string }
+    expect(r.error).toMatch(/no está configurada en ESTE entorno/i)
+    expect(runProbe).not.toHaveBeenCalled()
+  })
+
+  it('run_probe de objeto sin database_ref (compat) → fallback (ref undefined)', async () => {
+    const runProbe = vi.fn(async () => ({ rows: [] }))
+    const reg = buildToolRegistry(
+      routingCtx({ runProbe, catalog: [{ name: 'dbo.v_legacy', nivel: 'gestionado' }], configuredRefs: ['finanzas'] }),
+    )
+    await reg.invoke('run_probe', { sql: 'SELECT * FROM dbo.v_legacy', why: 'x' })
+    expect(runProbe).toHaveBeenCalledWith('SELECT TOP 500 * FROM dbo.v_legacy', 'x', undefined)
+  })
+})
+
 describe('tools · save_draft valida antes de guardar', () => {
   it('draft inválido → ok:false, no guarda', async () => {
     const saveDraft = vi.fn(async () => ({ version: 1 }))

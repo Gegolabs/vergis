@@ -43,3 +43,27 @@ describe('voz de negocio · prompt ensamblado', () => {
     expect(MIRANDA_HARD_RULES).not.toMatch(/Jamás prometas datos que 'catalog_tables' no respalde/)
   })
 })
+
+// Plan 099 · WP2: las tres reglas nuevas viajan en el prompt ENSAMBLADO. (El comportamiento real se
+// valida en el smoke del arnés — WP5; acá solo garantizamos que la doctrina está en el prompt.)
+describe('reglas del plan 099 · prompt ensamblado', () => {
+  const p = buildSystemPrompt({ dslDoc: 'DSL de ejemplo' })
+
+  it('regla 1 — el catálogo manda la promesa (una probe fallida no degrada la promesa)', () => {
+    expect(MIRANDA_HARD_RULES).toMatch(/EL CATÁLOGO MANDA LA PROMESA/)
+    expect(MIRANDA_HARD_RULES).toMatch(/JAMÁS evidencia para degradar la promesa/i)
+    expect(p).toMatch(/EL CATÁLOGO MANDA LA PROMESA/)
+  })
+
+  it('regla 2 — no narrar diagnósticos internos (ni «noté que una vista no resolvía…»)', () => {
+    expect(MIRANDA_VOICE).toMatch(/DIAGNÓSTICOS INTERNOS/)
+    expect(MIRANDA_VOICE).toMatch(/no resolvía/i)
+    expect(p).toMatch(/DIAGNÓSTICOS INTERNOS/)
+  })
+
+  it('regla 3 — decisión-raíz primero; la disponibilidad va como nota breve después; sin meta-preámbulos', () => {
+    expect(p).toMatch(/DECISIÓN-RAÍZ PRIMERO/)
+    expect(p).toMatch(/NOTA BREVE DESPUÉS/)
+    expect(p).toMatch(/dos cosas que quiero\s+dejarte claras/i) // el meta-preámbulo, citado como prohibido
+  })
+})

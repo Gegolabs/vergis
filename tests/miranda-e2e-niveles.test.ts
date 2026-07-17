@@ -109,4 +109,30 @@ describe('WP3 · e2e multi-nivel + data_request con nivel/acción', () => {
     const joined = msgs.map((m) => m.content).join(' ')
     expect(joined).toMatch(/no está en la capa de datos servible/i) // el rechazo quedó en el transcript de tools
   })
+
+  it('plan 099 · e2e: una probe a un objeto de un SEGUNDO dominio se rutea a su database_ref y trae filas', async () => {
+    const gov = await SqliteGovernanceStore.open(null)
+    // Catálogo multi-dominio: finanzas + ventas en conexiones distintas; ambas cableadas en este entorno.
+    const ROUTING: CatalogEntry[] = [
+      { name: 'dbo.v_saldos', nivel: 'gestionado', dominio: 'Finanzas', database_ref: 'finanzas' },
+      { name: 'dbo.v_movimiento', nivel: 'gestionado', dominio: 'Ventas', database_ref: 'ventas' },
+    ]
+    const transport = scriptedTransport([
+      tu('run_probe', { sql: 'SELECT empresa FROM dbo.v_movimiento', why: 'reconciliar libro mayor' }),
+      txt('Listo, te tengo el comparativo por empresa al momento.'),
+    ])
+    // Spy de la probe del server: captura el database_ref con que se ruteó.
+    const probe = vi.fn(async (_sql: string, _email: string | undefined, _ref?: string) => ({ rows: [{ empresa: 'ACME' }] }))
+    const base = deps(gov, transport)
+    const h = createMiranda({ ...base, catalog: ROUTING, configuredRefs: ['finanzas', 'ventas'], probe })
+    await gov.createSession('n3', 'Libro mayor', EMAIL)
+    const r = mkRes()
+    await h.tryHandle(mkReq('/miranda/api/s/n3/message', 'POST', { _csrf: token, text: 'muéstrame el comparativo por empresa' }), r.res)
+    await r.p
+    await h.whenIdle()
+    // La probe se ejecutó ruteada al dominio del objeto (ventas), no al fallback.
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(probe.mock.calls[0][0]).toBe('SELECT TOP 500 empresa FROM dbo.v_movimiento')
+    expect(probe.mock.calls[0][2]).toBe('ventas')
+  })
 })
