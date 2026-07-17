@@ -15,11 +15,14 @@ export {
   isProbeable,
   probeableNames,
   nivelForName,
+  databaseRefForName,
+  resolveProbeRoute,
   NIVELES_ACCESO,
   ACCIONES_DE_CIERRE,
   type CatalogEntry,
   type NivelAcceso,
   type AccionDeCierre,
+  type ProbeRoute,
 } from './catalog'
 export { validateIntentSummary, normalizeIntent, normalizeFormaVista, FORMAS, PIEZAS, type IntentSummary, type Forma, type Pieza, type FormaVista } from './intent'
 export { crossCheckForma, derivePiecesFromDraft, formaFromPiezas, type DraftView } from './forma'

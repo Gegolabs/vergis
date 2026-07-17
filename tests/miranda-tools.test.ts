@@ -97,7 +97,8 @@ describe('tools · run_probe pasa por la guardia', () => {
     const reg = buildToolRegistry(mockCtx({ runProbe }))
     const r = (await reg.invoke('run_probe', { sql: 'SELECT empresa, saldo FROM dbo.v_saldos', why: 'reconciliar total' })) as { executed_sql: string; row_count: number }
     expect(r.executed_sql).toContain('TOP 500')
-    expect(runProbe).toHaveBeenCalledWith('SELECT TOP 500 empresa, saldo FROM dbo.v_saldos', 'reconciliar total')
+    // v_saldos no declara database_ref en este mock → ruteo fallback (ref undefined = default global).
+    expect(runProbe).toHaveBeenCalledWith('SELECT TOP 500 empresa, saldo FROM dbo.v_saldos', 'reconciliar total', undefined)
     expect(r.row_count).toBe(1)
   })
   it('probe peligrosa → error de guardia, NO llega al runner', async () => {

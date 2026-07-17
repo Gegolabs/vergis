@@ -98,6 +98,7 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
       maxTurns: 10,
       tokenBudget: 500000,
       catalog: [{ name: 'dbo.v_saldos' }],
+      configuredRefs: [],
       identityOf: () => ({ user: EMAIL }),
       hasScope: async () => true,
       probe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),

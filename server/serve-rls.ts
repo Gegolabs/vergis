@@ -967,7 +967,12 @@ if (config.miranda.enabled) {
     const systemPrompt = buildSystemPrompt({ dslDoc })
     // Capacidades válidas de un draft (dato = conector enforcing; canales = render/publish/entrega).
     const MIRANDA_VALIDATE_CAPS = [...SERVING_CAPS, 'publicar-artefacto', 'render-html-piece', 'render-csv-piece', 'send-email', 'send-slack']
+    // Fallback global: la probe de un objeto SIN `database_ref` en el catálogo (compat) cae aquí.
     const PROBE_REF = process.env['MIRANDA_PROBE_DB'] ?? (connections ? Object.keys(connections)[0] : '')
+    // Conexiones efectivamente configuradas — el server rutea la probe al `database_ref` del objeto
+    // (plan 099); una fuente servible cuyo ref no esté acá cae en el camino educativo «no sondeable en
+    // este entorno» (distinto de «objeto no existe»). Incluye el fallback aunque no venga de connections.
+    const CONFIGURED_REFS = [...new Set([...(connections ? Object.keys(connections) : []), ...(PROBE_REF ? [PROBE_REF] : [])])]
     // Identidad simplificada de la probe (Fase 1: audiencia interna, dominios grant:all). TODO Fase 2:
     // ligar la probe a la identidad autoritativa del autor (claims), como el serving.
     const probeIdentityOf = (email: string | undefined): IdentityContext => ({ agent: 'miranda-probe', user: email })
@@ -982,18 +987,19 @@ if (config.miranda.enabled) {
       tokenBudget: config.miranda.tokenBudget,
       orphanTurnMs: config.miranda.orphanTurnMs,
       catalog,
+      configuredRefs: CONFIGURED_REFS,
       identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
       hasScope: async (email) => (await govForMiranda.isAdmin(email)) || (await govForMiranda.isMember(config.miranda.scopeGroup, email)),
-      probe: async (sql, email) => {
-        const out = (await servingCap.execute({ database_ref: PROBE_REF, sql }, probeIdentityOf(email))) as { rows: Record<string, unknown>[] }
+      probe: async (sql, email, databaseRef) => {
+        const out = (await servingCap.execute({ database_ref: databaseRef ?? PROBE_REF, sql }, probeIdentityOf(email))) as { rows: Record<string, unknown>[] }
         return { rows: out.rows ?? [] }
       },
-      columnsOf: async (table) => {
+      columnsOf: async (table, databaseRef) => {
         const [a, b] = table.includes('.') ? table.split('.') : [null, table]
         const sql = a
           ? `SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @s AND TABLE_NAME = @t ORDER BY ORDINAL_POSITION`
           : `SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t ORDER BY ORDINAL_POSITION`
-        const out = (await servingCap.execute({ database_ref: PROBE_REF, sql, params: a ? { s: a, t: b } : { t: b } }, probeIdentityOf(undefined))) as { rows: Record<string, unknown>[] }
+        const out = (await servingCap.execute({ database_ref: databaseRef ?? PROBE_REF, sql, params: a ? { s: a, t: b } : { t: b } }, probeIdentityOf(undefined))) as { rows: Record<string, unknown>[] }
         return (out.rows ?? []).map((r) => ({ name: String(r['name']), type: String(r['type']) }))
       },
       validateDraft: (yaml) => {

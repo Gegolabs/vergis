@@ -7,7 +7,7 @@
 import { guardProbeSql, SqlGuardError } from './sql-guard'
 import type { MirandaToolContext } from './context'
 import { validateIntentSummary } from '../intent'
-import { nivelForName, nivelOf, probeableNames, type AccionDeCierre, type NivelAcceso, ACCIONES_DE_CIERRE, NIVELES_ACCESO } from '../catalog'
+import { nivelForName, nivelOf, probeableNames, databaseRefForName, resolveProbeRoute, type AccionDeCierre, type NivelAcceso, ACCIONES_DE_CIERRE, NIVELES_ACCESO } from '../catalog'
 
 /** Error cuando una fuente conocida NO es consultable directamente (nivel ≠ gestionado). El mensaje
  *  es INTERNO (lo lee el modelo, no el usuario): explica por qué se rechaza y qué hacer, sin filtrarse
@@ -16,6 +16,33 @@ function noConsultableError(name: string): { error: string } {
   return {
     error: `'${name}' es una fuente conocida pero NO está en la capa de datos servible: no se puede describir, perfilar ni consultar directamente. Solo las fuentes ya servibles lo permiten. No inventes su contenido. Si el usuario la necesita, regístrala con create_data_request (con su nivel y acción de cierre) y háblale en términos de EXPECTATIVA DE ENTREGA, nunca de su estado técnico.`,
   }
+}
+
+/**
+ * Error cuando una fuente SERVIBLE (gestionada) según el catálogo tiene su `database_ref` FUERA de las
+ * conexiones configuradas en ESTE despliegue: no es sondeable aquí. Es DISTINTO de «el objeto no existe»
+ * — el objeto es servible, solo que su conexión no está cableada en este entorno. El mensaje EDUCA al
+ * modelo: NO degradar la promesa al usuario por un límite del entorno; la promesa se deriva del NIVEL
+ * del catálogo (servible ⇒ «al momento»), no de si la probe pudo correr aquí. Jamás llega al usuario. */
+function connectionNotConfiguredError(name: string): { error: string } {
+  return {
+    error: `'${name}' es una fuente SERVIBLE según el catálogo, pero su conexión de datos no está configurada en ESTE entorno de despliegue: no la puedes sondear aquí. Esto es DISTINTO de que el objeto no exista — la fuente es servible. NO degrades la promesa al usuario por esto: la expectativa de entrega se deriva del NIVEL del catálogo (una fuente servible se entrega «al momento»), jamás de si una probe pudo correr en este entorno. No narres esta limitación al usuario; si hace falta, regístrala internamente.`,
+  }
+}
+
+/** Error cuando una probe cruza objetos de dominios distintos (cada dominio vive en un SQL endpoint
+ *  separado): el cruce es físicamente imposible en una sola consulta. INTERNO — educa al modelo a
+ *  partir la consulta por dominio, sin narrarle la maquinaria de conexiones al usuario. */
+function crossDomainError(refs: string[]): { error: string } {
+  return {
+    error: `Esta consulta cruza objetos de ${refs.length} dominios distintos, que viven en conexiones de datos separadas: un cruce entre dominios NO es posible en una sola consulta en este entorno. Corre UNA consulta por dominio y combina los resultados tú mismo. Es una restricción física del entorno (endpoints distintos), no una falla del dato: no la narres al usuario.`,
+  }
+}
+
+/** ¿El `databaseRef` está configurado en este despliegue? Si el contexto no declara `configuredRefs`
+ *  (compat), no se puede chequear ⇒ se asume disponible (el ruteo real lo resolverá el server). */
+function refIsConfigured(ctx: MirandaToolContext, ref: string): boolean {
+  return ctx.configuredRefs === undefined || ctx.configuredRefs.includes(ref)
 }
 
 export type ToolResult = Record<string, unknown>
@@ -63,8 +90,10 @@ export async function describeTable(input: unknown, ctx: MirandaToolContext): Pr
   const nivel = nivelForName(ctx.catalog, name)
   if (nivel === undefined) return { error: `'${name}' no está en el catálogo. Usa catalog_tables para ver las fuentes disponibles.` }
   if (nivel !== 'gestionado') return noConsultableError(name)
+  const ref = databaseRefForName(ctx.catalog, name)
+  if (ref !== undefined && !refIsConfigured(ctx, ref)) return connectionNotConfiguredError(name)
   try {
-    const [columns, sample] = await Promise.all([ctx.columnsOf(name), ctx.sampleRows(name, 3)])
+    const [columns, sample] = await Promise.all([ctx.columnsOf(name, ref), ctx.sampleRows(name, 3, ref)])
     return { table: name, columns, sample: sample.map(reprRow), note: 'sample en repr(): las comillas revelan espacios y mayúsculas.' }
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
@@ -79,8 +108,10 @@ export async function profileColumn(input: unknown, ctx: MirandaToolContext): Pr
   const nivel = nivelForName(ctx.catalog, table)
   if (nivel === undefined) return { error: `'${table}' no está en el catálogo. Usa catalog_tables para ver las fuentes disponibles.` }
   if (nivel !== 'gestionado') return noConsultableError(table)
+  const ref = databaseRefForName(ctx.catalog, table)
+  if (ref !== undefined && !refIsConfigured(ctx, ref)) return connectionNotConfiguredError(table)
   try {
-    const rows = await ctx.profileColumn(table, column, top)
+    const rows = await ctx.profileColumn(table, column, top, ref)
     return { table, column, top, values: rows.map((r) => ({ value: repr(r.value), count: r.count })), note: 'valores en repr().' }
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
@@ -101,7 +132,16 @@ export async function runProbe(input: unknown, ctx: MirandaToolContext): Promise
     if (e instanceof SqlGuardError) return { error: `Probe rechazada por la guardia: ${e.message}` }
     return { error: e instanceof Error ? e.message : String(e) }
   }
-  const res = await ctx.runProbe(guarded.sql, why)
+  // Ruteo por dominio: cada objeto gestionado declara su `database_ref` (dominio); la probe se rutea al
+  // ref del/los objeto(s) que toca. Un cruce entre dominios es físicamente imposible (endpoints distintos).
+  const route = resolveProbeRoute(ctx.catalog, guarded.tables)
+  if (route.kind === 'multi') return crossDomainError(route.refs)
+  const ref = route.kind === 'ref' ? route.ref : undefined
+  if (ref !== undefined && !refIsConfigured(ctx, ref)) {
+    // La probe apunta a una fuente servible cuya conexión no está en este entorno: educa, no degrades.
+    return connectionNotConfiguredError([...new Set(guarded.tables)].join(', '))
+  }
+  const res = await ctx.runProbe(guarded.sql, why, ref)
   if ('error' in res) return { error: res.error, executed_sql: guarded.sql }
   return { executed_sql: guarded.sql, row_count: res.rows.length, rows: res.rows.map(reprRow) }
 }

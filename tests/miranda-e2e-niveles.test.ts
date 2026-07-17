@@ -50,6 +50,7 @@ function deps(gov: SqliteGovernanceStore, transport: AnthropicTransport): Mirand
     maxTurns: 10,
     tokenBudget: 500000,
     catalog: MULTINIVEL,
+    configuredRefs: [],
     identityOf: () => ({ user: EMAIL }),
     hasScope: async () => true,
     probe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),

@@ -46,14 +46,18 @@ export interface MirandaServerDeps {
   maxTurns: number
   tokenBudget: number
   catalog: CatalogEntry[]
+  /** Conexiones (`database_ref`) configuradas en este despliegue — el conjunto contra el que se decide
+   *  si una fuente servible es sondeable AQUÍ (una cuyo ref no esté acá cae en el camino educativo). */
+  configuredRefs: string[]
   /** Identidad del request (email del gate). */
   identityOf(headers: IncomingMessage['headers']): { user?: string }
   /** ¿La identidad tiene el scope `miranda`? (admin o miembro del grupo de scope). */
   hasScope(email: string | undefined): Promise<boolean>
-  /** Ejecuta una probe (SQL ya guardado) con la identidad del autor. */
-  probe(sql: string, email: string | undefined): Promise<{ rows: Record<string, unknown>[] }>
-  /** Columnas+tipos de un objeto del catálogo. */
-  columnsOf(table: string): Promise<{ name: string; type: string }[]>
+  /** Ejecuta una probe (SQL ya guardado) con la identidad del autor, ruteada a `databaseRef`
+   *  (undefined ⇒ el default global del despliegue). */
+  probe(sql: string, email: string | undefined, databaseRef?: string): Promise<{ rows: Record<string, unknown>[] }>
+  /** Columnas+tipos de un objeto del catálogo, ruteado a `databaseRef` (undefined ⇒ default global). */
+  columnsOf(table: string, databaseRef?: string): Promise<{ name: string; type: string }[]>
   /** Valida un draft contra el DSL (schema + capabilities de instancia). */
   validateDraft(yaml: string): { ok: true } | { ok: false; error: string }
   listSpecs(): SpecRef[]
@@ -102,25 +106,26 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     const probeable = probeableNames(deps.catalog)
     return {
       catalog: deps.catalog,
-      runProbe: async (sql, _why) => {
+      configuredRefs: deps.configuredRefs,
+      runProbe: async (sql, _why, databaseRef) => {
         try {
-          return await deps.probe(sql, email)
+          return await deps.probe(sql, email, databaseRef)
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) }
         }
       },
-      columnsOf: (table) => deps.columnsOf(table),
-      sampleRows: async (table, n) => {
+      columnsOf: (table, databaseRef) => deps.columnsOf(table, databaseRef),
+      sampleRows: async (table, n, databaseRef) => {
         const g = guardProbeSql(`SELECT * FROM ${table}`, { allowlist: probeable, topLimit: n })
-        return (await deps.probe(g.sql, email)).rows
+        return (await deps.probe(g.sql, email, databaseRef)).rows
       },
-      profileColumn: async (table, column, top) => {
+      profileColumn: async (table, column, top, databaseRef) => {
         if (!IDENT_RE.test(column)) throw new Error(`Columna inválida: '${column}'.`)
         const g = guardProbeSql(`SELECT ${column} AS value, COUNT(*) AS count FROM ${table} GROUP BY ${column} ORDER BY COUNT(*) DESC`, {
           allowlist: probeable,
           topLimit: top,
         })
-        const rows = (await deps.probe(g.sql, email)).rows
+        const rows = (await deps.probe(g.sql, email, databaseRef)).rows
         return rows.map((r) => ({ value: r['value'], count: Number(r['count'] ?? 0) }))
       },
       listSpecs: () => deps.listSpecs(),

@@ -21,14 +21,21 @@ export interface SpecRef {
 export interface MirandaToolContext {
   /** Censo de fuentes multi-nivel. Solo las `gestionado` son probeables (ver `probeableNames`/`nivelForName`). */
   catalog: CatalogEntry[]
-  /** Ejecuta una probe (ya guardada + `TOP` forzado). `why` se registra para auditoría. */
-  runProbe(sql: string, why: string): Promise<{ rows: Record<string, unknown>[] } | { error: string }>
-  /** Columnas + tipos de un objeto del catálogo (metadata acotada al objeto allowlisteado). */
-  columnsOf(table: string): Promise<{ name: string; type: string }[]>
-  /** N filas de muestra de un objeto del catálogo (`SELECT TOP n *`). */
-  sampleRows(table: string, n: number): Promise<Record<string, unknown>[]>
-  /** Top-N valores distintos de una columna con su conteo. */
-  profileColumn(table: string, column: string, top: number): Promise<{ value: unknown; count: number }[]>
+  /**
+   * Conexiones de datos (`database_ref`) EFECTIVAMENTE configuradas en ESTE despliegue. Ausente ⇒ no se
+   * sabe (no se chequea; compat con contextos que no lo cablean). Presente ⇒ una fuente servible cuyo
+   * `database_ref` no esté acá NO es sondeable en este entorno (camino educativo, distinto de «no existe»).
+   */
+  configuredRefs?: string[]
+  /** Ejecuta una probe (ya guardada + `TOP` forzado) en `databaseRef` (undefined ⇒ fallback global).
+   *  `why` se registra para auditoría. */
+  runProbe(sql: string, why: string, databaseRef?: string): Promise<{ rows: Record<string, unknown>[] } | { error: string }>
+  /** Columnas + tipos de un objeto del catálogo, ruteado a `databaseRef` (undefined ⇒ fallback global). */
+  columnsOf(table: string, databaseRef?: string): Promise<{ name: string; type: string }[]>
+  /** N filas de muestra de un objeto, ruteado a `databaseRef` (undefined ⇒ fallback global). */
+  sampleRows(table: string, n: number, databaseRef?: string): Promise<Record<string, unknown>[]>
+  /** Top-N valores distintos de una columna con su conteo, ruteado a `databaseRef` (undefined ⇒ fallback). */
+  profileColumn(table: string, column: string, top: number, databaseRef?: string): Promise<{ value: unknown; count: number }[]>
   /** Specs existentes (ejemplares). */
   listSpecs(): SpecRef[]
   /** Contenido YAML de una spec existente (read-only), o null. */

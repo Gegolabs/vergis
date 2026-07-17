@@ -37,6 +37,13 @@ export interface CatalogEntry {
   nivel?: NivelAcceso
   /** Dominio de negocio (Finanzas, Ventas, Personas, Plantación…). */
   dominio?: string
+  /**
+   * Conexión de datos lógica a la que ENRUTAR las probes de este objeto (`database_ref` del despliegue,
+   * p. ej. `ventas`, `finanzas`). Solo tiene sentido en el nivel `gestionado` (los demás no se sondean).
+   * Cada dominio vive en su propio SQL endpoint → una probe se rutea al `database_ref` del objeto que
+   * toca. COMPAT: ausente ⇒ el default global del despliegue (`MIRANDA_PROBE_DB`, ahora un *fallback*).
+   */
+  database_ref?: string
   /** Sistema de origen (niveles 2 y 3): «SAP Business One», «Buk», «Transtecnia». */
   sistema?: string
   /** Dueño del artefacto manual (nivel 4). «por confirmar» si no se sabe (jamás inventar). */
@@ -74,6 +81,43 @@ export function nivelForName(catalog: CatalogEntry[], name: string): NivelAcceso
   return e ? nivelOf(e) : undefined
 }
 
+/**
+ * El `database_ref` de un objeto por su nombre (por hoja), o undefined si el objeto no está en el
+ * catálogo o no declara ref (compat: entonces se usa el fallback global del despliegue). El nombre de
+ * `database_ref` no se filtra jamás al usuario: es maquinaria de ruteo.
+ */
+export function databaseRefForName(catalog: CatalogEntry[], name: string): string | undefined {
+  const l = leaf(name)
+  const e = catalog.find((c) => leaf(c.name) === l)
+  return e?.database_ref
+}
+
+/** Resultado de resolver a qué conexión rutear una probe SQL a partir de los objetos que toca. */
+export type ProbeRoute =
+  | { kind: 'ref'; ref: string } // exactamente un dominio con ref declarada
+  | { kind: 'fallback' } // ningún objeto declara ref → el default global (MIRANDA_PROBE_DB)
+  | { kind: 'multi'; refs: string[] } // >1 dominio: cruce imposible (SQL endpoints distintos)
+
+/**
+ * Decide a qué conexión enrutar una probe SQL según los objetos (hojas) que referencia. Cada objeto
+ * gestionado puede declarar su `database_ref`; los dominios viven en SQL endpoints separados, así que:
+ *   · exactamente UN ref distinto  → se rutea ahí.
+ *   · MÁS de un ref distinto        → cruce entre dominios (físicamente imposible en un solo endpoint).
+ *   · NINGÚN ref (objetos sin ref)  → fallback al default global del despliegue (compat).
+ * Los objetos sin `database_ref` (compat) no aportan al conjunto de refs: no fuerzan `multi` ni deciden
+ * el ref; si TODOS son así, cae en `fallback`.
+ */
+export function resolveProbeRoute(catalog: CatalogEntry[], referencedLeaves: string[]): ProbeRoute {
+  const refs = new Set<string>()
+  for (const t of referencedLeaves) {
+    const ref = databaseRefForName(catalog, t)
+    if (ref) refs.add(ref)
+  }
+  if (refs.size === 0) return { kind: 'fallback' }
+  if (refs.size === 1) return { kind: 'ref', ref: [...refs][0] }
+  return { kind: 'multi', refs: [...refs].sort() }
+}
+
 /** Etiqueta interna de un nivel (para trazas/errores internos; jamás para la voz del usuario). */
 const VALID = new Set<string>(NIVELES_ACCESO)
 
@@ -106,6 +150,7 @@ export function parseCatalog(json: unknown): { catalog: CatalogEntry[]; warnings
     if (typeof o['description'] === 'string') e.description = o['description']
     if (typeof o['rows_estimate'] === 'number') e.rows_estimate = o['rows_estimate']
     if (typeof o['dominio'] === 'string') e.dominio = o['dominio']
+    if (typeof o['database_ref'] === 'string') e.database_ref = o['database_ref']
     if (typeof o['sistema'] === 'string') e.sistema = o['sistema']
     if (typeof o['dueno'] === 'string') e.dueno = o['dueno']
     if (typeof o['artefacto'] === 'string') e.artefacto = o['artefacto']
