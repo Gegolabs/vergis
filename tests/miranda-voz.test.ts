@@ -67,3 +67,41 @@ describe('reglas del plan 099 · prompt ensamblado', () => {
     expect(p).toMatch(/dos cosas que quiero\s+dejarte claras/i) // el meta-preámbulo, citado como prohibido
   })
 })
+
+// Refinamiento de voz sobre 0.14.0 (batería del coordinador): Miranda no nombra sus artefactos ni
+// procesos internos al usuario («el catálogo», «la capa de datos», «la spec», «exploré…») — habla del
+// CONTENIDO, no del contenedor, y abre con la sustancia. El mundo del USUARIO («tu sistema contable»)
+// sigue siendo lenguaje de negocio legítimo (no sobre-prohibir).
+describe('voz · artefactos y procesos internos NO se nombran (refinamiento 099)', () => {
+  const p = buildSystemPrompt({ dslDoc: 'DSL de ejemplo' })
+
+  it('la regla viaja en MIRANDA_VOICE y en el prompt ensamblado', () => {
+    expect(MIRANDA_VOICE).toMatch(/TUS ARTEFACTOS Y PROCESOS INTERNOS/)
+    expect(p).toMatch(/TUS ARTEFACTOS Y PROCESOS INTERNOS/)
+  })
+
+  it('cita los contenedores prohibidos: «el catálogo», «la capa de datos», «la spec», «la ficha»', () => {
+    expect(MIRANDA_VOICE).toMatch(/«el catálogo»/)
+    expect(MIRANDA_VOICE).toMatch(/«la capa\s+de datos»/)
+    expect(MIRANDA_VOICE).toMatch(/«la spec»/)
+    expect(MIRANDA_VOICE).toMatch(/«la ficha»/)
+  })
+
+  it('manda contenido-no-contenedor con las sustituciones ejemplares', () => {
+    expect(MIRANDA_VOICE).toMatch(/CONTENIDO, no del\s+contenedor/i)
+    expect(MIRANDA_VOICE).toMatch(/la información que tenemos/)
+    expect(MIRANDA_VOICE).toMatch(/los datos de ventas/)
+  })
+
+  it('prohíbe abrir narrando el propio proceso («exploré el catálogo…») y manda abrir con la sustancia', () => {
+    expect(MIRANDA_VOICE).toMatch(/JAMÁS abras\s+narrando/i)
+    expect(MIRANDA_VOICE).toMatch(/exploré el catálogo/)
+    expect(MIRANDA_VOICE).toMatch(/abre con la SUSTANCIA/i)
+  })
+
+  it('NO sobre-prohíbe: el mundo del usuario («tu sistema contable», la planilla del equipo) sigue legítimo', () => {
+    expect(MIRANDA_VOICE).toMatch(/tu sistema contable/)
+    expect(MIRANDA_VOICE).toMatch(/planilla que mantiene tu\s+equipo/)
+    expect(MIRANDA_VOICE).toMatch(/lenguaje de negocio legítimo/i)
+  })
+})
