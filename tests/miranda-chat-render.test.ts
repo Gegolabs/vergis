@@ -227,7 +227,7 @@ describe('renderChat · disclosure de la traza (detalle por paso)', () => {
   })
 })
 
-describe('renderIntentPanel · tarjeta plana (091 ítem 2 revertido)', () => {
+describe('renderIntentPanel · ficha técnica cerrada por defecto (plan 101 etapa B)', () => {
   const session = (state: MirandaSession['state']): MirandaSession => ({ id: 's1', title: 'PI de saldos', state })
   const intent = JSON.stringify({
     titulo: 'Saldos por empresa',
@@ -237,20 +237,52 @@ describe('renderIntentPanel · tarjeta plana (091 ítem 2 revertido)', () => {
     medidas: [{ nombre: 'saldo', definicion: 'suma de cuentas' }],
     pendientes_de_datos: [],
   })
+  const qc = JSON.stringify({ veredicto: 'APROBADA', brechas: [] })
+  const draft = 'mira_version: "1.0"\nidentity:\n  id: saldos'
 
-  it('el resumen de intención es una tarjeta PLANA — sin <details> envolvente', () => {
+  it('la ficha es un <details> CERRADO por defecto (sin atributo open) con el nombre canónico', () => {
     const html = renderIntentPanel(intent, session('borrador'), 'tok', 's1')
-    expect(html).toContain('<h2>Resumen de intención</h2>')
-    expect(html).toContain('Saldos por empresa')
-    // ya NO hay disclosure envolvente en el panel de intención.
-    expect(html).not.toContain('mir-intent-d')
+    expect(html).toContain('<details class="mir-ficha">') // cerrado: no lleva `open`
+    expect(html).not.toContain('mir-ficha" open')
+    expect(html).toContain('>Ficha técnica</summary>') // nombre canónico (constante FICHA_TECNICA)
+    expect(html).not.toContain('<h2>Resumen de intención</h2>') // el viejo título plano desapareció
   })
 
-  it('sin resumen, muestra el texto de vacío como tarjeta plana (sin <details> ni hint)', () => {
+  it('la ficha contiene las tres secciones: Intención + validar, Verificación (self-check), Definición técnica (DSL)', () => {
+    const html = renderIntentPanel(intent, session('borrador'), 'tok', 's1', qc, draft)
+    expect(html).toContain('<h3>Intención</h3>')
+    expect(html).toContain('Saldos por empresa')
+    expect(html).toContain('Esto es lo que quiero') // «validar intención» mudado ADENTRO
+    expect(html).toContain('<h3>Verificación</h3>')
+    expect(html).toContain('APROBADA')
+    expect(html).toContain('<h3>Definición técnica</h3>')
+    expect(html).toContain('mira_version') // el DSL vive en la ficha, a demanda
+    // El «Esto es lo que quiero» está DENTRO del <details> de la ficha.
+    const fichaStart = html.indexOf('<details class="mir-ficha">')
+    expect(html.indexOf('Esto es lo que quiero')).toBeGreaterThan(fichaStart)
+  })
+
+  it('«Publicar» NO va dentro de la ficha — es una acción de la superficie principal', () => {
+    const html = renderIntentPanel(intent, session('autochequeado'), 'tok', 's1', qc, draft)
+    expect(html).toContain('/publish') // el botón existe
+    // …pero ANTES de que abra la ficha (fuera del <details>).
+    expect(html.indexOf('/publish')).toBeLessThan(html.indexOf('<details class="mir-ficha">'))
+  })
+
+  it('el link al reporte tampoco va en la ficha (acción, no sustento)', () => {
+    const html = renderIntentPanel(intent, session('autochequeado'), 'tok', 's1', qc, draft)
+    expect(html).toContain('/miranda/preview/s1')
+    expect(html.indexOf('/miranda/preview/s1')).toBeLessThan(html.indexOf('<details class="mir-ficha">'))
+  })
+
+  it('sin resumen, la ficha muestra el texto de vacío en la sección Intención', () => {
     const html = renderIntentPanel(undefined, session('borrador'), 'tok', 's1')
-    expect(html).toContain('<h2>Resumen de intención</h2>')
-    expect(html).not.toContain('mir-intent-d')
+    expect(html).toContain('<details class="mir-ficha">')
+    expect(html).toContain('<h3>Intención</h3>')
     expect(html).toContain('Aún no hay un resumen de intención')
+    // sin draft: no hay sección Definición técnica ni Verificación.
+    expect(html).not.toContain('<h3>Definición técnica</h3>')
+    expect(html).not.toContain('<h3>Verificación</h3>')
   })
 })
 

@@ -594,10 +594,16 @@ export function renderBudgetLine(used: number, budget: number): string {
   return `<div class="mir-budget${warn ? ' mir-budget--warn' : ''}"><span>Uso de la sesión</span><span><b>${fmtTokens(used)}</b> / ${fmtTokens(budget)}</span></div>`
 }
 
+/** Nombre canónico del panel de sustento a demanda (plan 101 etapa B). En UN solo lugar por si se
+ *  renombra (César lo confirmó, pero puede cambiar tras verlo vivo). */
+export const FICHA_TECNICA = 'Ficha técnica'
+
 /**
- * Panel de intención de la sesión: «Resumen de intención» (título + resumen + validar + preview),
- * self-check, publicar y el DSL, apilados como tarjeta **plana** (no hay disclosure envolvente — el
- * plegado ahora es de la COLUMNA entera, ver `renderMirCols`). Función pura (server-rendered, cero JS). */
+ * «Ficha técnica» (plan 101 etapa B): el sustento a demanda de la sesión. Un disclosure CERRADO por
+ * defecto (CSS-only, cero JS) con tres secciones legibles — **Intención** (resumen + «Esto es lo que
+ * quiero», mudado adentro por decisión de César), **Verificación** (self-check) y **Definición técnica**
+ * (el DSL). Guarda la JUSTIFICACIÓN, no las ACCIONES: «Publicar» y el link al reporte quedan FUERA de la
+ * ficha, en la superficie principal. Función pura (server-rendered). */
 export function renderIntentPanel(
   intentJson: string | undefined,
   s: MirandaSession,
@@ -606,11 +612,12 @@ export function renderIntentPanel(
   qcJson?: string,
   draftYaml?: string,
 ): string {
-  let summary = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
+  // Sección INTENCIÓN (+ el botón «Esto es lo que quiero» — mudado adentro, decisión de César).
+  let intencion = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
   if (intentJson) {
     try {
       const it = JSON.parse(intentJson) as IntentSummary
-      summary = `<div class="tile" style="min-width:auto">
+      intencion = `<div class="tile" style="min-width:auto">
         <div class="l">Título</div><div>${escapeHtml(it.titulo)}</div>
         <div class="l" style="margin-top:8px">Pregunta de negocio</div><div>${escapeHtml(it.pregunta_de_negocio)}</div>
         <div class="l" style="margin-top:8px">Audiencia</div><div>${escapeHtml(it.audiencia)}</div>
@@ -620,31 +627,41 @@ export function renderIntentPanel(
         ${it.pendientes_de_datos.length ? `<div class="l" style="margin-top:8px">Pendientes de datos</div><ul>${it.pendientes_de_datos.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul>` : ''}
       </div>`
     } catch {
-      summary = '<p class="msg err">Resumen de intención ilegible.</p>'
+      intencion = '<p class="msg err">Resumen de intención ilegible.</p>'
     }
   }
   const validateBtn =
     s.state === 'borrador' && intentJson
       ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/validate-intent"><input type="hidden" name="_csrf" value="${token}"><button class="add">Esto es lo que quiero</button></form>`
       : ''
-  let qcPanel = ''
+  const seccionIntencion = `<section class="mir-ficha-sec"><h3>Intención</h3>${intencion}${validateBtn}</section>`
+
+  // Sección VERIFICACIÓN (self-check): solo si ya corrió.
+  let seccionVerificacion = ''
   if (qcJson) {
     try {
       const r = JSON.parse(qcJson) as { veredicto: string; brechas: { id: string; sev: string; brecha: string; recomendacion: string }[] }
-      qcPanel = `<h2>Self-check</h2><p>Veredicto: <span class="tag">${escapeHtml(r.veredicto)}</span></p>${r.brechas.length ? `<ul>${r.brechas.map((b) => `<li><b>${escapeHtml(b.sev)}</b> ${escapeHtml(b.brecha)} — ${escapeHtml(b.recomendacion)}</li>`).join('')}</ul>` : '<p class="sub">Sin brechas.</p>'}`
+      seccionVerificacion = `<section class="mir-ficha-sec"><h3>Verificación</h3><p>Veredicto: <span class="tag">${escapeHtml(r.veredicto)}</span></p>${r.brechas.length ? `<ul>${r.brechas.map((b) => `<li><b>${escapeHtml(b.sev)}</b> ${escapeHtml(b.brecha)} — ${escapeHtml(b.recomendacion)}</li>`).join('')}</ul>` : '<p class="sub">Sin brechas.</p>'}</section>`
     } catch {
       /* ignore */
     }
   }
+
+  // Sección DEFINICIÓN TÉCNICA (el DSL): el detalle técnico vive AQUÍ, a demanda (escotilla técnica).
+  const seccionDefinicion = draftYaml
+    ? `<section class="mir-ficha-sec"><h3>Definición técnica</h3><pre class="mir-ficha-dsl">${escapeHtml(draftYaml)}</pre></section>`
+    : ''
+
+  // La ficha técnica: disclosure CERRADO por defecto (CSS-only). Guarda la JUSTIFICACIÓN, no las acciones.
+  const ficha = `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}</div></details>`
+
+  // Acciones (superficie principal, FUERA de la ficha): el link al reporte y «Publicar».
+  const preview = draftYaml ? `<p><a href="/miranda/preview/${escapeHtml(sessionId)}" target="_blank">Ver reporte (con tu RLS) ↗</a></p>` : ''
   const publishBtn =
     s.state === 'autochequeado'
       ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
       : ''
-  const preview = draftYaml ? `<p><a href="/miranda/preview/${escapeHtml(sessionId)}" target="_blank">Ver preview (con tu RLS) ↗</a></p>` : ''
-  const dslToggle = draftYaml
-    ? `<details style="margin-top:12px"><summary class="sub">ver DSL (read-only)</summary><pre style="overflow:auto;background:var(--card);padding:12px;border-radius:8px;font-size:12px">${escapeHtml(draftYaml)}</pre></details>`
-    : ''
-  return `<h2>Resumen de intención</h2>${summary}${validateBtn}${preview}${qcPanel}${publishBtn}${dslToggle}`
+  return `${preview}${publishBtn}${ficha}`
 }
 
 /**

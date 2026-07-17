@@ -128,6 +128,19 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-budget b{color:var(--fg);font-weight:600}
 .mir-budget--warn{color:var(--err)}
 .mir-budget--warn b{color:var(--err)}
+/* Ficha técnica (plan 101 etapa B): sustento a demanda, disclosure cerrado por defecto, con secciones
+   legibles (Intención · Verificación · Definición técnica). CSS-only. */
+.mir-ficha{margin-top:14px;border:1px solid var(--border);border-radius:12px;background:var(--card)}
+.mir-ficha>.mir-ficha-sum{cursor:pointer;list-style:none;padding:11px 14px;font-size:12px;font-weight:600;color:var(--fg);text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:8px}
+.mir-ficha>.mir-ficha-sum::-webkit-details-marker{display:none}
+.mir-ficha>.mir-ficha-sum::before{content:"›";display:inline-block;color:var(--muted);transition:transform .15s ease}
+.mir-ficha[open]>.mir-ficha-sum::before{transform:rotate(90deg)}
+.mir-ficha[open]>.mir-ficha-sum{border-bottom:1px solid var(--border)}
+.mir-ficha-body{padding:6px 16px 16px}
+.mir-ficha-sec{padding:14px 0;border-top:1px solid var(--border)}
+.mir-ficha-sec:first-child{border-top:none}
+.mir-ficha-sec>h3{font-size:11px;margin:0 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.mir-ficha-dsl{overflow:auto;background:var(--bg);border:1px solid var(--border);padding:12px;border-radius:8px;font-size:12px;margin:0}
 .mir-intent{position:sticky;top:24px;min-width:0;display:flex;flex-direction:column}
 .mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
 /* Gaveta de intención (work/093): divisor punteado = borde de la gaveta + tirador sobre él. CSS-only:
