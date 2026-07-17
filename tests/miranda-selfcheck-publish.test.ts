@@ -140,6 +140,103 @@ data:
   })
 })
 
+// Plan 100 · addendum 3: el cruce de refs valida la PERTENENCIA objeto↔database_ref contra el
+// catálogo. El caso que el cruce de existencia no cubre (arnés contra 0a0d45f): el modelo asoció
+// «estado de resultados» con `finanzas` por semántica y declaró esa ref (que SÍ existe en los
+// perfiles), pero el catálogo declara `dbo.v_movimiento → ventas` — el objeto no existe en esa base
+// y el serving reventó con `Invalid object name`. La baranda: por cada objeto FROM/JOIN del SQL que
+// tenga entrada de catálogo con ref declarada, la ref del dataset debe calzar; objetos fuera del
+// catálogo (o catalogados sin ref) no se opinan.
+describe('plan 100 addendum 3 · self-check cruza la pertenencia objeto↔ref contra el catálogo', () => {
+  const CATALOG = [
+    { name: 'dbo.v_movimiento', database_ref: 'ventas' },
+    { name: 'dbo.v_saldos' }, // catalogado SIN ref declarada → el cruce no opina
+  ]
+  const REFS = ['finanzas', 'ventas']
+  const draftEEFF = (paramsLine: string) => `mira_version: "1.0"
+identity:
+  id: eeff
+  display_name: Estado de resultados
+  classification: internal
+data:
+  resultado:
+    capability: execute-sql-dwh
+    params:
+      ${paramsLine}
+      sql: "SELECT cuenta, monto FROM dbo.v_movimiento JOIN dbo.v_saldos ON 1=1"
+`
+
+  it('ref existente pero ≠ catálogo → brecha B con el fix exacto (el caso finanzas/ventas del arnés)', async () => {
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draftEEFF(`database_ref: finanzas`), intentSummary: intent,
+      configuredRefs: REFS, catalog: CATALOG,
+    })
+    expect(r.brechas).toHaveLength(1) // v_movimiento discrepa; v_saldos (sin ref en catálogo) no opina
+    const b = r.brechas[0]
+    expect(b.sev).toBe('B')
+    expect(b.brecha).toMatch(/dbo\.v_movimiento.*pertenece a 'ventas' según el catálogo/)
+    expect(b.brecha).toContain(`declara 'finanzas'`)
+    expect(b.donde).toBe('data.resultado.params.database_ref')
+    expect(b.recomendacion).toContain(`database_ref: 'ventas'`) // el fix exacto
+    expect(r.veredicto).toBe('APROBABLE')
+  })
+
+  it('ref = catálogo → pasa limpio', async () => {
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draftEEFF(`database_ref: ventas`), intentSummary: intent,
+      configuredRefs: REFS, catalog: CATALOG,
+    })
+    expect(r.veredicto).toBe('APROBADA')
+    expect(r.brechas).toEqual([])
+  })
+
+  it('objeto fuera del catálogo → el cruce no opina', async () => {
+    const draft = `mira_version: "1.0"
+identity: {id: x, display_name: X, classification: internal}
+data:
+  d:
+    capability: execute-sql-dwh
+    params: {database_ref: finanzas, sql: "SELECT 1 FROM dbo.v_desconocida"}
+`
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draft, intentSummary: intent,
+      configuredRefs: REFS, catalog: CATALOG,
+    })
+    expect(r.brechas).toEqual([])
+  })
+
+  it('sin database_ref pero el objeto está catalogado con ref → brecha B pidiendo declararla', async () => {
+    const draft = `mira_version: "1.0"
+identity: {id: x, display_name: X, classification: internal}
+data:
+  d:
+    capability: execute-sql-dwh
+    params: {sql: "SELECT cuenta FROM dbo.v_movimiento"}
+`
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draft, intentSummary: intent,
+      configuredRefs: REFS, catalog: CATALOG,
+    })
+    expect(r.brechas).toHaveLength(1)
+    expect(r.brechas[0].sev).toBe('B')
+    expect(r.brechas[0].brecha).toMatch(/no declara database_ref.*vive en 'ventas'/)
+    expect(r.brechas[0].recomendacion).toContain(`database_ref: 'ventas'`)
+  })
+
+  it('compat: sin catálogo en deps → la pertenencia no se cruza (la existencia sigue operando)', async () => {
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draftEEFF(`database_ref: finanzas`), intentSummary: intent,
+      configuredRefs: REFS, // catalog: undefined
+    })
+    expect(r.brechas).toEqual([]) // 'finanzas' existe en los perfiles; sin catálogo no hay más que decir
+  })
+})
+
 describe('WP6 · publish y su gate', () => {
   async function seededSession(state: string, opts: { qc?: unknown; draft?: string } = {}) {
     const gov = await SqliteGovernanceStore.open(null)

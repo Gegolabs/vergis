@@ -13,6 +13,8 @@ import type { ToolDefinition } from './tools/registry'
 import { VEREDICTOS, SEVERIDADES, hasBlockingGaps, type SelfCheckResult, type Veredicto, type Severidad, type Brecha } from './qc'
 import { crossCheckForma } from './forma'
 import { normalizeIntent, type FormaVista } from './intent'
+import { referencedTables } from './tools/sql-guard'
+import { databaseRefForName, type CatalogEntry } from './catalog'
 
 export type { SelfCheckResult, Brecha } from './qc'
 
@@ -31,6 +33,10 @@ export interface SelfCheckDeps {
   /** Las `database_ref` configuradas en los perfiles de conexión de este despliegue (mismo valor que
    *  el contexto de tools). `undefined` = el llamador no las conoce (compat) → no se cruzan. */
   configuredRefs?: string[]
+  /** El catálogo de instancia (mismo valor que el contexto de tools): declara a qué `database_ref`
+   *  pertenece cada objeto gestionado. `undefined` = el llamador no lo conoce (compat) → no se cruza
+   *  la pertenencia objeto↔ref. */
+  catalog?: CatalogEntry[]
   maxTokens?: number
 }
 
@@ -116,7 +122,7 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckResult
   if (!toolUse) return { veredicto: 'NO_REVISABLE', brechas: [{ id: 'G0', sev: 'B', brecha: 'El juez no emitió un reporte estructurado.', donde: 'self-check', recomendacion: 'Reintentar el self-check.' }] }
   const report = normalizeReport(toolUse.input)
   const withForma = mergeFormaCross(report, deps.intentSummary, deps.draftYaml)
-  return mergeRefsCross(withForma, deps.draftYaml, deps.configuredRefs)
+  return mergeRefsCross(withForma, deps.draftYaml, deps.configuredRefs, deps.catalog)
 }
 
 /** Extrae `vistas[]` del resumen de intención serializado (tolerante: JSON ilegible → sin vistas). */
@@ -143,18 +149,28 @@ export function mergeFormaCross(report: SelfCheckResult, intentJson: string, dra
 }
 
 /**
- * Cruce de `database_ref` (enforcement en CÓDIGO — bug destapado por entrega-primero, arnés
- * 2026-07-17): el autor puede copiar una `database_ref` de un EJEMPLO del documento DSL que no existe
- * en los perfiles de conexión de este entorno; el juez-modelo no la caza (no conoce los perfiles) y el
- * error revienta recién al servir la preview (500 del riel). Aquí se valida cada dataset del draft
- * contra las refs configuradas y se emite brecha BLOQUEANTE con mensaje accionable (causa + refs
- * válidas), para que el autor se auto-corrija en el MISMO turno, antes de la preview.
- * `configuredRefs === undefined` = el llamador no conoce los perfiles (compat) → no se cruza.
- * Un YAML ilegible o sin `data` no es asunto de este cruce (lo cazan el validador y el juez).
- * IDs estables `REF-N` (orden de los datasets en el draft).
+ * Cruce de `database_ref` (enforcement en CÓDIGO — bugs destapados por entrega-primero, arnés
+ * 2026-07-17). Dos planos, ambos invisibles para el juez-modelo (no conoce ni los perfiles ni el
+ * ruteo) y que revientan recién al servir la preview (500 del riel):
+ *
+ *  1. EXISTENCIA — el autor copia una `database_ref` de un EJEMPLO del documento DSL que no existe en
+ *     los perfiles de conexión de este entorno (`fabric-lh-qw04`).
+ *  2. PERTENENCIA (addendum 3) — la ref existe, pero el objeto consultado NO vive en esa base: el
+ *     autor asocia por semántica («estado de resultados» → `finanzas`) ignorando que el catálogo
+ *     declara `dbo.v_movimiento → ventas` ⇒ `Invalid object name` al servir. Se extraen los objetos
+ *     FROM/JOIN de cada SQL (`referencedTables`, el mismo extractor del sql-guard) y se cruza la ref
+ *     del dataset contra la `database_ref` declarada en la entrada de catálogo de cada objeto.
+ *     Objetos fuera del catálogo o sin ref declarada: no se opina (fuera de alcance del cruce).
+ *     Un dataset SIN ref que referencia un objeto catalogado con ref: se pide declararla.
+ *
+ * Cada brecha es BLOQUEANTE con el fix exacto en el mensaje, para que el autor se auto-corrija en el
+ * MISMO turno, antes de la preview. Compat: `configuredRefs === undefined` ⇒ no se cruza existencia;
+ * `catalog === undefined` ⇒ no se cruza pertenencia. Un YAML ilegible o sin `data` no es asunto de
+ * este cruce (lo cazan el validador y el juez). IDs estables `REF-N` (orden de datasets del draft;
+ * dentro del dataset: existencia primero, luego pertenencia por objeto en orden de aparición).
  */
-export function crossCheckRefs(draftYaml: string, configuredRefs?: string[]): Brecha[] {
-  if (configuredRefs === undefined) return []
+export function crossCheckRefs(draftYaml: string, configuredRefs?: string[], catalog?: CatalogEntry[]): Brecha[] {
+  if (configuredRefs === undefined && catalog === undefined) return []
   let spec: Record<string, unknown>
   try {
     spec = (YAML.parse(draftYaml) ?? {}) as Record<string, unknown>
@@ -163,33 +179,69 @@ export function crossCheckRefs(draftYaml: string, configuredRefs?: string[]): Br
   }
   const data = spec['data']
   if (data == null || typeof data !== 'object' || Array.isArray(data)) return []
-  const valid = new Set(configuredRefs)
-  const listado = configuredRefs.length > 0 ? configuredRefs.join(', ') : '(ninguna)'
+  const valid = configuredRefs === undefined ? undefined : new Set(configuredRefs)
+  const listado = configuredRefs && configuredRefs.length > 0 ? configuredRefs.join(', ') : '(ninguna)'
   const brechas: Brecha[] = []
   let n = 1
   for (const [dataset, defRaw] of Object.entries(data as Record<string, unknown>)) {
     const def = (defRaw ?? {}) as Record<string, unknown>
     const params = (def['params'] ?? {}) as Record<string, unknown>
-    const ref = params['database_ref']
-    if (typeof ref !== 'string' || ref === '' || valid.has(ref)) continue
-    brechas.push({
-      id: `REF-${n++}`,
-      sev: 'B',
-      brecha: `El dataset '${dataset}' usa database_ref '${ref}', que NO está configurada en los perfiles de conexión de este entorno: la preview/serving fallaría al conectar.`,
-      donde: `data.${dataset}.params.database_ref`,
-      recomendacion: `Usa la database_ref de la entrada de catálogo de la fuente (jamás una copiada de un ejemplo del DSL). Las configuradas en este entorno son: ${listado}.`,
-    })
+    const rawRef = params['database_ref']
+    const ref = typeof rawRef === 'string' && rawRef !== '' ? rawRef : undefined
+
+    // Plano 1 · EXISTENCIA: la ref declarada debe estar en los perfiles de conexión.
+    if (ref !== undefined && valid !== undefined && !valid.has(ref)) {
+      brechas.push({
+        id: `REF-${n++}`,
+        sev: 'B',
+        brecha: `El dataset '${dataset}' usa database_ref '${ref}', que NO está configurada en los perfiles de conexión de este entorno: la preview/serving fallaría al conectar.`,
+        donde: `data.${dataset}.params.database_ref`,
+        recomendacion: `Usa la database_ref de la entrada de catálogo de la fuente (jamás una copiada de un ejemplo del DSL). Las configuradas en este entorno son: ${listado}.`,
+      })
+    }
+
+    // Plano 2 · PERTENENCIA: cada objeto FROM/JOIN catalogado con ref declarada debe calzar con la
+    // ref del dataset (los dominios viven en SQL endpoints separados: la base equivocada no tiene el
+    // objeto). Sin catálogo o sin SQL, nada que cruzar.
+    if (catalog === undefined) continue
+    const sql = params['sql']
+    if (typeof sql !== 'string' || !sql.trim()) continue
+    const seen = new Set<string>()
+    for (const obj of referencedTables(sql)) {
+      const key = obj.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const catRef = databaseRefForName(catalog, obj)
+      if (catRef === undefined) continue // fuera del catálogo o sin ref declarada: no se opina
+      if (ref === undefined) {
+        brechas.push({
+          id: `REF-${n++}`,
+          sev: 'B',
+          brecha: `El dataset '${dataset}' no declara database_ref y su consulta usa '${obj}', que según el catálogo vive en '${catRef}'.`,
+          donde: `data.${dataset}.params.database_ref`,
+          recomendacion: `Declara database_ref: '${catRef}' — la ref de la entrada de catálogo de '${obj}'.`,
+        })
+      } else if (ref !== catRef) {
+        brechas.push({
+          id: `REF-${n++}`,
+          sev: 'B',
+          brecha: `'${obj}' pertenece a '${catRef}' según el catálogo; el dataset '${dataset}' declara '${ref}' — el objeto no existe en esa base y la preview/serving fallaría (Invalid object name).`,
+          donde: `data.${dataset}.params.database_ref`,
+          recomendacion: `Usa la ref de la entrada de catálogo del objeto: database_ref: '${catRef}'.`,
+        })
+      }
+    }
   }
   return brechas
 }
 
 /**
- * Funde el cruce de `database_ref` al reporte del juez (mismo contrato que `mergeFormaCross`): las
- * brechas REF-N son B, así que un veredicto APROBADA se degrada a APROBABLE; el gate de publish (en
- * código) las honra igual que cualquier B.
+ * Funde el cruce de `database_ref` (existencia + pertenencia al catálogo) al reporte del juez (mismo
+ * contrato que `mergeFormaCross`): las brechas REF-N son B, así que un veredicto APROBADA se degrada a
+ * APROBABLE; el gate de publish (en código) las honra igual que cualquier B.
  */
-export function mergeRefsCross(report: SelfCheckResult, draftYaml: string, configuredRefs?: string[]): SelfCheckResult {
-  const refBrechas = crossCheckRefs(draftYaml, configuredRefs)
+export function mergeRefsCross(report: SelfCheckResult, draftYaml: string, configuredRefs?: string[], catalog?: CatalogEntry[]): SelfCheckResult {
+  const refBrechas = crossCheckRefs(draftYaml, configuredRefs, catalog)
   if (refBrechas.length === 0) return report
   const brechas = [...report.brechas, ...refBrechas]
   const veredicto: Veredicto = report.veredicto === 'APROBADA' && hasBlockingGaps(brechas) ? 'APROBABLE' : report.veredicto
