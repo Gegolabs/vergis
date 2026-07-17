@@ -29,6 +29,7 @@ import {
   type IntentSummary,
 } from '@vergis/miranda'
 import { page, readForm, redirect, send, csrfFactory, requireCsrf, CsrfError } from './ui'
+import { BusRegistry } from './miranda-bus'
 
 export interface MirandaHandler {
   tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
@@ -105,6 +106,8 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   const orphanTurnMs = deps.orphanTurnMs ?? DEFAULT_ORPHAN_TURN_MS
   // Turnos in-process en vuelo por sesión (fire-and-forget). Seam de `whenIdle` para tests + apagado.
   const inflight = new Map<string, Promise<void>>()
+  // Buses de eventos EN VIVO por sesión (plan 103 etapa 1): el turno publica, el SSE transmite.
+  const buses = new BusRegistry()
   /** Texto del error de sistema estándar (mismo prefijo ⚠️ que el resto). */
   const systemError = (note: string): string => JSON.stringify([{ type: 'text', text: `⚠️ ${note}` }])
 
@@ -219,6 +222,12 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         redirect(res, `/miranda/s/${id}`)
         return true
       }
+      // Canal EN VIVO (SSE, plan 103 etapa 1) — MISMA identidad/RLS que el resto (el scope ya se validó
+      // arriba; la identidad viene de los headers del proxy). Cero canal lateral al dato: transmite solo
+      // eventos de UI (fase, mensaje nuevo ya RLS-filtrado, draft-updated, done), no dato crudo.
+      const mEvents = path.match(/^\/miranda\/s\/([^/]+)\/events$/)
+      if (mEvents && req.method === 'GET') return handleEvents(mEvents[1], req, res)
+
       // Conversación.
       const mSess = path.match(/^\/miranda\/s\/([^/]+)$/)
       if (mSess && req.method === 'GET') {
@@ -324,6 +333,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     tokensUsedBefore: number,
   ): Promise<void> {
     const t0 = Date.now() // cronómetro del turno (plan 100 addendum 5): mide cuánto tarda este mensaje
+    const bus = buses.for(sessionId)
+    const youIni = youInitialsOf(email)
+    let lastSeq = -1 // seq del último mensaje persistido → se le ancla la duración al cerrar el turno
     try {
       const tools = buildToolRegistry(toolContext(sessionId, email))
       const result = await runAgentTurn({
@@ -337,28 +349,45 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         tokenBudget: deps.tokenBudget,
         maxTokensPerCall: deps.maxTokensPerCall, // tope de emisión (plan 100 addendum 2)
         tokensUsedBefore,
+        // Persistencia INCREMENTAL (plan 103 etapa 1): cada mensaje del turno se guarda APENAS se produce
+        // (ya no todos al final) → aparecen a medida (SSE en vivo Y meta-refresh no-JS a ≤4s). Cada uno
+        // se publica al bus con su HTML de burbuja renderizado (los tool-signals rinden '' — se omiten
+        // del chat, plan 102 C). La duración se ancla al cerrar el turno sobre el ÚLTIMO (`lastSeq`).
+        onMessage: async (m, { tokens }) => {
+          const role = roleOf(m)
+          const content = JSON.stringify(m.content)
+          lastSeq = await deps.gov.appendMirandaMessage(sessionId, role, content, tokens)
+          // Solo se publican al chat los mensajes con burbuja (usuario/texto de Miranda). Los tool-signals
+          // no rinden burbuja (se omiten del chat, plan 102 C) → su avance va por el evento `phase`.
+          if (!isToolSignal(role, m.content)) {
+            bus.publish('message', { seq: lastSeq, html: renderChat([{ role, content }], { youInitials: youIni }) })
+          }
+        },
         onEvent: (e) => {
-          // Fase visible del turno (addendum 4): cada tool_use proyecta a una frase de negocio que el
-          // meta-refresh pinta en la burbuja «pensando». Fire-and-forget: la fase jamás bloquea ni
-          // rompe el turno (un fallo del marcador se ignora; la burbuja cae al default).
-          if (e.type !== 'tool_use') return
-          const name = String((e.detail as { name?: unknown } | undefined)?.name ?? '')
-          const phase = turnPhaseOf(name)
-          // El índice canónico hace que el marcador avance en ALTO-AGUA (el store gatea monotónico):
-          // un rebote del pipeline a una fase anterior no retrocede el stepper (plan 101 etapa A).
-          if (phase) void deps.gov.setMirandaTurnPhase(sessionId, phase, phaseIndex(phase)).catch(() => {})
+          // Fase visible del turno (addendum 4) + publicación al bus (etapa 1): cada tool_use proyecta una
+          // frase de negocio; el marcador avanza en ALTO-AGUA (el store gatea monotónico — plan 101 A) y
+          // el stepper en vivo se refresca vía `phase`. Un `save_draft`/`render_preview` que rinde bien →
+          // `draft-updated` (el reporte del lienzo se refresca solo, sin pestañeo). Fire-and-forget.
+          if (e.type === 'tool_use') {
+            const name = String((e.detail as { name?: unknown } | undefined)?.name ?? '')
+            const phase = turnPhaseOf(name)
+            if (phase) {
+              const idx = phaseIndex(phase)
+              void deps.gov.setMirandaTurnPhase(sessionId, phase, idx).catch(() => {})
+              bus.publish('phase', { phase, idx })
+            }
+          } else if (e.type === 'tool_result') {
+            const d = e.detail as { name?: unknown; result?: { error?: unknown } } | undefined
+            const name = String(d?.name ?? '')
+            const ok = !(d?.result && typeof d.result === 'object' && 'error' in d.result)
+            if (ok && (name === 'save_draft' || name === 'render_preview')) bus.publish('draft-updated', {})
+          }
         },
       })
-      // El mensaje del usuario (newMessages[0]) ya está persistido; se anotan los del asistente/tool.
-      // Los tokens del turno se anclan en el 1er mensaje persistido (el usuario quedó en 0); la
-      // DURACIÓN se ancla en el ÚLTIMO (la burbuja visible del assistant), para que la medición viva
-      // CON el mensaje que midió. Cubre éxito y disculpa por max_tokens (esta vuelve dentro de `result`).
-      const rest = result.newMessages.slice(1)
-      for (let i = 0; i < rest.length; i += 1) {
-        const m = rest[i]
-        const isLast = i === rest.length - 1
-        await deps.gov.appendMirandaMessage(sessionId, roleOf(m), JSON.stringify(m.content), i === 0 ? result.tokensUsed : 0, isLast ? Date.now() - t0 : undefined)
-      }
+      // La duración se ancla en el ÚLTIMO mensaje persistido (la burbuja visible), para que la medición
+      // viva CON el mensaje que midió. Cubre éxito y disculpa por max_tokens (su apology entra por onMessage).
+      if (lastSeq >= 0) await deps.gov.updateMirandaMessageDuration(sessionId, lastSeq, Date.now() - t0)
+      void result // el resultado ya se persistió incrementalmente; no se re-guarda
     } catch (e) {
       // El error habla en VOZ DE NEGOCIO: el usuario JAMÁS ve jerga técnica cruda (nombre de proveedor,
       // request_id, JSON, códigos). El presupuesto agotado es un mensaje controlado y apto (sin jerga),
@@ -371,13 +400,18 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         console.error(`[miranda] turno falló (sesión ${sessionId}): ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
         note = SYSTEM_ERROR_APOLOGY
       }
-      await deps.gov.appendMirandaMessage(sessionId, 'assistant', systemError(note), 0, Date.now() - t0)
+      const errContent = systemError(note)
+      const seq = await deps.gov.appendMirandaMessage(sessionId, 'assistant', errContent, 0, Date.now() - t0)
+      bus.publish('message', { seq, html: renderChat([{ role: 'assistant', content: errContent }], { youInitials: youIni }) })
+      bus.publish('error', { note })
     } finally {
       try {
         await deps.gov.endMirandaTurn(sessionId)
       } catch {
         /* el marcador se reapará por watchdog si el store falló acá */
       }
+      bus.publish('done', {}) // el cliente cierra el SSE / reactiva el composer; el fallback recarga
+      buses.pruneIfIdle(sessionId) // si nadie escucha y el turno terminó, se poda el bus (evita fugas)
       // Encadenado de la cola FIFO (plan 101 etapa D): si llegaron mensajes durante este turno, se
       // desencola el MÁS ANTIGUO y se arranca el siguiente turno automáticamente. UN turno vivo a la
       // vez: `startTurn` re-marca `procesando` y setea `inflight` ANTES de que este `p.finally` borre el
@@ -430,6 +464,55 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       }
       throw e
     }
+  }
+
+  /**
+   * Endpoint SSE del canal EN VIVO (plan 103 etapa 1). Abre un `text/event-stream`, envía un evento
+   * `state` inicial (turno vivo, fase, arranque) y luego re-emite los eventos del bus de la sesión.
+   * Reconexión: honra `Last-Event-ID` (replay del buffer del bus). Cierre limpio: al cerrarse la request
+   * se desuscribe y poda el bus si queda ocioso. NO llama `res.end` (el stream vive hasta que el cliente
+   * cierra). La STORE es la fuente de verdad — el SSE es transporte; un reinicio del proceso lo tolera el
+   * cliente re-suscribiéndose y cayendo al estado persistido (server-render).
+   */
+  function handleEvents(sessionId: string, req: IncomingMessage, res: ServerResponse): boolean {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no', // evita el buffering de proxies inversos sobre el stream
+    })
+    res.write(': ok\n\n') // comentario inicial: abre el stream
+    const bus = buses.for(sessionId)
+    const lastEventId = Number(req.headers['last-event-id'] ?? 0) || 0
+    const write = (e: { id: number; type: string; data: unknown }): void => {
+      try {
+        res.write(`id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`)
+      } catch {
+        /* socket ya cerrado: el 'close' hará la baja */
+      }
+    }
+    // Estado inicial: qué turno hay AHORA (para que un cliente que llega a mitad de turno se sincronice).
+    void deps.gov.getMirandaSession(sessionId).then((s) => {
+      const startedMs = s?.turnStartedAt ? Date.parse(s.turnStartedAt) : NaN
+      write({
+        id: 0,
+        type: 'state',
+        data: {
+          pending: s?.turnState === 'procesando' || inflight.has(sessionId),
+          phase: s?.turnPhase ?? null,
+          phaseIdx: phaseIndex(s?.turnPhase),
+          startedAt: Number.isNaN(startedMs) ? null : startedMs,
+        },
+      })
+    }).catch(() => {})
+    const unsub = bus.subscribe(write, lastEventId)
+    const close = (): void => {
+      unsub()
+      buses.pruneIfIdle(sessionId)
+    }
+    req.on('close', close)
+    req.on('aborted', close)
+    return true
   }
 
   async function handlePreview(sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -523,12 +606,14 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     const convInner = `<h2>Conversación</h2>
            <div class="mir-thread">${chat}</div>
            ${composer}`
-    // Meta-refresh SOLO en estado pendiente (cuando no hay turno, cero refresh — no molestar).
+    // Meta-refresh SOLO en estado pendiente (FALLBACK sin-JS). El cliente en vivo (SSE) lo REMUEVE al
+    // cargar para no duplicar el refresco; sin JS o si el SSE cae, el meta-refresh sigue vigente.
     const headExtra = pending ? `<meta http-equiv="refresh" content="4">` : ''
+    const liveScript = s.state !== 'publicado' ? liveClientScript(sessionId) : ''
     return pg(
       s.title,
       `<p><a href="/miranda">← Sesiones</a> · <span class="tag">${escapeHtml(STATE_LABEL[s.state] ?? s.state)}</span></p>
-       ${renderMirCols(convInner, aside, intentEmpty)}`,
+       ${renderMirCols(convInner, aside, intentEmpty)}${liveScript}`,
       'chat',
       headExtra,
     )
@@ -784,6 +869,43 @@ export function renderMirCols(convInner: string, asideInner: string, intentEmpty
          <aside class="mir-intent${emptyCls}">${asideInner}</aside>
          <label for="${id}" class="mir-reopen" title="Abrir la gaveta de intención"><span class="mir-reopen-tab" aria-hidden="true">‹</span></label>
        </div>`
+}
+
+/**
+ * Cliente JS de MEJORA PROGRESIVA (plan 103 etapa 1) — vanilla inline, sin bundler. Se suscribe al SSE de
+ * la sesión y actualiza SOLO el DOM que cambió, sin recargar: (1) el stepper avanza en vivo (`phase`); (2)
+ * los mensajes nuevos se insertan a medida (`message`, con su HTML ya renderizado server-side); (3) el
+ * reporte se refresca SOLO ante `draft-updated`, con DOBLE-BUFFER de iframe (se precarga el nuevo oculto y
+ * se intercambia al `load` → cero pestañeo); (4) el reloj corre client-side cada 1s. INOFENSIVO: si no hay
+ * `EventSource` o algo falla, no toca nada y el FALLBACK (meta-refresh de 4s) sigue vigente; con SSE activo
+ * REMUEVE el meta-refresh (sin doble refresco). Al `done`/`error` recarga una vez para reconciliar el estado
+ * final (composer, publicar, «Proceso», reporte servible). */
+export function liveClientScript(sessionId: string): string {
+  const sid = JSON.stringify(sessionId) // valor JS seguro (el id es opaco; se inyecta como literal)
+  const js =
+    '(function(){' +
+    "if(typeof EventSource==='undefined')return;" + // sin SSE → fallback meta-refresh intacto
+    'try{' +
+    'var SID=' + sid + ';' +
+    "var mr=document.querySelector('meta[http-equiv=\"refresh\"]');if(mr&&mr.parentNode)mr.parentNode.removeChild(mr);" + // JS activo → sin doble refresco
+    'var started=null;' +
+    'function fmtDur(ms){if(!(ms>=0))return\"\";var s=Math.floor(ms/1000);if(s<60)return s+\"s\";var m=Math.floor(s/60),r=s%60;return m+\"m \"+(r<10?\"0\":\"\")+r+\"s\";}' +
+    "function tick(){if(started==null)return;var el=document.querySelector('.mir-clock');if(el)el.textContent='· '+fmtDur(Date.now()-started);}" +
+    'setInterval(tick,1000);' +
+    "function setStep(idx){var st=document.querySelectorAll('.mir-stepper .mir-step');for(var i=0;i<st.length;i++){st[i].className='mir-step '+(i<idx?'is-done':(i===idx?'is-active':'is-pending'));}}" +
+    "function addMsg(html){var th=document.querySelector('.mir-thread');if(!th||!html)return;var t=document.createElement('div');t.innerHTML=html;var n=t.firstElementChild;if(!n)return;var think=th.querySelector('.mir-thinking');if(think)th.insertBefore(n,think);else th.appendChild(n);}" +
+    "function refreshReport(){var cur=document.querySelector('iframe.mir-canvas');if(!cur)return;var buf=document.createElement('iframe');buf.className=cur.className;buf.title=cur.title;buf.setAttribute('loading','lazy');buf.style.position='absolute';buf.style.left='-99999px';buf.style.width='1px';buf.style.height='1px';buf.onload=function(){buf.style.position='';buf.style.left='';buf.style.width='';buf.style.height='';if(cur.parentNode)cur.parentNode.replaceChild(buf,cur);};buf.src='/miranda/preview/'+encodeURIComponent(SID)+'?t='+Date.now();(cur.parentNode||document.body).appendChild(buf);}" +
+    "var es=new EventSource('/miranda/s/'+encodeURIComponent(SID)+'/events');" +
+    "es.addEventListener('state',function(ev){try{var d=JSON.parse(ev.data);started=d.startedAt;if(d.phaseIdx>=0)setStep(d.phaseIdx);}catch(e){}});" +
+    "es.addEventListener('phase',function(ev){try{var d=JSON.parse(ev.data);if(d.idx>=0)setStep(d.idx);}catch(e){}});" +
+    "es.addEventListener('message',function(ev){try{var d=JSON.parse(ev.data);addMsg(d.html);}catch(e){}});" +
+    "es.addEventListener('draft-updated',function(){try{refreshReport();}catch(e){}});" +
+    "es.addEventListener('done',function(){try{es.close();}catch(e){}location.reload();});" +
+    "es.addEventListener('error',function(){try{es.close();}catch(e){}location.reload();});" +
+    'es.onerror=function(){if(es.readyState===EventSource.CLOSED)location.reload();};' +
+    '}catch(e){}' + // inofensivo: cualquier fallo deja el fallback meta-refresh en su lugar
+    '})();'
+  return `<script>${js}</script>`
 }
 
 // ── Helpers puros ──

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, splitLeadNotes, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, splitLeadNotes, liveClientScript, youInitialsOf } from '../server/miranda'
 import { PAGE_CSS } from '../server/ui'
 import type { MirandaSession } from '@vergis/capabilities'
 
@@ -554,5 +554,44 @@ describe('youInitialsOf', () => {
   it('sin email → «Tú»', () => {
     expect(youInitialsOf(undefined)).toBe('Tú')
     expect(youInitialsOf('')).toBe('Tú')
+  })
+})
+
+// Plan 103 · Etapa 1: el cliente JS de mejora progresiva. Debe ser INOFENSIVO si el SSE cae o no hay
+// EventSource — deja el fallback (meta-refresh) intacto y no rompe la página.
+describe('liveClientScript · cliente en vivo de mejora progresiva (plan 103 etapa 1)', () => {
+  const js = liveClientScript('sess-123')
+
+  it('es un <script> autocontenido (IIFE)', () => {
+    expect(js.startsWith('<script>')).toBe(true)
+    expect(js.trim().endsWith('</script>')).toBe(true)
+    expect(js).toContain('(function(){')
+  })
+
+  it('INOFENSIVO: guarda por typeof EventSource y envuelve todo en try/catch', () => {
+    expect(js).toContain("typeof EventSource==='undefined')return") // sin SSE → no toca nada
+    expect(js).toContain('catch(e){}') // cualquier fallo se traga; el fallback sigue
+  })
+
+  it('con SSE activo REMUEVE el meta-refresh (evita doble refresco), pero solo entonces', () => {
+    expect(js).toContain('meta[http-equiv="refresh"]')
+    expect(js).toContain('removeChild')
+  })
+
+  it('se suscribe al endpoint SSE de la sesión y maneja los eventos del bus', () => {
+    expect(js).toContain("new EventSource('/miranda/s/'+encodeURIComponent(SID)+'/events')")
+    for (const ev of ['state', 'phase', 'message', 'draft-updated', 'done', 'error']) {
+      expect(js).toContain("addEventListener('" + ev + "'")
+    }
+  })
+
+  it('reloj client-side cada 1s (setInterval) + refresco del reporte por doble-buffer (sin pestañeo)', () => {
+    expect(js).toContain('setInterval(tick,1000)')
+    expect(js).toContain('refreshReport') // doble-buffer del iframe
+    expect(js).toContain('replaceChild(buf,cur)') // swap al load del buffer oculto → cero flash
+  })
+
+  it('el id de sesión se inyecta como literal JS seguro (JSON.stringify)', () => {
+    expect(js).toContain('var SID="sess-123"')
   })
 })

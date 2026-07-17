@@ -36,6 +36,8 @@ function mkRes() {
 }
 
 const textResp = (t: string): AnthropicResponse => ({ id: 'm', role: 'assistant', content: [{ type: 'text', text: t }], stop_reason: 'end_turn', usage: { input_tokens: 5, output_tokens: 5 } })
+const toolUseResp = (name: string): AnthropicResponse => ({ id: 'm', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name, input: {} }], stop_reason: 'tool_use', usage: { input_tokens: 5, output_tokens: 5 } })
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function build(over: Partial<MirandaServerDeps> = {}, transport?: AnthropicTransport) {
   const gov = await SqliteGovernanceStore.open(null)
@@ -200,7 +202,7 @@ describe('async turn · página pendiente y watchdog', () => {
     await handler.tryHandle(mkReq('/miranda/s/s1'), r.res)
     await r.done
     expect(r.calls.status).toBe(200)
-    expect(r.calls.body).toContain('http-equiv="refresh"')
+    expect(r.calls.body).toContain('<meta http-equiv="refresh"') // el TAG del fallback (el script live lo referencia aparte)
     expect(r.calls.body).toContain('mir-thinking')
     // Espera NO bloqueante: el composer sigue disponible mientras Miranda responde (no `disabled`).
     expect(r.calls.body).toContain('name="text"')
@@ -216,7 +218,7 @@ describe('async turn · página pendiente y watchdog', () => {
     await handler.tryHandle(mkReq('/miranda/s/s1'), res)
     await done
     expect(calls.status).toBe(200)
-    expect(calls.body).not.toContain('http-equiv="refresh"')
+    expect(calls.body).not.toContain('<meta http-equiv="refresh"')
     expect(calls.body).toContain('name="text"')
   })
 
@@ -229,7 +231,7 @@ describe('async turn · página pendiente y watchdog', () => {
     await handler.tryHandle(mkReq('/miranda/s/s1'), res)
     await done
     expect(calls.status).toBe(200)
-    expect(calls.body).not.toContain('http-equiv="refresh"') // marcador reapado → sin refresh
+    expect(calls.body).not.toContain('<meta http-equiv="refresh"') // marcador reapado → sin refresh
     expect(calls.body).toContain('Error del sistema')
     expect((await gov.getMirandaSession('s1'))?.turnState).toBeUndefined()
   })
@@ -392,5 +394,61 @@ describe('WP4 · publish desde el handler', () => {
     await handler.tryHandle(mkReq('/miranda/api/s/s1/publish', 'POST', { _csrf: token }), res)
     await done
     expect(calls.status).toBe(409)
+  })
+})
+
+// Plan 103 · Etapa 1: la espina en vivo — persistencia incremental + canal SSE por sesión.
+describe('async turn · persistencia incremental + SSE en vivo (plan 103 etapa 1)', () => {
+  it('los mensajes se persisten A MEDIDA (no todos al final): visibles con el turno aún vivo', async () => {
+    let release!: () => void
+    const barrier = new Promise<void>((r) => (release = r))
+    let n = 0
+    // 1ª llamada: tool_use (el loop persiste assistant+tool_result); 2ª: bloquea hasta soltar la barrera.
+    const tp: AnthropicTransport = { async createMessage() { n += 1; if (n === 1) return toolUseResp('catalog_tables'); await barrier; return textResp('Listo.') } }
+    const { gov, handler } = await build(undefined, tp)
+    await gov.createSession('s1', 'x', EMAIL)
+    const r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'hola' }), r.res)
+    await r.done
+    // Esperar a que el 1er round persista (user + assistant(tool_use) + tool_result) SIN haber terminado.
+    for (let i = 0; i < 100 && (await gov.listMirandaMessages('s1')).length < 3; i += 1) await sleep(5)
+    const mid = await gov.listMirandaMessages('s1')
+    expect(mid.length).toBeGreaterThanOrEqual(3) // YA persistidos a mitad de turno
+    expect((await gov.getMirandaSession('s1'))?.turnState).toBe('procesando') // el turno AÚN corre
+    release()
+    await handler.whenIdle()
+    const fin = await gov.listMirandaMessages('s1')
+    expect(fin[fin.length - 1].content).toContain('Listo.') // el mensaje final llegó después
+    expect(fin[fin.length - 1].durationMs).toBeGreaterThanOrEqual(0) // duración anclada en el último
+    expect(await gov.mirandaSessionTokens('s1')).toBeGreaterThan(0) // los tokens se contabilizaron
+  })
+
+  it('el endpoint SSE emite los eventos del bus del turno (message + done)', async () => {
+    const { gov, handler } = await build() // transport default: un texto
+    await gov.createSession('s1', 'x', EMAIL)
+    // Abrir el SSE con un res que captura los chunks; el req es un Readable (soporta .on('close')).
+    const chunks: string[] = []
+    const sseRes = { writeHead() {}, write(c: string) { chunks.push(c) }, end() {} } as unknown as ServerResponse
+    const handled = await handler.tryHandle(mkReq('/miranda/s/s1/events'), sseRes)
+    expect(handled).toBe(true)
+    expect(chunks.join('')).toContain(': ok') // el stream se abrió
+    // Disparar un turno → publica al bus → el SSE escribe los eventos.
+    const r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'hola' }), r.res)
+    await r.done
+    await handler.whenIdle()
+    const out = chunks.join('')
+    expect(out).toContain('event: message') // un mensaje nuevo se transmitió en vivo
+    expect(out).toContain('event: done') // el fin del turno también
+  })
+
+  it('content-type del SSE es text/event-stream (writeHead)', async () => {
+    const { gov, handler } = await build()
+    await gov.createSession('s1', 'x', EMAIL)
+    let headers: Record<string, string> = {}
+    const sseRes = { writeHead(_c: number, h: Record<string, string>) { headers = h }, write() {}, end() {} } as unknown as ServerResponse
+    await handler.tryHandle(mkReq('/miranda/s/s1/events'), sseRes)
+    expect(headers['content-type']).toContain('text/event-stream')
+    expect(headers['cache-control']).toContain('no-store')
   })
 })

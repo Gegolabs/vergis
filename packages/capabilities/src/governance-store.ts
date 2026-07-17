@@ -211,6 +211,9 @@ export interface MirandaStore {
   setMirandaTitle(id: string, title: string): Promise<void>
   setMirandaPiCode(id: string, piCode: string): Promise<void>
   appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number, durationMs?: number): Promise<number>
+  /** Fija la duración (ms) de un mensaje ya persistido, por su `seq` (plan 103 etapa 1: la persistencia
+   *  incremental appenda cada mensaje al producirse; la duración se ancla en el último al cerrar el turno). */
+  updateMirandaMessageDuration(sessionId: string, seq: number, durationMs: number): Promise<void>
   listMirandaMessages(sessionId: string): Promise<MirandaMessage[]>
   /** Encola un mensaje recibido durante un turno vivo (cola FIFO no-bloqueante, plan 101 etapa D).
    *  Devuelve el `seq` asignado (orden FIFO). */
@@ -909,6 +912,12 @@ export class SqliteGovernanceStore implements GovernanceStore {
     this.db.run(`UPDATE miranda_session SET updated_at = ? WHERE id = ?`, [now(), sid])
     this.persist()
     return seq
+  }
+
+  async updateMirandaMessageDuration(sessionId: string, seq: number, durationMs: number): Promise<void> {
+    const dur = !Number.isFinite(durationMs) ? 0 : Math.max(0, Math.trunc(durationMs))
+    this.db.run(`UPDATE miranda_message SET duration_ms = ? WHERE session_id = ? AND seq = ?`, [dur, sessionId.trim(), Math.trunc(seq)])
+    this.persist()
   }
 
   async listMirandaMessages(sessionId: string): Promise<MirandaMessage[]> {

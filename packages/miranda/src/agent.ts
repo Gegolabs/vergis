@@ -50,6 +50,12 @@ export interface AgentDeps {
    *  thinking aparte en el transport, todo comparte este tope). */
   maxTokensPerCall?: number
   onEvent?: (e: AgentEvent) => void
+  /** Persistencia INCREMENTAL (plan 103 etapa 1): se invoca con CADA mensaje nuevo del turno (assistant /
+   *  tool_result / disculpa) apenas se produce — NO con el mensaje inicial del usuario (ya persistido por
+   *  el llamador). `tokens` es el gasto de esa llamada (0 para el mensaje de tool_result). Se `await`ea
+   *  para respetar el orden de persistencia. Ausente ⇒ comportamiento clásico (el llamador persiste al
+   *  final). Un fallo del callback NO se traga: lo maneja el llamador. */
+  onMessage?: (m: AnthropicMessage, meta: { tokens: number }) => void | Promise<void>
   /** Reintentos ante fallo de la API (default 1). */
   retries?: number
 }
@@ -130,13 +136,18 @@ export async function runAgentTurn(deps: AgentDeps): Promise<AgentTurnResult> {
     // tool_result invalidaría el historial ante la API en el turno siguiente) y se responde con una
     // disculpa VISIBLE en voz de negocio. El llamador persiste esto como un cierre normal → el
     // marcador de turno se limpia por su camino de siempre (la sesión no queda colgada).
+    const callTokens = usageTotal(resp.usage)
     if (resp.stop_reason === 'max_tokens') {
       emit({ type: 'stop', detail: 'max_tokens' })
-      newMessages.push({ role: 'assistant', content: [{ type: 'text', text: MAX_TOKENS_APOLOGY }] })
+      const apology: AnthropicMessage = { role: 'assistant', content: [{ type: 'text', text: MAX_TOKENS_APOLOGY }] }
+      newMessages.push(apology)
+      await deps.onMessage?.(apology, { tokens: callTokens })
       return { assistantText: MAX_TOKENS_APOLOGY, newMessages, tokensUsed, toolCalls, stopped: 'max_tokens' }
     }
 
-    newMessages.push({ role: 'assistant', content })
+    const assistantMsg: AnthropicMessage = { role: 'assistant', content }
+    newMessages.push(assistantMsg)
+    await deps.onMessage?.(assistantMsg, { tokens: callTokens })
     emit({ type: 'assistant', detail: textOf(content) })
 
     if (resp.stop_reason !== 'tool_use') {
@@ -159,7 +170,9 @@ export async function runAgentTurn(deps: AgentDeps): Promise<AgentTurnResult> {
         is_error: 'error' in result,
       })
     }
-    newMessages.push({ role: 'user', content: results })
+    const toolMsg: AnthropicMessage = { role: 'user', content: results }
+    newMessages.push(toolMsg)
+    await deps.onMessage?.(toolMsg, { tokens: 0 })
   }
 
   // Se agotaron los turnos internos: cortamos con lo último que dijo Miranda (o una nota).
