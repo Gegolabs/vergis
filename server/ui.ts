@@ -66,7 +66,9 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}
 /* ── Miranda · superficie de chat (server-rendered, sin framework) ── */
 body.chat{max-width:1180px}
-.mir-cols{display:grid;grid-template-columns:minmax(0,1fr) auto 380px;gap:30px;align-items:start;margin-top:6px}
+/* El ancho de la columna del reporte es una var (plan 103 etapa 2): el splitter arrastrable la ajusta y
+   la persiste en localStorage; sin JS queda el default 380px (fallback: divisor fijo). */
+.mir-cols{display:grid;grid-template-columns:minmax(0,1fr) auto var(--mir-aside-w,380px);gap:30px;align-items:start;margin-top:6px}
 .mir-conv{display:flex;flex-direction:column;min-width:0}
 .mir-thread{display:flex;flex-direction:column;gap:16px;padding:4px 2px}
 .turn{display:flex;gap:10px;align-items:flex-start;max-width:82%}
@@ -140,10 +142,11 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-budget b{color:var(--fg);font-weight:600}
 .mir-budget--warn{color:var(--err)}
 .mir-budget--warn b{color:var(--err)}
-/* Lienzo (plan 101 C · desacoplado y expandible 102 B): el reporte es su propia superficie, ancho
-   completo de su columna, alto generoso (se soltó el cap de alto anterior) con scroll interno propio. */
-.mir-canvas{width:100%;height:85vh;border:1px solid var(--border);border-radius:12px;background:#fff;display:block}
-.mir-canvas-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+/* Lienzo (plan 101 C · 102 B · 103 etapa 2 FULL-WINDOW): el reporte toma el ALTO COMPLETO útil de la
+   ventana (no un 85vh acotado) con scroll interno propio; ancho completo de su columna. Los controles
+   van ARRIBA (antes del iframe en el DOM). */
+.mir-canvas{width:100%;height:calc(100vh - 118px);min-height:420px;border:1px solid var(--border);border-radius:12px;background:#fff;display:block}
+.mir-canvas-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
 .mir-canvas-detach{font-size:12px;color:var(--muted)}
 .mir-canvas-expand{font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
 .mir-canvas-expand:hover{color:var(--fg)}
@@ -170,8 +173,11 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 /* Gaveta de intención (work/093): divisor punteado = borde de la gaveta + tirador sobre él. CSS-only:
    checkbox oculto (accesible por teclado) + labels; :has() dirige el grid. */
 .col-toggle,.mir-expand-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;white-space:nowrap}
-/* Divisor vertical punteado entre la conversación y la gaveta; se estira a la altura de la fila. */
+/* Divisor vertical punteado entre la conversación y el reporte; se estira a la altura de la fila. Es
+   ARRASTRABLE en X (plan 103 etapa 2): el JS de layout ajusta el ancho del reporte; sin JS queda fijo. */
 .mir-divider{align-self:stretch;position:relative;border-left:2px dashed var(--border);margin:6px 0;min-height:60px}
+.mir-cols.mir-splittable .mir-divider{cursor:col-resize}
+body.mir-dragging{cursor:col-resize;user-select:none}
 /* Tirador de gaveta anclado sobre el divisor (chevron › = cerrar la gaveta). No vive en la tarjeta. */
 .mir-drawer-pull{position:absolute;top:50%;left:-1px;transform:translate(-50%,-50%);z-index:5;display:flex;align-items:center;justify-content:center;width:22px;height:48px;cursor:pointer;user-select:none;background:var(--card);border:1px solid var(--border);border-radius:9px;color:var(--muted);font-size:14px;line-height:1;box-shadow:0 1px 8px rgba(0,0,0,.12)}
 .mir-drawer-pull:hover{color:var(--fg);border-color:var(--muted)}
@@ -192,7 +198,7 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-cols:has(> .mir-expand-toggle:checked) .mir-divider{display:none}
 .mir-cols:has(> .mir-expand-toggle:checked) .mir-reopen{display:none}
 .mir-cols:has(> .mir-expand-toggle:checked) .mir-intent{display:flex}
-.mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas{height:90vh}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas{height:calc(100vh - 70px)}
 .mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas-expand .lbl-open{display:none}
 .mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas-expand .lbl-close{display:inline}
 .mir-expand-toggle:focus-visible ~ .mir-intent .mir-canvas-expand{outline:2px solid var(--accent);outline-offset:2px}

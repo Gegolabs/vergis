@@ -610,10 +610,11 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     // cargar para no duplicar el refresco; sin JS o si el SSE cae, el meta-refresh sigue vigente.
     const headExtra = pending ? `<meta http-equiv="refresh" content="4">` : ''
     const liveScript = s.state !== 'publicado' ? liveClientScript(sessionId) : ''
+    // El splitter (etapa 2) aplica siempre — también en sesiones publicadas (el reporte se sigue viendo).
     return pg(
       s.title,
       `<p><a href="/miranda">← Sesiones</a> · <span class="tag">${escapeHtml(STATE_LABEL[s.state] ?? s.state)}</span></p>
-       ${renderMirCols(convInner, aside, intentEmpty)}${liveScript}`,
+       ${renderMirCols(convInner, aside, intentEmpty)}${liveScript}${layoutScript()}`,
       'chat',
       headExtra,
     )
@@ -835,7 +836,8 @@ export function renderCanvas(sessionId: string, s: MirandaSession, token: string
     s.state === 'autochequeado'
       ? `<form method="post" action="/miranda/api/s/${sid}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
       : ''
-  return `${iframe}<div class="mir-canvas-actions">${detach}${expand}${publishBtn}</div>`
+  // Controles ARRIBA (plan 103 etapa 2): los operadores del reporte van SOBRE el iframe, no debajo.
+  return `<div class="mir-canvas-actions">${detach}${expand}${publishBtn}</div>${iframe}`
 }
 
 /** Id del checkbox CSS-only que amplía el reporte (colapsa la conversación). Compartido entre
@@ -905,6 +907,29 @@ export function liveClientScript(sessionId: string): string {
     'es.onerror=function(){if(es.readyState===EventSource.CLOSED)location.reload();};' +
     '}catch(e){}' + // inofensivo: cualquier fallo deja el fallback meta-refresh en su lugar
     '})();'
+  return `<script>${js}</script>`
+}
+
+/**
+ * SPLITTER arrastrable (plan 103 etapa 2) — JS de mejora progresiva, vanilla inline. Restaura el ancho
+ * del reporte desde `localStorage` (la var `--mir-aside-w`), marca el layout como `mir-splittable` (habilita
+ * el cursor de resize) y hace el `.mir-divider` ARRASTRABLE en X, persistiendo el reparto. FALLBACK: sin
+ * JS, la clase no se agrega → divisor fijo al default (380px). No arranca en touch/pantalla angosta. El
+ * arrastre parte solo en el fondo del divisor (no sobre el tirador de gaveta, que conserva su clic). */
+export function layoutScript(): string {
+  const js =
+    '(function(){try{' +
+    "var cols=document.querySelector('.mir-cols');if(!cols)return;" +
+    "var KEY='vergis:miranda:aside-w';" +
+    "try{var w=localStorage.getItem(KEY);if(w){var n=parseInt(w,10);if(n>=280&&n<=1400)cols.style.setProperty('--mir-aside-w',n+'px');}}catch(e){}" +
+    "if(window.matchMedia&&window.matchMedia('(max-width:900px)').matches)return;" + // touch/angosto: sin drag
+    "cols.classList.add('mir-splittable');" +
+    "var div=cols.querySelector('.mir-divider');if(!div)return;" +
+    'var dragging=false;' +
+    "div.addEventListener('mousedown',function(ev){if(ev.button!==0)return;if(ev.target.closest&&ev.target.closest('.mir-drawer-pull'))return;dragging=true;document.body.classList.add('mir-dragging');ev.preventDefault();});" +
+    "window.addEventListener('mousemove',function(ev){if(!dragging)return;var w=window.innerWidth-ev.clientX-16;var max=window.innerWidth-360;if(w>max)w=max;if(w<280)w=280;cols.style.setProperty('--mir-aside-w',w+'px');});" +
+    "window.addEventListener('mouseup',function(){if(!dragging)return;dragging=false;document.body.classList.remove('mir-dragging');var cur=cols.style.getPropertyValue('--mir-aside-w');try{localStorage.setItem(KEY,parseInt(cur,10)||380);}catch(e){}});" +
+    '}catch(e){}})();'
   return `<script>${js}</script>`
 }
 

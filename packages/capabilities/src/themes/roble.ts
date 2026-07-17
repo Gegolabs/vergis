@@ -126,6 +126,10 @@ export const robleTheme: Theme = {
 
   .layout-rows { display: flex; flex-direction: column; gap: 16px; }
   .layout-grid { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 12px; }
+  /* KPIs RESPONSIVOS (plan 103 etapa 2): un grid de tarjetas KPI se reflow-ea (auto-fit) en vez de
+     forzar N columnas — cuando el reporte es angosto las tarjetas se apilan, jamas se aprietan/truncan.
+     El :has(kpi) afecta SOLO a las filas de KPI; los grids de charts/tablas conservan sus columnas. */
+  .layout-grid:has(> .kpi) { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
   .layout-flow > * + * { margin-top: 12px; }
 
   .banner { background: #503d1a; border: 1px solid var(--yellow); color: var(--yellow); padding: 8px 14px; border-radius: 8px; font-size: 13px; }
@@ -166,7 +170,9 @@ export const robleTheme: Theme = {
   .kpi-lg { display: flex; flex-direction: column; justify-content: center; min-height: 132px; padding: 24px; }
   .kpi-lg .kpi-value { font-size: 52px; }
   .kpi-lg .kpi-label { font-size: 13px; }
-  .kpi-value { font-size: 32px; font-weight: 800; line-height: 1.05; }
+  /* La cifra escala con el ancho del REPORTE (el iframe es su propio viewport → vw = ancho del reporte):
+     en un reporte angosto la cifra se achica sola en vez de truncarse (plan 103 etapa 2 · «8.0» cortado). */
+  .kpi-value { font-size: clamp(20px, 6vw, 32px); font-weight: 800; line-height: 1.05; overflow-wrap: anywhere; }
   .kpi-label { font-size: 11px; color: var(--fg-dim); margin-top: 6px; text-transform: uppercase; letter-spacing: .05em; }
   .kpi-comparison { color: var(--fg-dim); text-transform: none; letter-spacing: 0; }
   .kpi[data-accent="green"] .kpi-value { color: var(--green); }

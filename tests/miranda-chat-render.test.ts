@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, splitLeadNotes, liveClientScript, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, splitLeadNotes, liveClientScript, layoutScript, youInitialsOf } from '../server/miranda'
 import { PAGE_CSS } from '../server/ui'
 import type { MirandaSession } from '@vergis/capabilities'
 
@@ -593,5 +593,48 @@ describe('liveClientScript · cliente en vivo de mejora progresiva (plan 103 eta
 
   it('el id de sesión se inyecta como literal JS seguro (JSON.stringify)', () => {
     expect(js).toContain('var SID="sess-123"')
+  })
+})
+
+// Plan 103 · Etapa 2: layout Cowork — reporte full-window, splitter arrastrable, controles arriba.
+describe('canvas v2 · layout Cowork (plan 103 etapa 2)', () => {
+  const session = (state: MirandaSession['state']): MirandaSession => ({ id: 's1', title: 'PI', state })
+  const draft = 'mira_version: "1.0"\nidentity:\n  id: saldos'
+
+  it('reporte FULL-WINDOW: el iframe usa el alto de la ventana (calc 100vh), no el 85vh acotado', () => {
+    expect(PAGE_CSS).toContain('.mir-canvas{width:100%;height:calc(100vh')
+    expect(PAGE_CSS).not.toContain('height:85vh')
+  })
+
+  it('controles ARRIBA: las acciones van ANTES del iframe en el DOM', () => {
+    const html = renderCanvas('s1', session('autochequeado'), 'tok', draft)
+    expect(html.indexOf('mir-canvas-actions')).toBeLessThan(html.indexOf('<iframe'))
+    // los tres operadores están en la barra: desprendido, ampliar, publicar.
+    expect(html).toContain('Abrir desprendido')
+    expect(html).toContain('mir-canvas-expand')
+    expect(html).toContain('/publish')
+  })
+
+  it('el ancho del reporte es una var (--mir-aside-w) que el splitter ajusta; default 380px', () => {
+    expect(PAGE_CSS).toContain('grid-template-columns:minmax(0,1fr) auto var(--mir-aside-w,380px)')
+    expect(PAGE_CSS).toContain('.mir-cols.mir-splittable .mir-divider{cursor:col-resize}')
+  })
+
+  it('splitter: JS de mejora progresiva con drag + persistencia en localStorage + fallback', () => {
+    const js = layoutScript()
+    expect(js.startsWith('<script>')).toBe(true)
+    expect(js).toContain('(function(){try{') // IIFE guardado
+    expect(js).toContain('catch(e){}') // inofensivo
+    expect(js).toContain('vergis:miranda:aside-w') // clave de localStorage
+    expect(js).toContain('localStorage.setItem') // persiste
+    expect(js).toContain('localStorage.getItem') // restaura
+    expect(js).toContain("cols.classList.add('mir-splittable')") // habilita el cursor solo con JS (fallback: fijo)
+    expect(js).toContain("div.addEventListener('mousedown'") // drag del divisor
+    expect(js).toContain('--mir-aside-w') // ajusta la var del ancho
+    expect(js).not.toMatch(/<script[^>]*src=/) // sin bundler externo
+  })
+
+  it('splitter: el arrastre NO parte sobre el tirador de gaveta (conserva su clic de toggle)', () => {
+    expect(layoutScript()).toContain(".mir-drawer-pull')") // excluye el tirador del inicio de drag
   })
 })

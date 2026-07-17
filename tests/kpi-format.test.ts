@@ -116,3 +116,21 @@ describe('preview · tema blanco forzado (plan 102 etapa A)', () => {
     expect(sinBlanco.html ?? '').toMatch(/<html[^>]*data-palette="gruvbox"/)
   })
 })
+
+// Plan 103 · Etapa 2: KPIs responsivos — un grid de tarjetas KPI se reflow-ea (auto-fit) en vez de forzar
+// N columnas, y la cifra escala con el ancho del reporte. Nunca se aprietan/truncan en un reporte angosto.
+describe('KPI · fila responsiva (plan 103 etapa 2)', () => {
+  it('el CSS del reporte reflow-ea las filas de KPI (auto-fit) y escala la cifra', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vergis-kpirs-'))
+    const specPath = join(dir, 'spec.yaml')
+    writeFileSync(specPath, ACCENT_YAML.replace('target: web }', 'target: web, theme: roble }')) // theme roble
+    const out = await runSpec({ specPath, baseDir: dir, extraCapabilities: [{ name: 'mock-sql', async execute() { return { rows: [{ total: 8 }] } } } as Capability] })
+    expect(out.ok).toBe(true)
+    const html = out.html ?? ''
+    // Reflow: solo las filas de KPI (:has(> .kpi)) usan auto-fit; los charts/tablas conservan sus columnas.
+    expect(html).toContain('.layout-grid:has(> .kpi)')
+    expect(html).toContain('repeat(auto-fit, minmax(150px, 1fr))')
+    // La cifra escala con el ancho (clamp con vw = ancho del iframe) → jamás truncada.
+    expect(html).toContain('font-size: clamp(20px, 6vw, 32px)')
+  })
+})
