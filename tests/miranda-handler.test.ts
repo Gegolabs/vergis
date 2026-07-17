@@ -131,7 +131,7 @@ describe('WP4 · ciclo básico', () => {
     expect((await gov.getMirandaSession('s1'))?.turnState).toBeUndefined()
   })
 
-  it('segundo POST con turno pendiente NO arranca otro turno (un-turno-por-sesión)', async () => {
+  it('POST con turno vivo ENCOLA (no arranca 2º concurrente) y al cerrar se atiende en orden FIFO (etapa D)', async () => {
     // Transporte que se resuelve a mano: el 1er turno queda «vivo» hasta que soltamos la barrera.
     let release!: () => void
     const barrier = new Promise<void>((r) => (release = r))
@@ -143,19 +143,27 @@ describe('WP4 · ciclo básico', () => {
     await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'primero' }), r.res)
     await r.done
     expect((await gov.getMirandaSession('s1'))?.turnState).toBe('procesando')
-    // 2º POST mientras el 1º sigue vivo → redirige pero NO persiste ni arranca nada.
-    r = mkRes()
-    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'segundo' }), r.res)
-    await r.done
-    expect(r.calls.status).toBe(303)
-    const contents = (await gov.listMirandaMessages('s1')).map((m) => m.content)
-    expect(contents.filter((c) => c.includes('segundo'))).toHaveLength(0)
+    // 2º y 3º POST mientras el 1º sigue vivo → se ENCOLAN (FIFO), no arrancan turnos concurrentes.
+    for (const t of ['segundo', 'tercero']) {
+      r = mkRes()
+      await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: t }), r.res)
+      await r.done
+      expect(r.calls.status).toBe(303)
+    }
+    // Aún NO son mensajes del hilo (están en cola); el hilo tiene solo el 1er user; UN turno vivo.
+    expect((await gov.listMirandaMessages('s1')).map((m) => m.role)).toEqual(['user'])
+    expect(await gov.listMirandaQueue('s1')).toEqual(['segundo', 'tercero'])
+    // Soltar la barrera: el turno cierra y ENCADENA la cola FIFO hasta vaciarla (un turno a la vez).
     release()
     await handler.whenIdle()
     const msgs = await gov.listMirandaMessages('s1')
-    // Solo UN turno: user(primero) + assistant. «segundo» nunca entró.
-    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant'])
+    // Tres turnos en orden: (primero→assistant)(segundo→assistant)(tercero→assistant).
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant'])
     expect(msgs[0].content).toContain('primero')
+    expect(msgs[2].content).toContain('segundo')
+    expect(msgs[4].content).toContain('tercero')
+    expect(await gov.listMirandaQueue('s1')).toEqual([]) // cola vaciada
+    expect((await gov.getMirandaSession('s1'))?.turnState).toBeUndefined() // sin turno vivo al final
   })
 
   it('error del turno (background) → burbuja en voz de negocio (sin el crudo) y limpia el marcador', async () => {
@@ -178,7 +186,7 @@ describe('WP4 · ciclo básico', () => {
 })
 
 describe('async turn · página pendiente y watchdog', () => {
-  it('página en estado pendiente trae meta-refresh + composer deshabilitado + burbuja pensando', async () => {
+  it('página en estado pendiente trae meta-refresh + burbuja pensando, con el composer HABILITADO (etapa D)', async () => {
     // Barrera para mantener el turno vivo mientras pintamos la página pendiente.
     let release!: () => void
     const barrier = new Promise<void>((r) => (release = r))
@@ -194,9 +202,9 @@ describe('async turn · página pendiente y watchdog', () => {
     expect(r.calls.status).toBe(200)
     expect(r.calls.body).toContain('http-equiv="refresh"')
     expect(r.calls.body).toContain('mir-thinking')
-    expect(r.calls.body).toContain('disabled')
-    // El composer de envío (form) NO está presente mientras piensa.
-    expect(r.calls.body).not.toContain('name="text"')
+    // Espera NO bloqueante: el composer sigue disponible mientras Miranda responde (no `disabled`).
+    expect(r.calls.body).toContain('name="text"')
+    expect(r.calls.body).not.toContain('disabled')
     release()
     await handler.whenIdle()
   })
@@ -235,6 +243,91 @@ describe('async turn · página pendiente y watchdog', () => {
     await done
     expect(calls.body).toContain('Uso de la sesión')
     expect(calls.body).toContain('mir-budget--warn')
+  })
+})
+
+// Plan 101 · Etapa D: espera NO bloqueante + cola FIFO. Revierte el «un-turno-por-sesión» del 098: el
+// composer nunca se bloquea por `procesando`; un POST durante el turno vivo se encola y se atiende en
+// orden; la cola persiste y es visible; `reapOrphan` la deja intacta; el presupuesto corta la cadena.
+describe('async turn · cola FIFO no-bloqueante (plan 101 etapa D)', () => {
+  it('la cola es visible «en cola» en el hilo y SOBREVIVE un re-render', async () => {
+    let release!: () => void
+    const barrier = new Promise<void>((r) => (release = r))
+    const tp: AnthropicTransport = { async createMessage() { await barrier; return textResp('ok') } }
+    const { gov, handler } = await build(undefined, tp)
+    await gov.createSession('s1', 'x', EMAIL)
+    // 1er POST arranca el turno; 2º se encola.
+    let r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'primero' }), r.res)
+    await r.done
+    r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'en espera' }), r.res)
+    await r.done
+    // Render 1: el encolado aparece «en cola».
+    r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/s/s1'), r.res)
+    await r.done
+    expect(r.calls.body).toContain('en cola')
+    expect(r.calls.body).toContain('en espera')
+    // Render 2 (otro GET): la cola sigue ahí (persistida, no efímera).
+    r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/s/s1'), r.res)
+    await r.done
+    expect(r.calls.body).toContain('en espera')
+    expect(await gov.listMirandaQueue('s1')).toEqual(['en espera'])
+    release()
+    await handler.whenIdle()
+  })
+
+  it('reapOrphan deja la cola INTACTA; el backlog se drena FIFO en el próximo POST', async () => {
+    // orphanTurnMs:0 → el marcador colgado se reapa; simulamos un backlog encolado antes del «reinicio».
+    const { gov, handler } = await build({ orphanTurnMs: 0 })
+    await gov.createSession('s1', 'x', EMAIL)
+    await gov.beginMirandaTurn('s1') // turno colgado (proceso reiniciado)
+    await gov.enqueueMirandaMessage('s1', 'quedó en cola') // backlog previo al reinicio
+    // Un GET reapa el huérfano; la cola NO se toca.
+    let r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/s/s1'), r.res)
+    await r.done
+    expect((await gov.getMirandaSession('s1'))?.turnState).toBeUndefined() // reapado
+    expect(await gov.listMirandaQueue('s1')).toEqual(['quedó en cola']) // cola intacta
+    // Próximo POST: se respeta FIFO — el backlog arranca primero, el nuevo va detrás.
+    r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'nuevo' }), r.res)
+    await r.done
+    await handler.whenIdle()
+    const msgs = (await gov.listMirandaMessages('s1')).filter((m) => m.role === 'user').map((m) => m.content)
+    // El reaper dejó su aviso; luego «quedó en cola» (FIFO) antes que «nuevo».
+    const qIdx = msgs.findIndex((c) => c.includes('quedó en cola'))
+    const nIdx = msgs.findIndex((c) => c.includes('nuevo'))
+    expect(qIdx).toBeGreaterThanOrEqual(0)
+    expect(nIdx).toBeGreaterThan(qIdx) // FIFO: backlog antes que el nuevo
+    expect(await gov.listMirandaQueue('s1')).toEqual([])
+  })
+
+  it('presupuesto agregado: un turno encolado que ya no cabe recibe el mensaje de presupuesto, no un turno fantasma', async () => {
+    // Presupuesto muy chico: el 1er turno gasta y el 2º (encolado) ya no cabe → TokenBudgetExceeded.
+    let release!: () => void
+    const barrier = new Promise<void>((r) => (release = r))
+    const tp: AnthropicTransport = { async createMessage() { await barrier; return textResp('ok') } } // 10 tokens/turno
+    const { gov, handler } = await build({ tokenBudget: 10 }, tp)
+    await gov.createSession('s1', 'x', EMAIL)
+    let r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'primero' }), r.res)
+    await r.done
+    r = mkRes()
+    await handler.tryHandle(mkReq('/miranda/api/s/s1/message', 'POST', { _csrf: token, text: 'segundo' }), r.res)
+    await r.done
+    release()
+    await handler.whenIdle()
+    const msgs = await gov.listMirandaMessages('s1')
+    // 1er turno: user+assistant (gasta 10 → llega al tope). 2º: user(segundo)+assistant con el mensaje
+    // de presupuesto agotado (no un turno normal), porque el agregado ya no cabe.
+    const budgetMsg = msgs.find((m) => m.role === 'assistant' && m.content.includes('presupuesto'))
+    expect(budgetMsg).toBeTruthy()
+    expect(msgs.some((m) => m.content.includes('segundo'))).toBe(true) // el encolado SÍ entró al hilo
+    expect(await gov.listMirandaQueue('s1')).toEqual([]) // cola drenada, sin turno fantasma pendiente
+    expect((await gov.getMirandaSession('s1'))?.turnState).toBeUndefined()
   })
 })
 

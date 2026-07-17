@@ -279,10 +279,23 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     if (!session || !text) return
     if (session.state === 'publicado') return
     const fresh = await reapOrphan(session)
-    // Un-turno-por-sesión: si ya hay un turno vivo, este POST no arranca otro (el composer ya sale
-    // deshabilitado; esto cubre el caso de una recarga o un doble-submit).
-    if (fresh.turnState === 'procesando') return
-    await startTurn(sessionId, email, text)
+    // Espera NO bloqueante + cola FIFO (plan 101 etapa D): si hay un turno vivo, este POST NO arranca
+    // otro (nada de concurrencia por sesión) — se ENCOLA y se atiende en orden al cerrar el turno. El
+    // lock es doble: el marcador `procesando` Y `inflight` (que cubre la ventana del encadenado, cuando
+    // el marcador ya se limpió pero el turno siguiente aún no arrancó — evita arrancar dos turnos).
+    if (fresh.turnState === 'procesando' || inflight.has(sessionId)) {
+      await deps.gov.enqueueMirandaMessage(sessionId, text)
+      return
+    }
+    // Sin turno vivo: si hay backlog en cola (p. ej. quedó de antes de un reinicio), se respeta FIFO —
+    // el mensaje nuevo va al FINAL de la cola y arranca el MÁS ANTIGUO; si no hay backlog, arranca directo.
+    const backlog = await deps.gov.dequeueMirandaMessage(sessionId)
+    if (backlog == null) {
+      await startTurn(sessionId, email, text)
+    } else {
+      await deps.gov.enqueueMirandaMessage(sessionId, text)
+      await startTurn(sessionId, email, backlog)
+    }
   }
 
   /** Arranca el turno: captura el historial (ANTES de persistir el mensaje nuevo, para no duplicarlo
@@ -365,12 +378,25 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       } catch {
         /* el marcador se reapará por watchdog si el store falló acá */
       }
+      // Encadenado de la cola FIFO (plan 101 etapa D): si llegaron mensajes durante este turno, se
+      // desencola el MÁS ANTIGUO y se arranca el siguiente turno automáticamente. UN turno vivo a la
+      // vez: `startTurn` re-marca `procesando` y setea `inflight` ANTES de que este `p.finally` borre el
+      // marcador viejo, así que nunca hay concurrencia ni un hueco donde la cola quede sin dueño.
+      try {
+        const next = await deps.gov.dequeueMirandaMessage(sessionId)
+        if (next != null) await startTurn(sessionId, email, next)
+      } catch {
+        /* si el store falla acá, la cola queda intacta y se drena en el próximo POST (handleMessage) */
+      }
     }
   }
 
   /** Watchdog de huérfanos: un marcador «procesando» más viejo que `orphanTurnMs` sin un turno vivo
    *  en `inflight` (proceso reiniciado a mitad de turno) se considera muerto → limpia el marcador y
-   *  persiste el error de sistema estándar. Devuelve la sesión fresca (con el marcador ya limpio). */
+   *  persiste el error de sistema estándar. Devuelve la sesión fresca (con el marcador ya limpio).
+   *  COLA (etapa D): el reaper NO toca la cola — un backlog encolado antes del reinicio se conserva
+   *  intacto (ni se pierde ni se duplica) y se drena en el próximo POST (FIFO, vía `handleMessage`),
+   *  coherente con el mensaje que este reaper deja al usuario («vuelve a enviar tu mensaje»). */
   async function reapOrphan(session: MirandaSession): Promise<MirandaSession> {
     if (session.turnState !== 'procesando') return session
     if (inflight.has(session.id)) return session // turno vivo en este proceso: no es huérfano
@@ -445,7 +471,11 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     if (!s0) return pg('No encontrada', `<p class="msg err">Sesión no encontrada.</p>`)
     // Watchdog: si el marcador quedó huérfano (reinicio a mitad de turno), se reapa acá antes de pintar.
     const s = await reapOrphan(s0)
-    const pending = s.turnState === 'procesando'
+    // Pendiente = turno vivo. Se incluye `inflight` para cubrir la ventana del ENCADENADO de la cola
+    // (etapa D): entre un turno y el siguiente el marcador se limpia un instante, pero `inflight` sigue
+    // ocupado hasta que la cadena termina → el meta-refresh no se corta a mitad. En el caso reaper
+    // (proceso reiniciado) `inflight` está vacío → no hay refresh infinito con la cola en espera.
+    const pending = s.turnState === 'procesando' || inflight.has(sessionId)
     const messages = await deps.gov.listMirandaMessages(sessionId)
     let chat = renderChat(messages, { youInitials: youInitialsOf(email) })
     // Mientras piensa: el mensaje del usuario ya está en el hilo; se añade la burbuja «pensando» con
@@ -456,6 +486,10 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       const elapsedMs = Number.isNaN(startedMs) ? undefined : Date.now() - startedMs
       chat += thinkingBubble(s.turnPhase, elapsedMs)
     }
+    // Cola FIFO (etapa D): los mensajes recibidos durante el turno vivo se muestran «en cola» (recibidos,
+    // pendientes de atender) BAJO la burbuja «pensando». El encadenado los va convirtiendo en turnos.
+    const queued = await deps.gov.listMirandaQueue(sessionId)
+    for (const q of queued) chat += queuedBubble(q, youInitialsOf(email))
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
@@ -468,20 +502,15 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     let composer: string
     if (s.state === 'publicado') {
       composer = `<div class="mir-composer"><p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p></div>`
-    } else if (pending) {
-      // Composer DESHABILITADO mientras hay turno en proceso (un-turno-por-sesión).
-      composer = `<div class="mir-composer mir-composer--busy">
-           <p class="mir-busy-note">Miranda está respondiendo… la página se actualiza sola.</p>
-           <div class="mir-send" aria-disabled="true">
-             <textarea rows="2" placeholder="Miranda está respondiendo…" disabled></textarea>
-             <button class="add" disabled>Enviar</button>
-           </div>
-         </div>`
     } else {
+      // Espera NO bloqueante (etapa D): el composer SIEMPRE está habilitado (salvo `publicado`). Si hay
+      // un turno vivo, lo que escribas se recibe y se atiende en orden (se muestra «en cola»); no se
+      // pierde ni te bloquea la pantalla. El placeholder lo dice mientras Miranda responde.
+      const ph = pending ? 'Escribe mientras Miranda responde… se atenderá en orden' : 'Escríbele a Miranda…'
       composer = `<div class="mir-composer">
            <form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/message" class="mir-send">
              <input type="hidden" name="_csrf" value="${token}">
-             <textarea name="text" rows="2" placeholder="Escríbele a Miranda…" required></textarea>
+             <textarea name="text" rows="2" placeholder="${ph}" required></textarea>
              <button class="add">Enviar</button>
            </form>
          </div>`
@@ -505,7 +534,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   return {
     tryHandle,
     whenIdle: async () => {
-      await Promise.allSettled([...inflight.values()])
+      // Drena la CADENA completa de turnos encolados (etapa D): cada turno puede arrancar el siguiente
+      // en su `finally`, reemplazando el `inflight`; se espera hasta que no quede ninguno vivo.
+      while (inflight.size > 0) await Promise.allSettled([...inflight.values()])
     },
   }
 }
@@ -593,6 +624,12 @@ export function thinkingBubble(phase?: string, elapsedMs?: number): string {
   // (monotónico en el store), así que su índice canónico ilumina «el más avanzado alcanzado».
   const stepper = renderStepper(phaseIndex(phase))
   return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div>${stepper}<div class="bubble" role="status" aria-label="Miranda: ${escapeHtml(shown)}"><span class="mir-phase">${escapeHtml(label)}</span>${clockHtml} <span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
+}
+
+/** Burbuja «en cola» (plan 101 etapa D): un mensaje del usuario recibido durante un turno vivo, aún sin
+ *  atender. Se pinta del lado del usuario con una etiqueta «en cola» — recibido, esperando su turno. */
+export function queuedBubble(text: string, youInitials: string): string {
+  return `<div class="turn turn--you mir-queued"><div class="av2" aria-hidden="true">${escapeHtml(youInitials)}</div><div class="turn-b"><div class="cap">Tú · <span class="mir-queued-tag">en cola</span></div><div class="bubble">${mdInline(text)}</div></div></div>`
 }
 
 /** Compacta un conteo de tokens a una etiqueta corta: 407000 → «407k», 4000000 → «4M». */

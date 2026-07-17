@@ -120,9 +120,12 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-step.is-done{color:var(--fg)}
 .mir-step.is-active{color:var(--fg);font-weight:600;border-color:var(--border);background:var(--card)}
 .mir-sep{color:var(--muted);opacity:.5;font-size:10px}
-/* Composer deshabilitado mientras Miranda responde. */
+/* Composer deshabilitado mientras Miranda responde (legado; en etapa D el composer queda habilitado). */
 .mir-composer--busy{opacity:.6}
 .mir-composer .mir-busy-note{font-size:12px;color:var(--muted);margin:0 0 8px;text-align:center}
+/* Mensaje «en cola» (plan 101 etapa D): recibido durante un turno vivo, pendiente de atender. */
+.mir-queued{opacity:.62}
+.mir-queued-tag{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 7px}
 /* Línea de presupuesto de la sesión — maquinaria, vive en la gaveta (convención work/093). */
 .mir-budget{font-size:12px;color:var(--muted);margin:14px 0 2px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:10px}
 .mir-budget b{color:var(--fg);font-weight:600}

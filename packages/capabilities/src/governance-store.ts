@@ -212,6 +212,14 @@ export interface MirandaStore {
   setMirandaPiCode(id: string, piCode: string): Promise<void>
   appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number, durationMs?: number): Promise<number>
   listMirandaMessages(sessionId: string): Promise<MirandaMessage[]>
+  /** Encola un mensaje recibido durante un turno vivo (cola FIFO no-bloqueante, plan 101 etapa D).
+   *  Devuelve el `seq` asignado (orden FIFO). */
+  enqueueMirandaMessage(sessionId: string, text: string): Promise<number>
+  /** Saca y ELIMINA el mensaje MÁS ANTIGUO de la cola (FIFO). `null` si la cola está vacía. Atómico
+   *  bajo el lock del db (SELECT MIN(seq) + DELETE). */
+  dequeueMirandaMessage(sessionId: string): Promise<string | null>
+  /** Los textos en cola, en orden FIFO (para pintar «en cola» en el hilo). */
+  listMirandaQueue(sessionId: string): Promise<string[]>
   /** Tokens acumulados de la sesión (para el presupuesto). */
   mirandaSessionTokens(sessionId: string): Promise<number>
   /** Añade un artefacto (versión auto-incremental por kind). Devuelve la versión asignada. */
@@ -314,6 +322,15 @@ const MIRANDA_MESSAGE_DDL = `CREATE TABLE IF NOT EXISTS miranda_message (
   created_at TEXT,
   PRIMARY KEY (session_id, seq)
 );`
+// Cola FIFO de mensajes recibidos durante un turno vivo (plan 101 etapa D): espera no-bloqueante. Un
+// POST durante `procesando` encola en vez de descartar; al cerrar el turno se desencola el más antiguo.
+const MIRANDA_QUEUE_DDL = `CREATE TABLE IF NOT EXISTS miranda_queue (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT,
+  PRIMARY KEY (session_id, seq)
+);`
 const MIRANDA_ARTIFACT_DDL = `CREATE TABLE IF NOT EXISTS miranda_artifact (
   session_id TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -368,6 +385,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(MIRANDA_MESSAGE_DDL)
     // Duración del turno por mensaje (migración idempotente para DBs ya creadas) — plan 100 addendum 5.
     ensureColumns(db, 'miranda_message', ['duration_ms INTEGER'])
+    db.run(MIRANDA_QUEUE_DDL)
     db.run(MIRANDA_ARTIFACT_DDL)
     db.run(MIRANDA_SEQ_DDL)
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
@@ -912,6 +930,39 @@ export class SqliteGovernanceStore implements GovernanceStore {
     const n = Number((stmt.getAsObject() as { n: number }).n ?? 0)
     stmt.free()
     return n
+  }
+
+  async enqueueMirandaMessage(sessionId: string, text: string): Promise<number> {
+    const sid = sessionId.trim()
+    const seq = this.nextSeq(`SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM miranda_queue WHERE session_id = ?`, sid)
+    this.db.run(`INSERT INTO miranda_queue (session_id, seq, text, created_at) VALUES (?,?,?,?)`, [sid, seq, text, now()])
+    this.db.run(`UPDATE miranda_session SET updated_at = ? WHERE id = ?`, [now(), sid])
+    this.persist()
+    return seq
+  }
+
+  async dequeueMirandaMessage(sessionId: string): Promise<string | null> {
+    const sid = sessionId.trim()
+    const stmt = this.db.prepare(`SELECT seq, text FROM miranda_queue WHERE session_id = ? ORDER BY seq ASC LIMIT 1`)
+    stmt.bind([sid])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const row = stmt.getAsObject() as { seq: number; text: string }
+    stmt.free()
+    this.db.run(`DELETE FROM miranda_queue WHERE session_id = ? AND seq = ?`, [sid, Number(row.seq)])
+    this.persist()
+    return String(row.text)
+  }
+
+  async listMirandaQueue(sessionId: string): Promise<string[]> {
+    const stmt = this.db.prepare(`SELECT text FROM miranda_queue WHERE session_id = ? ORDER BY seq ASC`)
+    stmt.bind([sessionId.trim()])
+    const out: string[] = []
+    while (stmt.step()) out.push(String((stmt.getAsObject() as { text: string }).text))
+    stmt.free()
+    return out
   }
 
   async appendMirandaArtifact(sessionId: string, kind: MirandaArtifactKind, content: string): Promise<number> {
