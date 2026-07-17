@@ -4,6 +4,32 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.14.0 — 2026-07-17
+
+**Miranda: ruteo multi-dominio de probes + el catálogo manda la promesa (fin del falso negativo)**
+(work/099, cluster 077). Muere la limitación mono-DB de Fase 1 que producía un **falso negativo
+material**: con un único `MIRANDA_PROBE_DB`, una fuente servible de OTRO dominio (p. ej. el libro
+mayor en `ventas`) se sondeaba contra la conexión equivocada, «no existía», y Miranda degradaba una
+promesa que el catálogo respaldaba. Ahora cada probe se rutea al `database_ref` del objeto que toca.
+Apila sobre el arco de UI 089–093, voz/niveles 094 y turno asíncrono 098 (intactos, con sus tests).
+
+- **Ruteo por `database_ref`** (`packages/miranda/src/catalog.ts`, `tools/`): `CatalogEntry` gana
+  `database_ref` (solo `gestionado`); `describe_table`/`profile_column` resuelven el ref por nombre;
+  `run_probe` lo **infiere escaneando los objetos del SQL guardado** (`resolveProbeRoute`). El
+  allowlist del sql-guard NO se afloja: sigue siendo solo nivel gestionado.
+- **Cruce entre dominios = imposible físico**: una probe que toca objetos de dos dominios (SQL
+  endpoints separados) se rechaza con un error interno claro («una consulta por dominio»), no se
+  intenta.
+- **«No sondeable en este entorno» ≠ «no existe»**: una fuente servible según el catálogo cuya
+  conexión no está configurada en el despliegue (`configuredRefs`) produce un error que **educa al
+  modelo a NO degradar la promesa** — la expectativa se deriva del nivel del catálogo, no de si la
+  probe corrió aquí. Compat: entrada sin `database_ref` → fallback `MIRANDA_PROBE_DB`.
+- **Prompt — tres reglas** (`prompt.ts`): (1) *el catálogo manda la promesa* (una probe fallida es
+  asunto interno, jamás evidencia para degradar la promesa); (2) *no narrar diagnósticos internos*
+  (nada de «noté que una vista no resolvía…»); (3) *decisión-raíz primero* (el mensaje abre con la
+  decisión A/B; la disponibilidad va como nota breve después, sin meta-preámbulos).
+- La capa Instancia acompaña con el catálogo v2.1 (`database_ref` por dominio) — vive en el repo del lab.
+
 ## 0.13.1 — 2026-07-15
 
 **Miranda: turno asíncrono (el navegador no espera colgado) + presupuesto visible en la gaveta**
