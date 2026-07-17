@@ -498,7 +498,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     // ficha — los tres NO se leen como un solo panel. «Publicar»/«desprendido» viven junto al lienzo.
     const tokensUsed = await deps.gov.mirandaSessionTokens(sessionId)
     const canvas = renderCanvas(sessionId, s, token, draft?.content)
-    const fichaPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content, tokensUsed, deps.tokenBudget)
+    // La ficha recibe los mensajes de la sesión para consolidar el «Proceso» (plan 102 C); la conversación
+    // ya no pinta las cajas de traza inline (se lee limpia).
+    const fichaPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content, tokensUsed, deps.tokenBudget, messages)
     const aside = `${canvas}${fichaPanel}`
     let composer: string
     if (s.state === 'publicado') {
@@ -669,6 +671,7 @@ export function renderIntentPanel(
   draftYaml?: string,
   tokensUsed?: number,
   tokenBudget?: number,
+  sessionMessages?: { role: string; content: string }[],
 ): string {
   // Sección INTENCIÓN (+ el botón «Esto es lo que quiero» — mudado adentro, decisión de César).
   let intencion = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
@@ -710,6 +713,10 @@ export function renderIntentPanel(
     ? `<section class="mir-ficha-sec"><h3>Definición técnica</h3><pre class="mir-ficha-dsl">${escapeHtml(draftYaml)}</pre></section>`
     : ''
 
+  // Sección PROCESO (plan 102 etapa C): el detalle de pasos de la sesión, consolidado y a demanda —
+  // salió de la conversación (que queda limpia) y vive en la ficha. '' si no hubo pasos.
+  const seccionProceso = renderProceso(sessionMessages ?? [])
+
   // Sección USO DE LA SESIÓN (plan 102 etapa B): el presupuesto es MAQUINARIA → vive DENTRO de la ficha,
   // no suelto en el aside (así el reporte, la ficha y el uso no se leen como un solo panel).
   const budgetHtml = tokenBudget ? renderBudgetLine(tokensUsed ?? 0, tokenBudget) : ''
@@ -717,7 +724,7 @@ export function renderIntentPanel(
 
   // La ficha técnica: disclosure CERRADO por defecto (CSS-only). Guarda la JUSTIFICACIÓN y la maquinaria,
   // no las ACCIONES — «Publicar» y el link al reporte viven junto al LIENZO (`renderCanvas`).
-  return `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}${seccionUso}</div></details>`
+  return `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}${seccionProceso}${seccionUso}</div></details>`
 }
 
 /**
@@ -928,23 +935,12 @@ export function renderChat(rows: { role: string; content: string; durationMs?: n
   while (i < rows.length) {
     const r = rows[i]
     const c = safeParse(r.content)
-    // Colapsar una racha de señales de herramienta en UN disclosure `<details>`: el `<summary>` es la
-    // señal discreta (separador con el conteo); el cuerpo, abierto a demanda, muestra el detalle por paso.
+    // La conversación se lee LIMPIA (plan 102 etapa C): las señales de herramienta (rachas de tool_use/
+    // tool_result) NO se pintan inline — se OMITEN aquí. Su detalle se consolida a demanda en la sección
+    // «Proceso» de la ficha técnica (`renderProceso`), no fragmentando el chat. El stepper EN VIVO
+    // (durante el turno) sigue en `thinkingBubble`. Cero pérdida de info: solo cambia DÓNDE se ve.
     if (isToolSignal(r.role, c)) {
-      let steps = 0
-      const runContents: (string | AnthropicMessage['content'])[] = []
-      while (i < rows.length) {
-        const cc = safeParse(rows[i].content)
-        if (!isToolSignal(rows[i].role, cc)) break
-        steps += countToolUse(cc)
-        runContents.push(cc)
-        i += 1
-      }
-      if (steps === 0) steps = runContents.length
-      const label = `🔧 Miranda exploró los datos (${steps} ${steps === 1 ? 'paso' : 'pasos'})`
-      parts.push(
-        `<details class="trace-d"><summary class="trace"><span class="chev" aria-hidden="true">▸</span><span>${label}</span></summary><div class="trace-body">${renderTraceDetail(runContents)}</div></details>`,
-      )
+      while (i < rows.length && isToolSignal(rows[i].role, safeParse(rows[i].content))) i += 1
       continue
     }
     const text = extractText(c)
@@ -1001,6 +997,23 @@ export function renderTraceDetail(contents: (string | AnthropicMessage['content'
       return `<div class="trace-step"><div class="trace-tool"><code>${escapeHtml(u.name)}</code></div>${renderTraceInput(u.input)}${resHtml}</div>`
     })
     .join('')
+}
+
+/**
+ * Sección «Proceso» de la ficha técnica (plan 102 etapa C): el detalle de pasos de herramienta de TODA
+ * la sesión, consolidado (la ficha ya es por-sesión) y a demanda — salió de la conversación (que queda
+ * limpia) y vive aquí. Devuelve '' si la sesión no tuvo pasos. Reusa `renderTraceDetail` (mismo detalle
+ * por paso que antes vivía inline): CERO pérdida de información, solo cambia DÓNDE se ve.
+ */
+export function renderProceso(sessionMessages: { role: string; content: string }[]): string {
+  const contents = sessionMessages
+    .map((m) => ({ role: m.role, c: safeParse(m.content) }))
+    .filter((m) => isToolSignal(m.role, m.c))
+    .map((m) => m.c)
+  const steps = contents.reduce((n, c) => n + countToolUse(c), 0)
+  if (steps === 0) return ''
+  const label = `${steps} ${steps === 1 ? 'paso' : 'pasos'}`
+  return `<section class="mir-ficha-sec"><h3>Proceso</h3><p class="sub" style="margin:0 0 9px">Miranda exploró los datos (${label}).</p><div class="trace-body">${renderTraceDetail(contents)}</div></section>`
 }
 
 /** Argumentos de un tool_use como pares clave→valor escapados (string verbatim; el resto, JSON). */

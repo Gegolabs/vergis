@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, renderTraceDetail, renderIntentPanel, renderCanvas, renderMirCols, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, youInitialsOf } from '../server/miranda'
 import { PAGE_CSS } from '../server/ui'
 import type { MirandaSession } from '@vergis/capabilities'
 
@@ -157,8 +157,10 @@ describe('renderChat · burbujas y Markdown', () => {
   })
 })
 
-describe('renderChat · colapso de la traza de herramientas', () => {
-  it('varias tools consecutivas → UNA sola señal con el conteo de pasos', () => {
+// Plan 102 · Etapa C: la conversación se lee LIMPIA — las cajas de traza de herramienta ya NO se pintan
+// inline (se omiten en renderChat); su detalle vive consolidado en la sección «Proceso» de la ficha.
+describe('renderChat · conversación limpia, sin traza inline (plan 102 etapa C)', () => {
+  it('las rachas de tools se OMITEN; solo quedan los mensajes humanos + texto de Miranda', () => {
     const rows = [
       row('user', 'quiero saldos por empresa'),
       toolUse('t1'),
@@ -170,20 +172,22 @@ describe('renderChat · colapso de la traza de herramientas', () => {
       assistantText('Listo, exploré el dato.'),
     ]
     const html = renderChat(rows)
-    expect(count(html, 'exploró los datos')).toBe(1)
-    expect(html).toContain('(3 pasos)')
-    // no debe quedar rastro de las señales antiguas por-paso.
-    expect(html).not.toContain('resultado de herramienta')
-    expect(html).not.toContain('usó una herramienta')
-    // el texto final SÍ se renderiza como burbuja.
+    // Cero rastro de la caja de traza inline.
+    expect(html).not.toContain('exploró los datos')
+    expect(html).not.toContain('trace-d')
+    expect(html).not.toContain('<summary class="trace">')
+    // Los mensajes humanos SÍ (chat normal): el del usuario y el texto de Miranda.
+    expect(html).toContain('quiero saldos por empresa')
     expect(html).toContain('Listo, exploré el dato.')
+    expect(count(html, 'turn--you')).toBe(1)
+    expect(count(html, 'turn--miranda')).toBe(1)
   })
-  it('un solo paso de herramienta → "1 paso" (singular)', () => {
+  it('una racha SIN texto alrededor no deja nada visible en el chat', () => {
     const html = renderChat([toolUse('t1'), toolResult('t1')])
-    expect(count(html, 'exploró los datos')).toBe(1)
-    expect(html).toContain('(1 paso)')
+    expect(html).not.toContain('trace-d')
+    expect(html).not.toContain('exploró los datos')
   })
-  it('dos rachas separadas por texto → dos señales distintas', () => {
+  it('dos rachas separadas por texto → los textos quedan, la traza no', () => {
     const rows = [
       toolUse('t1'),
       toolResult('t1'),
@@ -193,7 +197,10 @@ describe('renderChat · colapso de la traza de herramientas', () => {
       assistantText('Confirmado.'),
     ]
     const html = renderChat(rows)
-    expect(count(html, 'exploró los datos')).toBe(2)
+    expect(html).not.toContain('exploró los datos')
+    expect(html).toContain('Voy a revisar otra tabla.')
+    expect(html).toContain('Confirmado.')
+    expect(count(html, 'turn--miranda')).toBe(2)
   })
 })
 
@@ -221,51 +228,67 @@ describe('renderChat · lados de la burbuja (sensación de chat)', () => {
   })
 })
 
-describe('renderChat · disclosure de la traza (detalle por paso)', () => {
-  // Fixtures con inputs/results reales (no vacíos como el helper de arriba).
+// Plan 102 · Etapa C: el detalle de pasos (antes inline en la conversación) vive ahora en la sección
+// «Proceso» de la ficha técnica, consolidado por sesión y a demanda. Reusa renderTraceDetail → CERO
+// pérdida de información: mismo detalle por paso, solo cambia DÓNDE se ve.
+describe('renderProceso · el detalle de pasos vive en la ficha (plan 102 etapa C)', () => {
   const probe = (id: string, sql: string) =>
     row('assistant', [{ type: 'tool_use', id, name: 'run_probe', input: { sql, why: 'validar el grano' } }])
   const describe_ = (id: string, name: string) =>
     row('assistant', [{ type: 'tool_use', id, name: 'describe_table', input: { name } }])
   const result = (id: string, content: string) => row('tool', [{ type: 'tool_result', tool_use_id: id, content }])
+  const asStr = (rows: { role: string; content: unknown }[]) => rows.map((r) => ({ role: r.role, content: typeof r.content === 'string' ? r.content : JSON.stringify(r.content) }))
 
-  it('la racha de tools va dentro de un <details class="trace-d"> (colapsable), no de un <div> plano', () => {
-    const html = renderChat([probe('t1', 'SELECT 1'), result('t1', '{"rows":[]}')])
-    expect(html).toContain('<details class="trace-d">')
-    expect(html).toContain('<summary class="trace">')
-    // el summary conserva la señal con el conteo (comportamiento de 090).
-    expect(html).toContain('exploró los datos')
-    expect(html).toContain('(1 paso)')
+  it('la sección «Proceso» consolida los pasos de la sesión (rótulo con el conteo)', () => {
+    const html = renderProceso(asStr([probe('t1', 'SELECT 1'), result('t1', '{"rows":[]}')]))
+    expect(html).toContain('<h3>Proceso</h3>')
+    expect(html).toContain('exploró los datos (1 paso)')
+    expect(html).toContain('trace-body')
   })
 
-  it('el detalle muestra los NOMBRES de tool de cada paso al expandir', () => {
-    const html = renderChat([
+  it('varias tools → el conteo total de la sesión (plural)', () => {
+    const html = renderProceso(asStr([probe('t1', 'a'), result('t1', 'x'), describe_('t2', 'dbo.v'), result('t2', 'y'), probe('t3', 'b'), result('t3', 'z')]))
+    expect(html).toContain('exploró los datos (3 pasos)')
+  })
+
+  it('sin pasos → sin sección (no se inventa)', () => {
+    expect(renderProceso(asStr([row('user', 'hola'), assistantText('¿qué PI?')]))).toBe('')
+  })
+
+  it('muestra los NOMBRES de tool y los argumentos clave de cada paso', () => {
+    const html = renderProceso(asStr([
       probe('t1', 'SELECT * FROM dbo.v_saldos'),
       result('t1', '{"rows":[{"empresa":"ACME"}]}'),
       describe_('t2', 'dbo.v_clientes'),
       result('t2', '{"columns":["id","nombre"]}'),
-    ])
+    ]))
     expect(html).toContain('<code>run_probe</code>')
     expect(html).toContain('<code>describe_table</code>')
-    // los argumentos clave visibles.
     expect(html).toContain('SELECT * FROM dbo.v_saldos')
     expect(html).toContain('dbo.v_clientes')
-    // el resultado se muestra.
     expect(html).toContain('ACME')
   })
 
   it('un tool_result con markup queda ESCAPADO (un <script> nunca es etiqueta real)', () => {
-    const html = renderChat([probe('t1', 'SELECT 1'), result('t1', '<script>alert(1)</script>')])
+    const html = renderProceso(asStr([probe('t1', 'SELECT 1'), result('t1', '<script>alert(1)</script>')]))
     expect(html).not.toContain('<script>alert')
     expect(html).toContain('&lt;script&gt;')
   })
 
   it('un resultado LARGO se trunca con marca explícita', () => {
     const big = 'x'.repeat(5000)
-    const html = renderChat([probe('t1', 'SELECT 1'), result('t1', big)])
+    const html = renderProceso(asStr([probe('t1', 'SELECT 1'), result('t1', big)]))
     expect(html).toContain('… (truncado)')
-    // no se vuelca el resultado completo.
     expect(html).not.toContain('x'.repeat(5000))
+  })
+
+  it('la ficha (renderIntentPanel) incluye la sección «Proceso» cuando la sesión tuvo pasos', () => {
+    const msgs = asStr([row('user', 'hola'), probe('t1', 'SELECT 1'), result('t1', 'ok'), assistantText('listo')])
+    const session = { id: 's1', title: 'PI', state: 'borrador' as MirandaSession['state'] }
+    const html = renderIntentPanel(undefined, session, 'tok', 's1', undefined, undefined, undefined, undefined, msgs)
+    expect(html).toContain('<h3>Proceso</h3>')
+    // vive DENTRO de la ficha (disclosure cerrado por defecto → a demanda).
+    expect(html.indexOf('<h3>Proceso</h3>')).toBeGreaterThan(html.indexOf('<details class="mir-ficha">'))
   })
 
   it('renderTraceDetail: input string arbitrario se escapa (no solo objetos)', () => {
