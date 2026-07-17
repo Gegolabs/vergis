@@ -377,10 +377,11 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
               bus.publish('phase', { phase, idx })
             }
           } else if (e.type === 'tool_result') {
-            const d = e.detail as { name?: unknown; result?: { error?: unknown } } | undefined
-            const name = String(d?.name ?? '')
-            const ok = !(d?.result && typeof d.result === 'object' && 'error' in d.result)
-            if (ok && (name === 'save_draft' || name === 'render_preview')) bus.publish('draft-updated', {})
+            // El lienzo se refresca SOLO ante un draft SERVIBLE (plan 103 etapa 3 · nada de intermedios
+            // rotos): la señal de «servible» es un self-check APROBADO — no un save_draft intermedio (que
+            // puede ser un borrador roto: ref/objeto/SQL inválidos). `shouldRefreshReport` lo decide.
+            const d = e.detail as { name?: unknown; result?: unknown } | undefined
+            if (shouldRefreshReport(String(d?.name ?? ''), d?.result)) bus.publish('draft-updated', {})
           }
         },
       })
@@ -515,13 +516,28 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     return true
   }
 
+  /** Documento HTML sobrio (fondo claro, como el reporte) para cuando el preview no puede renderizar —
+   *  una nota en voz de negocio, sin nada de maquinaria (plan 103 etapa 3). */
+  function previewNoticeHtml(message: string): string {
+    return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte</title><style>html,body{height:100%;margin:0;background:#fff;color:#475569;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}.wrap{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}p{max-width:32ch;font-size:15px;line-height:1.5}</style></head><body><div class="wrap"><p>${escapeHtml(message)}</p></div></body></html>`
+  }
+
   async function handlePreview(sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
     if (!draft) {
       send(res, 404, pg('Sin draft', `<p class="msg err">No hay draft que previsualizar en esta sesión.</p>`))
       return true
     }
-    const html = await deps.renderPreviewHtml(draft.content, req.headers)
+    let html: string
+    try {
+      html = await deps.renderPreviewHtml(draft.content, req.headers)
+    } catch (e) {
+      // El reporte falló al renderizar (draft intermedio no-servible: ref/objeto/SQL). El usuario JAMÁS
+      // ve la maquinaria cruda (SQL, database_ref, nombres de tool) — solo una nota en VOZ DE NEGOCIO; el
+      // DETALLE crudo va a log server-side para diagnóstico (plan 103 etapa 3 · como SYSTEM_ERROR_APOLOGY).
+      console.error(`[miranda] preview falló (sesión ${sessionId}): ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
+      html = previewNoticeHtml('Este reporte todavía se está preparando. Aparecerá aquí en cuanto esté listo.')
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
     res.end(html)
     return true
@@ -934,6 +950,20 @@ export function layoutScript(): string {
 }
 
 // ── Helpers puros ──
+
+/**
+ * ¿Este tool_result implica que el reporte ya es SERVIBLE y el lienzo puede refrescarse? (plan 103 etapa
+ * 3 · nada de intermedios rotos). La señal es un self-check APROBADO — un `save_draft`/`render_preview`
+ * intermedio puede ser un borrador roto (ref/objeto/SQL inválidos) que pintaría un panel de error. Solo
+ * `run_self_check` con veredicto APROBADA (sin brechas B/M) marca el draft como listo para mostrar. */
+export function shouldRefreshReport(toolName: string, result: unknown): boolean {
+  return (
+    toolName === 'run_self_check' &&
+    !!result &&
+    typeof result === 'object' &&
+    (result as { veredicto?: unknown }).veredicto === 'APROBADA'
+  )
+}
 
 /** Rol de almacenamiento de un mensaje Anthropic: los tool_result (role user + bloques tool_result)
  *  se guardan como `tool` para reconstruirlos bien; texto de usuario como `user`. */

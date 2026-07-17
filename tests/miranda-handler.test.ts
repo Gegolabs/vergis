@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createMiranda, type MirandaServerDeps } from '../server/miranda'
+import { createMiranda, shouldRefreshReport, type MirandaServerDeps } from '../server/miranda'
 import { csrfFactory } from '../server/ui'
 import { SqliteGovernanceStore } from '@vergis/capabilities'
 import type { AnthropicTransport, AnthropicResponse } from '@vergis/miranda'
@@ -450,5 +450,42 @@ describe('async turn · persistencia incremental + SSE en vivo (plan 103 etapa 1
     await handler.tryHandle(mkReq('/miranda/s/s1/events'), sseRes)
     expect(headers['content-type']).toContain('text/event-stream')
     expect(headers['cache-control']).toContain('no-store')
+  })
+})
+
+// Plan 103 · Etapa 3: bugs de camino (contenido/voz).
+describe('etapa 3 · el lienzo no refresca ante drafts no-servibles', () => {
+  it('shouldRefreshReport: solo un self-check APROBADA marca el reporte listo (no save_draft/render_preview)', () => {
+    // Un save_draft/render_preview intermedio NO refresca (podría ser un borrador roto).
+    expect(shouldRefreshReport('save_draft', {})).toBe(false)
+    expect(shouldRefreshReport('render_preview', { url: '/x' })).toBe(false)
+    // Un self-check que NO aprobó tampoco (draft con brechas).
+    expect(shouldRefreshReport('run_self_check', { veredicto: 'APROBABLE', brechas: [{ sev: 'M' }] })).toBe(false)
+    expect(shouldRefreshReport('run_self_check', { veredicto: 'NO_APROBABLE' })).toBe(false)
+    // SOLO el self-check APROBADA (servible) refresca el lienzo.
+    expect(shouldRefreshReport('run_self_check', { veredicto: 'APROBADA', brechas: [] })).toBe(true)
+    // Robusto ante result raro.
+    expect(shouldRefreshReport('run_self_check', null)).toBe(false)
+    expect(shouldRefreshReport('run_self_check', 'x')).toBe(false)
+  })
+})
+
+describe('etapa 3 · el preview error habla en voz de negocio (sin jerga cruda)', () => {
+  it('si el preview falla, la página muestra una nota sobria; el crudo va al log, no al usuario', async () => {
+    const crude = "execute-sql-dwh: database_ref 'dwh' no está configurado en los perfiles de conexión."
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { gov, handler } = await build({ renderPreviewHtml: async () => { throw new Error(crude) } })
+    await gov.createSession('s1', 'x', EMAIL)
+    await gov.appendMirandaArtifact('s1', 'spec_draft', 'mira_version: "1.0"')
+    const { res, calls, done } = mkRes()
+    await handler.tryHandle(mkReq('/miranda/preview/s1'), res)
+    await done
+    expect(calls.status).toBe(200) // se sirve una página válida, no un 500 crudo
+    expect(calls.body).toContain('todavía se está preparando') // voz de negocio
+    expect(calls.body).not.toContain('execute-sql-dwh') // sin nombre de tool
+    expect(calls.body).not.toContain('database_ref') // sin jerga
+    expect(calls.body).not.toContain("'dwh'") // sin refs crudas
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('dwh') // el crudo SÍ se registró server-side
+    errSpy.mockRestore()
   })
 })

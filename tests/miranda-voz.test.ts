@@ -180,3 +180,25 @@ describe('prompt · estructura lead + notas (plan 102 etapa D)', () => {
     expect(p).toMatch(/Alcance y notas/)
   })
 })
+
+// Plan 103 · Etapa 3: bugs de camino de contenido/voz atacados por el prompt.
+describe('prompt · bugs de camino (plan 103 etapa 3)', () => {
+  const p = buildSystemPrompt({ dslDoc: 'DSL de ejemplo' })
+
+  it('menos auto-narración: prohíbe el play-by-play del proceso en el chat', () => {
+    expect(p).toMatch(/NO NARRES TU PROCESO PASO A PASO/)
+    expect(p).toMatch(/ahora corro la verificación de calidad/)
+    expect(p).toMatch(/indicador de progreso/)
+  })
+
+  it('refuerzo anti-«dwh»: la database_ref sale EXACTA del catálogo, jamás inventada', () => {
+    expect(p).toMatch(/NUNCA INVENTES una\s+ref/)
+    expect(p).toMatch(/«dwh»/)
+    expect(p).toMatch(/valor EXACTO del campo/)
+  })
+
+  it('texto plano en el contenido del reporte (el renderer del PI no interpreta markdown de énfasis)', () => {
+    expect(p).toMatch(/TEXTO PLANO en el contenido del REPORTE/)
+    expect(p).toMatch(/sin\s+guiones bajos ni asteriscos de énfasis/)
+  })
+})
