@@ -163,6 +163,9 @@ export interface MirandaSession {
    *  undefined cuando no hay turno pendiente. El timestamp permite al watchdog reapar huérfanos. */
   turnState?: 'procesando'
   turnStartedAt?: string
+  /** Fase visible del turno en curso, en VOZ DE NEGOCIO (p. ej. «Armando el reporte…»). La escribe el
+   *  server al procesar los eventos del loop; se limpia junto con el marcador de turno. */
+  turnPhase?: string
 }
 /** Un turno de la conversación (o resultado de tool). `content` es JSON serializado. */
 export interface MirandaMessage {
@@ -196,6 +199,9 @@ export interface MirandaStore {
   beginMirandaTurn(id: string): Promise<void>
   /** Limpia el marcador de turno (al terminar el turno background, con éxito o error). */
   endMirandaTurn(id: string): Promise<void>
+  /** Fija la fase visible del turno en curso (voz de negocio, para la burbuja «pensando»). Se limpia
+   *  con `endMirandaTurn` y se resetea al arrancar un turno nuevo. */
+  setMirandaTurnPhase(id: string, phase: string): Promise<void>
   setMirandaTitle(id: string, title: string): Promise<void>
   setMirandaPiCode(id: string, piCode: string): Promise<void>
   appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number): Promise<number>
@@ -352,7 +358,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(PROCESS_OUTPUT_DDL)
     db.run(MIRANDA_SESSION_DDL)
     // Marcador de turno asíncrono (migración idempotente para DBs ya creadas).
-    ensureColumns(db, 'miranda_session', ['turn_state TEXT', 'turn_started_at TEXT'])
+    ensureColumns(db, 'miranda_session', ['turn_state TEXT', 'turn_started_at TEXT', 'turn_phase TEXT'])
     db.run(MIRANDA_MESSAGE_DDL)
     db.run(MIRANDA_ARTIFACT_DDL)
     db.run(MIRANDA_SEQ_DDL)
@@ -770,6 +776,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
       updatedAt: r['updated_at'] == null ? undefined : String(r['updated_at']),
       turnState: r['turn_state'] === 'procesando' ? 'procesando' : undefined,
       turnStartedAt: r['turn_started_at'] == null ? undefined : String(r['turn_started_at']),
+      turnPhase: r['turn_phase'] == null ? undefined : String(r['turn_phase']),
     }
   }
 
@@ -791,7 +798,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
   }
 
   async getMirandaSession(id: string): Promise<MirandaSession | null> {
-    const stmt = this.db.prepare(`SELECT id, title, state, created_by, pi_code, created_at, updated_at, turn_state, turn_started_at FROM miranda_session WHERE id = ?`)
+    const stmt = this.db.prepare(`SELECT id, title, state, created_by, pi_code, created_at, updated_at, turn_state, turn_started_at, turn_phase FROM miranda_session WHERE id = ?`)
     stmt.bind([id.trim()])
     if (!stmt.step()) {
       stmt.free()
@@ -806,14 +813,14 @@ export class SqliteGovernanceStore implements GovernanceStore {
     const by = normEmail(createdBy)
     const rows = by
       ? (() => {
-          const stmt = this.db.prepare(`SELECT id, title, state, created_by, pi_code, created_at, updated_at, turn_state, turn_started_at FROM miranda_session WHERE created_by = ? ORDER BY updated_at DESC`)
+          const stmt = this.db.prepare(`SELECT id, title, state, created_by, pi_code, created_at, updated_at, turn_state, turn_started_at, turn_phase FROM miranda_session WHERE created_by = ? ORDER BY updated_at DESC`)
           stmt.bind([by])
           const out: Record<string, unknown>[] = []
           while (stmt.step()) out.push(stmt.getAsObject())
           stmt.free()
           return out
         })()
-      : selectAll(this.db, `SELECT id, title, state, created_by, pi_code, created_at, updated_at, turn_state, turn_started_at FROM miranda_session ORDER BY updated_at DESC`)
+      : selectAll(this.db, `SELECT id, title, state, created_by, pi_code, created_at, updated_at, turn_state, turn_started_at, turn_phase FROM miranda_session ORDER BY updated_at DESC`)
     return rows.map((r) => this.mirandaSessionRow(r))
   }
 
@@ -830,12 +837,18 @@ export class SqliteGovernanceStore implements GovernanceStore {
   }
 
   async beginMirandaTurn(id: string): Promise<void> {
-    this.db.run(`UPDATE miranda_session SET turn_state = 'procesando', turn_started_at = ?, updated_at = ? WHERE id = ?`, [now(), now(), id.trim()])
+    // El turno nuevo arranca sin fase (la burbuja cae al default «Pensando…» hasta el primer evento).
+    this.db.run(`UPDATE miranda_session SET turn_state = 'procesando', turn_started_at = ?, turn_phase = NULL, updated_at = ? WHERE id = ?`, [now(), now(), id.trim()])
     this.persist()
   }
 
   async endMirandaTurn(id: string): Promise<void> {
-    this.db.run(`UPDATE miranda_session SET turn_state = NULL, turn_started_at = NULL, updated_at = ? WHERE id = ?`, [now(), id.trim()])
+    this.db.run(`UPDATE miranda_session SET turn_state = NULL, turn_started_at = NULL, turn_phase = NULL, updated_at = ? WHERE id = ?`, [now(), id.trim()])
+    this.persist()
+  }
+
+  async setMirandaTurnPhase(id: string, phase: string): Promise<void> {
+    this.db.run(`UPDATE miranda_session SET turn_phase = ?, updated_at = ? WHERE id = ?`, [phase.trim() || null, now(), id.trim()])
     this.persist()
   }
 

@@ -318,6 +318,15 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         tokenBudget: deps.tokenBudget,
         maxTokensPerCall: deps.maxTokensPerCall, // tope de emisión (plan 100 addendum 2)
         tokensUsedBefore,
+        onEvent: (e) => {
+          // Fase visible del turno (addendum 4): cada tool_use proyecta a una frase de negocio que el
+          // meta-refresh pinta en la burbuja «pensando». Fire-and-forget: la fase jamás bloquea ni
+          // rompe el turno (un fallo del marcador se ignora; la burbuja cae al default).
+          if (e.type !== 'tool_use') return
+          const name = String((e.detail as { name?: unknown } | undefined)?.name ?? '')
+          const phase = turnPhaseOf(name)
+          if (phase) void deps.gov.setMirandaTurnPhase(sessionId, phase).catch(() => {})
+        },
       })
       // El mensaje del usuario (newMessages[0]) ya está persistido; se anotan los del asistente/tool.
       // Los tokens del turno se anclan en el 1er mensaje persistido (el usuario quedó en 0).
@@ -418,8 +427,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     const pending = s.turnState === 'procesando'
     const messages = await deps.gov.listMirandaMessages(sessionId)
     let chat = renderChat(messages, { youInitials: youInitialsOf(email) })
-    // Mientras piensa: el mensaje del usuario ya está en el hilo; se añade la burbuja «pensando».
-    if (pending) chat += thinkingBubble()
+    // Mientras piensa: el mensaje del usuario ya está en el hilo; se añade la burbuja «pensando» con
+    // la fase actual del turno (cada meta-refresh la re-lee — feedback ocasional, no solo «…»).
+    if (pending) chat += thinkingBubble(s.turnPhase)
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
@@ -471,9 +481,32 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   }
 }
 
-/** Burbuja «pensando» de Miranda: indicador sobrio con puntos animados (CSS-only, cero JS). */
-export function thinkingBubble(): string {
-  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div><div class="bubble" role="status" aria-label="Miranda está pensando"><span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
+/**
+ * Proyección tool → fase visible del turno, en VOZ DE NEGOCIO (plan 100 addendum 4). Coarse a
+ * propósito: el usuario oye QUÉ está pasando en sus términos, jamás el nombre de la maquinaria.
+ * Un tool fuera del mapa NO cambia la fase (se conserva la previa; no inventar).
+ */
+const TOOL_PHASE: Record<string, string> = {
+  catalog_tables: 'Revisando la información disponible…',
+  describe_table: 'Revisando la información disponible…',
+  profile_column: 'Revisando la información disponible…',
+  run_probe: 'Revisando la información disponible…',
+  update_intent_summary: 'Armando el reporte…',
+  save_draft: 'Armando el reporte…',
+  run_self_check: 'Cuadrando las cifras…',
+  render_preview: 'Preparando la vista previa…',
+}
+
+/** La fase de negocio de un tool del loop, o undefined si el tool no proyecta fase (no se cambia). */
+export function turnPhaseOf(toolName: string): string | undefined {
+  return TOOL_PHASE[toolName]
+}
+
+/** Burbuja «pensando» de Miranda: indicador sobrio con puntos animados (CSS-only, cero JS). La FRASE
+ *  de fase (voz de negocio) acompaña a los puntos y cambia entre meta-refreshes; default «Pensando…». */
+export function thinkingBubble(phase?: string): string {
+  const label = phase && phase.trim() ? phase.trim() : 'Pensando…'
+  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div><div class="bubble" role="status" aria-label="Miranda: ${escapeHtml(label)}"><span class="mir-phase">${escapeHtml(label)}</span> <span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
 }
 
 /** Compacta un conteo de tokens a una etiqueta corta: 407000 → «407k», 4000000 → «4M». */

@@ -212,6 +212,7 @@ describe('plan 100 · entrega-primero en el primer turno (sin red)', () => {
     }
     const h = createMiranda(deps)
     await gov.createSession('ep', 'Saldos por empresa', EMAIL)
+    const phaseSpy = vi.spyOn(gov, 'setMirandaTurnPhase') // fase del turno (plan 100 addendum 4)
 
     // UN solo turno — nada de validate-intent en el medio (ese es el punto de entrega-primero).
     const r = mkRes()
@@ -231,5 +232,16 @@ describe('plan 100 · entrega-primero en el primer turno (sin red)', () => {
 
     // Sin validación del usuario, publicar sigue gated: el estado NO llegó a autochequeado.
     expect((await gov.getMirandaSession('ep'))?.state).toBe('borrador')
+
+    // Addendum 4: durante el turno, cada tool_use proyectó su fase en voz de negocio (en orden del
+    // guion), y al cerrar el turno el marcador quedó limpio (mismo camino que turn_state).
+    expect(phaseSpy.mock.calls.map((c) => c[1])).toEqual([
+      'Revisando la información disponible…', // catalog_tables
+      'Armando el reporte…', // update_intent_summary
+      'Armando el reporte…', // save_draft
+      'Cuadrando las cifras…', // run_self_check (el emit_qc_report del juez no es tool del loop)
+      'Preparando la vista previa…', // render_preview
+    ])
+    expect((await gov.getMirandaSession('ep'))?.turnPhase).toBeUndefined()
   })
 })
