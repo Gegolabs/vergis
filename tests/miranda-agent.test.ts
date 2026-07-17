@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   runAgentTurn,
   TokenBudgetExceeded,
+  MAX_TOKENS_APOLOGY,
   buildToolRegistry,
   buildSystemPrompt,
   type AnthropicTransport,
@@ -125,5 +126,65 @@ describe('agent loop · errores de API', () => {
   it('si persiste el fallo → propaga el error (nunca respuesta de Miranda)', async () => {
     const transport: AnthropicTransport = { async createMessage() { throw new Error('API caída') } }
     await expect(runAgentTurn({ ...base(), transport, userMessage: 'x', retries: 1 })).rejects.toThrow(/API caída/)
+  })
+})
+
+// Plan 100 · addendum 2: el tope de emisión (`stop_reason: 'max_tokens'`) es un INCIDENTE, jamás un
+// fin silencioso. Evidencia del arnés (2026-07-17): un turno murió con un tool_use de input vacío
+// (emisión truncada a mitad del draft) y otro con un assistant de solo-thinking — el usuario no
+// recibió respuesta en ninguno. El loop descarta el contenido truncado (un tool_use sin tool_result
+// invalidaría el historial ante la API), NO ejecuta la tool truncada y responde con una disculpa
+// visible en voz de negocio.
+describe('agent loop · tope de emisión (max_tokens) — plan 100 addendum 2', () => {
+  const truncatedToolUse = (name: string, input: unknown): AnthropicResponse => ({
+    id: 'm', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name, input }], stop_reason: 'max_tokens', usage: { input_tokens: 10, output_tokens: 4096 },
+  })
+
+  it('tool_use truncado (input vacío) → NO se ejecuta; disculpa visible; sin tool_use colgante', async () => {
+    const registry = buildToolRegistry(ctx())
+    const spy = vi.spyOn(registry, 'invoke')
+    const { transport } = fakeTransport([truncatedToolUse('save_draft', {})])
+    const r = await runAgentTurn({ ...base(), tools: registry, transport, userMessage: 'quiero un estado de resultados' })
+    expect(spy).not.toHaveBeenCalled() // el tool truncado JAMÁS se ejecuta como válido
+    expect(r.stopped).toBe('max_tokens')
+    expect(r.assistantText).toBe(MAX_TOKENS_APOLOGY)
+    expect(r.assistantText).toMatch(/pídemelo de nuevo/) // visible y en voz de negocio, sin jerga
+    // El contenido truncado se DESCARTA: lo persistible cierra con la disculpa (texto plano), de modo
+    // que el historial del turno siguiente no arrastra un tool_use sin su tool_result.
+    expect(r.newMessages).toHaveLength(2)
+    expect(r.newMessages[1].role).toBe('assistant')
+    expect(r.newMessages[1].content).toEqual([{ type: 'text', text: MAX_TOKENS_APOLOGY }])
+    expect(r.tokensUsed).toBe(4106) // la llamada truncada igual se contabiliza al presupuesto
+  })
+
+  it('solo-thinking truncado (sin texto ni tool_use) → misma disculpa visible, turno cerrado', async () => {
+    const thinkingOnly: AnthropicResponse = { id: 'm', role: 'assistant', content: [], stop_reason: 'max_tokens', usage: { input_tokens: 10, output_tokens: 4096 } }
+    const { transport } = fakeTransport([thinkingOnly])
+    const r = await runAgentTurn({ ...base(), transport, userMessage: 'x' })
+    expect(r.stopped).toBe('max_tokens')
+    expect(r.assistantText).toBe(MAX_TOKENS_APOLOGY)
+  })
+
+  it('tras rondas de tools sanas, el truncamiento cierra con los pares tool_use/tool_result intactos', async () => {
+    const { transport } = fakeTransport([toolUse('catalog_tables', {}), truncatedToolUse('save_draft', {})])
+    const r = await runAgentTurn({ ...base(), transport, userMessage: 'x' })
+    expect(r.stopped).toBe('max_tokens')
+    // user, assistant(tool_use), user(tool_result), assistant(disculpa) — nada colgante.
+    expect(r.newMessages).toHaveLength(4)
+    expect(Array.isArray(r.newMessages[2].content) && r.newMessages[2].content[0].type).toBe('tool_result')
+    expect(r.newMessages[3].content).toEqual([{ type: 'text', text: MAX_TOKENS_APOLOGY }])
+  })
+
+  it('max_tokens por llamada: default 16384, overrideable por deps', async () => {
+    const captured: number[] = []
+    const transport: AnthropicTransport = {
+      async createMessage(req) {
+        captured.push(req.max_tokens)
+        return text('ok')
+      },
+    }
+    await runAgentTurn({ ...base(), transport, userMessage: 'x' })
+    await runAgentTurn({ ...base(), transport, userMessage: 'x', maxTokensPerCall: 2048 })
+    expect(captured).toEqual([16384, 2048])
   })
 })

@@ -81,6 +81,9 @@ export interface MirandaConfig {
   maxTurns: number
   /** Presupuesto de tokens por sesión (corta con mensaje claro al excederse). */
   tokenBudget: number
+  /** `max_tokens` por llamada al modelo (tope de emisión). Los pasos de entrega-primero emiten
+   *  thinking + un draft completo en UNA llamada: un tope corto trunca la emisión a mitad. */
+  maxTokensPerCall: number
   /** Umbral (ms) tras el cual un marcador de turno se considera huérfano (watchdog anti «pensando» eterno). */
   orphanTurnMs: number
   /** Ruta/JSON del allowlist de catálogo (tablas/vistas que las probes pueden tocar). */
@@ -252,6 +255,9 @@ function mirandaConfig(env: Env): MirandaConfig {
     rubricDir: env['MIRANDA_RUBRIC_DIR'],
     maxTurns: num(env, 'MIRANDA_MAX_TURNS', 40),
     tokenBudget: num(env, 'MIRANDA_TOKEN_BUDGET', 500_000),
+    // Tope de emisión por llamada (plan 100 addendum 2): VERGIS_MIRANDA_MAX_TOKENS manda; alias
+    // MIRANDA_MAX_TOKENS por consistencia con el resto de las envs de esta config.
+    maxTokensPerCall: numOpt(env, 'VERGIS_MIRANDA_MAX_TOKENS') ?? num(env, 'MIRANDA_MAX_TOKENS', 16_384),
     orphanTurnMs: num(env, 'MIRANDA_ORPHAN_TURN_MS', 10 * 60_000),
     catalogPath: env['MIRANDA_CATALOG'],
     scopeGroup: (env['MIRANDA_SCOPE_GROUP'] ?? 'miranda').trim().toLowerCase(),

@@ -40,6 +40,6 @@ export {
   type ToolResultBlock,
 } from './transport'
 export { buildSystemPrompt, MIRANDA_HARD_RULES, MIRANDA_VOICE, type SystemPromptOptions } from './prompt'
-export { runAgentTurn, TokenBudgetExceeded, MaxTurnsExceeded, type AgentDeps, type AgentTurnResult, type AgentEvent } from './agent'
+export { runAgentTurn, TokenBudgetExceeded, MaxTurnsExceeded, MAX_TOKENS_APOLOGY, type AgentDeps, type AgentTurnResult, type AgentEvent } from './agent'
 export { runSelfCheck, buildJudgeSystem, mergeFormaCross, crossCheckRefs, mergeRefsCross, type SelfCheckDeps } from './self-check'
 export { publishSpec, slugify, PublishBlocked, type PublishDeps, type PublishStore, type PublishResult } from './publish'

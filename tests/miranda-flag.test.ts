@@ -13,17 +13,23 @@ describe('config · Miranda tras el flag', () => {
     expect(c.miranda.model).toBe('claude-sonnet-5')
     expect(c.miranda.maxTurns).toBe(40)
     expect(c.miranda.tokenBudget).toBe(500_000)
+    expect(c.miranda.maxTokensPerCall).toBe(16_384) // tope de emisión (plan 100 addendum 2)
     expect(c.miranda.scopeGroup).toBe('miranda')
   })
   it('flag encendido SIN key → aborta con error claro', () => {
     expect(() => configFromEnv({ MIRANDA_ENABLED: '1' }, fixedSecret)).toThrow(/ANTHROPIC_API_KEY/)
   })
   it('flag encendido CON key → OK, envs overridables', () => {
-    const c = configFromEnv({ MIRANDA_ENABLED: 'on', ANTHROPIC_API_KEY: 'sk-x', MIRANDA_MODEL: 'claude-opus-5', MIRANDA_MAX_TURNS: '20' }, fixedSecret)
+    const c = configFromEnv({ MIRANDA_ENABLED: 'on', ANTHROPIC_API_KEY: 'sk-x', MIRANDA_MODEL: 'claude-opus-5', MIRANDA_MAX_TURNS: '20', MIRANDA_MAX_TOKENS: '8192' }, fixedSecret)
     expect(c.miranda.enabled).toBe(true)
     expect(c.miranda.apiKey).toBe('sk-x')
     expect(c.miranda.model).toBe('claude-opus-5')
     expect(c.miranda.maxTurns).toBe(20)
+    expect(c.miranda.maxTokensPerCall).toBe(8192)
+  })
+  it('tope de emisión: VERGIS_MIRANDA_MAX_TOKENS manda sobre el alias MIRANDA_MAX_TOKENS', () => {
+    const c = configFromEnv({ VERGIS_MIRANDA_MAX_TOKENS: '9000', MIRANDA_MAX_TOKENS: '8192' }, fixedSecret)
+    expect(c.miranda.maxTokensPerCall).toBe(9000)
   })
 })
 

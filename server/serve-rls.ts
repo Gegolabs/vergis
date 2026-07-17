@@ -985,6 +985,7 @@ if (config.miranda.enabled) {
       rubric,
       maxTurns: config.miranda.maxTurns,
       tokenBudget: config.miranda.tokenBudget,
+      maxTokensPerCall: config.miranda.maxTokensPerCall,
       orphanTurnMs: config.miranda.orphanTurnMs,
       catalog,
       configuredRefs: CONFIGURED_REFS,

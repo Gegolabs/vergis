@@ -45,7 +45,9 @@ export interface AgentDeps {
   /** Presupuesto de tokens de la sesión y lo ya gastado (para cortar). */
   tokenBudget: number
   tokensUsedBefore: number
-  /** `max_tokens` por llamada (default 4096). */
+  /** `max_tokens` por llamada (default 16384: los pasos de entrega-primero emiten thinking + un draft
+   *  YAML completo en una sola llamada — 4096 se agotaba a mitad de la emisión; no hay presupuesto de
+   *  thinking aparte en el transport, todo comparte este tope). */
   maxTokensPerCall?: number
   onEvent?: (e: AgentEvent) => void
   /** Reintentos ante fallo de la API (default 1). */
@@ -61,8 +63,11 @@ export interface AgentTurnResult {
   tokensUsed: number
   /** Tools ejecutadas (nombre + input + resultado). */
   toolCalls: { name: string; input: unknown; result: Record<string, unknown> }[]
-  stopped: 'end_turn' | 'max_turns'
+  stopped: 'end_turn' | 'max_turns' | 'max_tokens'
 }
+
+/** Disculpa visible cuando la emisión se trunca por `max_tokens` (voz de negocio, sin jerga). */
+export const MAX_TOKENS_APOLOGY = 'Se me cortó la preparación de esto a medio camino — pídemelo de nuevo y lo retomo.'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -77,7 +82,7 @@ function textOf(content: AnthropicContentBlock[]): string {
 
 /** Corre UN turno del usuario a través del loop tool-use. */
 export async function runAgentTurn(deps: AgentDeps): Promise<AgentTurnResult> {
-  const maxTokensPerCall = deps.maxTokensPerCall ?? 4096
+  const maxTokensPerCall = deps.maxTokensPerCall ?? 16384
   const retries = deps.retries ?? 1
   const emit = (e: AgentEvent): void => deps.onEvent?.(e)
 
@@ -117,6 +122,20 @@ export async function runAgentTurn(deps: AgentDeps): Promise<AgentTurnResult> {
 
     tokensUsed += usageTotal(resp.usage)
     const content = resp.content as AnthropicContentBlock[]
+
+    // Tope de emisión (`max_tokens`) = INCIDENTE, jamás fin silencioso (arnés 2026-07-17, plan 100
+    // addendum 2): la emisión quedó TRUNCADA — un tool_use aquí puede traer input vacío/parcial y NO
+    // debe ejecutarse como válido, y un assistant de solo-thinking dejaría al usuario sin respuesta.
+    // Se registra el evento, se DESCARTA el contenido truncado (persistir un tool_use sin su
+    // tool_result invalidaría el historial ante la API en el turno siguiente) y se responde con una
+    // disculpa VISIBLE en voz de negocio. El llamador persiste esto como un cierre normal → el
+    // marcador de turno se limpia por su camino de siempre (la sesión no queda colgada).
+    if (resp.stop_reason === 'max_tokens') {
+      emit({ type: 'stop', detail: 'max_tokens' })
+      newMessages.push({ role: 'assistant', content: [{ type: 'text', text: MAX_TOKENS_APOLOGY }] })
+      return { assistantText: MAX_TOKENS_APOLOGY, newMessages, tokensUsed, toolCalls, stopped: 'max_tokens' }
+    }
+
     newMessages.push({ role: 'assistant', content })
     emit({ type: 'assistant', detail: textOf(content) })
 

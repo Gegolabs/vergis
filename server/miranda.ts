@@ -45,6 +45,10 @@ export interface MirandaServerDeps {
   rubric?: string
   maxTurns: number
   tokenBudget: number
+  /** `max_tokens` por llamada al modelo (tope de emisión). undefined ⇒ default del paquete (16384).
+   *  Un tope corto trunca la emisión (thinking + draft en una llamada) → el loop lo trata como
+   *  incidente visible, jamás como fin silencioso. */
+  maxTokensPerCall?: number
   catalog: CatalogEntry[]
   /** Conexiones (`database_ref`) configuradas en este despliegue — el conjunto contra el que se decide
    *  si una fuente servible es sondeable AQUÍ (una cuyo ref no esté acá cae en el camino educativo). */
@@ -311,6 +315,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         userMessage: text,
         maxTurns: deps.maxTurns,
         tokenBudget: deps.tokenBudget,
+        maxTokensPerCall: deps.maxTokensPerCall, // tope de emisión (plan 100 addendum 2)
         tokensUsedBefore,
       })
       // El mensaje del usuario (newMessages[0]) ya está persistido; se anotan los del asistente/tool.
