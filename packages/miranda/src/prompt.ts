@@ -137,6 +137,8 @@ const ELICITATION = `MÉTODO DE ELICITACIÓN:
 - Explora el catálogo (catalog_tables/describe_table/profile_column/run_probe) para aterrizar la
   realizabilidad ANTES de comprometer una medida o un filtro; esa exploración es tuya y silenciosa —
   su producto es lo que sirves o la decisión que elevas, jamás un relato de lo que hiciste.
+- La database_ref de cada dataset sale de la ENTRADA DE CATÁLOGO de su fuente, JAMÁS de un ejemplo del
+  documento DSL: los ejemplos ilustran la forma, no las conexiones de este entorno.
 - PUBLICAR NO CAMBIA: 'publish' sigue exigiendo la validación EXPLÍCITA del usuario. Entrega-primero
   llega hasta la preview (efímera, por el riel RLS real), NUNCA publica solo.
 - Modos (un solo loop, tú los gobiernas): explorar → redactar → auto-chequear → previsualizar →

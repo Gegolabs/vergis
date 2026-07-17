@@ -170,6 +170,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
           draftYaml: draft.content,
           intentSummary: intent?.content ?? '(sin resumen de intención)',
           probeContext,
+          configuredRefs: deps.configuredRefs, // cruce en código: database_ref inexistente → brecha B
         })
         await deps.gov.appendMirandaArtifact(sessionId, 'qc_report', JSON.stringify(report))
         // Gate en código: validado + sin B/M → autochequeado.

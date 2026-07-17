@@ -98,7 +98,7 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
       maxTurns: 10,
       tokenBudget: 500000,
       catalog: [{ name: 'dbo.v_saldos' }],
-      configuredRefs: [],
+      configuredRefs: ['fabric'], // GOOD_SPEC usa database_ref: fabric (el self-check ahora cruza refs — plan 100 addendum)
       identityOf: () => ({ user: EMAIL }),
       hasScope: async () => true,
       probe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),
@@ -191,7 +191,7 @@ describe('plan 100 · entrega-primero en el primer turno (sin red)', () => {
       maxTurns: 10,
       tokenBudget: 500000,
       catalog: [{ name: 'dbo.v_saldos' }],
-      configuredRefs: [],
+      configuredRefs: ['fabric'], // GOOD_SPEC usa database_ref: fabric (el self-check ahora cruza refs — plan 100 addendum)
       identityOf: () => ({ user: EMAIL }),
       hasScope: async () => true,
       probe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),

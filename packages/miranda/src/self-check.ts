@@ -7,6 +7,7 @@
  * El gate de publish (WP6) vive en CÓDIGO, no en el prompt: rechaza si el último qc_report tiene B/M
  * abiertas o si la sesión no está `validado`.
  */
+import YAML from 'yaml'
 import type { AnthropicTransport, ToolUseBlock } from './transport'
 import type { ToolDefinition } from './tools/registry'
 import { VEREDICTOS, SEVERIDADES, hasBlockingGaps, type SelfCheckResult, type Veredicto, type Severidad, type Brecha } from './qc'
@@ -27,6 +28,9 @@ export interface SelfCheckDeps {
   /** Contexto de realizabilidad: perfiles repr() de las columnas usadas + probes de reconciliación,
    *  ensamblado por el llamador desde las tool-calls previas (guard anti-`'TC '`). */
   probeContext?: string
+  /** Las `database_ref` configuradas en los perfiles de conexión de este despliegue (mismo valor que
+   *  el contexto de tools). `undefined` = el llamador no las conoce (compat) → no se cruzan. */
+  configuredRefs?: string[]
   maxTokens?: number
 }
 
@@ -111,7 +115,8 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckResult
   const toolUse = (resp.content as { type: string }[]).find((b): b is ToolUseBlock => b.type === 'tool_use') as ToolUseBlock | undefined
   if (!toolUse) return { veredicto: 'NO_REVISABLE', brechas: [{ id: 'G0', sev: 'B', brecha: 'El juez no emitió un reporte estructurado.', donde: 'self-check', recomendacion: 'Reintentar el self-check.' }] }
   const report = normalizeReport(toolUse.input)
-  return mergeFormaCross(report, deps.intentSummary, deps.draftYaml)
+  const withForma = mergeFormaCross(report, deps.intentSummary, deps.draftYaml)
+  return mergeRefsCross(withForma, deps.draftYaml, deps.configuredRefs)
 }
 
 /** Extrae `vistas[]` del resumen de intención serializado (tolerante: JSON ilegible → sin vistas). */
@@ -133,6 +138,60 @@ export function mergeFormaCross(report: SelfCheckResult, intentJson: string, dra
   const formaBrechas = crossCheckForma(declaredVistas(intentJson), draftYaml)
   if (formaBrechas.length === 0) return report
   const brechas = [...report.brechas, ...formaBrechas]
+  const veredicto: Veredicto = report.veredicto === 'APROBADA' && hasBlockingGaps(brechas) ? 'APROBABLE' : report.veredicto
+  return { veredicto, brechas }
+}
+
+/**
+ * Cruce de `database_ref` (enforcement en CÓDIGO — bug destapado por entrega-primero, arnés
+ * 2026-07-17): el autor puede copiar una `database_ref` de un EJEMPLO del documento DSL que no existe
+ * en los perfiles de conexión de este entorno; el juez-modelo no la caza (no conoce los perfiles) y el
+ * error revienta recién al servir la preview (500 del riel). Aquí se valida cada dataset del draft
+ * contra las refs configuradas y se emite brecha BLOQUEANTE con mensaje accionable (causa + refs
+ * válidas), para que el autor se auto-corrija en el MISMO turno, antes de la preview.
+ * `configuredRefs === undefined` = el llamador no conoce los perfiles (compat) → no se cruza.
+ * Un YAML ilegible o sin `data` no es asunto de este cruce (lo cazan el validador y el juez).
+ * IDs estables `REF-N` (orden de los datasets en el draft).
+ */
+export function crossCheckRefs(draftYaml: string, configuredRefs?: string[]): Brecha[] {
+  if (configuredRefs === undefined) return []
+  let spec: Record<string, unknown>
+  try {
+    spec = (YAML.parse(draftYaml) ?? {}) as Record<string, unknown>
+  } catch {
+    return []
+  }
+  const data = spec['data']
+  if (data == null || typeof data !== 'object' || Array.isArray(data)) return []
+  const valid = new Set(configuredRefs)
+  const listado = configuredRefs.length > 0 ? configuredRefs.join(', ') : '(ninguna)'
+  const brechas: Brecha[] = []
+  let n = 1
+  for (const [dataset, defRaw] of Object.entries(data as Record<string, unknown>)) {
+    const def = (defRaw ?? {}) as Record<string, unknown>
+    const params = (def['params'] ?? {}) as Record<string, unknown>
+    const ref = params['database_ref']
+    if (typeof ref !== 'string' || ref === '' || valid.has(ref)) continue
+    brechas.push({
+      id: `REF-${n++}`,
+      sev: 'B',
+      brecha: `El dataset '${dataset}' usa database_ref '${ref}', que NO está configurada en los perfiles de conexión de este entorno: la preview/serving fallaría al conectar.`,
+      donde: `data.${dataset}.params.database_ref`,
+      recomendacion: `Usa la database_ref de la entrada de catálogo de la fuente (jamás una copiada de un ejemplo del DSL). Las configuradas en este entorno son: ${listado}.`,
+    })
+  }
+  return brechas
+}
+
+/**
+ * Funde el cruce de `database_ref` al reporte del juez (mismo contrato que `mergeFormaCross`): las
+ * brechas REF-N son B, así que un veredicto APROBADA se degrada a APROBABLE; el gate de publish (en
+ * código) las honra igual que cualquier B.
+ */
+export function mergeRefsCross(report: SelfCheckResult, draftYaml: string, configuredRefs?: string[]): SelfCheckResult {
+  const refBrechas = crossCheckRefs(draftYaml, configuredRefs)
+  if (refBrechas.length === 0) return report
+  const brechas = [...report.brechas, ...refBrechas]
   const veredicto: Veredicto = report.veredicto === 'APROBADA' && hasBlockingGaps(brechas) ? 'APROBABLE' : report.veredicto
   return { veredicto, brechas }
 }

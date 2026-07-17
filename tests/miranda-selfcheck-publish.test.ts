@@ -55,6 +55,91 @@ describe('WP5 · self-check (juez separado)', () => {
   })
 })
 
+// Plan 100 · addendum: cruce en CÓDIGO de database_ref contra los perfiles configurados. El bug del
+// arnés (2026-07-17): Miranda copió `database_ref: fabric-lh-qw04` de un EJEMPLO del documento DSL, el
+// juez-modelo lo dio por bueno (no conoce los perfiles) y la preview reventó con 500 al servir. La
+// baranda es este cruce: ref inexistente → brecha BLOQUEANTE accionable (causa + refs válidas), para
+// que el autor se auto-corrija en el mismo turno, antes de la preview.
+describe('plan 100 addendum · self-check cruza database_ref contra los perfiles configurados', () => {
+  const draftConRef = (ref: string) => `mira_version: "1.0"
+identity:
+  id: saldos
+  display_name: Saldos
+  classification: internal
+data:
+  saldos:
+    capability: execute-sql-dwh
+    params:
+      database_ref: ${ref}
+      sql: "SELECT empresa, saldo FROM dbo.v_saldos"
+`
+
+  it('ref inexistente → brecha B REF-1 con mensaje accionable (causa + refs válidas) y APROBADA se degrada', async () => {
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draftConRef('fabric-lh-qw04'), intentSummary: intent,
+      configuredRefs: ['finanzas', 'ventas'],
+    })
+    expect(r.brechas).toHaveLength(1)
+    const b = r.brechas[0]
+    expect(b.id).toBe('REF-1')
+    expect(b.sev).toBe('B')
+    expect(b.brecha).toContain("'fabric-lh-qw04'")
+    expect(b.donde).toBe('data.saldos.params.database_ref')
+    expect(b.recomendacion).toContain('finanzas, ventas') // le dice las refs válidas
+    expect(b.recomendacion).toMatch(/catálogo/) // …y de dónde sale la correcta
+    expect(r.veredicto).toBe('APROBABLE') // una B es incompatible con APROBADA
+  })
+
+  it('ref válida → pasa limpio (APROBADA sin brechas)', async () => {
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draftConRef('finanzas'), intentSummary: intent,
+      configuredRefs: ['finanzas', 'ventas'],
+    })
+    expect(r.veredicto).toBe('APROBADA')
+    expect(r.brechas).toEqual([])
+  })
+
+  it('configuredRefs undefined (llamador sin perfiles, compat) → no se cruza', async () => {
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draftConRef('fabric-lh-qw04'), intentSummary: intent,
+    })
+    expect(r.veredicto).toBe('APROBADA')
+    expect(r.brechas).toEqual([])
+  })
+
+  it('varios datasets con refs inexistentes → IDs estables REF-1..N en orden del draft', async () => {
+    const draft = `mira_version: "1.0"
+identity:
+  id: x
+  display_name: X
+  classification: internal
+data:
+  a:
+    capability: execute-sql-dwh
+    params: {database_ref: vieja-1, sql: "SELECT 1"}
+  b:
+    capability: execute-sql-dwh
+    params: {database_ref: finanzas, sql: "SELECT 2"}
+  c:
+    capability: execute-sql-dwh
+    params: {database_ref: vieja-2, sql: "SELECT 3"}
+`
+    const r = await runSelfCheck({
+      transport: judgeTransport({ veredicto: 'APROBADA', brechas: [] }),
+      model: 'm', draftYaml: draft, intentSummary: intent,
+      configuredRefs: ['finanzas'],
+    })
+    expect(r.brechas.map((b) => [b.id, b.donde])).toEqual([
+      ['REF-1', 'data.a.params.database_ref'],
+      ['REF-2', 'data.c.params.database_ref'],
+    ])
+    expect(r.brechas.every((b) => b.sev === 'B')).toBe(true)
+  })
+})
+
 describe('WP6 · publish y su gate', () => {
   async function seededSession(state: string, opts: { qc?: unknown; draft?: string } = {}) {
     const gov = await SqliteGovernanceStore.open(null)

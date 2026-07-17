@@ -135,6 +135,11 @@ describe('reglas del plan 100 · prompt ensamblado', () => {
     expect(p).toMatch(/NUNCA publica solo/)
   })
 
+  it('addendum — la database_ref sale de la entrada de catálogo, jamás de ejemplos del DSL', () => {
+    expect(p).toMatch(/database_ref de cada dataset sale de la ENTRADA DE CATÁLOGO/)
+    expect(p).toMatch(/JAMÁS de un ejemplo del\s+documento DSL/)
+  })
+
   it('VOZ prohíbe el vocabulario de método interno («decisión raíz», «self-check», …)', () => {
     expect(MIRANDA_VOICE).toMatch(/VOCABULARIO DE MÉTODO INTERNO/)
     expect(MIRANDA_VOICE).toMatch(/«decisión raíz»/)
