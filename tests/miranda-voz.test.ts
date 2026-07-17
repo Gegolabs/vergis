@@ -158,3 +158,25 @@ describe('reglas del plan 100 · prompt ensamblado', () => {
     expect(MIRANDA_VOICE).toMatch(/EN LA MANO del usuario/)
   })
 })
+
+// Plan 102 · Etapa D: el prompt instruye la estructura lead + notas (marcador [[NOTAS]]) y prohíbe
+// enumerar en prosa lo que el reporte ya muestra (el lienzo es la evidencia).
+describe('prompt · estructura lead + notas (plan 102 etapa D)', () => {
+  const p = buildSystemPrompt({ dslDoc: 'DSL de ejemplo' })
+
+  it('instruye el LEAD corto y las NOTAS a demanda con el marcador [[NOTAS]]', () => {
+    expect(p).toMatch(/ESTRUCTURA DE TU RESPUESTA \(lead \+ notas\)/)
+    expect(p).toMatch(/LEAD corto/)
+    expect(p).toMatch(/\[\[NOTAS\]\]/)
+  })
+
+  it('prohíbe enumerar en prosa lo que el reporte ya muestra (el lienzo es la evidencia)', () => {
+    expect(p).toMatch(/NO ENUMERES EN PROSA\s+lo que el reporte ya muestra/)
+    expect(p).toMatch(/el reporte está a la vista en el lienzo/)
+  })
+
+  it('el usuario NUNCA ve el marcador (la UI lo vuelve «Alcance y notas»)', () => {
+    expect(p).toMatch(/El\s+usuario NUNCA ve ese marcador/)
+    expect(p).toMatch(/Alcance y notas/)
+  })
+})

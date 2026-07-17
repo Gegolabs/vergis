@@ -925,6 +925,24 @@ export function youInitialsOf(email: string | undefined): string {
   return ini || 'Tú'
 }
 
+/**
+ * Parte una respuesta de Miranda en LEAD (visible en la burbuja) y NOTAS (desplegable «Alcance y notas»),
+ * plan 102 etapa D. Marcador convenido: una línea que contiene «[[NOTAS]]» (case-insensitive, tolera
+ * negrita/prefijos); el lead es todo lo anterior, las notas todo lo posterior (+ lo que siga al marcador
+ * en su misma línea). FALLBACK OBLIGATORIO: sin marcador → TODO va como lead (jamás se oculta texto). Y si
+ * el marcador dejara el lead vacío (marcador al inicio), también todo como lead — nunca una burbuja vacía.
+ */
+export function splitLeadNotes(raw: string): { lead: string; notes: string } {
+  const lines = raw.split('\n')
+  const idx = lines.findIndex((l) => /\[\[\s*notas\s*\]\]/i.test(l))
+  if (idx === -1) return { lead: raw, notes: '' } // sin marcado → fallback: todo lead
+  const lead = lines.slice(0, idx).join('\n').trim()
+  const afterMarker = lines[idx].replace(/^.*?\[\[\s*notas\s*\]\]\**/i, '').trim() // \** consume el cierre de una negrita **[[NOTAS]]**
+  const notes = [afterMarker, lines.slice(idx + 1).join('\n').trim()].filter(Boolean).join('\n').trim()
+  if (!lead) return { lead: raw.replace(/\[\[\s*notas\s*\]\]/i, '').trim() || raw, notes: '' } // nunca burbuja vacía
+  return { lead, notes }
+}
+
 /** Renderiza la conversación como un chat: burbujas con lado (Tú a la derecha con tinte accent,
  *  Miranda a la izquierda sobre `--card`), nombre como caption chico y avatar. Texto con Markdown
  *  seguro (`mdInline`); las trazas de herramientas consecutivas se colapsan en UNA señal discreta. */
@@ -948,10 +966,17 @@ export function renderChat(rows: { role: string; content: string; durationMs?: n
     const side = isMiranda ? 'miranda' : 'you'
     const who = isMiranda ? 'Miranda' : 'Tú'
     const ini = isMiranda ? 'M' : youIni
+    // Lead + notas a demanda (plan 102 etapa D): SOLO en las respuestas de Miranda. El lead va en la
+    // burbuja; las notas (si las hay) en un desplegable discreto «Alcance y notas» cerrado por defecto.
+    // Sin marcador → todo lead (fallback). El texto del usuario no se parte (jamás emite el marcador).
+    const { lead, notes } = isMiranda ? splitLeadNotes(text) : { lead: text, notes: '' }
+    const notesHtml = notes
+      ? `<details class="mir-notes"><summary class="mir-notes-sum">Alcance y notas</summary><div class="mir-notes-body">${mdInline(notes)}</div></details>`
+      : ''
     // Meta discreto bajo la burbuja del assistant: cuánto tardó ese mensaje (plan 100 addendum 5).
     const meta = isMiranda && r.durationMs != null && Number.isFinite(r.durationMs) ? `<div class="mir-took sub">Respondido en ${escapeHtml(fmtDuration(r.durationMs))}</div>` : ''
     parts.push(
-      `<div class="turn turn--${side}"><div class="av2" aria-hidden="true">${escapeHtml(ini)}</div><div class="turn-b"><div class="cap">${who}</div><div class="bubble">${mdInline(text)}</div>${meta}</div></div>`,
+      `<div class="turn turn--${side}"><div class="av2" aria-hidden="true">${escapeHtml(ini)}</div><div class="turn-b"><div class="cap">${who}</div><div class="bubble">${mdInline(lead)}</div>${notesHtml}${meta}</div></div>`,
     )
     i += 1
   }

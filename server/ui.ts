@@ -126,6 +126,15 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 /* Mensaje «en cola» (plan 101 etapa D): recibido durante un turno vivo, pendiente de atender. */
 .mir-queued{opacity:.62}
 .mir-queued-tag{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 7px}
+/* «Alcance y notas» (plan 102 etapa D): el texto secundario de una respuesta, desplegable discreto
+   cerrado por defecto, bajo la burbuja de Miranda. CSS-only. */
+.mir-notes{margin:6px 0 0}
+.mir-notes>.mir-notes-sum{cursor:pointer;list-style:none;font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+.mir-notes>.mir-notes-sum::-webkit-details-marker{display:none}
+.mir-notes>.mir-notes-sum::before{content:"›";display:inline-block;color:var(--muted);transition:transform .15s ease}
+.mir-notes[open]>.mir-notes-sum::before{transform:rotate(90deg)}
+.mir-notes>.mir-notes-sum:hover{color:var(--fg)}
+.mir-notes-body{margin:6px 0 2px;font-size:13px;color:var(--fg-dim,var(--muted))}
 /* Línea de presupuesto de la sesión — maquinaria, vive en la gaveta (convención work/093). */
 .mir-budget{font-size:12px;color:var(--muted);margin:14px 0 2px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:10px}
 .mir-budget b{color:var(--fg);font-weight:600}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, youInitialsOf } from '../server/miranda'
+import { mdInline, renderChat, renderTraceDetail, renderProceso, renderIntentPanel, renderCanvas, renderMirCols, splitLeadNotes, youInitialsOf } from '../server/miranda'
 import { PAGE_CSS } from '../server/ui'
 import type { MirandaSession } from '@vergis/capabilities'
 
@@ -201,6 +201,62 @@ describe('renderChat · conversación limpia, sin traza inline (plan 102 etapa C
     expect(html).toContain('Voy a revisar otra tabla.')
     expect(html).toContain('Confirmado.')
     expect(count(html, 'turn--miranda')).toBe(2)
+  })
+})
+
+// Plan 102 · Etapa D: la respuesta se parte en LEAD (visible) + NOTAS (desplegable «Alcance y notas»),
+// con el marcador convenido [[NOTAS]]. Fallback OBLIGATORIO: sin marcador, todo va como lead.
+describe('splitLeadNotes · lead + notas a demanda (plan 102 etapa D)', () => {
+  it('marcador [[NOTAS]] → lead antes, notas después', () => {
+    const { lead, notes } = splitLeadNotes('Aquí tienes el estado de resultados de ZQ.\n[[NOTAS]]\nEsto cubre ZQ; el resto queda listo en el día.')
+    expect(lead).toBe('Aquí tienes el estado de resultados de ZQ.')
+    expect(notes).toBe('Esto cubre ZQ; el resto queda listo en el día.')
+  })
+  it('FALLBACK: sin marcador → TODO como lead, sin notas (jamás se pierde texto)', () => {
+    const { lead, notes } = splitLeadNotes('Una respuesta normal, sin marcado.')
+    expect(lead).toBe('Una respuesta normal, sin marcado.')
+    expect(notes).toBe('')
+  })
+  it('tolera negrita/prefijos y texto en la misma línea del marcador', () => {
+    const { lead, notes } = splitLeadNotes('Listo.\n**[[notas]]** empieza acá\ny sigue')
+    expect(lead).toBe('Listo.')
+    expect(notes).toBe('empieza acá\ny sigue')
+  })
+  it('marcador al inicio (lead vacío) → todo como lead, nunca burbuja vacía', () => {
+    const { lead, notes } = splitLeadNotes('[[NOTAS]]\nsolo notas')
+    expect(lead).not.toBe('')
+    expect(notes).toBe('')
+    expect(lead).toContain('solo notas')
+  })
+})
+
+describe('renderChat · lead en burbuja, notas en desplegable (plan 102 etapa D)', () => {
+  it('respuesta con lead+notas → lead en la burbuja, notas en <details> cerrado «Alcance y notas»', () => {
+    const html = renderChat([assistantText('El estado de resultados de ZQ, ya servido.\n[[NOTAS]]\nEl consolidado del resto queda listo en el día.')])
+    expect(html).toContain('El estado de resultados de ZQ, ya servido.')
+    expect(html).toContain('<details class="mir-notes">')
+    expect(html).not.toContain('mir-notes" open') // cerrado por defecto
+    expect(html).toContain('Alcance y notas')
+    expect(html).toContain('El consolidado del resto queda listo en el día.')
+    expect(html).not.toContain('[[NOTAS]]') // el marcador nunca se ve
+    // el lead va en la burbuja; las notas fuera de ella (en el <details>).
+    expect(html.indexOf('<details class="mir-notes">')).toBeGreaterThan(html.indexOf('class="bubble"'))
+  })
+  it('respuesta SIN notas → sin desplegable (chat normal)', () => {
+    const html = renderChat([assistantText('Hola, ¿qué PI quieres crear?')])
+    expect(html).toContain('Hola, ¿qué PI quieres crear?')
+    expect(html).not.toContain('mir-notes')
+  })
+  it('FALLBACK en el render: una respuesta sin marcador va entera en la burbuja', () => {
+    const html = renderChat([assistantText('Todo esto es la respuesta, sin marcado alguno.')])
+    expect(html).toContain('Todo esto es la respuesta, sin marcado alguno.')
+    expect(html).not.toContain('mir-notes')
+  })
+  it('el marcador NO parte el mensaje del USUARIO (solo las respuestas de Miranda)', () => {
+    const html = renderChat([row('user', 'quiero X\n[[NOTAS]]\ntexto del usuario')])
+    // el mensaje del usuario se muestra íntegro, sin desplegable.
+    expect(html).not.toContain('mir-notes')
+    expect(html).toContain('texto del usuario')
   })
 })
 

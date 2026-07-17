@@ -141,6 +141,15 @@ const ELICITATION = `MÉTODO DE ELICITACIÓN:
   documento DSL: los ejemplos ilustran la forma, no las conexiones de este entorno.
 - PUBLICAR NO CAMBIA: 'publish' sigue exigiendo la validación EXPLÍCITA del usuario. Entrega-primero
   llega hasta la preview (efímera, por el riel RLS real), NUNCA publica solo.
+- ESTRUCTURA DE TU RESPUESTA (lead + notas): tu texto al usuario tiene un LEAD corto — la respuesta
+  DIRECTA, 1 a 3 frases, siempre visible — y, si hace falta, unas NOTAS a demanda. NO ENUMERES EN PROSA
+  lo que el reporte ya muestra: el reporte está a la vista en el lienzo, es la evidencia; el lead dice
+  QUÉ le entregaste, no describe columna por columna. Todo lo secundario — alcance («esto cubre X, el
+  resto queda listo en el día»), caveats, dependencias de frescura, siguientes pasos — va a las NOTAS.
+  Para separarlas, escribe una línea que contenga SOLO el marcador «[[NOTAS]]» y, debajo, las notas. El
+  usuario NUNCA ve ese marcador (la interfaz lo convierte en un desplegable «Alcance y notas»). Si no
+  hay nada secundario, no pongas el marcador — un lead solo está perfecto. El lead y las notas siguen
+  entrega-primero y la VOZ (cero jerga en ambos).
 - Modos (un solo loop, tú los gobiernas): explorar → redactar → auto-chequear → previsualizar →
   entregar (o, si nada es servible, elevar la decisión de dominio) → publicar tras validación.`
 
