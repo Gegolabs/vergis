@@ -131,10 +131,14 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-budget b{color:var(--fg);font-weight:600}
 .mir-budget--warn{color:var(--err)}
 .mir-budget--warn b{color:var(--err)}
-/* Lienzo (plan 101 etapa C): el reporte embebido es el protagonista de la 2ª columna. */
-.mir-canvas{width:100%;height:min(72vh,680px);border:1px solid var(--border);border-radius:12px;background:var(--bg);display:block}
-.mir-canvas-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+/* Lienzo (plan 101 C · desacoplado y expandible 102 B): el reporte es su propia superficie, ancho
+   completo de su columna, alto generoso (se soltó el cap de alto anterior) con scroll interno propio. */
+.mir-canvas{width:100%;height:85vh;border:1px solid var(--border);border-radius:12px;background:#fff;display:block}
+.mir-canvas-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
 .mir-canvas-detach{font-size:12px;color:var(--muted)}
+.mir-canvas-expand{font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.mir-canvas-expand:hover{color:var(--fg)}
+.mir-canvas-expand .lbl-close{display:none}
 .mir-canvas-empty{border:1px dashed var(--border);border-radius:12px;padding:48px 20px;text-align:center;background:var(--card)}
 /* Ficha técnica (plan 101 etapa B): sustento a demanda, disclosure cerrado por defecto, con secciones
    legibles (Intención · Verificación · Definición técnica). CSS-only. */
@@ -149,11 +153,14 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-ficha-sec:first-child{border-top:none}
 .mir-ficha-sec>h3{font-size:11px;margin:0 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
 .mir-ficha-dsl{overflow:auto;background:var(--bg);border:1px solid var(--border);padding:12px;border-radius:8px;font-size:12px;margin:0}
+/* El uso de sesión vive DENTRO de la ficha (102 B): la sección ya trae su borde+rótulo, así que la
+   línea de presupuesto no repite su propio border-top/padding. */
+.mir-ficha-sec .mir-budget{border-top:none;padding-top:0;margin:0}
 .mir-intent{position:sticky;top:24px;min-width:0;display:flex;flex-direction:column}
 .mir-intent--empty{border:1px dashed var(--border);border-radius:14px;padding:2px 18px 20px;opacity:.75}
 /* Gaveta de intención (work/093): divisor punteado = borde de la gaveta + tirador sobre él. CSS-only:
    checkbox oculto (accesible por teclado) + labels; :has() dirige el grid. */
-.col-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+.col-toggle,.mir-expand-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden;white-space:nowrap}
 /* Divisor vertical punteado entre la conversación y la gaveta; se estira a la altura de la fila. */
 .mir-divider{align-self:stretch;position:relative;border-left:2px dashed var(--border);margin:6px 0;min-height:60px}
 /* Tirador de gaveta anclado sobre el divisor (chevron › = cerrar la gaveta). No vive en la tarjeta. */
@@ -168,6 +175,18 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-cols:has(> .col-toggle:checked) .mir-divider{display:none}
 .mir-cols:has(> .col-toggle:checked) .mir-reopen{display:block}
 .col-toggle:focus-visible ~ .mir-divider .mir-drawer-pull,.col-toggle:focus-visible ~ .mir-reopen .mir-reopen-tab{outline:2px solid var(--accent);outline-offset:2px}
+/* AMPLIAR el reporte (plan 102 B): colapsa la conversación (izquierda) para que el reporte domine.
+   Estas reglas van DESPUES del colapso de gaveta: si ambos checkboxes quedaran marcados, ganan (el
+   reporte manda) — coexisten sin romper. Re-muestran la gaveta por si col-toggle la habia ocultado. */
+.mir-cols:has(> .mir-expand-toggle:checked){grid-template-columns:1fr}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-conv{display:none}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-divider{display:none}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-reopen{display:none}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-intent{display:flex}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas{height:90vh}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas-expand .lbl-open{display:none}
+.mir-cols:has(> .mir-expand-toggle:checked) .mir-canvas-expand .lbl-close{display:inline}
+.mir-expand-toggle:focus-visible ~ .mir-intent .mir-canvas-expand{outline:2px solid var(--accent);outline-offset:2px}
 @media (max-width:900px){body.chat{max-width:920px}.mir-cols{grid-template-columns:1fr;gap:16px}.mir-intent{position:static}.turn{max-width:92%}.mir-divider{align-self:auto;border-left:none;border-top:2px dashed var(--border);margin:4px 0;min-height:0;height:0}.mir-drawer-pull{top:-1px;left:50%;transform:translate(-50%,-50%);width:48px;height:22px}}
 ${AVATAR_CSS}`
 

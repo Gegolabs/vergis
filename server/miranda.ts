@@ -493,12 +493,13 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
     const qc = await deps.gov.latestMirandaArtifact(sessionId, 'qc_report')
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
-    // Aside = LIENZO (el reporte embebido, protagonista) + ficha técnica (sustento, secundaria) +
-    // presupuesto (maquinaria). El «Publicar» y el link «desprendido» viven junto al lienzo.
-    const canvas = renderCanvas(sessionId, s, token, draft?.content)
-    const fichaPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content)
+    // Aside DESACOPLADO (plan 102 etapa B): el LIENZO (el reporte embebido) es su propia superficie; la
+    // ficha técnica (sustento) va DEBAJO, separada, y el uso de sesión (maquinaria) vive DENTRO de la
+    // ficha — los tres NO se leen como un solo panel. «Publicar»/«desprendido» viven junto al lienzo.
     const tokensUsed = await deps.gov.mirandaSessionTokens(sessionId)
-    const aside = `${canvas}${fichaPanel}${renderBudgetLine(tokensUsed, deps.tokenBudget)}`
+    const canvas = renderCanvas(sessionId, s, token, draft?.content)
+    const fichaPanel = renderIntentPanel(intentArt?.content, s, token, sessionId, qc?.content, draft?.content, tokensUsed, deps.tokenBudget)
+    const aside = `${canvas}${fichaPanel}`
     let composer: string
     if (s.state === 'publicado') {
       composer = `<div class="mir-composer"><p class="sub">Sesión publicada como <code>${escapeHtml(s.piCode ?? '')}</code>.</p></div>`
@@ -666,6 +667,8 @@ export function renderIntentPanel(
   sessionId: string,
   qcJson?: string,
   draftYaml?: string,
+  tokensUsed?: number,
+  tokenBudget?: number,
 ): string {
   // Sección INTENCIÓN (+ el botón «Esto es lo que quiero» — mudado adentro, decisión de César).
   let intencion = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
@@ -707,9 +710,14 @@ export function renderIntentPanel(
     ? `<section class="mir-ficha-sec"><h3>Definición técnica</h3><pre class="mir-ficha-dsl">${escapeHtml(draftYaml)}</pre></section>`
     : ''
 
-  // La ficha técnica: disclosure CERRADO por defecto (CSS-only). Guarda la JUSTIFICACIÓN, no las
-  // acciones — «Publicar» y el link al reporte viven junto al LIENZO (`renderCanvas`, plan 101 etapa C).
-  return `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}</div></details>`
+  // Sección USO DE LA SESIÓN (plan 102 etapa B): el presupuesto es MAQUINARIA → vive DENTRO de la ficha,
+  // no suelto en el aside (así el reporte, la ficha y el uso no se leen como un solo panel).
+  const budgetHtml = tokenBudget ? renderBudgetLine(tokensUsed ?? 0, tokenBudget) : ''
+  const seccionUso = budgetHtml ? `<section class="mir-ficha-sec"><h3>Uso de la sesión</h3>${budgetHtml}</section>` : ''
+
+  // La ficha técnica: disclosure CERRADO por defecto (CSS-only). Guarda la JUSTIFICACIÓN y la maquinaria,
+  // no las ACCIONES — «Publicar» y el link al reporte viven junto al LIENZO (`renderCanvas`).
+  return `<details class="mir-ficha"><summary class="mir-ficha-sum">${escapeHtml(FICHA_TECNICA)}</summary><div class="mir-ficha-body">${seccionIntencion}${seccionVerificacion}${seccionDefinicion}${seccionUso}</div></details>`
 }
 
 /**
@@ -727,12 +735,20 @@ export function renderCanvas(sessionId: string, s: MirandaSession, token: string
   }
   const iframe = `<iframe class="mir-canvas" src="/miranda/preview/${sid}" title="Reporte" loading="lazy"></iframe>`
   const detach = `<a class="mir-canvas-detach" href="/miranda/preview/${sid}" target="_blank" rel="noopener noreferrer">Abrir desprendido ↗</a>`
+  // «Ampliar» (plan 102 etapa B): CSS-only, alterna el checkbox `mir-expand` (definido en renderMirCols)
+  // que colapsa la conversación para que el reporte domine. Un solo control alterna ambos sentidos; el
+  // texto cambia por CSS según el estado. Coexiste con el colapso de gaveta (expandir gana).
+  const expand = `<label class="mir-canvas-expand" for="${MIR_EXPAND_ID}" title="Ampliar o reducir el reporte"><span class="lbl-open" aria-hidden="true">⤢ Ampliar</span><span class="lbl-close" aria-hidden="true">⤡ Reducir</span></label>`
   const publishBtn =
     s.state === 'autochequeado'
       ? `<form method="post" action="/miranda/api/s/${sid}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
       : ''
-  return `${iframe}<div class="mir-canvas-actions">${detach}${publishBtn}</div>`
+  return `${iframe}<div class="mir-canvas-actions">${detach}${expand}${publishBtn}</div>`
 }
+
+/** Id del checkbox CSS-only que amplía el reporte (colapsa la conversación). Compartido entre
+ *  `renderCanvas` (el label) y `renderMirCols` (el checkbox); en UN solo lugar (plan 102 etapa B). */
+const MIR_EXPAND_ID = 'mir-expand'
 
 /**
  * Ensambla la grilla (conversación + **gaveta** de intención) con el mecanismo de **plegado de la
@@ -749,8 +765,13 @@ export function renderCanvas(sessionId: string, s: MirandaSession, token: string
 export function renderMirCols(convInner: string, asideInner: string, intentEmpty: boolean): string {
   const id = 'mir-col-toggle'
   const emptyCls = intentEmpty ? ' mir-intent--empty' : ''
+  // Dos checkboxes CSS-only, hermanos directos de `.mir-cols` (para `:has(> …:checked)`): `col-toggle`
+  // colapsa la GAVETA (derecha) → queda la conversación; `mir-expand` AMPLÍA el reporte (colapsa la
+  // conversación, izquierda). Son opuestos; si ambos quedaran marcados, las reglas de expandir van
+  // DESPUÉS en el CSS y ganan (el reporte domina) — coexisten sin romper (plan 102 etapa B).
   return `<div class="mir-cols">
          <input type="checkbox" class="col-toggle" id="${id}" aria-label="Abrir o cerrar la gaveta de intención">
+         <input type="checkbox" class="mir-expand-toggle" id="${MIR_EXPAND_ID}" aria-label="Ampliar o reducir el reporte">
          <section class="mir-conv">${convInner}</section>
          <div class="mir-divider"><label for="${id}" class="mir-drawer-pull" title="Cerrar la gaveta de intención"><span aria-hidden="true">›</span></label></div>
          <aside class="mir-intent${emptyCls}">${asideInner}</aside>

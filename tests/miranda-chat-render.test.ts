@@ -378,6 +378,52 @@ describe('renderCanvas · lienzo del reporte (plan 101 etapa C)', () => {
   })
 })
 
+// Plan 102 · Etapa B: panel del reporte desacoplado y expandible.
+describe('canvas v2 · desacoplado + expandible (plan 102 etapa B)', () => {
+  const session = (state: MirandaSession['state']): MirandaSession => ({ id: 's1', title: 'PI', state })
+  const draft = 'mira_version: "1.0"\nidentity:\n  id: saldos'
+
+  it('el iframe ya NO trae el cap de alto viejo (min(72vh,680px)); ancho completo', () => {
+    expect(PAGE_CSS).not.toContain('min(72vh,680px)')
+    expect(PAGE_CSS).toContain('.mir-canvas{width:100%')
+  })
+
+  it('control «Ampliar»: label + checkbox CSS-only, cero JS', () => {
+    const canvas = renderCanvas('s1', session('borrador'), 'tok', draft)
+    expect(canvas).toContain('class="mir-canvas-expand" for="mir-expand"') // el label
+    expect(canvas).toContain('⤢ Ampliar')
+    expect(canvas).not.toMatch(/<script|\son\w+=/i) // sin JS
+    const cols = renderMirCols('<h2>Conv</h2>', 'aside', false)
+    expect(cols).toContain('class="mir-expand-toggle" id="mir-expand"') // el checkbox hermano de .mir-cols
+    expect(cols).not.toMatch(/<script|\son\w+=/i)
+  })
+
+  it('coexiste con el colapso de gaveta: dos checkboxes distintos, y ampliar gana en el CSS', () => {
+    const cols = renderMirCols('c', 'a', false)
+    expect(cols).toContain('id="mir-col-toggle"') // colapso de gaveta (derecha)
+    expect(cols).toContain('id="mir-expand"') // ampliar (colapsa izquierda)
+    // Las reglas de ampliar van DESPUÉS de las de colapso de gaveta (source order → ganan si ambas aplican).
+    expect(PAGE_CSS.indexOf('.mir-expand-toggle:checked')).toBeGreaterThan(PAGE_CSS.indexOf('.col-toggle:checked'))
+    // Ampliar re-muestra la gaveta (por si col-toggle la ocultó) y oculta la conversación.
+    expect(PAGE_CSS).toContain('.mir-cols:has(> .mir-expand-toggle:checked) .mir-conv{display:none}')
+    expect(PAGE_CSS).toContain('.mir-cols:has(> .mir-expand-toggle:checked) .mir-intent{display:flex}')
+  })
+
+  it('el uso de sesión vive DENTRO de la ficha (maquinaria), no suelto', () => {
+    const html = renderIntentPanel(undefined, session('borrador'), 'tok', 's1', undefined, undefined, 850, 1000)
+    expect(html).toContain('<details class="mir-ficha">')
+    expect(html).toContain('Uso de la sesión')
+    // «Uso de la sesión» aparece DESPUÉS del <details> de la ficha (está adentro).
+    expect(html.indexOf('Uso de la sesión')).toBeGreaterThan(html.indexOf('<details class="mir-ficha">'))
+    expect(html).toContain('mir-budget')
+  })
+
+  it('sin presupuesto → no hay sección de uso (no se inventa)', () => {
+    const html = renderIntentPanel(undefined, session('borrador'), 'tok', 's1')
+    expect(html).not.toContain('Uso de la sesión')
+  })
+})
+
 describe('renderMirCols · gaveta con divisor punteado + tirador (CSS-only, work/093)', () => {
   it('trae el checkbox oculto, el divisor punteado y el tirador SOBRE el divisor (no dentro de la tarjeta)', () => {
     const html = renderMirCols('<h2>Conversación</h2>', '<h2>Resumen de intención</h2>', false)

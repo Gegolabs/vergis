@@ -26,6 +26,12 @@ export interface MiraOptions {
    * el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS). Default 5000.
    */
   interactiveMaxRows?: number
+  /**
+   * Fuerza la PALETA del render, ignorando el default por tipo de PI (`resolveTheme`). Lo usa la
+   * PREVIEW de Miranda para servir el reporte SIEMPRE en `blanco` (un reporte se lee como documento;
+   * el chrome oscuro de Miranda no debe teñirlo) — plan 102 etapa A. Vacío/undefined → default normal.
+   */
+  paletteOverride?: string
 }
 
 /** Default del tope de materialización client-side (ver MiraOptions.interactiveMaxRows). */
@@ -342,8 +348,10 @@ export class MiraBotlet implements Botlet {
     host: BotletHost,
     identity: IdentityContext,
   ): Promise<string> {
-    // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
-    const { theme, palette } = resolveTheme(resolved, themeOverride)
+    // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana). Un
+    // `paletteOverride` (la preview de Miranda fuerza `blanco`) gana sobre el default por tipo.
+    const { theme, palette: resolvedPalette } = resolveTheme(resolved, themeOverride)
+    const palette = this.opts.paletteOverride || resolvedPalette
     const rendered = (await host.capabilityCall(
       'render-html-piece',
       {

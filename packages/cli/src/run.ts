@@ -78,6 +78,9 @@ export interface RunOptions {
   /** Tope de filas materializables por `interactions.filters` (ver MiraOptions.interactiveMaxRows).
    *  Mira no lee env: el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS y lo inyecta acá. */
   interactiveMaxRows?: number
+  /** Fuerza la PALETA del render (ignora el default por tipo de PI). La preview de Miranda pasa
+   *  `blanco` para servir el reporte siempre en claro (plan 102 etapa A). */
+  palette?: string
 }
 
 export interface RunOutcome {
@@ -138,7 +141,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
 
   // Se construye desde el spec YA parseado (cacheado): validate() corre por request (depende del
   // catálogo de capabilities), pero el parseo de texto/YAML y del schema no se repiten.
-  const mira = new MiraBotlet(spec, { schema, interactiveMaxRows: options.interactiveMaxRows })
+  const mira = new MiraBotlet(spec, { schema, interactiveMaxRows: options.interactiveMaxRows, paletteOverride: options.palette })
   botler.register(mira, options.specPath)
 
   const result = await botler.invoke(mira.id, {

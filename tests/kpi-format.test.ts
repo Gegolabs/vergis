@@ -82,3 +82,37 @@ describe('KPI · accent booleano NO revienta el render (regresión pre-existente
     expect(html).toContain('12.345') // el valor se formatea (int_0)
   })
 })
+
+// Plan 102 · Etapa A: la preview de Miranda se sirve SIEMPRE en tema blanco (un reporte se lee como
+// documento; el chrome oscuro no debe teñirlo). Un dashboard (KPI) por defecto iría en gruvbox oscuro;
+// el override de paleta (que renderPreviewHtml pasa como `palette: 'blanco'`) lo fuerza a blanco.
+const BLANCO_YAML = `
+mira_version: "1.0"
+identity: { id: pi-blanco, display_name: "Blanco", classification: internal }
+piece:
+  kpi: { label: "Total", format: int_0, metric: data.m.total }
+data:
+  m:
+    capability: mock-sql
+    params: { sql: "SELECT total FROM dbo.m" }
+    shape: { type: single_row, fields: { total: number } }
+quality: {}
+delivery: { render: [{ format: html, target: web, theme: roble }] }
+`
+
+describe('preview · tema blanco forzado (plan 102 etapa A)', () => {
+  it('palette override "blanco" → el HTML lleva data-palette="blanco" (aunque sea dashboard)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vergis-blanco-'))
+    const specPath = join(dir, 'spec.yaml')
+    writeFileSync(specPath, BLANCO_YAML) // theme roble + KPI → dashboard (default gruvbox oscuro sin override)
+    const cap = { name: 'mock-sql', async execute() { return { rows: [{ total: 1 }] } } } as Capability
+    const conBlanco = await runSpec({ specPath, baseDir: dir, extraCapabilities: [cap], palette: 'blanco' })
+    expect(conBlanco.ok).toBe(true)
+    // El ATRIBUTO del <html> (no el string suelto, que también vive en el CSS de las 3 paletas).
+    expect(conBlanco.html ?? '').toMatch(/<html[^>]*data-palette="blanco"/)
+    // Sin el override, el mismo dashboard sale en la paleta oscura por defecto (gruvbox), no blanco.
+    const sinBlanco = await runSpec({ specPath, baseDir: dir, extraCapabilities: [cap] })
+    expect(sinBlanco.html ?? '').not.toMatch(/<html[^>]*data-palette="blanco"/)
+    expect(sinBlanco.html ?? '').toMatch(/<html[^>]*data-palette="gruvbox"/)
+  })
+})

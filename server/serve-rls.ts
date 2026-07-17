@@ -1038,6 +1038,7 @@ if (config.miranda.enabled) {
             registerStarters: false,
             extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
             interactiveMaxRows: INTERACTIVE_MAX_ROWS,
+            palette: 'blanco', // el reporte-en-progreso se lee como documento: siempre en blanco (plan 102 A)
           })
           if (!out.ok) throw new Error(out.fallback?.reason ?? 'la preview no renderizó')
           return out.html ?? ''
