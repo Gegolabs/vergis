@@ -326,7 +326,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
           if (e.type !== 'tool_use') return
           const name = String((e.detail as { name?: unknown } | undefined)?.name ?? '')
           const phase = turnPhaseOf(name)
-          if (phase) void deps.gov.setMirandaTurnPhase(sessionId, phase).catch(() => {})
+          // El índice canónico hace que el marcador avance en ALTO-AGUA (el store gatea monotónico):
+          // un rebote del pipeline a una fase anterior no retrocede el stepper (plan 101 etapa A).
+          if (phase) void deps.gov.setMirandaTurnPhase(sessionId, phase, phaseIndex(phase)).catch(() => {})
         },
       })
       // El mensaje del usuario (newMessages[0]) ya está persistido; se anotan los del asistente/tool.
@@ -512,6 +514,42 @@ export function turnPhaseOf(toolName: string): string | undefined {
 }
 
 /**
+ * ORDEN CANÓNICO de las fases del pipeline (plan 101 etapa A) — FUENTE ÚNICA para el stepper. `phrase`
+ * es exactamente el valor que proyecta `TOOL_PHASE` (así el mapeo fase→índice es directo); `label` es
+ * la etiqueta corta del stepper (voz de negocio, sin jerga). El pipeline NO es estrictamente monotónico
+ * (el modelo rebota entre fases), por eso el marcador de fase avanza en alto-agua y el stepper nunca
+ * retrocede visualmente.
+ */
+export const PHASE_STEPS: readonly { phrase: string; label: string }[] = [
+  { phrase: 'Revisando la información disponible…', label: 'Explorando' },
+  { phrase: 'Armando el reporte…', label: 'Armando' },
+  { phrase: 'Cuadrando las cifras…', label: 'Cuadrando' },
+  { phrase: 'Preparando la vista previa…', label: 'Vista previa' },
+]
+
+/** Índice canónico de una fase (por su frase), o -1 si no hay fase aún / no reconocida («Pensando…»). */
+export function phaseIndex(phase?: string): number {
+  if (!phase) return -1
+  return PHASE_STEPS.findIndex((s) => s.phrase === phase)
+}
+
+/**
+ * Stepper de progreso (plan 101 etapa A), CSS-only. `activeIdx` = índice de ALTO-AGUA alcanzado (no la
+ * fase instantánea): pasos previos = cumplidos, actual = activo, siguientes = pendientes. `activeIdx=-1`
+ * (aún sin fase) → todos pendientes. Decorativo (`aria-hidden`): la semántica la lleva el `aria-label`
+ * de la burbuja (frase + reloj). Sin JS.
+ */
+export function renderStepper(activeIdx: number): string {
+  const chips: string[] = []
+  PHASE_STEPS.forEach((s, i) => {
+    if (i > 0) chips.push('<span class="mir-sep" aria-hidden="true">→</span>')
+    const state = i < activeIdx ? 'is-done' : i === activeIdx ? 'is-active' : 'is-pending'
+    chips.push(`<span class="mir-step ${state}">${escapeHtml(s.label)}</span>`)
+  })
+  return `<div class="mir-stepper" aria-hidden="true">${chips.join('')}</div>`
+}
+
+/**
  * Formato compacto de una duración: <60s → «47s»; ≥60s → «1m 05s» (segundos con cero a la izquierda).
  * Un cronómetro es lenguaje universal, no jerga: no viola VOZ. Entrada inválida (NaN/negativa) → «0s».
  */
@@ -533,7 +571,10 @@ export function thinkingBubble(phase?: string, elapsedMs?: number): string {
   const clock = elapsedMs != null && Number.isFinite(elapsedMs) && elapsedMs >= 0 ? fmtDuration(elapsedMs) : ''
   const shown = clock ? `${label} · ${clock}` : label
   const clockHtml = clock ? ` <span class="mir-clock sub">· ${escapeHtml(clock)}</span>` : ''
-  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div><div class="bubble" role="status" aria-label="Miranda: ${escapeHtml(shown)}"><span class="mir-phase">${escapeHtml(label)}</span>${clockHtml} <span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
+  // Stepper de progreso (plan 101 etapa A) sobre la frase; el marcador de fase ya viene en alto-agua
+  // (monotónico en el store), así que su índice canónico ilumina «el más avanzado alcanzado».
+  const stepper = renderStepper(phaseIndex(phase))
+  return `<div class="turn turn--miranda mir-thinking"><div class="av2" aria-hidden="true">M</div><div class="turn-b"><div class="cap">Miranda</div>${stepper}<div class="bubble" role="status" aria-label="Miranda: ${escapeHtml(shown)}"><span class="mir-phase">${escapeHtml(label)}</span>${clockHtml} <span class="mir-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div></div>`
 }
 
 /** Compacta un conteo de tokens a una etiqueta corta: 407000 → «407k», 4000000 → «4M». */

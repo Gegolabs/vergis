@@ -203,8 +203,11 @@ export interface MirandaStore {
   /** Limpia el marcador de turno (al terminar el turno background, con éxito o error). */
   endMirandaTurn(id: string): Promise<void>
   /** Fija la fase visible del turno en curso (voz de negocio, para la burbuja «pensando»). Se limpia
-   *  con `endMirandaTurn` y se resetea al arrancar un turno nuevo. */
-  setMirandaTurnPhase(id: string, phase: string): Promise<void>
+   *  con `endMirandaTurn` y se resetea al arrancar un turno nuevo. Con `phaseIdx` (índice canónico de
+   *  la fase) el avance es MONOTÓNICO: una fase de índice menor (rebote del pipeline) NO retrocede el
+   *  marcador — el stepper marca «el más avanzado alcanzado» (plan 101 etapa A). Sin `phaseIdx`
+   *  (compat) el set es best-effort. */
+  setMirandaTurnPhase(id: string, phase: string, phaseIdx?: number): Promise<void>
   setMirandaTitle(id: string, title: string): Promise<void>
   setMirandaPiCode(id: string, piCode: string): Promise<void>
   appendMirandaMessage(sessionId: string, role: MirandaMessageRole, content: string, tokens?: number, durationMs?: number): Promise<number>
@@ -361,7 +364,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(PROCESS_OUTPUT_DDL)
     db.run(MIRANDA_SESSION_DDL)
     // Marcador de turno asíncrono (migración idempotente para DBs ya creadas).
-    ensureColumns(db, 'miranda_session', ['turn_state TEXT', 'turn_started_at TEXT', 'turn_phase TEXT'])
+    ensureColumns(db, 'miranda_session', ['turn_state TEXT', 'turn_started_at TEXT', 'turn_phase TEXT', 'turn_phase_idx INTEGER'])
     db.run(MIRANDA_MESSAGE_DDL)
     // Duración del turno por mensaje (migración idempotente para DBs ya creadas) — plan 100 addendum 5.
     ensureColumns(db, 'miranda_message', ['duration_ms INTEGER'])
@@ -843,17 +846,30 @@ export class SqliteGovernanceStore implements GovernanceStore {
 
   async beginMirandaTurn(id: string): Promise<void> {
     // El turno nuevo arranca sin fase (la burbuja cae al default «Pensando…» hasta el primer evento).
-    this.db.run(`UPDATE miranda_session SET turn_state = 'procesando', turn_started_at = ?, turn_phase = NULL, updated_at = ? WHERE id = ?`, [now(), now(), id.trim()])
+    // El índice de alto-agua (turn_phase_idx) también se resetea: el stepper es por-turno.
+    this.db.run(`UPDATE miranda_session SET turn_state = 'procesando', turn_started_at = ?, turn_phase = NULL, turn_phase_idx = NULL, updated_at = ? WHERE id = ?`, [now(), now(), id.trim()])
     this.persist()
   }
 
   async endMirandaTurn(id: string): Promise<void> {
-    this.db.run(`UPDATE miranda_session SET turn_state = NULL, turn_started_at = NULL, turn_phase = NULL, updated_at = ? WHERE id = ?`, [now(), id.trim()])
+    this.db.run(`UPDATE miranda_session SET turn_state = NULL, turn_started_at = NULL, turn_phase = NULL, turn_phase_idx = NULL, updated_at = ? WHERE id = ?`, [now(), id.trim()])
     this.persist()
   }
 
-  async setMirandaTurnPhase(id: string, phase: string): Promise<void> {
-    this.db.run(`UPDATE miranda_session SET turn_phase = ?, updated_at = ? WHERE id = ?`, [phase.trim() || null, now(), id.trim()])
+  async setMirandaTurnPhase(id: string, phase: string, phaseIdx?: number): Promise<void> {
+    const p = phase.trim() || null
+    const idx = phaseIdx == null || !Number.isFinite(phaseIdx) ? null : Math.trunc(phaseIdx)
+    if (idx == null) {
+      // Compat sin índice: set best-effort (no hay orden con que decidir monotonicidad).
+      this.db.run(`UPDATE miranda_session SET turn_phase = ?, updated_at = ? WHERE id = ?`, [p, now(), id.trim()])
+    } else {
+      // Monotónico y ATÓMICO (sin read-modify-write, sin carrera): solo avanza cuando el índice nuevo
+      // es ≥ al alto-agua guardado (o no hay uno). Un rebote a una fase anterior NO retrocede.
+      this.db.run(
+        `UPDATE miranda_session SET turn_phase = ?, turn_phase_idx = ?, updated_at = ? WHERE id = ? AND (turn_phase_idx IS NULL OR turn_phase_idx <= ?)`,
+        [p, idx, now(), id.trim(), idx],
+      )
+    }
     this.persist()
   }
 

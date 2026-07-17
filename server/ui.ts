@@ -113,6 +113,13 @@ summary.trace .chev{transition:transform .15s ease;display:inline-block;flex:non
 .mir-dots i:nth-child(3){animation-delay:.4s}
 @keyframes mir-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
 @media (prefers-reduced-motion:reduce){.mir-dots i{animation:none;opacity:.6}}
+/* Stepper de progreso del turno (plan 101 etapa A): pasos del pipeline, el actual iluminado, los
+   cumplidos visibles; marca el más avanzado alcanzado (no retrocede en un rebote). CSS-only. */
+.mir-stepper{display:flex;flex-wrap:wrap;align-items:center;gap:5px 6px;margin:0 0 7px;font-size:11px;line-height:1.6}
+.mir-step{color:var(--muted);padding:2px 9px;border-radius:999px;border:1px solid transparent}
+.mir-step.is-done{color:var(--fg)}
+.mir-step.is-active{color:var(--fg);font-weight:600;border-color:var(--border);background:var(--card)}
+.mir-sep{color:var(--muted);opacity:.5;font-size:10px}
 /* Composer deshabilitado mientras Miranda responde. */
 .mir-composer--busy{opacity:.6}
 .mir-composer .mir-busy-note{font-size:12px;color:var(--muted);margin:0 0 8px;text-align:center}

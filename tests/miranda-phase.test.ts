@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { turnPhaseOf, thinkingBubble, fmtDuration, renderChat } from '../server/miranda'
+import { turnPhaseOf, thinkingBubble, fmtDuration, renderChat, PHASE_STEPS, phaseIndex, renderStepper } from '../server/miranda'
 import { SqliteGovernanceStore } from '@vergis/capabilities'
 
 // Plan 100 · addendum 4 (encargo de César): feedback ocasional mientras el server piensa — «no es
@@ -161,5 +161,116 @@ describe('plan 100 addendum 5 · duration_ms persiste por mensaje', () => {
     expect(msgs[0].durationMs).toBeUndefined()
     expect(msgs[1].durationMs).toBe(154_000)
     expect(msgs[1].tokens).toBe(120) // duración y tokens conviven sin pisarse
+  })
+})
+
+// Plan 101 · Etapa A: durante el turno, un stepper visible «Explorando → Armando → Cuadrando → Vista
+// previa» ilumina el paso actual y deja ver los cumplidos. Fuente única = PHASE_STEPS (orden canónico);
+// la fase actual mapea a su índice. El pipeline NO es monotónico (el modelo rebota), así que el
+// marcador avanza en ALTO-AGUA y el stepper no retrocede visualmente. CSS-only, sin JS.
+describe('plan 101 etapa A · orden canónico de fases', () => {
+  it('PHASE_STEPS es la fuente única: 4 pasos en orden, cada frase = un valor de TOOL_PHASE', () => {
+    expect(PHASE_STEPS.map((s) => s.label)).toEqual(['Explorando', 'Armando', 'Cuadrando', 'Vista previa'])
+    // Cada frase del stepper es exactamente la que proyecta un tool del loop (mapeo directo fase→índice).
+    expect(turnPhaseOf('catalog_tables')).toBe(PHASE_STEPS[0].phrase)
+    expect(turnPhaseOf('save_draft')).toBe(PHASE_STEPS[1].phrase)
+    expect(turnPhaseOf('run_self_check')).toBe(PHASE_STEPS[2].phrase)
+    expect(turnPhaseOf('render_preview')).toBe(PHASE_STEPS[3].phrase)
+  })
+
+  it('phaseIndex mapea la fase actual a su índice; desconocida/ausente → -1', () => {
+    expect(phaseIndex(PHASE_STEPS[0].phrase)).toBe(0)
+    expect(phaseIndex(PHASE_STEPS[1].phrase)).toBe(1)
+    expect(phaseIndex(PHASE_STEPS[2].phrase)).toBe(2)
+    expect(phaseIndex(PHASE_STEPS[3].phrase)).toBe(3)
+    expect(phaseIndex(undefined)).toBe(-1)
+    expect(phaseIndex('Frase que no existe')).toBe(-1)
+  })
+})
+
+describe('plan 101 etapa A · render del stepper (CSS-only)', () => {
+  it('con cada fase activa: previos cumplidos, actual activo, siguientes pendientes', () => {
+    // Activo en «Cuadrando» (idx 2): 0 y 1 done, 2 active, 3 pending.
+    const html = renderStepper(2)
+    expect(html).toContain('<span class="mir-step is-done">Explorando</span>')
+    expect(html).toContain('<span class="mir-step is-done">Armando</span>')
+    expect(html).toContain('<span class="mir-step is-active">Cuadrando</span>')
+    expect(html).toContain('<span class="mir-step is-pending">Vista previa</span>')
+    // Separadores → entre los cuatro pasos (tres flechas).
+    expect(html.match(/mir-sep/g)).toHaveLength(3)
+    // Decorativo: el stepper no aporta semántica de estado (va aria-hidden).
+    expect(html).toContain('class="mir-stepper" aria-hidden="true"')
+  })
+
+  it('idx 0 → solo el primero activo, el resto pendiente', () => {
+    const html = renderStepper(0)
+    expect(html).toContain('<span class="mir-step is-active">Explorando</span>')
+    expect(html).not.toContain('is-done')
+    expect(html.match(/is-pending/g)).toHaveLength(3)
+  })
+
+  it('idx -1 (aún sin fase, «Pensando…») → todos pendientes, ninguno activo', () => {
+    const html = renderStepper(-1)
+    expect(html).not.toContain('is-active')
+    expect(html).not.toContain('is-done')
+    expect(html.match(/is-pending/g)).toHaveLength(4)
+  })
+
+  it('sin JS: el stepper no emite <script> ni handlers on*', () => {
+    const html = renderStepper(2)
+    expect(html).not.toMatch(/<script|on\w+=/i)
+  })
+})
+
+describe('plan 101 etapa A · thinkingBubble integra el stepper conservando reloj y puntos', () => {
+  it('la burbuja lleva el stepper + la frase + el reloj + los puntos', () => {
+    const html = thinkingBubble('Cuadrando las cifras…', 72_000)
+    expect(html).toContain('mir-stepper')
+    expect(html).toContain('<span class="mir-step is-active">Cuadrando</span>')
+    expect(html).toContain('1m 12s') // reloj del addendum 5 conservado
+    expect(html).toContain('mir-dots') // puntos del addendum 4 conservados
+    expect(html).toContain('aria-label="Miranda: Cuadrando las cifras… · 1m 12s"')
+  })
+  it('sin fase → stepper con todo pendiente y frase «Pensando…»', () => {
+    const html = thinkingBubble(undefined, 3000)
+    expect(html).toContain('mir-stepper')
+    expect(html).not.toContain('is-active')
+    expect(html).toContain('Pensando…')
+  })
+})
+
+describe('plan 101 etapa A · no-retroceso: el marcador de fase avanza en alto-agua (store monotónico)', () => {
+  it('un rebote a una fase anterior NO retrocede turn_phase; una fase igual o mayor sí avanza', async () => {
+    const s = await SqliteGovernanceStore.open(null)
+    await s.createSession('hw', 'Alto-agua', 'ana@x.com')
+    await s.beginMirandaTurn('hw')
+
+    await s.setMirandaTurnPhase('hw', PHASE_STEPS[0].phrase, 0) // Explorando
+    await s.setMirandaTurnPhase('hw', PHASE_STEPS[2].phrase, 2) // Cuadrando (avanza)
+    expect((await s.getMirandaSession('hw'))?.turnPhase).toBe(PHASE_STEPS[2].phrase)
+
+    // Rebote: el modelo vuelve a explorar (idx 0 < 2) → el marcador NO retrocede.
+    await s.setMirandaTurnPhase('hw', PHASE_STEPS[0].phrase, 0)
+    expect((await s.getMirandaSession('hw'))?.turnPhase).toBe(PHASE_STEPS[2].phrase)
+    expect(phaseIndex((await s.getMirandaSession('hw'))?.turnPhase)).toBe(2) // el stepper sigue en Cuadrando
+
+    // Avance real a Vista previa (idx 3 ≥ 2) → sí actualiza.
+    await s.setMirandaTurnPhase('hw', PHASE_STEPS[3].phrase, 3)
+    expect((await s.getMirandaSession('hw'))?.turnPhase).toBe(PHASE_STEPS[3].phrase)
+
+    // Un turno nuevo resetea el alto-agua (el stepper es por-turno).
+    await s.endMirandaTurn('hw')
+    await s.beginMirandaTurn('hw')
+    await s.setMirandaTurnPhase('hw', PHASE_STEPS[0].phrase, 0)
+    expect((await s.getMirandaSession('hw'))?.turnPhase).toBe(PHASE_STEPS[0].phrase)
+  })
+
+  it('sin índice (compat) → set best-effort, sin gate monotónico', async () => {
+    const s = await SqliteGovernanceStore.open(null)
+    await s.createSession('cc', 'Compat', 'ana@x.com')
+    await s.beginMirandaTurn('cc')
+    await s.setMirandaTurnPhase('cc', PHASE_STEPS[3].phrase, 3)
+    await s.setMirandaTurnPhase('cc', 'Fase libre sin índice') // compat: pisa
+    expect((await s.getMirandaSession('cc'))?.turnPhase).toBe('Fase libre sin índice')
   })
 })
