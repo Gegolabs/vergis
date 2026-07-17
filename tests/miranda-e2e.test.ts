@@ -270,9 +270,12 @@ describe('plan 100 addendum 5 · duración en los caminos de error y max_tokens'
     }
   }
 
-  it('error de sistema (transport revienta) → el assistant de error lleva su duración', async () => {
+  it('error de sistema (transport revienta) → burbuja en voz de negocio, SIN filtrar el crudo; el detalle va al log', async () => {
     const gov = await SqliteGovernanceStore.open(null)
-    const transport: AnthropicTransport = { async createMessage() { throw new Error('API caída') } }
+    // Simula una caída de la API con el crudo que filtraba (provider + request_id + JSON).
+    const raw = 'Anthropic API 500: {"type":"error","error":{"type":"api_error"},"request_id":"req_011ABC"}'
+    const transport: AnthropicTransport = { async createMessage() { throw new Error(raw) } }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const h = createMiranda(baseDeps(gov, transport))
     await gov.createSession('err', 'X', EMAIL)
     const r = mkRes()
@@ -282,9 +285,18 @@ describe('plan 100 addendum 5 · duración en los caminos de error y max_tokens'
     const msgs = await gov.listMirandaMessages('err')
     const last = msgs[msgs.length - 1]
     expect(last.role).toBe('assistant')
-    expect(last.content).toContain('Error del sistema') // la burbuja de error
-    expect(last.durationMs).toBeGreaterThanOrEqual(0) // medida y persistida
+    // La burbuja: voz de negocio, CERO jerga técnica cruda.
+    expect(last.content).toContain('Tuve un problema técnico')
+    expect(last.content).not.toContain('Anthropic API')
+    expect(last.content).not.toContain('request_id')
+    expect(last.content).not.toContain('api_error') // nada del JSON crudo del error
+    expect(last.content).not.toContain('500')
+    expect(last.durationMs).toBeGreaterThanOrEqual(0) // medida y persistida (addendum 5)
     expect((await gov.getMirandaSession('err'))?.turnState).toBeUndefined() // turno cerrado limpio
+    // El detalle CRUDO se registró server-side (para diagnóstico), no se perdió.
+    expect(errSpy).toHaveBeenCalled()
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('req_011ABC')
+    errSpy.mockRestore()
   })
 
   it('disculpa por max_tokens → el assistant de disculpa lleva su duración', async () => {

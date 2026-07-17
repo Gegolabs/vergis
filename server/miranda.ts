@@ -36,6 +36,11 @@ export interface MirandaHandler {
   whenIdle(): Promise<void>
 }
 
+/** Disculpa en VOZ DE NEGOCIO cuando un turno falla por un problema técnico (API caída, error inesperado).
+ *  El detalle crudo — nombre de proveedor, request_id, JSON — se registra server-side, JAMÁS en la
+ *  burbuja al usuario. Misma familia sobria que `MAX_TOKENS_APOLOGY` (plan 100 addendum 2). */
+export const SYSTEM_ERROR_APOLOGY = 'Tuve un problema técnico procesando esto. Vuelve a intentarlo en un momento.'
+
 /** Dependencias que el server cablea (todas seams testeables). */
 export interface MirandaServerDeps {
   gov: MirandaStore
@@ -342,7 +347,17 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         await deps.gov.appendMirandaMessage(sessionId, roleOf(m), JSON.stringify(m.content), i === 0 ? result.tokensUsed : 0, isLast ? Date.now() - t0 : undefined)
       }
     } catch (e) {
-      const note = e instanceof TokenBudgetExceeded ? e.message : `Error del sistema al conversar con Miranda: ${e instanceof Error ? e.message : String(e)}`
+      // El error habla en VOZ DE NEGOCIO: el usuario JAMÁS ve jerga técnica cruda (nombre de proveedor,
+      // request_id, JSON, códigos). El presupuesto agotado es un mensaje controlado y apto (sin jerga),
+      // así que se muestra tal cual; cualquier otro error → disculpa sobria y el DETALLE CRUDO se
+      // registra server-side para diagnóstico (nunca se pierde para nosotros; solo no llega a la burbuja).
+      let note: string
+      if (e instanceof TokenBudgetExceeded) {
+        note = e.message
+      } else {
+        console.error(`[miranda] turno falló (sesión ${sessionId}): ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`)
+        note = SYSTEM_ERROR_APOLOGY
+      }
       await deps.gov.appendMirandaMessage(sessionId, 'assistant', systemError(note), 0, Date.now() - t0)
     } finally {
       try {

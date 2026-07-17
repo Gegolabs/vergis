@@ -158,8 +158,9 @@ describe('WP4 · ciclo básico', () => {
     expect(msgs[0].content).toContain('primero')
   })
 
-  it('error del turno (background) se persiste como error de sistema y limpia el marcador', async () => {
+  it('error del turno (background) → burbuja en voz de negocio (sin el crudo) y limpia el marcador', async () => {
     const tp: AnthropicTransport = { async createMessage() { throw new Error('boom API') } }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { gov, handler } = await build(undefined, tp)
     await gov.createSession('s1', 'x', EMAIL)
     const { res, done } = mkRes()
@@ -168,8 +169,11 @@ describe('WP4 · ciclo básico', () => {
     await handler.whenIdle()
     const msgs = await gov.listMirandaMessages('s1')
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant'])
-    expect(msgs[1].content).toContain('Error del sistema')
+    expect(msgs[1].content).toContain('Tuve un problema técnico') // voz de negocio
+    expect(msgs[1].content).not.toContain('boom API') // el crudo NO llega a la burbuja
     expect((await gov.getMirandaSession('s1'))?.turnState).toBeUndefined()
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('boom API') // …se registró server-side
+    errSpy.mockRestore()
   })
 })
 
