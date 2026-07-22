@@ -45,17 +45,22 @@ export const renderHtmlPiece: Capability = {
     const signals: RenderSignals = { interactiveTable: false, drillActions: false }
     const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry, signals }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
-    // el control), no en la gaveta. La gaveta queda para la maquinaria (facetas de dashboard /
-    // runtime de tabla, guardados, config). Un PI cuyo único contenido de gaveta eran los controles
-    // queda SIN gaveta.
+    // el control), no en la gaveta. El tab «Controles» de la gaveta queda para la maquinaria
+    // (facetas de dashboard / runtime de tabla). Los selectores de alcance NO viven aquí.
     const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
     const nav = pages ? renderPagesNav(pages, carry) : ''
     let body = contextStrip + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
-    // GAVETA COMÚN (un solo shell por documento) para PI con interactividad de dashboard o de tabla.
-    // 3 tabs: Controles · Guardados · Config. El tab «Controles» reúne las facetas del dashboard /
-    // los controles del runtime de tabla (los selectores de alcance viven en la banda, no aquí).
-    const hasTray = !!interactive || hasTable
+    // GAVETA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
+    // los tabs Controles·Vistas·Config y el pie de versión. El shell NO se gatea por maquinaria: una
+    // vista de dashboard puro (KPIs+charts, sin tabla, con la interactividad de gráficos aún no
+    // construida — capacidad #82) también merece su Inspector con Apariencia+Config. El tab
+    // «Controles» reúne las facetas del dashboard / los controles del runtime de tabla; cuando no hay
+    // ninguna, muestra un empty-state (no un panel en blanco).
+    const facets = interactive ? renderDashboardFacets(interactive) : ''
+    // «Controles trae maquinaria» = facetas server-rendered (dashboard) o el runtime de tabla que las
+    // inyecta client-side. Decide el empty-state y el tab por defecto — NO decide si hay gaveta.
+    const controlesHasMachinery = !!facets || hasTable
     // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
     const piLabel = meta?.code
       ? `${meta.code}${meta.version ? ' · v' + meta.version : ''}`
@@ -63,17 +68,15 @@ export const renderHtmlPiece: Capability = {
         ? `v${meta.version}`
         : ''
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
-    if (interactive) {
-      body = renderTrayShell(renderDashboardFacets(interactive), theme.palettes, palette, piLabel) + body
-      tail += renderInteractiveScript(interactive)
-    } else if (hasTray) {
-      body = renderTrayShell('', theme.palettes, palette, piLabel) + body
-    }
+    // El shell del Inspector se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
+    // Controles solo cuando `interactive`; si no, `''` (y el tab muestra su empty-state).
+    body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable) + body
+    if (interactive) tail += renderInteractiveScript(interactive)
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
     // aplicaba el CSS al llegar al `<style>` del final). Todo el CSS por-documento va junto, arriba.
     let css = ''
-    if (hasTray) css += TRAY_CSS
+    css += TRAY_CSS // el shell del Inspector existe SIEMPRE → su CSS también
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (pages) css += PAGES_NAV_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
@@ -335,7 +338,14 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
  * vacío para que el runtime de tabla inyecte sus controles en `.tray-sections`). Apariencia,
  * Imprimir y crédito son universales. Una sola implementación = comportamiento idéntico.
  */
-function renderTrayShell(sections: string, palettes?: { id: string; label: string }[], activePalette?: string, piLabel?: string): string {
+function renderTrayShell(
+  sections: string,
+  palettes?: { id: string; label: string }[],
+  activePalette?: string,
+  piLabel?: string,
+  controlesHasMachinery = true,
+  hasTable = false,
+): string {
   const active = activePalette || (palettes && palettes[0]?.id) || ''
   let appearance = ''
   if (palettes && palettes.length > 1) {
@@ -360,6 +370,20 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
     `<div class="tray-version">Mira v${escapeHtml(VERGIS_VERSION)}</div>` +
     `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>` +
     `</div>`
+  // Tab por defecto (radio `checked`): Controles cuando trae maquinaria (facetas de dashboard o
+  // runtime de tabla); si no, se abre en Config (Apariencia + Imprimir) — el único tab con contenido
+  // real en una vista de dashboard puro, para no aterrizar en un panel vacío. Exactamente un radio
+  // `checked` en ambos casos.
+  const controlesChecked = controlesHasMachinery ? ' checked' : ''
+  const configChecked = controlesHasMachinery ? '' : ' checked'
+  // Empty-state sobrio cuando el tab no tiene maquinaria (evita el panel en blanco). Sin prometer #82.
+  const controlesBody = controlesHasMachinery
+    ? sections
+    : `<div class="tray-empty">Esta vista no tiene filtros disponibles.</div>`
+  // «Vistas» (guardados) lo puebla el runtime de tabla; sin tabla no hay qué guardar → empty-state.
+  const guardadosBody = hasTable
+    ? ''
+    : `<div class="tray-empty">Las vistas guardadas están disponibles en reportes con tabla.</div>`
   return (
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
     `<label for="vergis-tray-toggle" class="tray-tab" title="Inspector" aria-label="Abrir inspector">` +
@@ -370,16 +394,16 @@ function renderTrayShell(sections: string, palettes?: { id: string; label: strin
     `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Inspector">` +
     `<div class="tray-head"><strong>Inspector</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
     // 3 tabs (radios CSS puros): Controles · Guardados · Config
-    `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin" checked hidden>` +
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin"${controlesChecked} hidden>` +
     `<input type="radio" name="vergis-traytab" id="vergis-tt-guardados" class="tray-tabin" hidden>` +
-    `<input type="radio" name="vergis-traytab" id="vergis-tt-config" class="tray-tabin" hidden>` +
+    `<input type="radio" name="vergis-traytab" id="vergis-tt-config" class="tray-tabin"${configChecked} hidden>` +
     `<div class="tray-tabs">` +
     `<label for="vergis-tt-controles" class="tray-tablabel tt-controles">Controles</label>` +
     `<label for="vergis-tt-guardados" class="tray-tablabel tt-guardados">Vistas</label>` +
     `<label for="vergis-tt-config" class="tray-tablabel tt-config">Config</label>` +
     `</div>` +
-    `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${sections}</div></div>` +
-    `<div class="tray-panel tray-panel-guardados"><div class="tray-saved"></div></div>` +
+    `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${controlesBody}</div></div>` +
+    `<div class="tray-panel tray-panel-guardados"><div class="tray-saved">${guardadosBody}</div></div>` +
     `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
     // Pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible, pegado al fondo.
     footer +
