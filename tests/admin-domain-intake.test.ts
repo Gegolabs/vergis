@@ -24,12 +24,24 @@ const ENTITIES = parseMasterDataConfig({
 })
 const DOMAINS = parseDomainsConfig({ domains: [{ id: 'cartera', label: 'Cartera / Finanzas', stewards: [STEWARD] }] })
 const SLOTS = parseIntakeConfig({
-  slots: [{
-    id: 'saldos_cartera', label: 'Antigüedad de saldos', domain: 'cartera',
-    accept: 'saldos *.xlsx', maxBytes: 1024,
-    target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' },
-    trigger: { processRef: 'PIPE' },
-  }],
+  slots: [
+    {
+      id: 'saldos_cartera', label: 'Antigüedad de saldos', domain: 'cartera',
+      accept: 'saldos *.xlsx', maxBytes: 1024,
+      target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' },
+      trigger: { processRef: 'PIPE' },
+    },
+    // Issue #76: slot con metadata requerida (empresa por RUT + versión enum).
+    {
+      id: 'facturas', label: 'Facturas', domain: 'cartera', maxBytes: 4096,
+      target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/facturas' },
+      trigger: { processRef: 'PIPE2' },
+      meta: [
+        { id: 'empresa_rut', label: 'Empresa (receptor)', type: 'rut', required: true },
+        { id: 'version', label: 'Versión', type: 'enum', options: ['V0', 'V1'], required: true },
+      ],
+    },
+  ],
 })
 // Fila de frescura cuya entidad casa con el slot por el item del motor (engineItemId === slot.trigger.processRef).
 // Así la carga de archivo (plegada en Frescura) aparece en la fila de la entidad.
@@ -75,7 +87,7 @@ function mockRes(): MockRes {
 describe('admin · gestión de dominio + ingesta', () => {
   let admin: AdminHandler
   let audit: LogEventInput[]
-  let puts: { filename: string; len: number; target: IntakeTarget }[]
+  let puts: { filename: string; len: number; target: IntakeTarget; sidecar?: string }[]
   let runs: string[]
 
   beforeEach(async () => {
@@ -83,7 +95,7 @@ describe('admin · gestión de dominio + ingesta', () => {
     puts = []
     runs = []
     const intake: IntakeRunner = {
-      put: async (target: IntakeTarget, filename: string, bytes: Buffer) => { puts.push({ filename, len: bytes.length, target }) },
+      put: async (target: IntakeTarget, filename: string, bytes: Buffer, sidecar?: string) => { puts.push({ filename, len: bytes.length, target, sidecar }) },
       runNow: async (trigger: IntakeTrigger) => { runs.push(trigger.processRef) },
     }
     admin = createAdmin({
@@ -256,6 +268,55 @@ describe('admin · gestión de dominio + ingesta', () => {
   it('input de archivo acepta selección múltiple', async () => {
     const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
     expect(res.body).toMatch(/<input type="file" name="file" multiple required>/)
+  })
+
+  // ── Issue #76: metadata requerida por slot ──────────────────────────────────
+  it('slot sin meta: put SIN sidecar (regresión cero)', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token }, { filename: 'saldos w24.xlsx', bytes: Buffer.from('ok') })
+    await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
+    expect(puts).toHaveLength(1)
+    expect(puts[0].sidecar).toBeUndefined()
+  })
+
+  it('slot con meta válida: put CON sidecar (slot → campos → auditoría) + run-now', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token, meta_empresa_rut: '96835510-4', meta_version: 'V1' }, { filename: 'facturas.xlsx', bytes: Buffer.from('datos') })
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/facturas', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(puts).toHaveLength(1)
+    expect(puts[0].sidecar).toBeDefined()
+    expect(JSON.parse(puts[0].sidecar!)).toEqual({ slot: 'facturas', empresa_rut: '96835510-4', version: 'V1', uploadedBy: STEWARD, uploadedAt: expect.any(String) })
+    expect(runs).toEqual(['PIPE2'])
+  })
+
+  it('slot con meta: campo requerido faltante → 400, sin put', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token, meta_version: 'V1' }, { filename: 'facturas.xlsx', bytes: Buffer.from('datos') }) // falta empresa_rut
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/facturas', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303) // PRG: el error vuelve como msg
+    expect(res.headers['location']).toContain('Empresa')
+    expect(puts).toHaveLength(0)
+    expect(runs).toHaveLength(0)
+    expect(audit.find((e) => e.type === 'intake')?.ok).toBe(false)
+  })
+
+  it('slot con meta: RUT con DV inválido → 400, sin put', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token, meta_empresa_rut: '96835510-3', meta_version: 'V1' }, { filename: 'facturas.xlsx', bytes: Buffer.from('datos') })
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/facturas', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(res.headers['location']).toContain('RUT')
+    expect(puts).toHaveLength(0)
+  })
+
+  it('uploadForm del slot con meta: renderiza los controles (select enum + rut) requeridos', async () => {
+    // El slot `facturas` no casa con una entidad de FRESHNESS → aparece como slot huérfano con su form.
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('name="meta_empresa_rut"')
+    expect(res.body).toContain('name="meta_version"')
+    expect(res.body).toContain('<option value="V0">V0</option>')
   })
 
   it('steward de cartera NO puede ingestar a un dominio que no gestiona', async () => {

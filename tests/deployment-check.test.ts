@@ -90,6 +90,22 @@ describe('checkDeploymentConfig', () => {
     expect(checkDeploymentConfig({ VERGIS_GATE_SECRET: '' })).toEqual([])
   })
 
+  // Issue #76: el schema de slots (incl. `meta`) se valida al arranque, ANTES del try/catch de la admin.
+  it('VERGIS_INTAKE con `meta` mal declarado → error ruidoso (no degrada en silencio)', () => {
+    const bad = join(dir, 'slots-bad.yaml')
+    writeFileSync(bad, 'slots:\n  - id: facturas\n    label: Facturas\n    target: { workspaceId: w, lakehouseId: l, path: Files/f }\n    meta:\n      - { id: empresa, label: Empresa, type: fecha }\n')
+    const f = checkDeploymentConfig({ VERGIS_INTAKE: bad })
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatchObject({ level: 'error', env: 'VERGIS_INTAKE' })
+    expect(f[0].message).toMatch(/type inválido/)
+  })
+
+  it('VERGIS_INTAKE bien declarado → sin hallazgos', () => {
+    const good = join(dir, 'slots-ok.yaml')
+    writeFileSync(good, 'slots:\n  - id: facturas\n    label: Facturas\n    target: { workspaceId: w, lakehouseId: l, path: Files/f }\n    meta:\n      - { id: empresa_rut, label: Empresa, type: rut, required: true }\n')
+    expect(checkDeploymentConfig({ VERGIS_INTAKE: good })).toEqual([])
+  })
+
   it('reproduce el incidente del avatar: master-data sin montar + admin seed + OUT efímero', () => {
     const f = checkDeploymentConfig({
       VERGIS_MASTER_DATA: '/master-data/entidades.yaml', // no montado

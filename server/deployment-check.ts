@@ -11,9 +11,11 @@
  *
  * Es genérico: no conoce ninguna instancia. Solo mira el env contra el disco.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import { parseIntakeConfig } from '@vergis/capabilities'
 
 export interface ConfigFinding {
   level: 'error' | 'warn'
@@ -89,6 +91,19 @@ export function checkDeploymentConfig(env: NodeJS.ProcessEnv = process.env): Con
         'puede inyectar claims arbitrarios (bypass de RLS). Asegura que el proxy sea el único ingress, o ' +
         'define VERGIS_GATE_SECRET para exigir el token del proxy en cada request.',
     })
+  }
+
+  // 1·quater) VERGIS_INTAKE: el schema de slots —incluido el bloque `meta` (issue #76)— se valida aquí,
+  //    al arranque. El parse real vive DENTRO del try/catch de la app de administración: un slot mal
+  //    declarado (p.ej. `meta` con type inválido u `options_ref`) degradaría en SILENCIO (la admin
+  //    desaparece sin rastro). Este chequeo corre ANTES y lo acusa como ERROR ruidoso (strict aborta).
+  const intakeRaw = (env['VERGIS_INTAKE'] ?? '').trim()
+  if (intakeRaw && existsSync(resolve(intakeRaw))) {
+    try {
+      parseIntakeConfig(parseYaml(readFileSync(resolve(intakeRaw), 'utf8')))
+    } catch (e) {
+      findings.push({ level: 'error', env: 'VERGIS_INTAKE', message: `slots de ingesta mal declarados: ${e instanceof Error ? e.message : String(e)}` })
+    }
   }
 
   // 2) Gobierno pedido pero GovernanceStore EFÍMERO → WARN. Sin VERGIS_OUT (o bajo /tmp), el store de

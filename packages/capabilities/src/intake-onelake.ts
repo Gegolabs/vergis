@@ -9,7 +9,7 @@
  * El run-now dispara el pipeline por Fabric REST. Ambos usan bearer del SP vía `TokenProvider`.
  */
 import { SCOPE_ONELAKE, SCOPE_FABRIC, type TokenProvider } from './aad-token'
-import type { IntakeTarget, IntakeTrigger } from './intake'
+import { sidecarName, type IntakeTarget, type IntakeTrigger } from './intake'
 import type { RunRecord, RunStatus } from './ingestion-observability'
 
 type FetchLike = typeof fetch
@@ -19,7 +19,13 @@ const FABRIC_API = 'https://api.fabric.microsoft.com/v1'
 
 /** Aterriza un archivo crudo en la landing zone OneLake de un Lakehouse. */
 export interface OneLakeIntake {
-  put(target: IntakeTarget, filename: string, bytes: Uint8Array): Promise<void>
+  /**
+   * Aterriza el archivo. Con `sidecar` (JSON de metadata, issue #76) lo escribe como
+   * `<filename>.meta.json` en el mismo path y **ANTES** que el archivo, de modo que el SJD nunca vea un
+   * archivo de datos sin su sidecar. El disparo del trigger ocurre después de todos los `put` (lo hace
+   * el caller): así el orden es sidecar → archivo → trigger.
+   */
+  put(target: IntakeTarget, filename: string, bytes: Uint8Array, sidecar?: string): Promise<void>
 }
 
 /**
@@ -38,29 +44,37 @@ export function createOneLakeIntake(tokens: TokenProvider, opts: { fetch?: Fetch
     return { authorization: `Bearer ${token}` }
   }
 
+  async function writeFile(target: IntakeTarget, filename: string, bytes: Uint8Array, headers: Record<string, string>): Promise<void> {
+    const rel = encodedRelPath(target, filename)
+    const base = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}/${encodeURIComponent(target.lakehouseId)}/${rel}`
+    const len = bytes.byteLength
+
+    // 1) crear el archivo (vacío). Idempotente: overwrite del mismo nombre.
+    const created = await doFetch(`${base}?resource=file`, { method: 'PUT', headers, signal: AbortSignal.timeout(30_000) })
+    if (!created.ok) throw await dfsError('crear', created, base)
+
+    // 2) append de los bytes desde la posición 0.
+    const appended = await doFetch(`${base}?action=append&position=0`, {
+      method: 'PATCH',
+      headers: { ...headers, 'content-type': 'application/octet-stream' },
+      body: bytes as unknown as RequestInit['body'],
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!appended.ok) throw await dfsError('append', appended, base)
+
+    // 3) flush (commit) hasta la longitud escrita.
+    const flushed = await doFetch(`${base}?action=flush&position=${len}`, { method: 'PATCH', headers, signal: AbortSignal.timeout(30_000) })
+    if (!flushed.ok) throw await dfsError('flush', flushed, base)
+  }
+
   return {
-    async put(target, filename, bytes): Promise<void> {
-      const rel = encodedRelPath(target, filename)
-      const base = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}/${encodeURIComponent(target.lakehouseId)}/${rel}`
+    async put(target, filename, bytes, sidecar): Promise<void> {
       const headers = await auth()
-      const len = bytes.byteLength
-
-      // 1) crear el archivo (vacío). Idempotente: overwrite del mismo nombre.
-      const created = await doFetch(`${base}?resource=file`, { method: 'PUT', headers, signal: AbortSignal.timeout(30_000) })
-      if (!created.ok) throw await dfsError('crear', created, base)
-
-      // 2) append de los bytes desde la posición 0.
-      const appended = await doFetch(`${base}?action=append&position=0`, {
-        method: 'PATCH',
-        headers: { ...headers, 'content-type': 'application/octet-stream' },
-        body: bytes as unknown as RequestInit['body'],
-        signal: AbortSignal.timeout(30_000),
-      })
-      if (!appended.ok) throw await dfsError('append', appended, base)
-
-      // 3) flush (commit) hasta la longitud escrita.
-      const flushed = await doFetch(`${base}?action=flush&position=${len}`, { method: 'PATCH', headers, signal: AbortSignal.timeout(30_000) })
-      if (!flushed.ok) throw await dfsError('flush', flushed, base)
+      // Orden garantizado: el sidecar aterriza ANTES que el archivo. Si el sidecar falla, el archivo no
+      // se escribe (el SJD no verá un archivo huérfano); si el archivo falla tras el sidecar, queda un
+      // sidecar sin archivo — inocuo (el SJD procesa archivos, no sidecars sueltos).
+      if (sidecar != null) await writeFile(target, sidecarName(filename), new TextEncoder().encode(sidecar), headers)
+      await writeFile(target, filename, bytes, headers)
     },
   }
 }
