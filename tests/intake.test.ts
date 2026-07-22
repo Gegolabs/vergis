@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseIntakeConfig, matchSlot, validateUpload, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG } from '@vergis/capabilities'
+import { parseIntakeConfig, matchSlot, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG } from '@vergis/capabilities'
 
 const SLOT = {
   slots: [
@@ -67,5 +67,80 @@ describe('intake · contrato declarativo', () => {
     expect((validateUpload(slot, 'Antigüedad de saldos W24.xlsx', 99999) as { error: string }).error).toMatch(/excede/)
     expect(validateUpload(slot, 'Antigüedad de saldos W24.xlsx', 0).ok).toBe(false)
     expect(validateUpload(slot, '../etc/passwd', 10).ok).toBe(false)
+  })
+})
+
+// Issue #76: metadata requerida por slot (schema + validación + sidecar).
+const META_SLOT = {
+  slots: [{
+    id: 'facturas', label: 'Facturas', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/f' },
+    meta: [
+      { id: 'empresa_rut', label: 'Empresa (receptor)', type: 'rut', required: true },
+      { id: 'version', label: 'Versión', type: 'enum', options: ['V0', 'V1', 'V2'], required: true },
+      { id: 'folios', label: 'Folios', type: 'number' },
+      { id: 'nota', label: 'Nota', type: 'string' },
+    ],
+  }],
+}
+
+describe('intake · metadata requerida (issue #76)', () => {
+  it('parsea el bloque meta completo (tipos, required, options)', () => {
+    const slot = parseIntakeConfig(META_SLOT)[0]
+    expect(slot.meta).toHaveLength(4)
+    expect(slot.meta![0]).toEqual({ id: 'empresa_rut', label: 'Empresa (receptor)', type: 'rut', required: true })
+    expect(slot.meta![1].options).toEqual(['V0', 'V1', 'V2'])
+    expect(slot.meta![2]).toEqual({ id: 'folios', label: 'Folios', type: 'number' })
+  })
+
+  it('slot sin meta: meta queda undefined (regresión cero)', () => {
+    const slot = parseIntakeConfig({ slots: [{ id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }] })[0]
+    expect(slot.meta).toBeUndefined()
+  })
+
+  it('schema mal formado = fallo ruidoso: type inválido · enum sin options · options_ref no soportado · id dup · required no-bool', () => {
+    const base = { id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'fecha' }] }] })).toThrow(/type inválido/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'enum' }] }] })).toThrow(/requiere 'options'/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'enum', options_ref: 'cat' }] }] })).toThrow(/options_ref no soportado/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'string' }, { id: 'x', label: 'Y', type: 'string' }] }] })).toThrow(/duplicado/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'string', required: 'si' }] }] })).toThrow(/booleano/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'BAD-ID', label: 'X', type: 'string' }] }] })).toThrow(/id inválido/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'string', options: ['a'] }] }] })).toThrow(/solo aplica a type enum/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: 'no-lista' }] })).toThrow(/debe ser una lista/)
+  })
+
+  it('validateRut: DV módulo 11 (acepta puntos, guion y K)', () => {
+    expect(validateRut('96835510-4')).toBe(true)
+    expect(validateRut('12.345.678-5')).toBe(true)
+    expect(validateRut('11111111-1')).toBe(true)
+    expect(validateRut('60803000-K')).toBe(true) // Tesorería (DV = K)
+    expect(validateRut('96835510-3')).toBe(false) // DV incorrecto
+    expect(validateRut('sin-guion')).toBe(false)
+    expect(validateRut('123456789-1')).toBe(false) // cuerpo > 8 dígitos
+    expect(validateRut('')).toBe(false)
+  })
+
+  it('validateMeta: requerido faltante rechaza; devuelve solo los campos declarados (trim)', () => {
+    const slot = parseIntakeConfig(META_SLOT)[0]
+    const ok = validateMeta(slot, { empresa_rut: ' 96835510-4 ', version: 'V1', extra: 'ignorado' })
+    expect(ok.ok).toBe(true)
+    expect((ok as { values: Record<string, string> }).values).toEqual({ empresa_rut: '96835510-4', version: 'V1' })
+    expect((validateMeta(slot, { version: 'V1' }) as { error: string }).error).toMatch(/Empresa/)
+  })
+
+  it('validateMeta: rechaza rut inválido, enum fuera de opciones, number no-numérico', () => {
+    const slot = parseIntakeConfig(META_SLOT)[0]
+    expect((validateMeta(slot, { empresa_rut: '96835510-3', version: 'V1' }) as { error: string }).error).toMatch(/RUT inválido/)
+    expect((validateMeta(slot, { empresa_rut: '96835510-4', version: 'V9' }) as { error: string }).error).toMatch(/opción válida/)
+    expect((validateMeta(slot, { empresa_rut: '96835510-4', version: 'V1', folios: 'abc' }) as { error: string }).error).toMatch(/número/)
+  })
+
+  it('buildSidecar/sidecarName/isSidecarName: orden slot → campos → auditoría', () => {
+    const json = buildSidecar('facturas', { empresa_rut: '96835510-4' }, 'user@tenant', '2026-07-22T00:41:00Z')
+    expect(JSON.parse(json)).toEqual({ slot: 'facturas', empresa_rut: '96835510-4', uploadedBy: 'user@tenant', uploadedAt: '2026-07-22T00:41:00Z' })
+    expect(Object.keys(JSON.parse(json))).toEqual(['slot', 'empresa_rut', 'uploadedBy', 'uploadedAt'])
+    expect(sidecarName('extracto w24.xlsx')).toBe('extracto w24.xlsx.meta.json')
+    expect(isSidecarName('extracto w24.xlsx.meta.json')).toBe(true)
+    expect(isSidecarName('extracto w24.xlsx')).toBe(false)
   })
 })
