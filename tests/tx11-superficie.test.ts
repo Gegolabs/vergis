@@ -79,24 +79,32 @@ describe('TX-11 WP2 · los controles salen de la gaveta', () => {
     expect(html).not.toContain('vt-ctl-multi')
   })
 
-  it('PI cuyo único contenido de gaveta eran los controles → queda SIN gaveta', async () => {
+  it('PI con controles + sin tabla → el sello está en la banda; la gaveta universal existe pero NO aloja el control', async () => {
     const html = await render({
       piece: banner, // sin tabla ni interactividad
       controls: [{ id: 'oc', label: 'OC', options: ['A', 'B'], value: 'A' }],
     })
     expect(html).toContain('class="vctxbar"') // el sello sí está (en la banda)
-    expect(html).not.toContain('id="vergis-tray-toggle"') // sin gaveta
-    expect(html).not.toContain('tray-sections')
+    // La gaveta/Inspector es UNIVERSAL (Apariencia + Config): existe aunque no haya maquinaria.
+    expect(html).toContain('id="vergis-tray-toggle"')
+    expect(html).toContain('<aside class="tray"')
+    // pero el control NO se cuela a la gaveta (vive en la banda) → Controles muestra su empty-state.
+    expect(html).not.toContain('vt-ctl-select')
+    expect(html).not.toContain('vt-ctl-multi')
+    expect(html).toContain('Esta vista no tiene filtros disponibles.')
   })
 })
 
 describe('TX-11 WP4·1 · heurística de tabla display', () => {
-  it('tabla que rinde 1 fila → display pura (sin runtime, sin iconos de filtro, sin gaveta)', async () => {
+  it('tabla que rinde 1 fila → display pura (sin runtime de tabla ni iconos de filtro)', async () => {
     const html = await render({ piece: { type: 'table', columnsSpec: [{ field: 'a', label: 'A' }], rows: [{ a: 1 }] } })
     expect(html).toContain('class="table"')
     expect(html).not.toContain('vtable')
     expect(html).not.toContain('vt-filter-btn')
-    expect(html).not.toContain('tray-sections')
+    // NO hay maquinaria de tabla, pero la gaveta universal (Apariencia+Config) igual existe;
+    // el tab Controles queda con su empty-state (no un panel en blanco).
+    expect(html).toContain('<aside class="tray"')
+    expect(html).toContain('Esta vista no tiene filtros disponibles.')
   })
 
   it('tabla de 2 filas → interactiva', async () => {
