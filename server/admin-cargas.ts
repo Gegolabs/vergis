@@ -15,7 +15,7 @@
  * Este módulo es PURO (datos → HTML): el fetch de datos y los POST (CSRF + steward + audit) viven en
  * admin.ts / serve-rls. Helpers de render locales a propósito (evita ciclo de imports con admin.ts).
  */
-import { escapeHtml, slotLogPath, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry } from '@vergis/capabilities'
+import { escapeHtml, slotLogPath, isSidecarName, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry } from '@vergis/capabilities'
 
 /** Evento de carga del audit log (type=intake). */
 export interface IntakeUploadEvent {
@@ -160,16 +160,17 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
       ? `<details class="guia"><summary class="sub">Log de la última conversión</summary><pre class="sub" style="white-space:pre-wrap;overflow-x:auto;max-height:260px;overflow-y:auto">${escapeHtml((sc.log.length > 4000 ? '…' + sc.log.slice(-4000) : sc.log).trim())}</pre></details>`
       : ''
 
+    // Los sidecars `<archivo>.meta.json` (issue #76) son metadata, no archivos de datos: no se listan.
     const landingRows = sc.landing === 'error'
       ? `<tr><td colspan="4" class="sub">No se pudo listar el landing (reintentá refrescando).</td></tr>`
-      : sc.landing.filter((e) => !e.isDirectory).map((e) => {
+      : sc.landing.filter((e) => !e.isDirectory && !isSidecarName(e.path)).map((e) => {
           const residuo = esResiduo(e, lastDone)
           return `<tr${residuo ? ' style="color:var(--err)"' : ''}><td>${escapeHtml(baseName(e.path))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}${residuo ? ' <b>⚠ residuo</b><div class="sub">anterior a la última conversión: se RE-PROCESARÁ en la próxima corrida</div>' : ''}</td><td>${postForm(action, token, { slot: s.id, accion: 'retire', archivo: baseName(e.path) }, 'Retirar', `Retirar «${baseName(e.path)}» del landing (va a _retirado/, reversible). ¿Continuar?`)}</td></tr>`
         }).join('') || `<tr><td colspan="4" class="sub">Landing vacío — nada pendiente de procesar.</td></tr>`
 
     const archivedRows = sc.archived === 'error'
       ? `<tr><td colspan="4" class="sub">No se pudo listar el archivo de procesados.</td></tr>`
-      : sc.archived.filter((e) => !e.isDirectory).slice(0, 60).map((e) =>
+      : sc.archived.filter((e) => !e.isDirectory && !isSidecarName(e.path)).slice(0, 60).map((e) =>
           `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert', archivo: e.path }, 'Revertir', `Revertir la carga «${baseName(e.path)}»: sale del histórico a _retirado/ y, si su clave tiene versión previa, se re-materializa el estado anterior. ¿Continuar?`)}</td></tr>`,
         ).join('') || `<tr><td colspan="4" class="sub">Sin procesados archivados todavía.</td></tr>`
 
