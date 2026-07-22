@@ -30,6 +30,30 @@ export interface IntakeTrigger {
   jobType?: string
 }
 
+/** Tipo de un campo de metadata requerida en la subida (issue #76). */
+export type IntakeMetaType = 'string' | 'number' | 'enum' | 'rut'
+
+/**
+ * Campo de metadata requerida por un slot (issue #76). El archivo de algunos slots NO se puede convertir
+ * sin un dato que no viene en su contenido y que por política JAMÁS se infiere (identidad explícita,
+ * fail-closed): a qué empresa se imputa un extracto, qué versión trae un presupuesto. La UI lo solicita
+ * en el acto de subir y el valor viaja con el archivo (sidecar) hasta el SJD.
+ */
+export interface IntakeMetaField {
+  /** Slug estable, usado como llave en el sidecar y en el name del control del form. */
+  id: string
+  /** Nombre legible para la UI. */
+  label: string
+  type: IntakeMetaType
+  /** Sin valor bloquea la subida (validación server-side; la del browser es cortesía). */
+  required?: boolean
+  /** Opciones inline para type `enum`. */
+  options?: string[]
+  /** Catálogo externo para type `enum` — declarado en el contrato pero NO soportado aún (no hay
+   *  mecanismo de catálogos en la capa admin): un slot que lo use NO arranca (fail-closed). */
+  options_ref?: string
+}
+
 export interface IntakeSlot {
   /** Slug estable, usado en rutas y como id lógico (p.ej. `saldos_cartera`). */
   id: string
@@ -48,6 +72,8 @@ export interface IntakeSlot {
    * Frescura lo expone para reconfirmar una carga (filas, semana, commit) sin acceso a Fabric.
    * Default `Files/code/_ingest_log.txt`; `log: false` en el YAML lo deshabilita. */
   log?: string | false
+  /** Metadata requerida en la subida (issue #76). Ausente = sin cambio (regresión cero). */
+  meta?: IntakeMetaField[]
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
@@ -94,7 +120,46 @@ function parseSlot(s: unknown, i: number, seen: Set<string>): IntakeSlot {
     if (!/^Files\//.test(p)) throw new Error(`intake: '${id}'.log debe empezar en 'Files/' (vive en el mismo Lakehouse del target).`)
     out.log = p
   }
+  if (o['meta'] != null) {
+    const meta = parseMeta(o['meta'], id)
+    if (meta.length) out.meta = meta
+  }
   return out
+}
+
+const META_TYPES = new Set<IntakeMetaType>(['string', 'number', 'enum', 'rut'])
+
+/** Valida y normaliza el bloque `meta` de un slot (issue #76). Mal formado = fallo ruidoso. */
+function parseMeta(raw: unknown, slotId: string): IntakeMetaField[] {
+  if (!Array.isArray(raw)) throw new Error(`intake: '${slotId}'.meta debe ser una lista.`)
+  const seen = new Set<string>()
+  return raw.map((m, i) => {
+    const o = (m ?? {}) as Record<string, unknown>
+    const id = String(o['id'] ?? '')
+    if (!SLUG_RE.test(id)) throw new Error(`intake: '${slotId}'.meta #${i} con id inválido '${id}' (esperado [a-z][a-z0-9_]*).`)
+    if (seen.has(id)) throw new Error(`intake: '${slotId}'.meta con id duplicado '${id}'.`)
+    seen.add(id)
+    const type = String(o['type'] ?? '') as IntakeMetaType
+    if (!META_TYPES.has(type)) throw new Error(`intake: '${slotId}'.meta '${id}' con type inválido '${type}' (string | number | enum | rut).`)
+    const field: IntakeMetaField = { id, label: String(o['label'] ?? id), type }
+    if (o['required'] != null) {
+      if (typeof o['required'] !== 'boolean') throw new Error(`intake: '${slotId}'.meta '${id}'.required debe ser booleano.`)
+      field.required = o['required']
+    }
+    // `options_ref`: en el contrato pero NO soportado aún (no hay mecanismo de catálogos en la capa
+    // admin). Fail-closed: un slot que lo declare NO arranca — se exige `options` inline por ahora.
+    if (o['options_ref'] != null) {
+      throw new Error(`intake: '${slotId}'.meta '${id}'.options_ref no soportado aún — usa 'options' inline (lista de valores).`)
+    }
+    if (type === 'enum') {
+      const opts = o['options']
+      if (!Array.isArray(opts) || opts.length === 0) throw new Error(`intake: '${slotId}'.meta '${id}' (enum) requiere 'options' (lista no vacía).`)
+      field.options = opts.map((v) => String(v))
+    } else if (o['options'] != null) {
+      throw new Error(`intake: '${slotId}'.meta '${id}': 'options' solo aplica a type enum.`)
+    }
+    return field
+  })
 }
 
 /** Ruta efectiva del log de conversión de un slot (null = deshabilitado). */
@@ -154,4 +219,75 @@ export function validateUpload(slot: IntakeSlot, filename: string, size: number)
     return { ok: false, error: `El archivo (${size} bytes) excede el máximo del slot (${max} bytes).` }
   }
   return { ok: true }
+}
+
+// ─── Metadata requerida por slot (issue #76) ────────────────────────────────
+
+/**
+ * Valida un RUT chileno con su dígito verificador (módulo 11). Acepta `12345678-9` / `12.345.678-9` /
+ * `12345678-K` (puntos y espacios se ignoran; el DV `K`/`k` cuenta). Sin guion, sin cuerpo o con cuerpo
+ * de más de 8 dígitos → inválido. No infiere ni corrige: es una compuerta booleana.
+ */
+export function validateRut(raw: string): boolean {
+  const cleaned = (raw ?? '').replace(/[.\s]/g, '').toUpperCase()
+  const m = /^(\d{1,8})-([\dK])$/.exec(cleaned)
+  if (!m) return false
+  const [, body, dv] = m
+  let sum = 0
+  let mul = 2
+  for (let i = body.length - 1; i >= 0; i -= 1) {
+    sum += Number(body[i]) * mul
+    mul = mul === 7 ? 2 : mul + 1
+  }
+  const res = 11 - (sum % 11)
+  const expected = res === 11 ? '0' : res === 10 ? 'K' : String(res)
+  return expected === dv
+}
+
+export type ValidateMetaResult = { ok: true; values: Record<string, string> } | { ok: false; error: string }
+
+/**
+ * Valida los valores de metadata enviados contra el bloque `meta` del slot. Devuelve SOLO los campos
+ * declarados (normalizados/trim) — lo que viaja al sidecar; ignora extras. Un `required` sin valor o un
+ * valor que no calza el tipo rechaza el lote (server-side; la validación del browser es cortesía).
+ */
+export function validateMeta(slot: IntakeSlot, submitted: Record<string, string>): ValidateMetaResult {
+  const values: Record<string, string> = {}
+  for (const f of slot.meta ?? []) {
+    const raw = (submitted[f.id] ?? '').trim()
+    if (!raw) {
+      if (f.required) return { ok: false, error: `Falta el campo requerido «${f.label}».` }
+      continue // opcional sin valor: no viaja
+    }
+    switch (f.type) {
+      case 'number':
+        if (!Number.isFinite(Number(raw))) return { ok: false, error: `«${f.label}» debe ser un número (recibido: '${raw}').` }
+        break
+      case 'enum':
+        // `options` siempre está presente (el parse rechaza enum sin options y options_ref).
+        if (!(f.options ?? []).includes(raw)) return { ok: false, error: `«${f.label}»: '${raw}' no es una opción válida.` }
+        break
+      case 'rut':
+        if (!validateRut(raw)) return { ok: false, error: `«${f.label}»: RUT inválido (dígito verificador no cuadra): '${raw}'.` }
+        break
+      case 'string':
+        break
+    }
+    values[f.id] = raw
+  }
+  return { ok: true, values }
+}
+
+/** Nombre del sidecar de metadata de un archivo: `<archivo>.meta.json`. */
+export const sidecarName = (filename: string): string => `${filename}.meta.json`
+
+/** ¿El nombre es un sidecar de metadata (no un archivo de datos)? Para filtrar listados del landing. */
+export const isSidecarName = (name: string): boolean => name.endsWith('.meta.json')
+
+/**
+ * Construye el JSON del sidecar (issue #76). Orden: `slot` → campos de metadata → auditoría
+ * (`uploadedBy`/`uploadedAt`). El SJD lo lee para imputar la metadata sin intervención humana.
+ */
+export function buildSidecar(slotId: string, values: Record<string, string>, uploadedBy: string, uploadedAt: string): string {
+  return JSON.stringify({ slot: slotId, ...values, uploadedBy, uploadedAt }, null, 2)
 }
