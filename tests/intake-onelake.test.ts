@@ -44,6 +44,29 @@ describe('intake-onelake · write DFS + run-now', () => {
     await expect(intake.put({ workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' }, 'f.bin', Buffer.from('x'))).rejects.toThrow(/crear falló \(403\)/)
   })
 
+  // Issue #76: el sidecar aterriza ANTES que el archivo (el SJD nunca ve un archivo sin su contexto).
+  it('put con sidecar: escribe <archivo>.meta.json ANTES que el archivo', async () => {
+    const calls: Call[] = []
+    const intake = createOneLakeIntake(tokens, { fetch: recorder(calls) })
+    await intake.put({ workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/f' }, 'extracto.xlsx', Buffer.from('datos'), '{"slot":"facturas"}')
+    // 6 llamadas: create/append/flush del sidecar (primeras 3) y del archivo (últimas 3).
+    expect(calls).toHaveLength(6)
+    const createCalls = calls.filter((c) => c.url.includes('?resource=file')).map((c) => c.url)
+    expect(createCalls[0]).toContain('/Files/f/extracto.xlsx.meta.json?resource=file') // sidecar primero
+    expect(createCalls[1]).toContain('/Files/f/extracto.xlsx?resource=file') // archivo después
+    const sidecarIdx = calls.findIndex((c) => c.url.includes('.meta.json?resource=file'))
+    const fileIdx = calls.findIndex((c) => c.url.includes('/extracto.xlsx?resource=file'))
+    expect(sidecarIdx).toBeLessThan(fileIdx)
+  })
+
+  it('put sin sidecar: comportamiento idéntico (3 llamadas, sin .meta.json)', async () => {
+    const calls: Call[] = []
+    const intake = createOneLakeIntake(tokens, { fetch: recorder(calls) })
+    await intake.put({ workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/f' }, 'extracto.xlsx', Buffer.from('datos'))
+    expect(calls).toHaveLength(3)
+    expect(calls.some((c) => c.url.includes('.meta.json'))).toBe(false)
+  })
+
   it('runNow: POST a jobs/instances con jobType y bearer; 202 es éxito', async () => {
     const calls: Call[] = []
     const jobs = createFabricJobs(tokens, { fetch: recorder(calls, 202) })

@@ -672,7 +672,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       const jobs = createFabricJobs(tokens)
       const reader = createOneLakeReader(tokens)
       return {
-        runner: { put: (t, f, b) => onelake.put(t, f, b), runNow: (tr, t) => jobs.runNow(tr, t) },
+        runner: { put: (t, f, b, sc) => onelake.put(t, f, b, sc), runNow: (tr, t) => jobs.runNow(tr, t) },
         status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
         // Log de la última conversión del slot (issue #55): lo escribe el proceso en el landing;
         // Frescura lo expone para reconfirmar una carga sin acceso a Fabric. null = sin log.

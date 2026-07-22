@@ -28,6 +28,8 @@ import {
   manageableDomains,
   slotMaxBytes,
   validateUpload,
+  validateMeta,
+  buildSidecar,
   secondsToDuration,
   type AdminStore,
   type DomainDecl,
@@ -64,7 +66,8 @@ const adminPage = (deps: AdminDeps, chrome: Chrome, title: string, body: string)
 
 /** Write-path del intake (a OneLake) + disparo del pipeline. Lo inyecta el wiring. */
 export interface IntakeRunner {
-  put(target: IntakeTarget, filename: string, bytes: Buffer): Promise<void>
+  /** `sidecar` (issue #76): JSON de metadata que aterriza como `<filename>.meta.json` ANTES del archivo. */
+  put(target: IntakeTarget, filename: string, bytes: Buffer, sidecar?: string): Promise<void>
   runNow?(trigger: IntakeTrigger, target?: IntakeTarget): Promise<void>
 }
 
@@ -419,6 +422,17 @@ async function handleIntake(
       return
     }
   }
+  // Metadata requerida del slot (issue #76): la subida DEBE traer los campos declarados — la validación
+  // aquí es la que manda (la del browser es cortesía). Un campo requerido sin valor, o un valor que no
+  // calza el tipo, rechaza el LOTE completo (misma atomicidad). Los campos llegan como `meta_<id>`.
+  const submittedMeta: Record<string, string> = {}
+  for (const [k, v] of Object.entries(fields)) if (k.startsWith('meta_')) submittedMeta[k.slice('meta_'.length)] = v
+  const metaCheck = validateMeta(slot, submittedMeta)
+  if (!metaCheck.ok) {
+    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: uploads.map((u) => u.filename).join(', '), bytes: 0, by, ok: false, error: metaCheck.error })
+    redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + metaCheck.error)}`)
+    return
+  }
   // Dedup por CONTENIDO (issue #62): SHA-256 de los bytes vs cargas previas del slot — el NOMBRE no
   // participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
   // re-procesar idéntico es legítimo (re-materialización); lo que se elimina es la sorpresa.
@@ -429,13 +443,18 @@ async function handleIntake(
   }
   // UN SOLO disparo por LOTE (no uno por archivo: N triggers = N corridas = throttling de capacidad).
   const willTrigger = !!(slot.trigger && deps.intake.runNow)
+  // Sidecar (issue #76): solo si el slot declara `meta` — sin `meta` NO se escribe sidecar y el flujo es
+  // idéntico al de siempre (regresión cero). Un solo `uploadedAt` para todo el lote (misma subida).
+  const hasMeta = (slot.meta?.length ?? 0) > 0
+  const uploadedAt = new Date().toISOString()
   // Aterriza cada crudo en la landing zone OneLake (staging). El pipeline/SJD lee de ahí y transforma.
   const duplicados: string[] = []
   for (const u of uploads) {
     const sha256 = createHash('sha256').update(u.bytes).digest('hex')
     const dupOf = dupDe(sha256)
     if (dupOf) duplicados.push(`«${u.filename}» es idéntico a ${dupOf}`)
-    await deps.intake.put(slot.target, u.filename, u.bytes)
+    const sidecar = hasMeta ? buildSidecar(slot.id, metaCheck.values, by, uploadedAt) : undefined
+    await deps.intake.put(slot.target, u.filename, u.bytes, sidecar)
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}) })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
@@ -737,11 +756,35 @@ function freshnessHealthCell(r: DomainEntityFreshness): string {
   return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>${runErrorLine(runs[0])}`
 }
 
+/** Controles de la metadata requerida del slot (issue #76). Vacío si el slot no declara `meta`. */
+function metaFieldsHtml(slot: IntakeSlot): string {
+  if (!slot.meta?.length) return ''
+  return slot.meta.map((f) => {
+    const name = `meta_${escapeHtml(f.id)}`
+    const req = f.required ? ' required' : ''
+    const mark = f.required ? ' <span style="color:var(--err)">*</span>' : ''
+    let control: string
+    if (f.type === 'enum') {
+      const opts = (f.options ?? []).map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')
+      control = `<select name="${name}"${req}><option value="">— elegir —</option>${opts}</select>`
+    } else if (f.type === 'number') {
+      control = `<input type="number" step="any" name="${name}"${req}>`
+    } else if (f.type === 'rut') {
+      // La validación real (DV) es server-side; el pattern del browser es solo forma (cortesía).
+      control = `<input type="text" name="${name}" placeholder="12345678-9" pattern="[0-9]{1,8}-[0-9Kk]"${req}>`
+    } else {
+      control = `<input type="text" name="${name}"${req}>`
+    }
+    return `<label class="sub" style="flex-basis:100%">${escapeHtml(f.label)}${mark}<br>${control}</label>`
+  }).join('')
+}
+
 /** Formulario compacto de carga manual de un slot (mismo write-path que el intake). */
 function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
   return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:320px">
        <input type="hidden" name="_csrf" value="${token}">
        <input type="file" name="file" multiple required>
+       ${metaFieldsHtml(slot)}
        <button class="add">Subir</button>
        ${slot.accept ? `<div class="sub" style="flex-basis:100%">patrón: <code>${escapeHtml(slot.accept)}</code> · máx. ${Math.round(slotMaxBytes(slot) / (1024 * 1024))} MB c/u</div>` : ''}
      </form>`
