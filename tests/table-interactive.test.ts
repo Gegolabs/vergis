@@ -257,7 +257,7 @@ describe('render-html-piece · tabla interactiva', () => {
     expect(html).toMatch(/value="blanco"[^>]*checked|checked[^>]*value="blanco"/)
   })
 
-  it('kill-switch: interactive:false → tabla estática, sin runtime ni gaveta', async () => {
+  it('kill-switch: interactive:false → tabla estática, sin runtime de tabla', async () => {
     const { html } = (await renderHtmlPiece.execute({
       piece: { ...piece, interactive: false },
       title: 'X',
@@ -265,8 +265,9 @@ describe('render-html-piece · tabla interactiva', () => {
     }, { agent: 'test' })) as { html: string }
     expect(html).not.toContain('vtable')
     expect(html).not.toContain('vt-filter-btn')
-    expect(html).not.toContain('tray-sections')
     expect(html).not.toContain('function vtBootstrap')
+    // El runtime de tabla se apaga, pero la gaveta universal (Apariencia+Config) igual existe.
+    expect(html).toContain('<aside class="tray"')
     expect(html).toContain('<table>') // sigue habiendo tabla
     expect(html).toContain('Ana Pérez')
   })
