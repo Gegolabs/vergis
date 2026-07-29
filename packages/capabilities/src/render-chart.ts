@@ -6,6 +6,7 @@ import * as vega from 'vega'
 import { compile, type TopLevelSpec } from 'vega-lite'
 import { canonical } from '@vergis/botler'
 import { escapeHtml } from './markdown'
+import { vtFormat } from './table-runtime'
 import type { ChartSort, ResolvedNode } from './piece-types'
 import type { ThemeTokens } from './themes'
 
@@ -114,31 +115,80 @@ export function groupedTopN(
 export type TopNRank = { by: 'sum' } | { by: 'field'; field: string } | { by: 'arrival' }
 
 /**
- * Aplica el `ChartSort` normalizado por compose: devuelve las filas en el orden que manda, el criterio
- * de ranking para la cota top-N y si el eje categórico debe declarar `sort: null`.
+ * Aplica el `ChartSort` normalizado por compose: devuelve las filas EN EL ORDEN FINAL de las
+ * categorías. El orden se resuelve siempre acá, en JS, y el encoding declara `sort: null` — no se
+ * delega a Vega. Dos razones: (1) con la capa de rótulos (#80) el spec es `layer`, y un `sort` en el
+ * canal categórico compartido entre capas dispara el «conflicting sort properties» de Vega-Lite, que
+ * degrada a orden ALFABÉTICO en silencio; (2) el criterio del top-N y el del eje quedan garantizados
+ * idénticos por construcción, en vez de por dos mecanismos que hay que mantener de acuerdo.
  *
- * `preordered: true` ⇒ el orden de las filas es la verdad y el encoding NO debe re-ordenar;
- * `preordered: false` ⇒ Vega ordena el eje por magnitud (contrato histórico, render byte-idéntico
- * cuando el spec no declara `sort`).
+ * `magnitude` (default) reproduce el contrato histórico: en mono, por la métrica descendente; en
+ * agrupado, por la SUMA de las series descendente.
  */
 function applyChartSort(
   rows: Record<string, unknown>[],
   sort: ChartSort | undefined,
-  magnitudeField?: string,
-): { rows: Record<string, unknown>[]; rank: TopNRank; preordered: boolean } {
+  opts: { metricField?: string; fields?: string[] } = {},
+): Record<string, unknown>[] {
+  const desc = (field: string) => [...rows].sort((a, b) => (Number(b[field]) || 0) - (Number(a[field]) || 0))
   switch (sort?.kind) {
     // `chrono` manda el orden de llegada (el ORDER BY del SQL); el legacy `-campo` del modo mono ya
-    // viene pre-ordenado por compose. En ambos casos la cota top-N corta sin re-ordenar.
+    // viene pre-ordenado por compose. En ambos casos no se re-ordena acá.
     case 'chrono':
     case 'field':
-      return { rows, rank: { by: 'arrival' }, preordered: true }
-    case 'value': {
-      const f = sort.field
-      const ordered = [...rows].sort((a, b) => (Number(b[f]) || 0) - (Number(a[f]) || 0))
-      return { rows: ordered, rank: { by: 'arrival' }, preordered: true }
+      return rows
+    case 'value':
+      return desc(sort.field)
+    default: {
+      if (opts.metricField) return desc(opts.metricField)
+      const fields = opts.fields ?? []
+      const rowSum = (r: Record<string, unknown>): number => fields.reduce((s, f) => s + (Number(r[f]) || 0), 0)
+      return [...rows].sort((a, b) => rowSum(b) - rowSum(a))
     }
-    default:
-      return { rows, rank: magnitudeField ? { by: 'field', field: magnitudeField } : { by: 'sum' }, preordered: false }
+  }
+}
+
+/** Campo sintético que lleva el rótulo YA formateado server-side (#80). Vega solo lo pinta. */
+const LABEL_FIELD = '__label'
+
+/**
+ * Formato del rótulo de una marca: el `format` declarado de la métrica si lo hay; sin él, `abbr`.
+ * Decisión de plataforma — un chart sin formato explícito rotula abreviado, que es lo legible sobre
+ * una barra (`1,2M` cabe donde `1.234.567` no).
+ */
+function labelFormat(declared?: string): string {
+  return declared && declared !== '' ? declared : 'abbr'
+}
+
+/**
+ * Holgura del dominio cuantitativo para que el rótulo de la marca más larga NO se corte contra el
+ * borde del lienzo. El texto vive fuera de la barra (al final en horizontal, encima en vertical), y
+ * Vega dimensiona la escala solo por los DATOS: sin este margen el rótulo del máximo queda mochado.
+ * Se expande ~10% del rango, y se conserva el 0 como base cuando todos los valores son del mismo signo.
+ */
+export function labelledDomain(values: number[]): [number, number] | undefined {
+  const finite = values.filter((v) => Number.isFinite(v))
+  if (finite.length === 0) return undefined
+  const lo = Math.min(0, ...finite)
+  const hi = Math.max(0, ...finite)
+  const span = hi - lo
+  // Dato degenerado (todo cero): un dominio [0,0] no es escala válida.
+  if (span === 0) return [lo, hi + 1]
+  const pad = span * 0.1
+  return [lo < 0 ? lo - pad : lo, hi + pad]
+}
+
+/**
+ * Capa de rótulos (#80): mismo encoding posicional que las barras (se hereda del top-level), texto
+ * pre-computado en los datos. El color sale del theme; la anti-colisión fina (rotar/omitir) es
+ * decisión del motor y NO se declara por spec.
+ */
+function labelLayer(horizontal: boolean, tokens: ThemeTokens) {
+  return {
+    mark: horizontal
+      ? ({ type: 'text', align: 'left', baseline: 'middle', dx: 4, fontSize: 11, color: tokens.chartText } as const)
+      : ({ type: 'text', align: 'center', baseline: 'bottom', dy: -4, fontSize: 11, color: tokens.chartText } as const),
+    encoding: { text: { field: LABEL_FIELD, type: 'nominal' as const } },
   }
 }
 
@@ -150,29 +200,31 @@ export async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens
   const horizontal = (node.orientation ?? 'horizontal') === 'horizontal'
   // Orden de las categorías (#81): `magnitude` (default, contrato histórico) deja que Vega ordene el
   // eje por la métrica; `chrono` y el legacy `-campo` respetan el orden de llegada de las filas.
-  const sorted = applyChartSort(node.rows ?? [], node.sortSpec, metric)
-  const { rank, preordered } = sorted
-  let rows = sorted.rows
+  let rows = applyChartSort(node.rows ?? [], node.sortSpec, { metricField: metric })
   // Cota top-N: se dibujan las CHART_MAX_BARS primeras según el criterio de orden y el resto se
   // agrupa en una barra «(otros)» (suma de la métrica), con nota al pie — el total sigue cuadrando.
   let note = ''
   if (rows.length > CHART_MAX_BARS) {
     const total = rows.length
-    rows = groupedTopN(rows, dim, [metric], CHART_MAX_BARS, rank).rows
+    rows = groupedTopN(rows, dim, [metric], CHART_MAX_BARS, { by: 'arrival' }).rows
     note = `<div class="chart-note" style="font-size:11px;color:var(--fg-dim,#94a3b8);margin-top:4px">Top ${CHART_MAX_BARS} de ${total} valores — el resto agrupado en «(otros)»</div>`
   }
-  // `sort: null` ⇒ manda el orden de las filas; `-x`/`-y` ⇒ lo ordena Vega por la métrica.
-  const catSort = preordered ? null : horizontal ? ('-x' as const) : ('-y' as const)
+  // Rótulo de cada marca (#80), pre-computado server-side: Vega solo lo pinta, y así el formato NO
+  // se duplica en expresiones Vega (el formateador único es `vtFormat`, que ya viaja al browser).
+  const fmt = labelFormat(node.format)
+  const values = rows.map((r) => ({ ...r, [LABEL_FIELD]: vtFormat(r[metric], fmt) }))
+  const domain = labelledDomain(rows.map((r) => Number(r[metric])))
+  const quant = { field: metric, type: 'quantitative' as const, title: null, ...(domain ? { scale: { domain } } : {}) }
+  // `sort: null` ⇒ manda el orden de las filas, ya resuelto por applyChartSort.
+  const cat = { field: dim, type: 'nominal' as const, sort: null, title: null }
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
     width: 320,
     height: Math.max(120, rows.length * 34),
-    data: { values: rows },
-    mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar },
-    encoding: horizontal
-      ? { y: { field: dim, type: 'nominal', sort: catSort, title: null }, x: { field: metric, type: 'quantitative', title: null } }
-      : { x: { field: dim, type: 'nominal', sort: catSort, title: null }, y: { field: metric, type: 'quantitative', title: null } },
+    data: { values },
+    encoding: horizontal ? { y: cat, x: quant } : { x: cat, y: quant },
+    layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar } }, labelLayer(horizontal, tokens)],
     config: chartAxisConfig(tokens),
   }
   const svg = await cachedSvg(spec)
@@ -194,25 +246,36 @@ async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens
   const original = node.rows ?? []
   // Orden de las categorías (#81): `magnitude` (default) = suma de las series, y lo ordena Vega;
   // `chrono` = orden de llegada del SQL; `value:<serie>` = por ESA serie (y el top-N usa la misma).
-  const { rows: ordered, rank, preordered } = applyChartSort(original, node.sortSpec)
-  const capped = groupedTopN(ordered, dim, fields, CHART_MAX_BARS, rank)
+  const ordered = applyChartSort(original, node.sortSpec, { fields })
+  const capped = groupedTopN(ordered, dim, fields, CHART_MAX_BARS, { by: 'arrival' })
   const rows = capped.rows
   const note = capped.grouped
     ? `<div class="chart-note" style="font-size:11px;color:var(--fg-dim,#94a3b8);margin-top:4px">Top ${CHART_MAX_BARS} de ${original.length} valores — el resto agrupado en «(otros)»</div>`
     : ''
-  // Datos re-etiquetados: la clave de cada serie es su LABEL (lo que verá la leyenda), el valor su
-  // coerción numérica. El fold opera sobre los labels → `serie` = label, `valor` = número.
+  // Datos en formato LARGO, plegados acá y no por el `fold` de Vega: el rótulo de #80 es por
+  // (categoría × serie), y un campo pre-computado no sobrevive a un fold de Vega. Plegar en JS lo
+  // hace trivial y de paso deja el spec sin transform. `serie` = label (lo que ve la leyenda).
   const labels = metrics.map((m) => m.label)
-  const values = rows.map((r) => {
-    const o: Record<string, unknown> = { [dim]: r[dim] }
-    for (const m of metrics) o[m.label] = Number(r[m.field]) || 0
-    return o
-  })
+  const fmt = labelFormat(node.format)
+  const values = rows.flatMap((r) =>
+    metrics.map((m) => {
+      const valor = Number(r[m.field]) || 0
+      return { [dim]: r[dim], serie: m.label, valor, [LABEL_FIELD]: vtFormat(valor, fmt) }
+    }),
+  )
   const colors = seriesColors(tokens, metrics.length)
-  // `sort: null` ⇒ manda el orden de las filas (chrono / value:<serie>, ya aplicado arriba);
-  // el agregado por suma descendente es el contrato histórico de `magnitude`.
-  const catSort = preordered ? null : ({ field: 'valor', op: 'sum', order: 'descending' } as const)
   const nSeries = Math.max(1, metrics.length)
+  const domain = labelledDomain(values.map((v) => v.valor))
+  const quant = { field: 'valor', type: 'quantitative' as const, title: null, ...(domain ? { scale: { domain } } : {}) }
+  // `sort: null` ⇒ manda el orden de las filas, ya resuelto por applyChartSort.
+  const cat = { field: dim, type: 'nominal' as const, sort: null, title: null }
+  const offset = { field: 'serie', type: 'nominal' as const }
+  const color = {
+    field: 'serie',
+    type: 'nominal' as const,
+    scale: { domain: labels, range: colors },
+    legend: chartLegendConfig(),
+  }
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
@@ -220,21 +283,9 @@ async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens
     // Barras agrupadas ocupan más: el alto (horizontal) escala con categorías × series, acotado.
     height: horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * nSeries)) : 260,
     data: { values },
-    transform: [{ fold: labels, as: ['serie', 'valor'] }],
-    mark: { type: 'bar', cornerRadiusEnd: 2 },
-    encoding: horizontal
-      ? {
-          y: { field: dim, type: 'nominal', sort: catSort, title: null },
-          x: { field: 'valor', type: 'quantitative', title: null },
-          yOffset: { field: 'serie', type: 'nominal' },
-          color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
-        }
-      : {
-          x: { field: dim, type: 'nominal', sort: catSort, title: null },
-          y: { field: 'valor', type: 'quantitative', title: null },
-          xOffset: { field: 'serie', type: 'nominal' },
-          color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
-        },
+    encoding: horizontal ? { y: cat, x: quant, yOffset: offset, color } : { x: cat, y: quant, xOffset: offset, color },
+    // Un rótulo POR SUB-BARRA: la capa de texto hereda el encoding posicional y el offset de serie.
+    layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2 } }, labelLayer(horizontal, tokens)],
     config: chartAxisConfig(tokens),
   }
   const svg = await cachedSvg(spec)

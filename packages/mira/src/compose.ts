@@ -310,6 +310,7 @@ export function composePiece(
       metrics?: { field?: string; label?: string }[]
       orientation?: string
       sort?: string
+      format?: string
       title?: string
     }
     const dataset = stripData(String(d.dimension ?? '')).split('.')[0]
@@ -322,7 +323,16 @@ export function composePiece(
       const metricsSpec = d.metrics.map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
       const rows = [...(results[dataset]?.rows ?? [])]
       const sortSpec = parseChartSort(d.sort, metricsSpec)
-      return { type: 'distribution', rows, dimensionField, metricsSpec, sortSpec, orientation: d.orientation, title: d.title }
+      return {
+        type: 'distribution',
+        rows,
+        dimensionField,
+        metricsSpec,
+        sortSpec,
+        orientation: d.orientation,
+        format: d.format,
+        title: d.title,
+      }
     }
     const metricField = stripData(String(d.metric ?? '')).split('.')[1]
     let rows = [...(results[dataset]?.rows ?? [])]
@@ -331,7 +341,16 @@ export function composePiece(
     // `-x`/`-y` y el orden declarado quedaba MUERTO (bug (a) de #81).
     const sortSpec = parseChartSort(d.sort, metricField ? [{ field: metricField, label: metricField }] : [])
     if (sortSpec?.kind === 'field') rows = sortRows(rows, d.sort, metricField)
-    return { type: 'distribution', rows, dimensionField, metricField, sortSpec, orientation: d.orientation, title: d.title }
+    return {
+      type: 'distribution',
+      rows,
+      dimensionField,
+      metricField,
+      sortSpec,
+      orientation: d.orientation,
+      format: d.format,
+      title: d.title,
+    }
   }
   if (node['series']) {
     // `series` — líneas de N series sobre un eje. El dataset sale de `data` (data.<dataset>); cada

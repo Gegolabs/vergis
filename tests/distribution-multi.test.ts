@@ -68,8 +68,8 @@ describe('distribution singular · compat (modo `metric` intacto)', () => {
     const html = out.html ?? ''
     expect(html).toContain('Por Programa')
     expect(html).toMatch(/role-mark/)
-    // 2 categorías × 1 serie = 2 marcas.
-    expect((html.match(/role-mark/g) ?? []).length).toBe(2)
+    // 2 categorías × 1 serie = 2 barras, + 1 contenedor de la capa de rótulos (#80) = 3.
+    expect((html.match(/role-mark/g) ?? []).length).toBe(2 + 1)
   })
 })
 
@@ -107,14 +107,14 @@ describe('distribution multi-métrica · render', () => {
     expect(out.ok).toBe(true)
     const html = out.html ?? ''
     expect(html).toContain('Programa Genético — Base vs Actual')
-    // 3 categorías × 2 series = 6 marcas (chart NO vacío).
-    expect((html.match(/role-mark/g) ?? []).length).toBe(6)
+    // 3 categorías × 2 series = 6 barras, + 1 contenedor de rótulos (#80) = 7 (chart NO vacío).
+    expect((html.match(/role-mark/g) ?? []).length).toBe(6 + 1)
     // Leyenda con las dos etiquetas de serie.
     expect(html).toContain('>Base<')
     expect(html).toContain('>Actual<')
   })
 
-  it('3 series agrupadas → 3×3 = 9 marcas', async () => {
+  it('3 series agrupadas → 3×3 = 9 barras (+ la capa de rótulos)', async () => {
     const yaml3 = GROUPED_YAML.replace(
       '      - { field: plantas_actual, label: "Actual" }',
       '      - { field: plantas_actual, label: "Actual" }\n      - { field: plantas_meta, label: "Meta" }',
@@ -125,7 +125,7 @@ describe('distribution multi-métrica · render', () => {
       { programa_genetico: 'G3', plantas_base: 3, plantas_actual: 9, plantas_meta: 8 },
     ])
     expect(out.ok).toBe(true)
-    expect(((out.html ?? '').match(/role-mark/g) ?? []).length).toBe(9)
+    expect(((out.html ?? '').match(/role-mark/g) ?? []).length).toBe(9 + 1)
     expect(out.html ?? '').toContain('>Meta<')
   })
 
@@ -137,7 +137,7 @@ describe('distribution multi-métrica · render', () => {
       rows: [{ prog: 'x', a: 1, b: 2 }, { prog: 'y', a: 3, b: 4 }],
     }
     const { html } = (await renderHtmlPiece.execute({ piece, title: 'X', theme: 'arbol' }, { agent: 't' })) as { html: string }
-    expect((html.match(/role-mark/g) ?? []).length).toBe(4)
+    expect((html.match(/role-mark/g) ?? []).length).toBe(4 + 1)
   })
 })
 
