@@ -48,6 +48,16 @@ function chartAxisConfig(tokens: ThemeTokens) {
 }
 
 /**
+ * Config de la leyenda de los charts multi-serie — CONVENCIÓN DE PLATAFORMA, no declarable por spec
+ * (el spec declara QUÉ se grafica; la plataforma decide CÓMO se ve). Arriba a la derecha, horizontal
+ * y sin título: Vega-Lite reserva el espacio de la leyenda FUERA del área de plot, así que no pisa
+ * marcas; el título del chart es un `<h3>` HTML fuera del SVG, así que tampoco colisiona con él.
+ */
+function chartLegendConfig() {
+  return { orient: 'top-right', title: null, direction: 'horizontal' } as const
+}
+
+/**
  * Compila un spec Vega-Lite a SVG pasando por el LRU (clave = hash canónico del spec completo —
  * incluye datos, ejes y tokens del theme ya resueltos). Compartido por distribution (singular y
  * agrupado) y series: el compile es caro y determinista.
@@ -168,13 +178,13 @@ async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens
           y: { field: dim, type: 'nominal', sort: catSort, title: null },
           x: { field: 'valor', type: 'quantitative', title: null },
           yOffset: { field: 'serie', type: 'nominal' },
-          color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: { orient: 'bottom', title: null } },
+          color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
         }
       : {
           x: { field: dim, type: 'nominal', sort: catSort, title: null },
           y: { field: 'valor', type: 'quantitative', title: null },
           xOffset: { field: 'serie', type: 'nominal' },
-          color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: { orient: 'bottom', title: null } },
+          color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
         },
     config: chartAxisConfig(tokens),
   }
@@ -212,7 +222,7 @@ export async function renderSeries(node: ResolvedNode, tokens: ThemeTokens): Pro
       // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
       x: { field: x, type: 'ordinal', sort: null, title: null },
       y: { field: 'valor', type: 'quantitative', title: null },
-      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: { orient: 'bottom', title: null } },
+      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
     },
     config: chartAxisConfig(tokens),
   }
