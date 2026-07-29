@@ -25,6 +25,30 @@ export {
 export type { VtState, VtTreeNode } from './table-runtime'
 export { openAnnotationStore, SqliteAnnotationStore } from './annotation-store'
 export type { AnnotationStore, AnnotationRecord } from './annotation-store'
+export {
+  openNotasStore,
+  SqliteNotasStore,
+  NotasConflict,
+  SESSION_WINDOW_MS,
+  canonicalJson,
+  canonicalKey,
+  normalizeEntityRef,
+  substrateHash,
+} from './notas-store'
+export type {
+  NotasStore,
+  Impresion,
+  Nota,
+  Comparticion,
+  Entrega,
+  NotaEspecie,
+  NotaContenidoTipo,
+  NotaObjetivoTipo,
+  EntregaCanal,
+  AbrirImpresionInput,
+  CrearNotaInput,
+  ComentarioResumen,
+} from './notas-store'
 export { openSqliteDb, persistSqliteDb, selectAll } from './sqlite'
 export type { SqlDb, SqlStmt } from './sqlite'
 export {
