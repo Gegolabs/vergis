@@ -86,6 +86,17 @@ export interface TableColumn {
   annotation?: boolean
 }
 
+/**
+ * Criterio de orden de las categorías de un `distribution`, normalizado desde el DSL (#81).
+ * ESPEJO del `ChartSort` de `@vergis/capabilities/piece-types` (tipado estructural, como el resto de
+ * `ResolvedNode`) — MANTENER EN SINCRONÍA.
+ */
+export type ChartSort =
+  | { kind: 'magnitude' }
+  | { kind: 'chrono' }
+  | { kind: 'value'; field: string; label: string }
+  | { kind: 'field'; field: string; desc: boolean }
+
 export interface ResolvedNode {
   layout?: string
   columns?: number
@@ -107,6 +118,8 @@ export interface ResolvedNode {
   metricField?: string
   /** `distribution` multi-métrica: 2+ series agrupadas. Presente ⇒ modo agrupado. */
   metricsSpec?: { field: string; label: string }[]
+  /** `distribution`: criterio de orden de las categorías, ya normalizado (#81). */
+  sortSpec?: ChartSort
   orientation?: string
   title?: string
   /** `series`: campo del eje x (el SQL manda el orden de las filas). */
@@ -297,6 +310,7 @@ export function composePiece(
       metrics?: { field?: string; label?: string }[]
       orientation?: string
       sort?: string
+      format?: string
       title?: string
     }
     const dataset = stripData(String(d.dimension ?? '')).split('.')[0]
@@ -308,12 +322,35 @@ export function composePiece(
     if (Array.isArray(d.metrics) && d.metrics.length > 0) {
       const metricsSpec = d.metrics.map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
       const rows = [...(results[dataset]?.rows ?? [])]
-      return { type: 'distribution', rows, dimensionField, metricsSpec, orientation: d.orientation, title: d.title }
+      const sortSpec = parseChartSort(d.sort, metricsSpec)
+      return {
+        type: 'distribution',
+        rows,
+        dimensionField,
+        metricsSpec,
+        sortSpec,
+        orientation: d.orientation,
+        format: d.format,
+        title: d.title,
+      }
     }
     const metricField = stripData(String(d.metric ?? '')).split('.')[1]
     let rows = [...(results[dataset]?.rows ?? [])]
-    rows = sortRows(rows, d.sort, metricField)
-    return { type: 'distribution', rows, dimensionField, metricField, orientation: d.orientation, title: d.title }
+    // Modo mono: la única «serie» es la métrica. El token legacy (`-campo`) pre-ordena las filas acá
+    // y el render respeta ese orden (`sort: null` en el encoding) — antes el encoding lo pisaba con
+    // `-x`/`-y` y el orden declarado quedaba MUERTO (bug (a) de #81).
+    const sortSpec = parseChartSort(d.sort, metricField ? [{ field: metricField, label: metricField }] : [])
+    if (sortSpec?.kind === 'field') rows = sortRows(rows, d.sort, metricField)
+    return {
+      type: 'distribution',
+      rows,
+      dimensionField,
+      metricField,
+      sortSpec,
+      orientation: d.orientation,
+      format: d.format,
+      title: d.title,
+    }
   }
   if (node['series']) {
     // `series` — líneas de N series sobre un eje. El dataset sale de `data` (data.<dataset>); cada
@@ -361,6 +398,33 @@ export function composePiece(
   }
   const key = Object.keys(node)[0] ?? 'unknown'
   return { type: key }
+}
+
+/**
+ * Normaliza el `sort` declarado de un `distribution` al vocabulario cerrado de #81.
+ *
+ * `magnitude` (default, contrato histórico) · `chrono` (manda el orden del SQL) ·
+ * `value:<serie>` (una serie declarada, por label o por field) · cualquier otro token se lee como el
+ * legacy `-campo`/`campo` del modo mono.
+ *
+ * `value:<x>` con `<x>` desconocido lo rechaza `validateSpec` ANTES de llegar acá; si aun así
+ * llegara (compose se puede invocar suelto), degrada a `magnitude` — nunca a un campo fantasma que
+ * dejaría el chart ordenado por NaN en silencio.
+ */
+export function parseChartSort(
+  token: string | undefined,
+  metrics: { field: string; label: string }[],
+): ChartSort | undefined {
+  if (!token) return undefined
+  if (token === 'magnitude') return { kind: 'magnitude' }
+  if (token === 'chrono') return { kind: 'chrono' }
+  if (token.startsWith('value:')) {
+    const name = token.slice('value:'.length)
+    const m = metrics.find((x) => x.label === name) ?? metrics.find((x) => x.field === name)
+    return m ? { kind: 'value', field: m.field, label: m.label } : { kind: 'magnitude' }
+  }
+  const desc = token.startsWith('-')
+  return { kind: 'field', field: desc ? token.slice(1) : token, desc }
 }
 
 /** sort token: "-campo" (desc), "campo" (asc); "metric"/"-metric" → campo de métrica. */

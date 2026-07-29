@@ -196,6 +196,54 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         }
       }
     }
+    // `sort` (#81): vocabulario CERRADO — `magnitude` (default e implícito) · `chrono` (manda el
+    // ORDER BY del SQL) · `value:<serie>` (una serie declarada, por label o por field). En modo mono
+    // se acepta además el token legacy `-campo`/`campo`. Un `value:` colgante ordenaría por un campo
+    // fantasma (todo NaN) y saldría en orden arbitrario SIN error: se ataja acá.
+    if ('sort' in d) {
+      const raw = d['sort']
+      if (typeof raw !== 'string' || raw === '') {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'distribution-sort-not-string',
+          path: 'piece -> distribution.sort',
+          value: (raw ?? null) as never,
+          message: `El 'sort' de un gráfico distribution debe ser una cadena del vocabulario cerrado; recibió ${JSON.stringify(raw ?? null)}.`,
+          remediation: `Usar 'sort: magnitude' (default), 'sort: chrono' o 'sort: value:<serie>'.`,
+        })
+      }
+      const known = raw === 'magnitude' || raw === 'chrono' || raw.startsWith('value:')
+      if (hasMetrics && !known) {
+        // El token legacy `-campo` NUNCA tuvo efecto en el modo agrupado (el encoding ordenaba por
+        // la suma de series): aceptarlo en silencio sería prometer un orden que no ocurre.
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'distribution-sort-unknown',
+          path: 'piece -> distribution.sort',
+          value: raw,
+          message: `El 'sort' '${raw}' no pertenece al vocabulario de un distribution agrupado (metrics).`,
+          remediation: `Usar 'magnitude' (por la suma de las series, default), 'chrono' (el orden del SQL) o 'value:<serie>' con el label o el field de una de las series declaradas.`,
+        })
+      }
+      if (raw.startsWith('value:')) {
+        const name = raw.slice('value:'.length)
+        const candidates = hasMetrics
+          ? (d['metrics'] as { field?: unknown; label?: unknown }[]).flatMap((m) =>
+              [m.label, m.field].filter((x): x is string => typeof x === 'string' && x !== ''),
+            )
+          : [stripDataRef(String(d['metric'] ?? '')).split('.')[1] ?? ''].filter((x) => x !== '')
+        if (!candidates.includes(name)) {
+          throw new VergisError({
+            error: 'mira/spec-invalid',
+            code: 'distribution-sort-value-dangling',
+            path: 'piece -> distribution.sort',
+            value: raw,
+            message: `El orden 'value:${name}' no corresponde a ninguna serie del gráfico distribution.`,
+            remediation: `Usar el label o el field de una serie declarada (${candidates.map((c) => `'${c}'`).join(', ') || 'ninguna declarada'}), o cambiar a 'magnitude'/'chrono'.`,
+          })
+        }
+      }
+    }
     if ('data' in d) {
       throw new VergisError({
         error: 'mira/spec-invalid',

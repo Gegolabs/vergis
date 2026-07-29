@@ -138,11 +138,13 @@ describe('WP4 · fixture PI-17-like (KPIs + series + 2 distribution agrupados)',
     const out = await runSpec({ specPath, baseDir: dir, extraCapabilities: [mockSql] })
     const html = out.html ?? ''
     const marks = roleMarksPerChart(html)
-    // 3 charts: series (2 series × 3 meses) + distribution prog (3 cat × 2 series = 6) + var (2 × 2 = 4).
+    // 3 charts: series (2 series × 3 meses) + distribution prog (3 cat × 2 series) + var (2 × 2).
     expect(marks.length).toBe(3)
     for (const m of marks) expect(m).toBeGreaterThan(0)
-    // Las barras agrupadas: conteo = categorías × series (detección de chart vacío).
-    expect(marks).toContain(6) // programa: 3 × 2
-    expect(marks).toContain(4) // variedad: 2 × 2
+    // Barras agrupadas: categorías × series, MÁS el contenedor de la capa de rótulos (#80), que es
+    // uno por chart. La aritmética se deja explícita para que el conteo siga siendo una afirmación
+    // sobre la cardinalidad del dato y no un número mágico.
+    expect(marks).toContain(3 * 2 + 1) // programa
+    expect(marks).toContain(2 * 2 + 1) // variedad
   })
 })
