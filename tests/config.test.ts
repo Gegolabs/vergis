@@ -144,3 +144,20 @@ describe('decideFreshStore · --fresh solo en el arnés de desarrollo', () => {
     expect(decideFreshStore(['--fresh'], { VERGIS_DEV_IDENTITY: ':solo-grupos' })).toEqual({ mode: 'refused-no-dev' })
   })
 })
+
+// `HOST` (opcional) permite atar la escucha a una interfaz — el arnés de dev, localhost-only. Sin el
+// env, el comportamiento es el de hoy: `server.listen(PORT)` = todas las interfaces (lo que el
+// contenedor necesita para que el proxy lo alcance).
+describe('configFromEnv · HOST (interfaz de escucha, opcional)', () => {
+  it('sin HOST → undefined (todas las interfaces, como hoy)', () => {
+    expect(configFromEnv({}, fixedSecret).host).toBeUndefined()
+  })
+  it('HOST vacío o en blanco NO cuenta (no se ata a "")', () => {
+    expect(configFromEnv({ HOST: '' }, fixedSecret).host).toBeUndefined()
+    expect(configFromEnv({ HOST: '   ' }, fixedSecret).host).toBeUndefined()
+  })
+  it('HOST seteado → se usa tal cual (trim)', () => {
+    expect(configFromEnv({ HOST: '127.0.0.1' }, fixedSecret).host).toBe('127.0.0.1')
+    expect(configFromEnv({ HOST: ' ::1 ' }, fixedSecret).host).toBe('::1')
+  })
+})

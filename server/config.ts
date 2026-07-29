@@ -23,6 +23,12 @@ export type Engine = 'clickhouse' | 'fabric'
 export interface ServerConfig {
   engine: Engine
   port: number
+  /**
+   * Interfaz de escucha (`HOST`). `undefined` = comportamiento por defecto de Node: escucha en TODAS
+   * las interfaces — lo que necesita el contenedor para que el proxy lo alcance. Seteado (p. ej.
+   * `127.0.0.1`), el arnés de dev queda localhost-only y no expone el puerto a la red local.
+   */
+  host: string | undefined
   refreshMs: number
   dataCacheTtlMs: number
   /** Tope de filas materializables por `interactions.filters`; undefined → default de Mira. */
@@ -247,6 +253,7 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
     miranda: mirandaConfig(env),
     devIdentity: devDecision.mode === 'active' ? devDecision.identity : null,
     port: num(env, 'PORT', 8080),
+    host: (env['HOST'] ?? '').trim() || undefined,
     refreshMs: num(env, 'VERGIS_REFRESH_MS', 0),
     dataCacheTtlMs: num(env, 'VERGIS_DATA_CACHE_TTL_MS', 0),
     interactiveMaxRows: numOpt(env, 'VERGIS_INTERACTIVE_MAX_ROWS'),
