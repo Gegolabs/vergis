@@ -478,9 +478,14 @@ function renderTrayShell(
       `<div class="faceta faceta-appearance"><div class="faceta-title">Apariencia (Theme)</div>` +
       `<div class="faceta-options">${radios}</div></div>`
   }
-  // Restaura la paleta elegida por el usuario (persistida por reporte) sobre el default de plataforma.
+  // Restaura el estado del usuario (persistido POR REPORTE, como la paleta y las anotaciones) sobre
+  // los defaults de plataforma: (1) la paleta elegida y (2) si el Inspector queda abierto. El colapso
+  // es CSS-only (un checkbox), así que un POST→redirect→GET —aplicar un filtro server-side, enviar
+  // cualquier form— re-renderiza la página y lo devolvía a cerrado en cada turno. Mismo mecanismo que
+  // ya usan paleta y anotaciones: localStorage + re-aplicación al cargar.
   const restore =
-    `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}})();</script>`
+    `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}` +
+    `try{var t=localStorage.getItem('vergis:tray:'+location.pathname);if(t!==null){var c=document.getElementById('vergis-tray-toggle');if(c)c.checked=(t==='1');}}catch(e){}})();</script>`
   // Pie de la gaveta (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
   // Pie del inspector: versión del PI (instancia) + versión de Mira (motor) — pistas DISTINTAS.
   const footer =
@@ -507,7 +512,8 @@ function renderTrayShell(
   // resto de la maquinaria, jamás sueltos en el cuerpo del documento.
   const notasKit = hasNotas ? renderNotasTraySection() : ''
   return (
-    `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
+    // El colapso se PERSISTE (por reporte) al cambiar: sin esto, cada POST→redirect→GET lo resetea.
+    `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden onchange="try{localStorage.setItem('vergis:tray:'+location.pathname,this.checked?'1':'0')}catch(e){}">` +
     `<label for="vergis-tray-toggle" class="tray-tab" title="Inspector" aria-label="Abrir inspector">` +
     // Ícono de sliders/controles (no embudo): el panel es un Inspector (controles + vistas + config).
     `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.7" fill="currentColor" stroke="none"/><circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none"/><circle cx="5" cy="11.5" r="1.7" fill="currentColor" stroke="none"/></svg>` +
