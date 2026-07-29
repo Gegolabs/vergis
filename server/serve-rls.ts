@@ -94,7 +94,7 @@ import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
-import { configFromEnv, decideDevIdentity, deprecatedEnvWarnings } from './config'
+import { configFromEnv, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
 import { avatarMenu, csrfFactory } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -714,6 +714,33 @@ try {
 let admin: AdminHandler | null = null
 const ADMIN_SEED = (process.env['VERGIS_ADMIN_SEED'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 const OUT = (process.env['VERGIS_OUT'] ?? tmpdir()).replace(/\/$/, '')
+/** Store de gobierno (SQLite): una sola expresión de la ruta para todos sus consumidores. */
+const GOVERNANCE_DB = process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`
+
+// `--fresh` (arnés de DESARROLLO): recrea el store de gobierno para no arrastrar sesiones de prueba
+// entre corridas. Sin la bandera, el store se conserva (default de hoy). La decisión ya la tomó
+// `decideFreshStore` — jamás borra sin identidad de dev activa ni con gate real presente; acá solo se
+// ejecuta y se comunica. Borrar un store de producción es imposible por construcción.
+{
+  const fresh = decideFreshStore(process.argv.slice(2), process.env)
+  if (fresh.mode === 'fresh') {
+    let borrado = false
+    for (const f of [GOVERNANCE_DB, `${GOVERNANCE_DB}-wal`, `${GOVERNANCE_DB}-shm`]) {
+      try {
+        unlinkSync(f)
+        if (f === GOVERNANCE_DB) borrado = true
+      } catch {
+        /* no existía: el arranque lo crea igual */
+      }
+    }
+    console.warn(`⚠ --fresh (DEV): store de gobierno ${borrado ? 'BORRADO' : 'inexistente'} → se recrea vacío (${GOVERNANCE_DB})`)
+  } else if (fresh.mode === 'refused-gate') {
+    console.warn('--fresh IGNORADO: hay gate real (VERGIS_GATE_SECRET presente). El store no se toca.')
+  } else if (fresh.mode === 'refused-no-dev') {
+    console.warn('--fresh IGNORADO: no hay identidad de dev activa (VERGIS_DEV_IDENTITY). Solo el arnés de desarrollo puede recrear el store.')
+  }
+}
+
 if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
   try {
     const entities = process.env['VERGIS_MASTER_DATA']
@@ -739,7 +766,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           processOutputs?: { processId: string; tableRef: string }[]
         })
       : {}
-    const govStore = await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, {
+    const govStore = await SqliteGovernanceStore.open(GOVERNANCE_DB, {
       admins: ADMIN_SEED,
       groups: groupSeeds,
       sources: sourceReg.sources,
@@ -1052,7 +1079,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
 if (config.miranda.enabled) {
   try {
     // Store: reusa el de gobierno si existe; si no, abre uno (Miranda necesita persistir sesiones).
-    const govForMiranda = governance ?? (await SqliteGovernanceStore.open(process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.sqlite`, { admins: ADMIN_SEED }))
+    const govForMiranda = governance ?? (await SqliteGovernanceStore.open(GOVERNANCE_DB, { admins: ADMIN_SEED }))
     // Catálogo (allowlist de probes) — config de instancia (JSON: lista o {catalog:[…]}).
     const catalog: CatalogEntry[] = (() => {
       const p = config.miranda.catalogPath
