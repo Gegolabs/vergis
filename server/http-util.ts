@@ -8,7 +8,17 @@
  * el proceso en Node 22) y escapa el mensaje (era interpolado crudo).
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import { escapeHtml } from '@vergis/capabilities'
+
+/** Comparación de tiempo constante para tokens/firmas: no delata cuántos caracteres coinciden.
+ *  La longitud del token esperado es fija y pública (24 hex), así que comparar longitudes primero no
+ *  filtra nada útil; solo evita el requisito de buffers de igual tamaño de `timingSafeEqual`. */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a)
+  const bb = Buffer.from(b)
+  return ab.length === bb.length && timingSafeEqual(ab, bb)
+}
 
 /** Lee el cuerpo como string con límite DURO: al excederlo, corta el stream y rechaza. */
 export function readBody(req: IncomingMessage, limit: number): Promise<string> {

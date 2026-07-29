@@ -6,7 +6,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHmac } from 'node:crypto'
 import { escapeHtml } from '@vergis/capabilities'
-import { constantTimeEqual } from './annotations'
+import { constantTimeEqual } from './http-util'
 
 /** CSS del avatar de identidad (menú arriba-derecha). Compartido por las superficies de admin y el
  * catálogo, para que ambas usen el mismo marco. Referencia las mismas CSS vars (--card/--accent/…). */
@@ -95,8 +95,9 @@ document.addEventListener('click',function(e){var d=document.querySelector('deta
 export const THEME_TOGGLE_JS = "(function(){var t=document.documentElement.getAttribute('data-theme')==='blanco'?'oscuro':'blanco';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('vergis:index-theme',t)}catch(e){}})()"
 
 /** Avatar de identidad (menú arriba-derecha) — COMPARTIDO por admin y el catálogo. `<details>` puro,
- * sin JS. El menú gradúa según el rol: Perfil siempre · Gestión si gestiona dominios · Configuración si
- * admin. `signoutRd` = a dónde volver tras cerrar sesión. Requiere AVATAR_CSS en la página. */
+ * sin JS. El menú gradúa según el rol: Perfil y Mis impresiones siempre · Gestión si gestiona
+ * dominios · Configuración si admin. `signoutRd` = a dónde volver tras cerrar sesión. Requiere
+ * AVATAR_CSS en la página. */
 export function avatarMenu(opts: {
   email: string
   isAdmin: boolean
@@ -114,6 +115,9 @@ export function avatarMenu(opts: {
   m += it('/', 'Catálogo de PIs')
   m += `<div class="sep"></div>`
   m += it('/admin/perfil', 'Perfil')
+  // «Mis impresiones» es universal: la capacidad de anotar existió meses con cero uso porque nadie
+  // la veía. Si no está en el menú, no existe (D9).
+  m += it('/impresiones', 'Mis impresiones')
   if (opts.hasMiranda) m += it('/miranda', 'Miranda')
   if (hasDomains) m += it('/admin', 'Gestión')
   if (isAdmin) m += it('/admin/plataforma', 'Configuración')

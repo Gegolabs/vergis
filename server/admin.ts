@@ -51,6 +51,7 @@ import {
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
+import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
 import { cargasBody, type CargasOps, type SlotCargas, type IntakeUploadEvent } from './admin-cargas'
 
@@ -312,6 +313,28 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           redirect(res, '/admin/roles')
         } catch (e) {
           send(res, e instanceof AdminLockout ? 409 : 400, await rolesPage(deps, nav, token, errMsg(e)))
+        }
+        return true
+      }
+      // Settings de plataforma de la CAPA DE NOTAS (A7): retención + límites, validados con el
+      // MISMO parser que los consume (un valor inválido se rechaza acá, no al momento de purgar).
+      if (deps.settingStore && path === '/admin/settings/notas' && req.method === 'POST') {
+        if (!isAdmin) return denyPlatform()
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        try {
+          const ret = (f['notas_retencion_impresiones'] ?? '').trim().toUpperCase()
+          const max = (f['notas_max_schedules_usuario'] ?? '').trim()
+          const anti = (f['notas_anti_cementerio'] ?? 'off').trim().toLowerCase() === 'on' ? 'on' : 'off'
+          validarRetencion(ret)
+          validarMaxSchedules(max)
+          await deps.settingStore.setSetting(NOTAS_SETTINGS.retencionImpresiones.key, ret, email)
+          await deps.settingStore.setSetting(NOTAS_SETTINGS.maxSchedulesUsuario.key, max, email)
+          await deps.settingStore.setSetting(NOTAS_SETTINGS.antiCementerio.key, anti, email)
+          deps.audit({ type: 'platform-setting', key: 'notas', value: `${ret}·${max}·${anti}`, by: email })
+          redirect(res, '/admin/plataforma')
+        } catch (e) {
+          send(res, 400, await platformPage(deps, nav, token, errMsg(e)))
         }
         return true
       }
@@ -688,8 +711,25 @@ function maestraPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): string {
 
 
 /** Gestión de PLATAFORMA: Usuarios y Roles · Grupos · Settings (una entrada que despliega todo). */
-async function platformPage(deps: AdminDeps, nav: Chrome, token: string): Promise<string> {
+async function platformPage(deps: AdminDeps, nav: Chrome, token: string, msg?: string): Promise<string> {
   const curTitle = deps.settingStore ? (await deps.settingStore.getSetting('index_title')) ?? '' : ''
+  const n = deps.settingStore ? await leerNotasSettings(deps.settingStore) : null
+  // Capa de NOTAS (A7): la retención se APLICA hoy; el límite de envíos programados y el
+  // anti-cementerio se declaran acá y se hacen cumplir cuando los envíos programados existan.
+  const notasSettings = n
+    ? `<h2>Notas</h2>
+       <form method="post" action="/admin/settings/notas" class="grid">
+         <input type="hidden" name="_csrf" value="${token}">
+         <label class="fld"><span>Retención de impresiones (duración ISO-8601)</span>
+           <input name="${NOTAS_SETTINGS.retencionImpresiones.key}" value="${escapeHtml(n.retencion)}" placeholder="P12M"></label>
+         <label class="fld"><span>Envíos programados por usuario</span>
+           <input name="${NOTAS_SETTINGS.maxSchedulesUsuario.key}" value="${escapeHtml(n.maxSchedules)}" placeholder="10"></label>
+         <label class="fld"><input type="checkbox" name="${NOTAS_SETTINGS.antiCementerio.key}" value="on"${n.antiCementerio === 'on' ? ' checked' : ''}> Desactivar solos los envíos que nadie abre</label>
+         <button class="add">Guardar</button>
+       </form>
+       <p class="sub">Una impresión vive desde su última actividad: anotarla o responder en ella la mantiene viva. Vencida, se borra con sus notas.</p>
+       <p class="sub">El límite de envíos programados y el apagado automático se aplican cuando los envíos programados estén disponibles.</p>`
+    : ''
   const settings = deps.settingStore
     ? `<h2>Catálogo</h2>
        <form method="post" action="/admin/settings" class="row">
@@ -704,7 +744,9 @@ async function platformPage(deps: AdminDeps, nav: Chrome, token: string): Promis
     `<h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles">Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
        deps.groupStore ? `<li><a href="/admin/groups">Grupos de Mira</a><div class="sub">Grupos para compartir PIs (no grupos AAD).</div></li>` : ''
      }</ul>
-     ${settings}`,
+     ${msg ? `<p class="msg err">${escapeHtml(msg)}</p>` : ''}
+     ${settings}
+     ${notasSettings}`,
   )
 }
 

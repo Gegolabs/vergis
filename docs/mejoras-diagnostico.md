@@ -46,7 +46,7 @@ La memoización de datasets por invocación ya existe (`mira.ts`: un dataset rec
 | `tsx` compila al vuelo en producción | `Dockerfile` | Build multi-stage a `dist/` + `node dist/` con `--omit=dev --ignore-scripts` |
 | Vulnerabilidades HIGH en vega/vega-lite (XSS, GHSA-7f2v-3qq3-vvjf y GHSA-m9rg-mr6g-75gm) | `capabilities` | Upgrade a vega 6 / vega-lite 6; exploitabilidad acotada (specs confiables, render server-side) pero está en el path del HTML servido |
 | Sin gate de audit ni cooldown de updates | CI | `npm audit` en CI + Renovate con `minimumReleaseAge` |
-| Anotaciones gateadas por token opaco, sin HMAC criptográfico en el store | `capabilities/src/annotation-store.ts` | Implementar verificación HMAC del token por fila — roadmap |
+| El gesto de comentar re-ejecuta la recuperación del dataset para verificar visibilidad | `server/notas.ts` | Es el diseño (el gate se ancla en el dato, no en un token). El volumen de comentarios es bajo por naturaleza y el result-cache del Botler amortigua: no optimizar prematuramente |
 
 El análisis completo de supply chain y la decisión de lenguaje viven en [adr-001-lenguaje-y-supply-chain.md](adr-001-lenguaje-y-supply-chain.md).
 

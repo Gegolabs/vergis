@@ -53,6 +53,7 @@ Canonical product docs live in `docs/`:
 - [`gobierno-permisos.md`](docs/gobierno-permisos.md) — Governance: the **three-state model**, the `GovernanceStore`, **PI permissions** (owner/collaborator/viewer, Mira-managed groups, public/private), the two orthogonal authz layers (artifact vs RLS, no bypass), and how RLS is applied. Includes the **contract for agents**.
 - [`data-maestra-y-publicacion.md`](docs/data-maestra-y-publicacion.md) — Master data management: authoring, the **universal publication model** (`md_<entity>__replica` projections, not Fabric shortcuts), freshness via oferta/demanda, and the **contract for agents**.
 - [`frescura-oferta-demanda.md`](docs/frescura-oferta-demanda.md) — Freshness: **oferta vs demanda**, demand ceiling, required-cadence derivation, observability, and the reconciler (delegate to the engine's scheduler).
+- [`capa-de-notas.md`](docs/capa-de-notas.md) — The **notes layer**: the two species (**comment** anchored to a governed record via the dataset's `anchor`, **annotation** anchored to a frozen **impression**), the write-time authorization check against live data, lazy materialization, governed sharing, retention settings, and the **contract for agents**.
 - [`adr-001-lenguaje-y-supply-chain.md`](docs/adr-001-lenguaje-y-supply-chain.md) — language & supply-chain ADR.
 
 ## Edition and license

@@ -285,14 +285,7 @@ function vtColorBg(value, range){
   var t=(value-range.min)/(range.max-range.min); var light=Math.round(95 - t*45);
   return ' style="background:hsl(8,75%,'+light+'%)"';
 }
-function vtCell(col, r, ann){
-  // Columna de anotación: celda editable (contenteditable) con la clave + token del registro.
-  if(col.annotation && ann){
-    var v=vtEsc(r[ann.valueField]==null?'':r[ann.valueField]);
-    var key=vtEsc(r[ann.keyField]==null?'':r[ann.keyField]);
-    var tok=vtEsc(r[ann.tokenField]==null?'':r[ann.tokenField]);
-    return '<td class="align-left vt-ann-cell" contenteditable="true" data-key="'+key+'" data-token="'+tok+'" title="Anotación compartida — editable">'+v+'</td>';
-  }
+function vtCell(col, r){
   var raw=r[col.field]; var text=vtFormat(raw, col.format);
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
   return '<td class="align-'+(col.align||'left')+'"'+bg+'>'+vtEsc(text)+'</td>';
@@ -305,11 +298,19 @@ function vtDrillActions(drills, r, carry){
   var links=drills.map(function(d){ var href=vtEsc(vtDrillHref(d,r,carry)); var label=d.label?vtEsc(d.label):'→'; var cls=d.label?'vt-drill-link':'vt-drill-link vt-drill-arrow'; var title=d.label?vtEsc(d.label):'Ver detalle'; return '<a class="'+cls+'" href="'+href+'" title="'+title+'">'+label+'</a>'; }).join('');
   return '<td class="vt-actions">'+links+'</td>';
 }
-function vtBodyRows(cols, rows, ann, drills, carry){
+/* Llave canónica de negocio de una fila — espejo EXACTO de llaveCanonicaDeFila (server) y de
+   llaveDeFila+canonicalKey (store): columnas ordenadas y valores coercionados a texto. Si las dos
+   implementaciones divergen, el marcador aparece o no según por dónde se pregunte. */
+function vtNKey(r, key){
+  var cols=key.slice().sort();
+  return '{'+cols.map(function(k){ return JSON.stringify(k)+':'+JSON.stringify(r[k]==null?'':String(r[k])); }).join(',')+'}';
+}
+function vtBodyRows(cols, rows, drills, carry, ancla){
   var single = drills && drills.length===1;
   return rows.map(function(r){
-    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry))+'">' : '<tr>';
-    return open+cols.map(function(c){return vtCell(c,r,ann);}).join('')+vtDrillActions(drills,r,carry)+'</tr>';
+    var nkey = ancla ? ' data-nkey="'+vtEsc(vtNKey(r,ancla.key))+'" data-ndataset="'+vtEsc(ancla.dataset)+'"' : '';
+    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry))+'"'+nkey+'>' : '<tr'+nkey+'>';
+    return open+cols.map(function(c){return vtCell(c,r);}).join('')+vtDrillActions(drills,r,carry)+'</tr>';
   }).join('');
 }
 function vtCounts(rows, field){ var m={}; for(var i=0;i<rows.length;i++){ var k=String(rows[i][field]==null?'':rows[i][field]); m[k]=(m[k]||0)+1; } return m; }
@@ -318,22 +319,18 @@ function vtBootstrap(root){
   if(!dataEl) return;
   var payload = JSON.parse(dataEl.textContent);
   var rows = payload.rows, cols = payload.cols;
-  // Anotaciones: columna editable compartida. Mostrar/ocultar es preferencia POR-USUARIO (localStorage).
-  var ann = payload.annotation || null;
   // Drill-through: acciones por fila (1 link por drill). Con un solo drill, además doble-clic de fila.
   // carry (ctx de cabecera, p.ej. la semana) se preserva en cada href de drill.
   var drills = payload.drills || [];
   var carry = payload.carryCtx || {};
+  var ancla = payload.ancla || null;
   var nactions = drills.length ? 1 : 0;
-  var annShown = false;
-  try{ annShown = ann ? (localStorage.getItem('vergis:anncol:'+location.pathname)==='1') : false; }catch(e){}
-  // Columnas a renderizar: la columna de anotación se omite si está oculta (header + body juntos).
-  function renderCols(){ return ann && !annShown ? cols.filter(function(c){ return !c.annotation; }) : cols; }
+  function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
   var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
   // Busqueda global acotada a las columnas mostradas y buscables: los campos ocultos del payload
-  // (tokens de anotacion, claves de drill) no estan en cols, asi que no se buscan por texto.
+  // (claves de drill) no estan en cols, asi que no se buscan por texto.
   state.searchCols = cols.filter(function(c){ return c.searchable!==false; }).map(function(c){ return c.field; });
   var rendered = false; // ¿render() ya corrió? (p.ej. una vista pinneada aplicada vía applySnapshot)
   var tbody = root.querySelector('tbody');
@@ -374,12 +371,12 @@ function vtBootstrap(root){
     // las pulsaciones y se renderiza una vez que el usuario pausa (el value del input sigue instantáneo).
     var gsTimer; gs.addEventListener('input', function(){ clearTimeout(gsTimer); gsTimer=setTimeout(function(){ state.globalSearch=gs.value; render(); }, 150); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
-    // Export CSV (issue #61 / TX-01): exporta la VISTA ACTUAL (filtros/búsqueda aplicados), columnas
-    // visibles sin anotaciones (#60: las anotaciones no viajan). Separador ';' (Excel es-CL usa coma
+    // Export CSV (issue #61 / TX-01): exporta la VISTA ACTUAL (filtros/búsqueda aplicados) con las
+    // columnas visibles. Las NOTAS jamás viajan en el export. Separador ';' (Excel es-CL usa coma
     // decimal) + BOM UTF-8 para que Excel abra tildes correcto. Sin dependencias: Blob + download.
     var expBtn = sec.querySelector('.vt-export');
     if(expBtn) expBtn.addEventListener('click', function(){
-      var rc = renderCols().filter(function(c){ return !c.annotation; });
+      var rc = renderCols();
       var view = vtApply(rows, state);
       var cell = function(v){ var s = (v==null?'':String(v)); return /[";\\n\\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
       var lines = [rc.map(function(c){ return cell(c.label||c.field); }).join(';')];
@@ -398,34 +395,6 @@ function vtBootstrap(root){
       sec.querySelector('.vt-expand-all').addEventListener('click', function(){ state.collapsed={}; render(); });
       sec.querySelector('.vt-collapse-all').addEventListener('click', function(){ collapseAll(); render(); });
       renderGroupUI();
-    }
-  }
-  // ---- Anotaciones: el toggle "Mostrar" vive en CONFIG (es preferencia de vista, no control) ----
-  //      + AVISO si el reporte tiene anotaciones y la columna está oculta.
-  var annToggleEl=null, annHintEl=null;
-  var hasAnn = !!(ann && rows.some(function(r){ return r[ann.valueField]; }));
-  function setAnnShown(v){
-    annShown=v;
-    try{ localStorage.setItem('vergis:anncol:'+location.pathname, v?'1':'0'); }catch(e){}
-    if(annToggleEl) annToggleEl.checked=v;
-    if(annHintEl) annHintEl.style.display=(hasAnn && !v)?'':'none';
-    render();
-  }
-  if(ann){
-    var cfg=document.querySelector('.tray-panel-config');
-    if(cfg){
-      var grp=document.createElement('div'); grp.className='faceta';
-      grp.innerHTML='<div class="faceta-title">Anotaciones</div><label class="vt-ann-toggle"><input type="checkbox" class="vt-ann-show"'+(annShown?' checked':'')+'> Mostrar la columna</label>';
-      cfg.insertBefore(grp, cfg.firstChild);
-      annToggleEl=grp.querySelector('.vt-ann-show');
-      annToggleEl.addEventListener('change', function(){ setAnnShown(annToggleEl.checked); });
-    }
-    if(hasAnn){
-      annHintEl=document.createElement('div'); annHintEl.className='vt-ann-hint';
-      annHintEl.innerHTML='<span>📝 Este reporte tiene anotaciones.</span><button type="button" class="vt-ann-hint-show">Mostrar</button>';
-      var sc=root.querySelector('.vt-scroll'); if(sc) root.insertBefore(annHintEl, sc);
-      annHintEl.querySelector('.vt-ann-hint-show').addEventListener('click', function(){ setAnnShown(true); });
-      annHintEl.style.display = annShown ? 'none' : '';
     }
   }
   function renderGroupUI(){
@@ -523,9 +492,8 @@ function vtBootstrap(root){
   });
 
   // ---- Selección de registro: UN clic en una fila hoja la marca como seleccionada (feedback visual).
-  //      Selección única (limpia las demás). Ignora celda de anotación (editar) y encabezados de grupo. ----
+  //      Selección única (limpia las demás). Ignora los encabezados de grupo. ----
   tbody.addEventListener('click', function(e){
-    if(e.target.closest('.vt-ann-cell')) return;
     var tr=e.target.closest('tbody > tr'); if(!tr) return;
     if(tr.classList.contains('vt-group-head') || tr.classList.contains('vt-empty')) return;
     Array.prototype.forEach.call(tbody.querySelectorAll('tr.vt-selected'), function(x){ x.classList.remove('vt-selected'); });
@@ -534,29 +502,12 @@ function vtBootstrap(root){
 
   // ---- Drill-through: DOBLE clic en una fila hoja → navega a la vista destino con el contexto del
   //      registro. Doble clic (no simple) para no disparar la navegación con un clic casual; deja el
-  //      clic simple libre (seleccionar, arriba). Ignora la celda de anotación y los encabezados de grupo. ----
+  //      clic simple libre (seleccionar, arriba). Ignora los encabezados de grupo. ----
   if(drills.length===1) tbody.addEventListener('dblclick', function(e){
-    if(e.target.closest('.vt-ann-cell')) return;
     if(e.target.closest('tr.vt-group-head')) return;
     if(e.target.closest('.vt-drill-link')) return; // el link ya navega por sí mismo
     var tr=e.target.closest('tr.vt-drill-row'); if(!tr) return;
     var href=tr.getAttribute('data-href'); if(href) location.assign(href);
-  });
-
-  // ---- Edición de anotación: al salir de la celda (focusout, delegado) → upsert compartido ----
-  if(ann) tbody.addEventListener('focusout', function(e){
-    var cell=e.target && e.target.closest ? e.target.closest('.vt-ann-cell') : null; if(!cell) return;
-    var key=cell.getAttribute('data-key'), token=cell.getAttribute('data-token');
-    var value=(cell.textContent||'').trim();
-    var row=null; for(var i=0;i<rows.length;i++){ if(String(rows[i][ann.keyField]==null?'':rows[i][ann.keyField])===key){ row=rows[i]; break; } }
-    if(!row) return;
-    if(String(row[ann.valueField]==null?'':row[ann.valueField])===value) return; // sin cambio
-    row[ann.valueField]=value; // sobrevive al re-render
-    try{
-      fetch(ann.endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:key,token:token,value:value})})
-        .then(function(r){ if(r.ok) cell.classList.remove('vt-ann-err'); else cell.classList.add('vt-ann-err'); })
-        .catch(function(){ cell.classList.add('vt-ann-err'); });
-    }catch(e){}
   });
 
   // ---- Chips de filtros activos (sobre la tabla): clic = quitar ----
@@ -570,7 +521,7 @@ function vtBootstrap(root){
   // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
   // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
   function renderNodeTree(rc, ncols, node, depth, prefix){
-    if(node.leaf) return vtBodyRows(rc, node.rows, ann, drills, carry);
+    if(node.leaf) return vtBodyRows(rc, node.rows, drills, carry, ancla);
     return node.groups.map(function(g){
       var path=prefix+node.field+SEP+g.key;
       var collapsed=!!state.collapsed[path];
@@ -586,10 +537,8 @@ function vtBootstrap(root){
     if(state.groupLevels.length){
       tbody.innerHTML = renderNodeTree(rc, ncols, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
-      tbody.innerHTML = vtBodyRows(rc, view, ann, drills, carry) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = vtBodyRows(rc, view, drills, carry, ancla) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
-    // Mostrar/ocultar la columna de anotación (header th + body se mueven juntos).
-    if(ann){ var ath=root.querySelector('th[data-field="'+ann.valueField+'"]'); if(ath) ath.style.display = annShown ? '' : 'none'; }
     if(footEl) footEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){
       var f=th.getAttribute('data-field'); var ind=th.querySelector('.vt-sort-ind');
@@ -607,14 +556,14 @@ function vtBootstrap(root){
   }
   // Arranque: si una vista pinneada ya aplicó (applySnapshot → render), no hay nada que hacer.
   // Si el tbody servido ya trae TODAS las filas (ssrComplete) y el estado inicial es vacío (sin
-  // orden/búsqueda/facetas/grupos) — y sin columna de anotación, cuya visibilidad la resuelve
-  // render() — el render() inicial reconstruiría un tbody IDÉNTICO al servido: se salta, pintando
+  // orden/búsqueda/facetas/grupos) — el render() inicial reconstruiría un tbody IDÉNTICO al
+  // servido: se salta, pintando
   // solo el conteo (que de otro modo solo pinta render()). En cualquier otro caso, render() normal.
   var stateEmpty = !state.sort.field && !state.globalSearch && !state.groupLevels.length;
   for(var fk in state.facets){ if((state.facets[fk]||[]).length) stateEmpty=false; }
   if(!rendered){
     // Con 0 filas NO se salta: render() pinta la fila «Sin resultados» (el tbody servido va vacío).
-    if(payload.ssrComplete && stateEmpty && !ann && rows.length){
+    if(payload.ssrComplete && stateEmpty && rows.length){
       if(footEl) footEl.textContent = rows.length + (rows.length===1?' fila':' filas');
     } else {
       render();

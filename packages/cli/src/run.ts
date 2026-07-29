@@ -3,14 +3,14 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Botler, type Capability, type IdentityContext, type LogEntry } from '@vergis/botler'
 import { starterCapabilities, createExecuteSqlDwh, type SqlConnectionProfile } from '@vergis/capabilities'
-import { MiraBotlet, parseSpec, type AnnotationContext, type MiraSpec } from '@vergis/mira'
+import { MiraBotlet, parseSpec, type MiraSpec, type ResolvedNode, type ResolverComentarios } from '@vergis/mira'
 
 // Caché module-level del camino de serving (work/052 F3): sin ella cada request re-lee+re-parsea el
 // schema y el spec desde disco. El schema se parsea UNA vez por ruta → misma IDENTIDAD de objeto ⇒ el
 // WeakMap de getValidator reusa el validador AJV compilado. El spec (texto+YAML) se memoiza por
 // (ruta, mtime): editar el archivo cambia el mtime e invalida naturalmente (el hot-reload por
 // watchPaths sigue funcionando). NADA muta el spec cacheado entre requests: composePiece copia los
-// arreglos, y las anotaciones mutan filas de RESULTADOS, no el árbol del spec.
+// arreglos, y todo enriquecimiento posterior opera sobre RESULTADOS, no sobre el árbol del spec.
 const schemaCache = new Map<string, object>()
 const specCache = new Map<string, { mtimeMs: number; spec: MiraSpec }>()
 /** Contadores de parseo (solo para pruebas: verifican que el 2º request no re-parsea). */
@@ -66,9 +66,13 @@ export interface RunOptions {
    * vía `extraCapabilities`.
    */
   registerStarters?: boolean
-  /** Contexto de anotaciones (enriquecimiento de la capa de viz). Si se pasa, Mira fusiona la
-   *  columna editable en la primera tabla. Lo arma el server (store + firma del token). */
-  annotations?: AnnotationContext
+  /**
+   * CAPA DE NOTAS (vergis#84). `render` = el contexto que viaja al HTML (endpoints + CSRF + recorte)
+   * para que la bandeja ofrezca «Imprimir»/«Anotar» y los marcadores de comentario funcionen.
+   * `resolver` = qué se ha comentado sobre las filas servidas — lo consulta el server, no Mira.
+   * Ausente ⇒ el PI se sirve sin superficie de notas (p.ej. el render de una impresión congelada).
+   */
+  notas?: { render?: unknown; resolver?: ResolverComentarios }
   /** PI multi-vista: id de la página activa (default: la 1ª). Viene de la query `?page=`. */
   page?: string
   /** Contexto del drill-through (campo→valor(es)). Viene de la query `?ctx.<campo>=` — repetido
@@ -87,6 +91,10 @@ export interface RunOutcome {
   artifacts: { format: string; path?: string; content?: string }[]
   /** El HTML renderizado (para servir per-request sin pasar por disco). */
   html?: string
+  /** El árbol resuelto que produjo ese HTML — lo que una impresión congela (vergis#84 · D1). */
+  resolved?: ResolvedNode
+  /** Frescura de la corrida: el `watermark` es la procedencia del dato congelado. */
+  freshness?: { watermark?: string; stale?: boolean }
   fallback?: { reason: string; recovery: string }
   log: LogEntry[]
   chainValid: boolean
@@ -146,19 +154,26 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
     trigger: 'on-demand',
     params: {
       baseDir: options.baseDir ?? process.cwd(),
-      annotations: options.annotations,
+      notas: options.notas,
       page: options.page,
       ctx: options.ctx,
     },
   })
   botler.stop()
 
-  const output = (result.output ?? {}) as { artifacts?: { format: string; path?: string; content?: string }[]; html?: string }
+  const output = (result.output ?? {}) as {
+    artifacts?: { format: string; path?: string; content?: string }[]
+    html?: string
+    resolved?: ResolvedNode
+    freshness?: { watermark?: string; stale?: boolean }
+  }
   return {
     ok: result.ok,
     botletId: result.botletId,
     artifacts: output.artifacts ?? [],
     html: output.html,
+    resolved: output.resolved,
+    freshness: output.freshness,
     fallback: result.fallback,
     log: botler.log.all(),
     chainValid: botler.log.verifyChain(),
