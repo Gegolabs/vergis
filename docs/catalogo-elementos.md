@@ -134,7 +134,26 @@ decimal solo si la mantisa es menor a 100.
 (principio Gold-in-query): la agregación por mes/semana y el orden salen del SQL, no de un motor de
 tiempo en el render. **`x` reemplaza a `time_field`.** El eje es ordinal en el orden de las filas.
 
-## 4 · El resto del catálogo: diseñado, no construido
+## 4 · Tema y color de los charts (no declarable por spec)
+
+El fondo y la paleta son **convención de plataforma**, no algo que un PI declare: el spec dice QUÉ se
+grafica, la plataforma decide CÓMO se ve.
+
+- **Todo PI nace con fondo blanco** — reportes y dashboards por igual. La instancia puede revertirlo
+  con `VERGIS_THEME_REPORT` / `VERGIS_THEME_DASHBOARD` (formato `theme[@paleta]`).
+- **Los colores del chart se hornean en el SVG server-side**, así que un theme con paletas
+  conmutables declara un juego de tokens **por paleta** (`Theme.chartTokensByPalette`): lo que
+  contrasta sobre fondo oscuro se lava sobre blanco. El render resuelve los tokens de la paleta
+  ACTIVA, no los del theme a secas.
+- **El selector de Apariencia re-colorea también los gráficos.** Un atributo de presentación de SVG
+  (`fill="#…"`) no admite `var()`, así que el render reescribe cada color de token a
+  `style="fill:var(--chart-bar,#…)"` —una declaración CSS gana sobre el atributo— y cada paleta
+  declara sus `--chart-*`. El hex horneado queda solo como respaldo. **No se re-compila Vega en el
+  browser**: el contrato del motor sigue siendo SVG server-side, que imprime gratis.
+- **Invariante de los juegos de tokens de un theme**: `chartBar` es el color de la primera serie. Así
+  el mapa hex→variable asigna los mismos nombres bajo cualquier paleta activa.
+
+## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de
 construcción se documenta aquí para no re-litigarlo:

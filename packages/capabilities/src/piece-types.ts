@@ -154,6 +154,8 @@ export interface Drill {
 
 export interface RenderOpts {
   tokens: ThemeTokens
+  /** Mapa hex→CSS var para abrir los colores horneados del SVG al conmutador de Apariencia (#78). */
+  chartVars?: Record<string, string>
   interactive: boolean
   /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
   carry: CarryCtx

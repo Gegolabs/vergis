@@ -148,6 +148,38 @@ function applyChartSort(
   }
 }
 
+/**
+ * Post-proceso del SVG que abre los colores horneados al conmutador de Apariencia (#78).
+ *
+ * Vega serializa el color como ATRIBUTO de presentación (`fill="#b8bb26"`), y un atributo no admite
+ * `var()`. Se reescribe a `style="fill:var(--chart-bar,#b8bb26)"`: la declaración CSS gana sobre el
+ * atributo de presentación, así que la paleta activa manda y el hex queda solo como respaldo.
+ *
+ * Determinista y acotado: reescribe SOLO `fill`/`stroke` cuyo valor sea EXACTAMENTE un hex de token
+ * (los ~11 colores que emitimos nosotros); cualquier otro color de Vega —el `#000` de los símbolos
+ * de leyenda, `none`, `transparent`— queda intacto. Opera por etiqueta y funde ambas propiedades en
+ * UN solo atributo `style`: hay elementos (los símbolos de leyenda de `series`) con fill Y stroke de
+ * token, y dos atributos `style` en la misma etiqueta serían HTML inválido.
+ */
+export function themeChartSvg(svg: string, varMap: Record<string, string>): string {
+  if (Object.keys(varMap).length === 0) return svg
+  return svg.replace(/<[a-zA-Z][^>]*>/g, (tag) => {
+    const decls: string[] = []
+    let out = tag
+    for (const prop of ['fill', 'stroke'] as const) {
+      const m = out.match(new RegExp(`\\s${prop}="(#[0-9a-fA-F]{3,8})"`))
+      if (!m) continue
+      const name = varMap[m[1].toLowerCase()]
+      if (!name) continue
+      out = out.replace(m[0], '')
+      decls.push(`${prop}:var(${name},${m[1]})`)
+    }
+    if (decls.length === 0) return tag
+    // `style` al final de la etiqueta, antes del cierre (`>` o `/>`).
+    return out.replace(/\s*(\/?)>$/, ` style="${decls.join(';')}"$1>`)
+  })
+}
+
 /** Campo sintético que lleva el rótulo YA formateado server-side (#80). Vega solo lo pinta. */
 const LABEL_FIELD = '__label'
 
@@ -192,9 +224,13 @@ function labelLayer(horizontal: boolean, tokens: ThemeTokens) {
   }
 }
 
-export async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens): Promise<string> {
+export async function renderDistribution(
+  node: ResolvedNode,
+  tokens: ThemeTokens,
+  vars: Record<string, string> = {},
+): Promise<string> {
   // Modo AGRUPADO (multi-métrica): 2+ series de barras por categoría.
-  if (node.metricsSpec && node.metricsSpec.length > 0) return renderDistributionGrouped(node, tokens)
+  if (node.metricsSpec && node.metricsSpec.length > 0) return renderDistributionGrouped(node, tokens, vars)
   const dim = node.dimensionField ?? 'dimension'
   const metric = node.metricField ?? 'metric'
   const horizontal = (node.orientation ?? 'horizontal') === 'horizontal'
@@ -227,7 +263,9 @@ export async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens
     layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar } }, labelLayer(horizontal, tokens)],
     config: chartAxisConfig(tokens),
   }
-  const svg = await cachedSvg(spec)
+  // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
+  // puro posterior, así que no contamina el caché ni lo invalida.
+  const svg = themeChartSvg(await cachedSvg(spec), vars)
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
 
@@ -238,7 +276,11 @@ export async function renderDistribution(node: ResolvedNode, tokens: ThemeTokens
  * SUMA de las series y agrega el resto en «(otros)» sumando CADA serie por separado (el total de cada
  * serie sigue cuadrando). Mismo LRU (la clave ya es hash del spec+datos).
  */
-async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens): Promise<string> {
+async function renderDistributionGrouped(
+  node: ResolvedNode,
+  tokens: ThemeTokens,
+  vars: Record<string, string> = {},
+): Promise<string> {
   const dim = node.dimensionField ?? 'dimension'
   const metrics = node.metricsSpec ?? []
   const fields = metrics.map((m) => m.field)
@@ -288,7 +330,9 @@ async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens
     layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2 } }, labelLayer(horizontal, tokens)],
     config: chartAxisConfig(tokens),
   }
-  const svg = await cachedSvg(spec)
+  // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
+  // puro posterior, así que no contamina el caché ni lo invalida.
+  const svg = themeChartSvg(await cachedSvg(spec), vars)
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
 
@@ -298,7 +342,11 @@ async function renderDistributionGrouped(node: ResolvedNode, tokens: ThemeTokens
  * el eje x es ORDINAL en el orden de llegada de las filas (`sort: null` — el SQL manda, NO se
  * re-ordena alfabético). Marca de línea con puntos, leyenda abajo, paleta del theme. Mismo LRU.
  */
-export async function renderSeries(node: ResolvedNode, tokens: ThemeTokens): Promise<string> {
+export async function renderSeries(
+  node: ResolvedNode,
+  tokens: ThemeTokens,
+  vars: Record<string, string> = {},
+): Promise<string> {
   const rows = node.rows ?? []
   const x = node.xField ?? 'x'
   const series = node.seriesSpec ?? []
@@ -326,7 +374,9 @@ export async function renderSeries(node: ResolvedNode, tokens: ThemeTokens): Pro
     },
     config: chartAxisConfig(tokens),
   }
-  const svg = await cachedSvg(spec)
+  // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
+  // puro posterior, así que no contamina el caché ni lo invalida.
+  const svg = themeChartSvg(await cachedSvg(spec), vars)
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
 }
 
