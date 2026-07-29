@@ -6,7 +6,7 @@ import { staticData } from './static-data'
 
 export { staticData } from './static-data'
 export { renderHtmlPiece } from './render-html-piece'
-export { CHART_MAX_BARS, chartCacheStats, groupedTopN, labelledDomain } from './render-chart'
+export { CHART_MAX_BARS, chartCacheStats, groupedTopN, labelledDomain, themeChartSvg } from './render-chart'
 export type { TopNRank } from './render-chart'
 export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
@@ -96,7 +96,15 @@ export { createExecuteSqlClickHouse, fetchChTransport } from './execute-sql-ch'
 export type { ClickHouseProfile, ChQueryRequest, ChQueryResult, ChTransport } from './execute-sql-ch'
 export { bootstrapClickHouse, createIngestClickHouse } from './clickhouse-store'
 export type { ChAdminConn, ChColumnType, ChStoreSchema, BootstrapOptions } from './clickhouse-store'
-export { getTheme, registerTheme, defaultTheme, arbolTheme } from './themes'
+export {
+  getTheme,
+  registerTheme,
+  defaultTheme,
+  arbolTheme,
+  resolveChartTokens,
+  chartVarMap,
+  chartVarDeclarations,
+} from './themes'
 export type { Theme, ThemeTokens, DashboardMeta } from './themes'
 
 /**

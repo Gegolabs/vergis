@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type Capability } from '@vergis/botler'
 import { escapeHtml, renderMarkdown } from './markdown'
-import { getTheme, type ThemeTokens } from './themes'
+import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
 import { renderTable } from './render-table'
@@ -41,9 +41,15 @@ export const renderHtmlPiece: Capability = {
     const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
+    // Los colores del chart se hornean en el SVG server-side ⇒ el juego de tokens es el de la paleta
+    // ACTIVA, no el del theme a secas (los tonos calibrados para fondo oscuro se lavan sobre blanco).
+    const chartTokens = resolveChartTokens(theme, palette)
+    // …y además se abren a CSS vars, para que el conmutador de Apariencia re-coloree los gráficos
+    // sin re-compilar Vega en el browser (el contrato del motor es SVG server-side).
+    const chartVars = chartVarMap(chartTokens)
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false }
-    const opts: RenderOpts = { tokens: theme.tokens, interactive: !!interactive, carry, signals }
+    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, carry, signals }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
     // el control), no en la gaveta. El tab «Controles» de la gaveta queda para la maquinaria
     // (facetas de dashboard / runtime de tabla). Los selectores de alcance NO viven aquí.
@@ -231,9 +237,9 @@ async function renderNode(node: ResolvedNode, opts: RenderOpts): Promise<string>
     case 'dato':
       return renderDato(node)
     case 'distribution':
-      return renderDistribution(node, opts.tokens)
+      return renderDistribution(node, opts.tokens, opts.chartVars)
     case 'series':
-      return renderSeries(node, opts.tokens)
+      return renderSeries(node, opts.tokens, opts.chartVars)
     case 'table':
       return renderTable(node, opts)
     case 'semaforo':
