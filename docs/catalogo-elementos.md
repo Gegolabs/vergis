@@ -46,8 +46,40 @@ modo singular queda **intacto** (cero cambios a specs existentes).
   se rechaza (`distribution-metrics-field-dangling`).
 - **Render**: `fold` (wide→long) + `color` por serie + `yOffset` (horizontal) / `xOffset` (vertical).
   Paleta categórica del theme (`chartSeries`, con fallback).
-- **Cota top-N** (`CHART_MAX_BARS = 30`): ordena las categorías por la **suma de las series** y colapsa
-  el resto en «(otros)» sumando **cada serie por separado** — el total de cada serie se conserva.
+- **Cota top-N** (`CHART_MAX_BARS = 30`): colapsa el resto en «(otros)» sumando **cada serie por
+  separado** — el total de cada serie se conserva. El criterio de corte es el mismo `sort` de abajo.
+
+### `sort` — orden declarable de las categorías
+
+Vocabulario **cerrado**; el default (ausente) es `magnitude`, que es el contrato histórico: un spec
+que no declara `sort` renderiza idéntico.
+
+| Token | Qué ordena |
+|--|--|
+| `magnitude` | Magnitud descendente. En agrupado, por la **suma** de las series; en mono, por la métrica. |
+| `chrono` | **No re-ordena**: manda el orden de llegada de las filas, o sea el `ORDER BY` del SQL. |
+| `value:<serie>` | Por **una** serie declarada, descendente. `<serie>` es su `label` o su `field`. |
+
+```yaml
+- distribution:
+    dimension: data.cruce.periodo
+    metrics:
+      - { field: plantas_base,   label: "Base" }
+      - { field: plantas_actual, label: "Actual" }
+    sort: chrono            # ene→dic tal como los ordenó el SQL
+```
+
+- **`chrono` NO parsea fechas ni meses.** El calendario lo conoce el `ORDER BY` del SQL, que es quien
+  tiene el dato; meter un parser de meses en español dentro del motor sería moverlo al lugar
+  equivocado. Es la misma tesis ya vigente en `series`.
+- **La cota top-N usa el mismo criterio**: con `chrono` se conservan las primeras N *en orden de
+  llegada* (no se re-ordena para cortar); con `value:<serie>` el top-N se rankea por ESA serie. En
+  los tres casos «(otros)» sigue sumando cada serie por separado.
+- **`value:<serie>` colgante es error de validación** (`distribution-sort-value-dangling`), con la
+  lista de series válidas en la remediación — no un orden arbitrario en silencio.
+- **Modo mono**: se acepta además el token legacy `-campo` / `campo`, que ordena las filas por ese
+  campo. En modo **agrupado** ese token se rechaza (`distribution-sort-unknown`): ahí nunca tuvo
+  efecto, y aceptarlo sería prometer un orden que no ocurre.
 
 ## 3 · `series` — líneas de N series sobre un eje
 
