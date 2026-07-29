@@ -48,6 +48,69 @@ chica** («Filtros: Clasificación: X · buscar: rosas»), ocultando solo la acc
 `.vt-chip-x`). **Agrupar-por no imprime chips**: su estado ya es autoevidente en la estructura de la
 tabla renderizada.
 
+## 4·bis · Los dos motores de filtro (y cuándo usar cada uno)
+
+Hay **dos** mecanismos de filtro, con la misma superficie y distinto motor. La regla de elección es
+una sola: **¿el documento tiene charts?**
+
+| | `interactions.filters` (client-side) | **`filters:` (server-side, `:flt.*`)** |
+|---|---|---|
+| Cómo re-ancla | recompute JS sobre datasets materializados en el HTML | **navegación + re-render server-side** |
+| Qué alcanza a re-anclar | KPIs, semáforo y tabla | **todo: charts, KPIs, semáforo y tabla** |
+| Costo | los datasets viajan completos al HTML | solo las opciones visibles viajan; el catálogo queda server-side |
+| Cascada de opciones | no | **sí** (`depends_on`) |
+| Cuándo usarlo | reportes tabulares sin gráficos: es el camino barato | **dashboards con charts** |
+
+Los charts son **SVG horneado server-side** (así imprimen gratis, TX-09). Ningún JS de recompute
+puede re-dibujarlos sin re-ejecutar Vega en el browser, que es justo lo que el contrato del motor no
+hace. Por eso `filters:` re-ancla por re-render, no por recompute. Los dos mecanismos **coexisten**:
+un spec puede declarar ambos, y el client-side opera sobre lo que el server ya recortó.
+
+### El bloque `filters:` en el DSL
+
+```yaml
+filters:
+  - id: familia
+    label: Familia
+    source: data.catalogo.familia    # catálogo de opciones (un SELECT DISTINCT, bajo la misma RLS)
+  - id: tipo
+    label: Tipo
+    source: data.catalogo.tipo
+    multi: true
+    depends_on: familia              # cascada: las opciones se condicionan por la selección del padre
+
+data:
+  hechos:
+    params:
+      sql: "SELECT … FROM dbo.hechos WHERE 1=1 AND :flt.familia AND :flt.tipo"
+```
+
+- **`:flt.<id>` es un placeholder de PREDICADO**: sin selección se sustituye por `1=1` (ausencia =
+  sin efecto = documento completo); con selección, por `<column> IN (@flt_<id>_0, …)`. Los valores del
+  usuario viajan **siempre como binds**, jamás interpolados.
+- **La granularidad la decide el spec**: los datasets sin `:flt.` no se re-anclan. Así un dashboard
+  puede dejar deliberadamente fuera del filtro sus tarjetas de encabezado o una curva de referencia,
+  sin ninguna regla especial del motor.
+- **`column`** (default: el campo de `source`) es la columna que el predicado filtra; se **interpola**
+  en el SQL, así que se valida como identificador — nunca admite una expresión.
+- **Correspondencia obligatoria en ambas direcciones**: un `:flt.` sin filtro declarado y un filtro
+  que ningún SQL usa son errores de validación, no silencios. El primero sería un filtro que no
+  filtra; el segundo, un control en la bandeja que no mueve nada.
+
+### Por qué un placeholder nuevo y no `:ctx.` «expandido»
+
+Reutilizar `:ctx.` expandiendo a todas las opciones cuando no hay selección rompería tres cosas a la
+vez: la **semántica de NULL** (las filas con el campo nulo desaparecerían sin que nadie filtrara), el
+**tope de parámetros TDS** (~2100 binds con catálogos grandes) y la **nitidez del contrato**
+«ausencia = sin efecto».
+
+### Autorización
+
+El filtro es **sustractivo por construcción**: compone dentro de queries que ya corren bajo la RLS
+data-anchored, y sus opciones salen del catálogo, que también corrió bajo RLS. Una selección fuera del
+catálogo se **descarta** — jamás se bindea. La cascada es post-RLS por construcción, porque opera
+in-memory sobre un catálogo ya recortado. Un filtro **nunca** puede producir filas adicionales.
+
 ## 5 · Afordancias proporcionales y atribuibles
 
 1. **Tablas display no reciben maquinaria.** Una tabla cuyo dataset es `single_row` o que rinde 1
