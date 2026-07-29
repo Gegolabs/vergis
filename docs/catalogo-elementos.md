@@ -46,8 +46,68 @@ modo singular queda **intacto** (cero cambios a specs existentes).
   se rechaza (`distribution-metrics-field-dangling`).
 - **Render**: `fold` (wide→long) + `color` por serie + `yOffset` (horizontal) / `xOffset` (vertical).
   Paleta categórica del theme (`chartSeries`, con fallback).
-- **Cota top-N** (`CHART_MAX_BARS = 30`): ordena las categorías por la **suma de las series** y colapsa
-  el resto en «(otros)» sumando **cada serie por separado** — el total de cada serie se conserva.
+- **Cota top-N** (`CHART_MAX_BARS = 30`): colapsa el resto en «(otros)» sumando **cada serie por
+  separado** — el total de cada serie se conserva. El criterio de corte es el mismo `sort` de abajo.
+
+### `sort` — orden declarable de las categorías
+
+Vocabulario **cerrado**; el default (ausente) es `magnitude`, que es el contrato histórico: un spec
+que no declara `sort` renderiza idéntico.
+
+| Token | Qué ordena |
+|--|--|
+| `magnitude` | Magnitud descendente. En agrupado, por la **suma** de las series; en mono, por la métrica. |
+| `chrono` | **No re-ordena**: manda el orden de llegada de las filas, o sea el `ORDER BY` del SQL. |
+| `value:<serie>` | Por **una** serie declarada, descendente. `<serie>` es su `label` o su `field`. |
+
+```yaml
+- distribution:
+    dimension: data.cruce.periodo
+    metrics:
+      - { field: plantas_base,   label: "Base" }
+      - { field: plantas_actual, label: "Actual" }
+    sort: chrono            # ene→dic tal como los ordenó el SQL
+```
+
+- **`chrono` NO parsea fechas ni meses.** El calendario lo conoce el `ORDER BY` del SQL, que es quien
+  tiene el dato; meter un parser de meses en español dentro del motor sería moverlo al lugar
+  equivocado. Es la misma tesis ya vigente en `series`.
+- **La cota top-N usa el mismo criterio**: con `chrono` se conservan las primeras N *en orden de
+  llegada* (no se re-ordena para cortar); con `value:<serie>` el top-N se rankea por ESA serie. En
+  los tres casos «(otros)» sigue sumando cada serie por separado.
+- **`value:<serie>` colgante es error de validación** (`distribution-sort-value-dangling`), con la
+  lista de series válidas en la remediación — no un orden arbitrario en silencio.
+- **Modo mono**: se acepta además el token legacy `-campo` / `campo`, que ordena las filas por ese
+  campo. En modo **agrupado** ese token se rechaza (`distribution-sort-unknown`): ahí nunca tuvo
+  efecto, y aceptarlo sería prometer un orden que no ocurre.
+
+### Rótulos de valor sobre las marcas
+
+Cada barra (y cada sub-barra del modo agrupado) lleva su valor rotulado. Es **convención de
+plataforma**, no un opcional del spec: un gráfico de barras sin cifra obliga a estimar contra el eje.
+
+- El rótulo se **pre-computa server-side** y viaja como un campo del dato; Vega solo lo pinta. El
+  formateador es el mismo `vtFormat` de las tablas — no hay una segunda implementación de formato en
+  expresiones Vega que pueda divergir.
+- **Formato**: el `format` declarado en el `distribution` si lo hay; sin él, `abbr`.
+- El rótulo es parte del SVG ⇒ **se imprime**, sin trabajo extra.
+- La holgura del dominio cuantitativo (~10 %) evita que el rótulo de la marca más larga se corte
+  contra el borde. La anti-colisión fina entre rótulos vecinos (rotar/omitir) es decisión del motor y
+  **no se declara por spec**.
+
+#### Formato `abbr` — magnitud abreviada (es-CL)
+
+| Valor | `abbr` | `int_0` |
+|--|--|--|
+| `1234567` | `1,2M` | `1.234.567` |
+| `340000` | `340K` | `340.000` |
+| `2500000000` | `2.500M` | `2.500.000.000` |
+| `999` | `999` | `999` |
+
+Escalera de **dos** sufijos a propósito: K (miles) y M (millones). No se usa «B»: en español
+«billón» es 10¹², así que 2,5·10⁹ se rotula `2.500M` — millones, la unidad idiomática — en vez de un
+`2,5B` que se leería mil veces mayor. Coma decimal y punto de miles como el resto del formateador; un
+decimal solo si la mantisa es menor a 100.
 
 ## 3 · `series` — líneas de N series sobre un eje
 

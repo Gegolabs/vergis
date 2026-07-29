@@ -94,7 +94,7 @@ export function vtFormat(value: unknown, format?: string): string {
   // se agrupa SOBRE el string (convertir a Number perdería dígitos más allá de MAX_SAFE_INTEGER);
   // un string no numérico sigue su camino normal (se sirve tal cual, sin romper el render).
   // AUTOCONTENIDO a propósito: esta función viaja al browser vía `.toString()` (PURE_FNS).
-  if (typeof value === 'string' && (format === 'int_0' || format === 'percent_1' || format === 'percent')) {
+  if (typeof value === 'string' && (format === 'int_0' || format === 'percent_1' || format === 'percent' || format === 'abbr')) {
     const s = value.trim()
     if (format === 'int_0' && /^[+-]?\d+$/.test(s)) {
       const digits = s.replace(/^[+-]/, '').replace(/^0+(?=\d)/, '')
@@ -109,6 +109,25 @@ export function vtFormat(value: unknown, format?: string): string {
       return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Math.round(value))
     if (format === 'percent_1') return (value * 100).toFixed(1) + '%'
     if (format === 'percent') return Math.round(value * 100) + '%'
+    // `abbr` — magnitud abreviada es-CL para rótulos de chart, donde el ancho de la marca es el
+    // presupuesto: `1,2M` · `340K` · `2.500M`. Escalera de DOS sufijos a propósito: K (miles) y M
+    // (millones). NO se usa «B»: en español «billón» es 10^12, así que 2,5e9 se rotula `2.500M`
+    // (millones, la unidad idiomática en Chile) en vez de un `2,5B` que se leería mil veces mayor.
+    // Coma decimal y punto de miles como el resto del formateador; un decimal solo si la mantisa es
+    // menor a 100 (con más dígitos el decimal no aporta y roba ancho), y se poda el `,0`.
+    if (format === 'abbr') {
+      const abs = Math.abs(value)
+      const [div, suffix] = abs >= 1e6 ? [1e6, 'M'] : abs >= 1e3 ? [1e3, 'K'] : [1, '']
+      const mant = value / div
+      const decimals = Math.abs(mant) < 100 && suffix !== '' ? 1 : 0
+      const txt = new Intl.NumberFormat('es-CL', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      }).format(mant)
+      const trimmed = decimals ? txt.replace(/,0$/, '') : txt
+      // `-0` (redondeo de una magnitud negativa diminuta) se rotula `0`: el signo miente sobre el dato.
+      return (trimmed === '-0' ? '0' : trimmed) + suffix
+    }
     return String(value)
   }
   if (value instanceof Date) return value.toISOString().slice(0, 10)
