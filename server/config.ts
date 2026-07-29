@@ -23,6 +23,12 @@ export type Engine = 'clickhouse' | 'fabric'
 export interface ServerConfig {
   engine: Engine
   port: number
+  /**
+   * Interfaz de escucha (`HOST`). `undefined` = comportamiento por defecto de Node: escucha en TODAS
+   * las interfaces — lo que necesita el contenedor para que el proxy lo alcance. Seteado (p. ej.
+   * `127.0.0.1`), el arnés de dev queda localhost-only y no expone el puerto a la red local.
+   */
+  host: string | undefined
   refreshMs: number
   dataCacheTtlMs: number
   /** Tope de filas materializables por `interactions.filters`; undefined → default de Mira. */
@@ -150,6 +156,44 @@ export function decideDevIdentity(env: Env): DevIdentityDecision {
   return { mode: 'active', identity }
 }
 
+/**
+ * Decisión de `--fresh` — **el arnés de desarrollo arranca con el store limpio**.
+ *
+ * El store SQLite de gobierno persiste entre corridas del arnés y arrastra sesiones de prueba de
+ * Miranda. `--fresh` lo borra y lo deja recrear al arranque. El default se conserva intacto (sin la
+ * bandera, el store se preserva — «`--keep` implícito»).
+ *
+ * **Imposible por construcción sobre un store de producción:** el borrado exige que el proceso sea
+ * un despliegue de DESARROLLO, y la señal es la MISMA que ya gobierna `VERGIS_DEV_IDENTITY`:
+ *
+ * - `off`            — la bandera no vino → jamás se toca nada.
+ * - `refused-gate`   — hay gate real (`VERGIS_GATE_SECRET` presente) → se REHÚSA (nunca borra).
+ * - `refused-no-dev` — sin identidad de dev activa (`VERGIS_DEV_IDENTITY`) → se REHÚSA: un despliegue
+ *                      sin ese env no es el arnés, y un store que no es de dev no se borra.
+ * - `fresh`          — bandera ∧ dev-identity activa ∧ sin gate real → se borra el store de dev.
+ *
+ * Ambas negativas son fail-safe: ante duda, se conserva el store.
+ */
+export type FreshStoreDecision =
+  | { mode: 'off' }
+  | { mode: 'fresh' }
+  | { mode: 'refused-gate' }
+  | { mode: 'refused-no-dev' }
+
+/** ¿Vino `--fresh` en los argumentos del proceso? (`--keep` es el default, se acepta y no hace nada.) */
+export function hasFreshFlag(argv: readonly string[]): boolean {
+  return argv.includes('--fresh')
+}
+
+/** Decide si el store de gobierno se recrea. Fail-safe: solo el arnés de dev puede borrar. */
+export function decideFreshStore(argv: readonly string[], env: Env): FreshStoreDecision {
+  if (!hasFreshFlag(argv)) return { mode: 'off' }
+  const dev = decideDevIdentity(env)
+  if (dev.mode === 'ignored-gate') return { mode: 'refused-gate' }
+  if (dev.mode !== 'active') return { mode: 'refused-no-dev' }
+  return { mode: 'fresh' }
+}
+
 type Env = Record<string, string | undefined>
 
 const TRUTHY = new Set(['1', 'true', 'on'])
@@ -209,6 +253,7 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
     miranda: mirandaConfig(env),
     devIdentity: devDecision.mode === 'active' ? devDecision.identity : null,
     port: num(env, 'PORT', 8080),
+    host: (env['HOST'] ?? '').trim() || undefined,
     refreshMs: num(env, 'VERGIS_REFRESH_MS', 0),
     dataCacheTtlMs: num(env, 'VERGIS_DATA_CACHE_TTL_MS', 0),
     interactiveMaxRows: numOpt(env, 'VERGIS_INTERACTIVE_MAX_ROWS'),

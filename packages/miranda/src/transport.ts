@@ -29,9 +29,27 @@ export interface AnthropicMessage {
   content: string | AnthropicContentBlock[]
 }
 
+/**
+ * Marca de caché de la Messages API. Un bloque con `cache_control` cierra un PREFIJO cacheable:
+ * el orden de render es `tools` → `system` → `messages`, así que la marca en el último bloque del
+ * system cachea tools + system de una vez. Lo que va DESPUÉS del breakpoint (los mensajes del turno)
+ * no se cachea — por eso el prefijo marcado debe ser estable entre turnos.
+ */
+export interface CacheControl {
+  type: 'ephemeral'
+}
+
+/** Bloque de texto del system prompt (la forma en array, la única que admite `cache_control`). */
+export interface SystemTextBlock {
+  type: 'text'
+  text: string
+  cache_control?: CacheControl
+}
+
 export interface AnthropicRequest {
   model: string
-  system?: string
+  /** Texto plano, o la forma en ARRAY de bloques cuando se marca un breakpoint de caché. */
+  system?: string | SystemTextBlock[]
   messages: AnthropicMessage[]
   tools?: ToolDefinition[]
   max_tokens: number
@@ -42,6 +60,10 @@ export interface AnthropicRequest {
 export interface AnthropicUsage {
   input_tokens: number
   output_tokens: number
+  /** Tokens ESCRITOS al caché en esta llamada (se cobran ~1.25×). Ausente si no hubo caché. */
+  cache_creation_input_tokens?: number
+  /** Tokens SERVIDOS desde el caché (se cobran ~0.1×). Ausente si no hubo caché. */
+  cache_read_input_tokens?: number
 }
 
 export interface AnthropicResponse {
@@ -56,9 +78,19 @@ export interface AnthropicTransport {
   createMessage(req: AnthropicRequest, signal?: AbortSignal): Promise<AnthropicResponse>
 }
 
-/** Total de tokens de una respuesta (input + output). */
+/**
+ * Total de tokens de una respuesta. Con caché de prompt, `input_tokens` trae SOLO el remanente no
+ * cacheado: el prompt completo es `input + cache_creation + cache_read`. Se suman los tres para que
+ * el presupuesto de la sesión siga contando el mismo volumen que antes del caché (el caché abarata la
+ * llamada, no acorta el prompt); ambos campos son opcionales y valen 0 cuando no hubo caché.
+ */
 export function usageTotal(u: AnthropicUsage): number {
-  return (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+  return (
+    (u.input_tokens ?? 0) +
+    (u.output_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0)
+  )
 }
 
 export interface FetchTransportOptions {

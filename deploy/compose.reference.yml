@@ -29,6 +29,10 @@ services:
       VERGIS_SPECS_DIR: /specs                    # PIs servibles (authz-blind) — montaje ./specs
       VERGIS_POLICIES: /policies/entidades.yaml   # policy store data-anchored (coma-separado si son varios)
       VERGIS_IDENTITY_MAP: /identity/map.json     # email del gate → claim de identidad (trust-base)
+      # HOST: 127.0.0.1                           # interfaz de escucha (opcional). SIN definir (default):
+                                                  #   todas las interfaces — lo que el contenedor necesita
+                                                  #   para que el proxy lo alcance. Definirlo solo fuera del
+                                                  #   contenedor (arnés de dev localhost-only).
       # VERGIS_GATE_SECRET: <token-compartido>    # D2 · defensa en profundidad (A10): exige `x-gate-token`
                                                   #   en CADA request. El proxy (abajo) debe inyectarlo. Sin
                                                   #   esto el gate confía en X-Forwarded-* a ciegas — seguro
