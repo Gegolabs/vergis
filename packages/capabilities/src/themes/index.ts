@@ -41,6 +41,13 @@ export interface Palette {
 export interface Theme {
   name: string
   tokens: ThemeTokens
+  /**
+   * Tokens de chart POR PALETA. Los colores del chart se hornean en el SVG server-side, así que un
+   * theme con paletas conmutables necesita un juego calibrado por cada una: los tonos que contrastan
+   * sobre fondo oscuro se lavan sobre fondo blanco. La paleta activa se resuelve con
+   * `resolveChartTokens`; una paleta sin entrada cae a `tokens`.
+   */
+  chartTokensByPalette?: Record<string, ThemeTokens>
   /** Paletas que el theme ofrece para conmutar en vivo (selector de apariencia en la bandeja). */
   palettes?: Palette[]
   /** Envuelve el body semántico en el documento HTML completo (head, css, cromo).
@@ -63,6 +70,54 @@ export function getTheme(name?: string): Theme {
 
 export function registerTheme(theme: Theme): void {
   THEMES[theme.name] = theme
+}
+
+/** Tokens de chart de la paleta ACTIVA (server-side): los del theme si la paleta no declara los suyos. */
+export function resolveChartTokens(theme: Theme, palette?: string): ThemeTokens {
+  return (palette && theme.chartTokensByPalette?.[palette]) || theme.tokens
+}
+
+/**
+ * Nombres de las CSS custom properties de chart, por rol. El post-proceso del SVG reemplaza cada
+ * color horneado por `var(--chart-<rol>, #hex)`, y cada paleta del theme declara sus `--chart-*`:
+ * así el selector de Apariencia re-colorea también los gráficos, sin re-compilar Vega en el browser.
+ */
+export const CHART_VAR_BAR = '--chart-bar'
+export const CHART_VAR_TEXT = '--chart-text'
+export const CHART_VAR_AXIS = '--chart-axis'
+export const chartVarSeries = (i: number): string => `--chart-s${i + 1}`
+
+/**
+ * Mapa `hex en minúsculas → nombre de la CSS var` para los tokens de un juego.
+ *
+ * Un mismo hex puede servir a dos roles (en `arbol`, `chartBar` ES la primera serie): gana el
+ * PRIMERO en el orden barra → texto → eje → series. La ambigüedad es inofensiva porque los roles que
+ * comparten hex lo comparten por diseño del theme, y cada paleta define ambas vars al mismo valor.
+ */
+export function chartVarMap(tokens: ThemeTokens): Record<string, string> {
+  const map: Record<string, string> = {}
+  const put = (hex: string | undefined, name: string): void => {
+    if (!hex) return
+    const k = hex.toLowerCase()
+    if (!(k in map)) map[k] = name
+  }
+  put(tokens.chartBar, CHART_VAR_BAR)
+  put(tokens.chartText, CHART_VAR_TEXT)
+  put(tokens.chartAxis, CHART_VAR_AXIS)
+  ;(tokens.chartSeries ?? []).forEach((c, i) => put(c, chartVarSeries(i)))
+  return map
+}
+
+/**
+ * Bloque de declaraciones `--chart-*: <hex>;` de un juego de tokens, para inyectar en el CSS de una
+ * paleta. Se declaran TODAS las vars (incluidas las que comparten hex), para que el fallback del
+ * `var()` nunca sea el que manda.
+ */
+export function chartVarDeclarations(tokens: ThemeTokens): string {
+  const out = [`${CHART_VAR_BAR}: ${tokens.chartBar};`, `${CHART_VAR_TEXT}: ${tokens.chartText};`]
+  if (tokens.chartAxis) out.push(`${CHART_VAR_AXIS}: ${tokens.chartAxis};`)
+  ;(tokens.chartSeries ?? []).forEach((c, i) => out.push(`${chartVarSeries(i)}: ${c};`))
+  return out.join(' ')
 }
 
 export { defaultTheme } from './default'

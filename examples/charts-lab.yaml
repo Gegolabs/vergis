@@ -131,7 +131,9 @@ quality:
 
 delivery:
   render:
-    - { format: html, target: web }
+    # Theme `arbol`: el que trae paletas conmutables, para ejercitar también el re-coloreado de
+    # charts del selector de Apariencia (#78).
+    - { format: html, target: web, theme: arbol }
   channels:
     - type: file
       capability: publicar-artefacto
