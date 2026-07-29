@@ -6,7 +6,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHmac } from 'node:crypto'
 import { escapeHtml } from '@vergis/capabilities'
-import { constantTimeEqual } from './annotations'
+import { constantTimeEqual } from './http-util'
 
 /** CSS del avatar de identidad (menú arriba-derecha). Compartido por las superficies de admin y el
  * catálogo, para que ambas usen el mismo marco. Referencia las mismas CSS vars (--card/--accent/…). */

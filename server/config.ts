@@ -6,6 +6,10 @@
  * un env fake en tests — y valida los numéricos (cierra el hallazgo NaN: `PORT=abc` → `listen(NaN)`,
  * `VERGIS_INTERACTIVE_MAX_ROWS` NaN pasado a Mira sin chequeo).
  *
+ * `VERGIS_ANNOTATION_SECRET` está DEPRECADO (la capa de notas no usa tokens por fila): si viene en el
+ * entorno se ignora con aviso — el secreto CSRF se fija con `VERGIS_CSRF_SECRET`. Ver
+ * `deprecatedEnvWarnings`.
+ *
  * Alcance de este módulo: los valores ESCALARES y de RUTA/nombre. La CARGA de los archivos de config
  * (YAML/JSON de policies, specs, master-data, etc.) la hacen sus consumidores a partir de las rutas
  * que este config expone — así el parseo de entorno queda separado de la lectura de disco.
@@ -39,8 +43,10 @@ export interface ServerConfig {
   defaultStewardGroups: string[]
   /** Mapeo claim→cabecera del gate (VERGIS_GATE_CLAIMS). */
   gateClaims: Record<string, string>
-  /** Secreto HMAC de tokens de anotación; `random` indica que se generó por arranque (no persistente). */
-  annotationSecret: { value: string; ephemeral: boolean }
+  /** Secreto HMAC de los tokens CSRF de las superficies SSR de gestión. `ephemeral` indica que se
+   *  generó por arranque (no persistente): los formularios abiertos no sobreviven un restart ni se
+   *  comparten entre réplicas. `VERGIS_CSRF_SECRET` lo fija. */
+  csrfSecret: { value: string; ephemeral: boolean }
   /** Miranda — el agente conversacional de especificación de PIs (cluster 077). Todo detrás del flag. */
   miranda: MirandaConfig
   /**
@@ -196,7 +202,7 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
   if (engine !== 'clickhouse' && engine !== 'fabric') {
     throw new Error(`VERGIS_ENGINE inválido: '${engine}' (clickhouse | fabric).`)
   }
-  const envSecret = env['VERGIS_ANNOTATION_SECRET']
+  const envSecret = env['VERGIS_CSRF_SECRET']
   const devDecision = decideDevIdentity(env)
   return {
     engine,
@@ -218,7 +224,7 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
     defaultCollaboratorGroups: list(env, 'VERGIS_DEFAULT_COLLABORATOR_GROUPS', true),
     defaultStewardGroups: list(env, 'VERGIS_DEFAULT_STEWARD_GROUPS', true),
     gateClaims: parseGateClaims(env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-groups'),
-    annotationSecret: envSecret ? { value: envSecret, ephemeral: false } : { value: randomSecret(), ephemeral: true },
+    csrfSecret: envSecret ? { value: envSecret, ephemeral: false } : { value: randomSecret(), ephemeral: true },
     paths: {
       connections: env['VERGIS_CONNECTIONS'],
       datasets: env['VERGIS_DATASETS'],
@@ -254,6 +260,25 @@ function mirandaConfig(env: Env): MirandaConfig {
     scopeGroup: (env['MIRANDA_SCOPE_GROUP'] ?? 'miranda').trim().toLowerCase(),
     announceWebhook: env['MIRANDA_ANNOUNCE_WEBHOOK'],
   }
+}
+
+/** Envs retirados que siguen apareciendo en despliegues vivos: se avisan y se ignoran (jamás se
+ *  imprime su VALOR). `VERGIS_ANNOTATION_SECRET` firmaba los tokens por-fila del esquema de
+ *  anotaciones, retirado junto con él (vergis#84). */
+export function deprecatedEnvWarnings(env: Env = process.env): string[] {
+  const out: string[] = []
+  if ((env['VERGIS_ANNOTATION_SECRET'] ?? '') !== '') {
+    out.push(
+      'VERGIS_ANNOTATION_SECRET está DEPRECADO y se ignora: el esquema de tokens por fila fue retirado ' +
+        'con la capa de notas. El secreto CSRF de las superficies de gestión se fija con VERGIS_CSRF_SECRET.',
+    )
+  }
+  for (const k of ['VERGIS_ANNOTATIONS_DB', 'VERGIS_ANNOTATIONS_URL']) {
+    if ((env[k] ?? '') !== '') {
+      out.push(`${k} está DEPRECADO y se ignora: el store de anotaciones fue reemplazado por la capa de notas (VERGIS_NOTES_DB).`)
+    }
+  }
+  return out
 }
 
 function tmpdirSafe(): string {

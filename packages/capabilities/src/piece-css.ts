@@ -63,20 +63,12 @@ export const TABLE_INTERACTIVE_CSS = `
 .tray .vt-kit-target .vt-kit-target-sel:hover{border-color:var(--green,#2563eb)}
 .vtable .vt-count-foot{margin-top:8px;font-size:11px;color:var(--fg-dim,#64748b)}
 .vtable .vt-count-foot:empty{display:none}
-.tray .vt-ann-toggle{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--fg,#1f2937);cursor:pointer}
-.vtable .vt-ann-hint{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;margin-bottom:10px;background:var(--card,#fffbeb);border:1px solid var(--yellow,#d97706);border-radius:8px;font-size:12px;color:var(--fg,#1f2937)}
-.vtable .vt-ann-hint button{flex:none;background:none;border:1px solid var(--yellow,#d97706);color:var(--yellow,#d97706);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer}
-.vtable .vt-ann-hint button:hover{background:var(--yellow,#d97706);color:var(--bg,#fff)}
-.vtable td.vt-ann-cell{background:var(--panel,#f8fafc);min-width:120px;cursor:text;outline:none}
-.vtable td.vt-ann-cell:focus{box-shadow:inset 0 0 0 2px var(--green,#2563eb)}
-.vtable td.vt-ann-cell:empty::before{content:'+ nota';color:var(--fg-dim,#94a3b8);opacity:.55}
-.vtable td.vt-ann-cell.vt-ann-err{box-shadow:inset 0 0 0 2px var(--red,#dc2626)}
 .vtable tr.vt-drill-row{cursor:pointer}
 .vtable tr.vt-drill-row:hover td{background:var(--card,#eef2ff)}
 .vtable tbody tr.vt-selected td{background:var(--card,#e0e7ff)}
 .vtable tbody tr.vt-selected td:first-child{box-shadow:inset 3px 0 0 var(--green,#2563eb)}
 .vtable td.vt-drill-arrow{color:var(--green,#2563eb);font-weight:700;text-align:center;width:1.6em}
-@media print{.vtable .vt-filter-btn,.vtable .vt-ann-hint,.vtable td.vt-drill-arrow,.vtable .vt-chip-x{display:none!important}.vtable td.vt-ann-cell:empty::before{content:''}.vtable .vt-chips{display:block;margin:0 0 6px;font-size:10px;color:var(--fg-dim,#64748b)}.vtable .vt-chips::before{content:"Filtros: ";font-weight:600}.vtable .vt-chip{display:inline;background:none!important;border:none!important;padding:0;border-radius:0;margin:0;color:var(--fg-dim,#64748b);cursor:default}.vtable .vt-chip:not(:first-child)::before{content:"· "}}
+@media print{.vtable .vt-filter-btn,.vtable td.vt-drill-arrow,.vtable .vt-chip-x{display:none!important}.vtable .vt-chips{display:block;margin:0 0 6px;font-size:10px;color:var(--fg-dim,#64748b)}.vtable .vt-chips::before{content:"Filtros: ";font-weight:600}.vtable .vt-chip{display:inline;background:none!important;border:none!important;padding:0;border-radius:0;margin:0;color:var(--fg-dim,#64748b);cursor:default}.vtable .vt-chip:not(:first-child)::before{content:"· "}}
 `
 
 /** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.

@@ -82,8 +82,6 @@ export interface TableColumn {
   searchable?: boolean
   filter?: boolean
   groupBy?: boolean
-  /** Columna de anotación (editable, enriquecimiento de la capa de viz). */
-  annotation?: boolean
 }
 
 /**
@@ -135,8 +133,6 @@ export interface ResolvedNode {
   dataset?: string
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
   interactive?: boolean
-  /** Meta de anotaciones inyectada por Mira (ver applyAnnotations). */
-  annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
   /**
    * Drill-through: acciones de navegación por fila hoja. Cada acción lleva a la vista `to` pasando
    * una o más claves `by` (multi-clave: p.ej. empresa+socio). Una tabla puede ofrecer VARIOS drills
@@ -385,11 +381,10 @@ export function composePiece(
     const drills = normalizeDrills(t.drillthrough)
     return {
       type: 'table',
-      dataset, // permite direccionar la tabla por su dataset (p.ej. anotaciones sobre tabla nombrada)
+      dataset, // permite direccionar la tabla por su dataset (p.ej. el ancla de comentarios)
       rows,
-      // COPIA del arreglo de columnas (no la referencia al spec): applyAnnotations hace push de la
-      // columna de anotación sobre columnsSpec — sobre la referencia mutaría el SPEC CACHEADO
-      // (run.ts memoiza el spec por mtime) y cada request acumularía una columna más.
+      // COPIA del arreglo de columnas (no la referencia al spec): el spec está MEMOIZADO por mtime
+      // (run.ts) y cualquier enriquecimiento posterior sobre la referencia mutaría el spec cacheado.
       columnsSpec: [...(t.columns ?? [])],
       title: t.title,
       interactive: t.interactive,

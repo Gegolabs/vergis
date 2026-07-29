@@ -66,17 +66,16 @@ describe('delivery.render format csv', () => {
     expect(out.csv).toContain('# Segunda\nB\n2\n')
   })
 
-  it('columna de anotación (__ann) se omite del CSV', async () => {
+  it('el CSV exporta las columnas declaradas: las notas no son columnas y no viajan', async () => {
     const piece: ResolvedNode = {
       type: 'table',
-      columnsSpec: [
-        { field: 'a', label: 'A' },
-        { field: '__ann', label: 'Anotaciones', annotation: true },
-      ],
-      rows: [{ a: 1, __ann: 'nota' }],
+      columnsSpec: [{ field: 'a', label: 'A' }],
+      // Aunque la fila traiga campos no declarados, solo viajan las columnas del spec.
+      rows: [{ a: 1, comentario: 'no debe viajar' }],
     }
     const out = (await renderCsvPiece.execute({ piece }, { agent: 'test' })) as { csv: string }
     expect(out.csv).toBe('A\n1\n')
+    expect(out.csv).not.toContain('no debe viajar')
   })
 
   it('pieza sin tablas → fail-loud (no un CSV vacío silencioso)', async () => {
