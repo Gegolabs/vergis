@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAdmin, type AdminHandler } from '../server/admin'
-import { timeline, esResiduo, lastCompletedStart, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
+import { timeline, esResiduo, lastCompletedStart, diagnosticoDeFalla, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
 import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, type RunRecord, type OneLakeEntry } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
@@ -93,6 +93,69 @@ describe('admin-cargas · lógica pura', () => {
     expect(esResiduo(LANDING[1], last)).toBe(true)
     expect(esResiduo(LANDING[0], last)).toBe(false)
     expect(esResiduo(LANDING[1], lastCompletedStart('error'))).toBe(false)
+  })
+})
+
+// ─── El diagnóstico del log como titular de la falla (issue #85) ────────────
+const LOG_ABORTADO = [
+  '[ingest] ▶ inicio',
+  '[ingest] ⚠ hoja «Resumen» ignorada',
+  '[ingest] ✖ ABORTADO: archivo sin filas de datos (1 filas)',
+].join('\n')
+
+const RUNS_FALLIDA: RunRecord[] = [
+  { startedAt: '2026-07-14T09:00:00Z', endedAt: '2026-07-14T09:00:20Z', status: 'Failed', error: 'Job failed during run time with state=[dead].' },
+  ...RUNS,
+]
+/** Lo visible SIN expandir el log (todo lo anterior al `<details>` del log). */
+const antesDelLog = (html: string): string => html.split('Log de la última conversión')[0]
+
+describe('admin-cargas · diagnóstico de la falla (issue #85)', () => {
+  it('diagnosticoDeFalla: última línea ✖, sin prefijo de canal; ignora ⚠/✔; null sin marcador', () => {
+    expect(diagnosticoDeFalla(LOG_ABORTADO)).toBe('✖ ABORTADO: archivo sin filas de datos (1 filas)')
+    expect(diagnosticoDeFalla('[ingest] ✖ ERROR no controlado: KeyError: «clave»'))
+      .toBe('✖ ERROR no controlado: KeyError: «clave»')
+    expect(diagnosticoDeFalla('[ingest] ⚠ aviso\n[ingest] ✔ DONE commit: 10 filas')).toBeNull()
+    expect(diagnosticoDeFalla(null)).toBeNull()
+    expect(diagnosticoDeFalla('')).toBeNull()
+  })
+
+  it('diagnosticoDeFalla: con varias ✖ gana la última, y trunca lo muy largo', () => {
+    expect(diagnosticoDeFalla('[ingest] ✖ ABORTADO: primera\n[ingest] ✖ ABORTADO: segunda')).toBe('✖ ABORTADO: segunda')
+    const largo = diagnosticoDeFalla(`[ingest] ✖ ABORTADO: ${'x'.repeat(500)}`)!
+    expect(largo).toHaveLength(301)
+    expect(largo.endsWith('…')).toBe(true)
+  })
+
+  it('corrida fallida con ✖ en el log → el motivo es titular visible sin expandir; state=[dead] queda de detalle', async () => {
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: async () => LOG_ABORTADO }))
+    const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    const visible = antesDelLog(res.body)
+    expect(visible).toContain('✖ ABORTADO: archivo sin filas de datos (1 filas)')
+    expect(visible).toContain('state=[dead]')
+  })
+
+  it('corrida fallida SIN ✖ en el log → comportamiento anterior intacto (solo el estado genérico)', async () => {
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: async () => '[ingest] ▶ inicio' }))
+    const visible = antesDelLog((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    expect(visible).toContain('state=[dead]')
+    expect(visible).not.toContain('✖ ABORTADO')
+  })
+
+  it('corrida Completed con ✖ residual de una corrida vieja → NO hay titular de falla', async () => {
+    const admin = await mkAdmin(ops({ log: async () => LOG_ABORTADO })) // RUNS[0] = Completed
+    const visible = antesDelLog((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    expect(visible).not.toContain('ABORTADO')
+    expect(visible).toContain('✓ Listo')
+  })
+
+  it('timeline: solo la corrida Falló MÁS RECIENTE toma el diagnóstico; las históricas no', () => {
+    const diag = '✖ ABORTADO: archivo sin filas de datos (1 filas)'
+    const t = timeline([], RUNS_FALLIDA, 30, diag)
+    expect(t[0].html).toContain(diag) // la más reciente (Failed)
+    expect(t[0].html).toContain('state=[dead]') // el genérico degradado a sub
+    expect(t[2].html).not.toContain(diag) // la Failed histórica conserva su render
+    expect(t[2].html).toContain('state=[dead]')
   })
 })
 

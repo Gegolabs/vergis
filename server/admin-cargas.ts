@@ -103,8 +103,30 @@ export function esResiduo(entry: OneLakeEntry, lastCompleted: number | null): bo
   return !Number.isNaN(t) && t < lastCompleted
 }
 
+/**
+ * El DIAGNÓSTICO de la falla, extraído del log de la conversión.
+ *
+ * Convención del contrato de ingesta (misma familia que el marcador `[delta] sin cambios en el dato`):
+ * ante un aborto, la última línea del log lleva el marcador `✖` (U+2716) tras el prefijo de canal —
+ * `✖ ABORTADO: <motivo>` o `✖ ERROR no controlado: <Tipo>: <mensaje>`. Las líneas informativas usan
+ * `⚠` o `✔`, nunca `✖`, así que el marcador identifica la causa real sin ambigüedad.
+ *
+ * Devuelve la última línea marcada, ya sin el prefijo de canal (`[…] `) y truncada, o `null` si el log
+ * no trae ninguna. Recorre el log COMPLETO: el recorte a 4.000 chars de la vista es solo de display.
+ */
+export function diagnosticoDeFalla(log: string | null): string | null {
+  if (!log) return null
+  let found: string | null = null
+  for (const raw of log.split('\n')) {
+    const linea = raw.replace(/^\s*(?:\[[^\]]*\]\s*)*/, '').trim()
+    if (linea.startsWith('✖')) found = linea
+  }
+  if (!found) return null
+  return found.length > 300 ? found.slice(0, 300) + '…' : found
+}
+
 /** Línea de tiempo fusionada: cargas + corridas, más reciente primero. */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   if (history !== 'error') {
     for (const h of history) {
@@ -115,8 +137,13 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
     }
   }
   if (runs !== 'error') {
-    for (const r of runs) {
-      const motivo = r.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(r.error.length > 240 ? r.error.slice(0, 240) + '…' : r.error)}</div>` : ''
+    for (const [i, r] of runs.entries()) {
+      // El log pertenece a la ÚLTIMA conversión: el diagnóstico solo puede rotularse sobre runs[0].
+      const diag = i === 0 && r.status === 'Failed' && diagnostico ? diagnostico : null
+      const generico = r.error ? escapeHtml(r.error.length > 240 ? r.error.slice(0, 240) + '…' : r.error) : ''
+      const motivo = diag
+        ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${generico ? `<div class="sub">${generico}</div>` : ''}`
+        : generico ? `<div class="sub" style="color:var(--err)">${generico}</div>` : ''
       items.push({
         ts: r.startedAt,
         html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${motivo}</td><td></td>`,
@@ -150,8 +177,16 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     // #62 (capa «delta neto cero»): el pipeline emite `[delta] sin cambios en el dato` en su log
     // cuando la corrida dejó el dato idéntico (convención del contrato de ingesta) → badge honesto.
     const sinCambios = last?.status === 'Completed' && !!sc.log && sc.log.includes('[delta] sin cambios en el dato')
+
+    // #85 · el MOTIVO real manda: con la corrida fallida, la línea `✖` del log es el titular y el
+    // estado genérico del job (`state=[dead]`) degrada a detalle. El gate por `Failed` es duro: el log
+    // puede conservar una línea `✖` de una corrida anterior a una que sí completó.
+    const diag = last?.status === 'Failed' ? diagnosticoDeFalla(sc.log) : null
+    const motivoLast = diag
+      ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${last?.error ? `<div class="sub">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
+      : last?.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(last.error.slice(0, 300))}</div>` : ''
     const estado = last
-      ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${last.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
+      ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${motivoLast}`
       : sc.runs === 'error' ? '<span class="sub">motor no respondió</span>' : '<span class="sub">sin corridas</span>'
 
     const rerun = s.trigger ? postForm(action, token, { slot: s.id, accion: 'rerun' }, 'Correr conversión de nuevo', 'La conversión re-procesará TODOS los archivos del landing. ¿Continuar?') : ''
@@ -182,7 +217,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th><th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <tbody>${timeline(sc.history, sc.runs, 30, diag).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
