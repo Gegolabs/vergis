@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { configFromEnv, decideDevIdentity, deprecatedEnvWarnings, parseDevIdentity } from '../server/config'
+import { configFromEnv, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, hasFreshFlag, parseDevIdentity } from '../server/config'
 
 const fixedSecret = () => 'SECRET-EFIMERO'
 
@@ -111,5 +111,53 @@ describe('decideDevIdentity · fail-safe (imposible activar con gate real)', () 
   })
   it('seteado pero sin email parseable → invalid (se ignora)', () => {
     expect(decideDevIdentity({ VERGIS_DEV_IDENTITY: ':solo-grupos' })).toEqual({ mode: 'invalid', raw: ':solo-grupos' })
+  })
+})
+
+// `--fresh` recrea el store de gobierno del ARNÉS DE DEV. La imposibilidad de tocar un store de
+// producción es de construcción: reusa la misma señal fail-safe que `decideDevIdentity`.
+describe('decideFreshStore · --fresh solo en el arnés de desarrollo', () => {
+  const DEV = { VERGIS_DEV_IDENTITY: 'cesar@x.com:miranda' }
+
+  it('sin la bandera → off (el store se conserva: `--keep` implícito)', () => {
+    expect(decideFreshStore([], DEV)).toEqual({ mode: 'off' })
+    expect(decideFreshStore(['--keep'], DEV)).toEqual({ mode: 'off' })
+    expect(hasFreshFlag([])).toBe(false)
+    expect(hasFreshFlag(['--fresh'])).toBe(true)
+  })
+
+  it('bandera ∧ dev-identity activa ∧ sin gate real → fresh', () => {
+    expect(decideFreshStore(['--fresh'], DEV)).toEqual({ mode: 'fresh' })
+    expect(decideFreshStore(['--otro', '--fresh'], DEV)).toEqual({ mode: 'fresh' })
+  })
+
+  it('bandera CON gate real → refused-gate, jamás borra (producción)', () => {
+    expect(decideFreshStore(['--fresh'], { ...DEV, VERGIS_GATE_SECRET: 'proxy-token' })).toEqual({ mode: 'refused-gate' })
+  })
+
+  it('bandera SIN identidad de dev → refused-no-dev (un despliegue cualquiera no es el arnés)', () => {
+    expect(decideFreshStore(['--fresh'], {})).toEqual({ mode: 'refused-no-dev' })
+    expect(decideFreshStore(['--fresh'], { VERGIS_GOVERNANCE_DB: '/opt/mira/governance.sqlite' })).toEqual({ mode: 'refused-no-dev' })
+  })
+
+  it('dev-identity inválida no habilita el borrado', () => {
+    expect(decideFreshStore(['--fresh'], { VERGIS_DEV_IDENTITY: ':solo-grupos' })).toEqual({ mode: 'refused-no-dev' })
+  })
+})
+
+// `HOST` (opcional) permite atar la escucha a una interfaz — el arnés de dev, localhost-only. Sin el
+// env, el comportamiento es el de hoy: `server.listen(PORT)` = todas las interfaces (lo que el
+// contenedor necesita para que el proxy lo alcance).
+describe('configFromEnv · HOST (interfaz de escucha, opcional)', () => {
+  it('sin HOST → undefined (todas las interfaces, como hoy)', () => {
+    expect(configFromEnv({}, fixedSecret).host).toBeUndefined()
+  })
+  it('HOST vacío o en blanco NO cuenta (no se ata a "")', () => {
+    expect(configFromEnv({ HOST: '' }, fixedSecret).host).toBeUndefined()
+    expect(configFromEnv({ HOST: '   ' }, fixedSecret).host).toBeUndefined()
+  })
+  it('HOST seteado → se usa tal cual (trim)', () => {
+    expect(configFromEnv({ HOST: '127.0.0.1' }, fixedSecret).host).toBe('127.0.0.1')
+    expect(configFromEnv({ HOST: ' ::1 ' }, fixedSecret).host).toBe('::1')
   })
 })

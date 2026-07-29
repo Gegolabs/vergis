@@ -102,6 +102,27 @@ La decisión de activación es pura y testeada (`decideDevIdentity` en `server/c
 de `VERGIS_GATE_SECRET` gana **siempre**. Como defensa en profundidad, con `VERGIS_GATE_SECRET` definido
 el gate A10 además rechaza (403) toda request sin `x-gate-token` antes de resolver identidad alguna.
 
+### Bandera `--fresh` — store de gobierno limpio (solo el arnés de dev)
+
+El store SQLite de gobierno persiste entre corridas y en desarrollo arrastra sesiones de prueba de
+Miranda. `server/serve-rls.ts` acepta `--fresh`: borra el store (`VERGIS_GOVERNANCE_DB`, o
+`$VERGIS_OUT/governance.sqlite`) antes de abrirlo, de modo que el arranque lo recrea vacío. **Sin la
+bandera, el comportamiento es el de hoy** (el store se conserva — `--keep` implícito, aceptado y sin
+efecto).
+
+**Borrar un store de producción es imposible por construcción**: el borrado exige exactamente la misma
+señal de «esto es dev» que gobierna `VERGIS_DEV_IDENTITY`.
+
+| Condición | Comportamiento |
+|--|--|
+| Sin `--fresh` | El store no se toca. |
+| `--fresh` ∧ **CON** gate real (`VERGIS_GATE_SECRET`) | **Se rehúsa.** Log: `--fresh IGNORADO: hay gate real…`. |
+| `--fresh` ∧ **sin** identidad de dev activa (`VERGIS_DEV_IDENTITY`) | **Se rehúsa.** Log: `--fresh IGNORADO: no hay identidad de dev activa…`. |
+| `--fresh` ∧ dev-identity activa ∧ sin gate real | Borra el store y lo recrea. Log: `⚠ --fresh (DEV): store de gobierno BORRADO…`. |
+
+La decisión es pura y testeada (`decideFreshStore` en `server/config.ts`). Ambas negativas son
+fail-safe: ante duda, se conserva el store.
+
 ### Bootstrap del ownership
 
 El **dueño inicial** de un PI se siembra de config de instancia (hoy: el dueño del ticket de gestión

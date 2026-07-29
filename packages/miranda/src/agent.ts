@@ -7,7 +7,9 @@
  *
  * PURO respecto de la red: recibe el `AnthropicTransport` inyectado → se testea con un fake.
  */
-import type { AnthropicTransport, AnthropicMessage, AnthropicContentBlock, ToolResultBlock } from './transport'
+import type {
+  AnthropicTransport, AnthropicMessage, AnthropicContentBlock, ToolResultBlock, SystemTextBlock,
+} from './transport'
 import { usageTotal } from './transport'
 import type { ToolRegistry } from './tools/registry'
 
@@ -66,6 +68,22 @@ export interface AgentTurnResult {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * System prompt con BREAKPOINT DE CACHÉ.
+ *
+ * El system de Miranda (identidad + reglas duras + DSL + rúbrica + voz, ~60k tokens) se ensambla una
+ * sola vez al arranque y no varía entre turnos: es exactamente el prefijo estable que la Messages API
+ * sabe cachear. Se emite en la forma de ARRAY con `cache_control: {type:'ephemeral'}` en el ÚLTIMO
+ * bloque; como el orden de render es `tools` → `system` → `messages`, esa marca cierra un prefijo que
+ * abarca también las definiciones de tools (igual de estables: el registry es fijo).
+ *
+ * Lo VARIABLE del turno (historial + mensaje del usuario) va en `messages`, es decir DESPUÉS del
+ * breakpoint: no invalida el prefijo. Un único bloque ⇒ un único breakpoint (el tope es 4).
+ */
+function systemWithCacheBreakpoint(system: string): SystemTextBlock[] {
+  return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+}
+
 /** Extrae el texto plano de una respuesta del modelo (concatena los bloques `text`). */
 function textOf(content: AnthropicContentBlock[]): string {
   return content
@@ -99,7 +117,7 @@ export async function runAgentTurn(deps: AgentDeps): Promise<AgentTurnResult> {
       try {
         resp = await deps.transport.createMessage({
           model: deps.model,
-          system: deps.system,
+          system: systemWithCacheBreakpoint(deps.system),
           messages,
           tools: deps.tools.definitions,
           max_tokens: maxTokensPerCall,
