@@ -117,16 +117,11 @@ describe('TX-11 WP4·1 · heurística de tabla display', () => {
     expect(html).toContain('class="table vtable"')
   })
 
-  it('1 fila con anotación → conserva runtime (editar es su propósito, no filtrar)', async () => {
-    const piece: ResolvedNode = {
-      type: 'table',
-      columnsSpec: [{ field: 'id', label: 'ID' }, { field: '__ann', label: 'Nota', annotation: true }],
-      rows: [{ id: 1, __ann: '', __anntok: 'tok-1' }],
-      annotation: { valueField: '__ann', tokenField: '__anntok', keyField: 'id', endpoint: '/pi/annotations', label: 'Nota' },
-    }
-    const html = await render({ piece, theme: 'arbol' })
-    expect(html).toContain('class="table vtable"')
-    expect(html).toContain('"annotation":{')
+  it('el payload de la tabla no lleva rastro del esquema viejo de anotaciones', async () => {
+    const html = await render({ piece: table2(), theme: 'arbol' })
+    expect(html).not.toContain('"annotation"')
+    expect(html).not.toContain('__anntok')
+    expect(html).not.toContain('vt-ann-cell')
   })
 })
 

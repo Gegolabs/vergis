@@ -82,8 +82,6 @@ export interface TableColumn {
   searchable?: boolean
   filter?: boolean
   groupBy?: boolean
-  /** Columna de anotación (editable, enriquecimiento de la capa de viz). */
-  annotation?: boolean
 }
 
 /**
@@ -135,14 +133,18 @@ export interface ResolvedNode {
   dataset?: string
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
   interactive?: boolean
-  /** Meta de anotaciones inyectada por Mira (ver applyAnnotations). */
-  annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
   /**
    * Drill-through: acciones de navegación por fila hoja. Cada acción lleva a la vista `to` pasando
    * una o más claves `by` (multi-clave: p.ej. empresa+socio). Una tabla puede ofrecer VARIOS drills
    * (p.ej. "ver el socio" y "ver la empresa"); con uno solo, además se habilita el doble-clic de fila.
    */
   drills?: Drill[]
+  /**
+   * Llave de negocio declarada por el dataset de la tabla (`data.<ds>.anchor`, D16). Es lo que
+   * permite clavar un comentario en un REGISTRO. Mira la copia del spec tal cual — es DESCRIPTIVA,
+   * no autoriza nada; `comentarios` lo puebla el server tras el render (Mira jamás lee una nota).
+   */
+  ancla?: { dataset: string; entity: string; key: string[]; display?: string; comentarios: Record<string, { count: number; porCampo: Record<string, number> }> }
 }
 
 /** Una acción de drill-through declarada en una tabla. `by` = claves de contexto que viajan al destino. */
@@ -383,17 +385,21 @@ export function composePiece(
     rows = sortRows(rows, t.sort)
     if (typeof t.limit === 'number') rows = rows.slice(0, t.limit)
     const drills = normalizeDrills(t.drillthrough)
+    const anchor = spec.data?.[dataset]?.anchor
     return {
       type: 'table',
-      dataset, // permite direccionar la tabla por su dataset (p.ej. anotaciones sobre tabla nombrada)
+      dataset, // permite direccionar la tabla por su dataset (p.ej. el ancla de comentarios)
       rows,
-      // COPIA del arreglo de columnas (no la referencia al spec): applyAnnotations hace push de la
-      // columna de anotación sobre columnsSpec — sobre la referencia mutaría el SPEC CACHEADO
-      // (run.ts memoiza el spec por mtime) y cada request acumularía una columna más.
+      // COPIA del arreglo de columnas (no la referencia al spec): el spec está MEMOIZADO por mtime
+      // (run.ts) y cualquier enriquecimiento posterior sobre la referencia mutaría el spec cacheado.
       columnsSpec: [...(t.columns ?? [])],
       title: t.title,
       interactive: t.interactive,
       drills: drills.length ? drills : undefined,
+      // La llave de negocio del dataset viaja con la tabla (fail-closed: sin `anchor` declarado, no
+      // hay ancla y el gesto de comentar no se ofrece). `comentarios` nace vacío: quien lee el store
+      // de notas es el server, jamás Mira (D7 — el motor no lee una nota).
+      ancla: anchor ? { dataset, entity: anchor.entity, key: anchor.key, display: anchor.display, comentarios: {} } : undefined,
     }
   }
   const key = Object.keys(node)[0] ?? 'unknown'

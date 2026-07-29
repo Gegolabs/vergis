@@ -4,6 +4,40 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.13.0 — 2026-07-28
+
+**La capa de notas — impresiones, anotaciones y comentarios** (vergis#84, cierra #60). Lo que una
+persona dice sobre lo que ve tiene por fin dónde vivir. Doc:
+[`docs/capa-de-notas.md`](docs/capa-de-notas.md).
+
+- **Dos especies, no una.** El **comentario** se ancla a un REGISTRO gobernado (entidad + llave de
+  negocio) y es el mismo se mire desde el PI que se mire; la **anotación** se ancla a una
+  **impresión**: lo que viste, congelado tal como lo viste (filas, forma, recorte, watermark,
+  versión del spec, autoría). Confundirlas produce un sistema que no sirve para ninguna.
+- **El gate del comentario se verifica contra el DATO, al escribir** — el server re-ejecuta la
+  recuperación del dataset bajo la identidad del autor y exige que la llave esté en el resultado. Un
+  token firmado verificaría lo que el server dijo antes; una autorización revocada seguiría
+  escribiendo. La lectura del hilo es igual de fail-closed.
+- **`anchor` en el DSL** — el dataset declara `{ entity, key[], display? }`: identidad de negocio,
+  jamás autorización (el spec sigue authz-blind). **Sin `anchor` el gesto no se ofrece** (404).
+- **Impresión perezosa** — la primera anotación hace nacer la impresión sola; dentro de la sesión de
+  trabajo (12 h) las notas del mismo sustrato comparten impresión. Se ve read-only y sin drills: es
+  un documento, no una vista.
+- **Compartición gobernada** — solo el dueño, auditada, revocable **hacia adelante**: el receptor
+  pierde el acceso y sus notas persisten. El registro ES la fuente de «Compartidas conmigo».
+- **«Mis impresiones»** en el menú del avatar — una capacidad que no se ve, no existe.
+- **El motor jamás lee una nota**: el enriquecimiento corre tras componer, sobre el resultado ya
+  cerrado; si falla, el PI se sirve idéntico. Las notas no viajan en el export CSV.
+- **Envs nuevos** — `VERGIS_NOTES_DB` (default `<VERGIS_OUT>/notas.sqlite`), `VERGIS_CSRF_SECRET`.
+  **Retirados** (se ignoran con aviso, sin imprimir su valor): `VERGIS_ANNOTATION_SECRET`,
+  `VERGIS_ANNOTATIONS_DB`, `VERGIS_ANNOTATIONS_URL`.
+- **Settings de plataforma** — retención de impresiones `P12M` (**se aplica**: purga al arranque y
+  cada 24 h, medida desde la última actividad), envíos programados por usuario `10` y
+  anti-cementerio `on` (declarados; se aplican cuando los envíos programados existan).
+- **Retirado el esquema anterior de anotaciones** — la columna editable y los tokens HMAC por fila
+  visible en cada render (≈850 firmas por carga, sosteniendo cero anotaciones) desaparecen junto con
+  su store, sus rutas y su secreto. Sin migración: estaba vacío.
+
 ## 0.12.0 — 2026-07-15
 
 **`VERGIS_DEV_IDENTITY` — identidad de desarrollo inyectable (fail-safe)** (work/087). En un despliegue

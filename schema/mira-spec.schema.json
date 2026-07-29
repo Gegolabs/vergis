@@ -66,7 +66,18 @@
         "properties": {
           "capability": { "type": "string", "minLength": 1 },
           "params": { "type": "object" },
-          "shape": { "type": "object" }
+          "shape": { "type": "object" },
+          "anchor": {
+            "type": "object",
+            "description": "Identidad de negocio de las filas de este dataset: a qué entidad gobernada corresponden y qué columnas componen su llave. Es DESCRIPTIVA — habilita comentar un registro, no concede ni niega acceso (el spec sigue authz-blind). Sin anchor, el gesto de comentar no se ofrece (fail-closed).",
+            "required": ["entity", "key"],
+            "additionalProperties": false,
+            "properties": {
+              "entity": { "type": "string", "pattern": "^[^.\\s]+\\.[^.\\s]+$", "description": "La entidad gobernada, calificada por esquema (`schema.tabla`). Es la que unifica el comentario ENTRE PIs." },
+              "key": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "Columnas DEL DATASET que componen la llave de negocio." },
+              "display": { "type": "string", "minLength": 1, "description": "Columna legible del dataset para nombrar el registro en el índice por llave." }
+            }
+          }
         }
       }
     },

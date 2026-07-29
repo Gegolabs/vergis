@@ -11,6 +11,8 @@ export type { TopNRank } from './render-chart'
 export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn, ChartSort } from './piece-types'
+export { renderNotasTraySection, llaveCanonicaDeFila, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
+export type { NotasRenderContext, TablaAncla } from './notas-render'
 export {
   TABLE_RUNTIME_SOURCE,
   vtNorm,
@@ -23,8 +25,31 @@ export {
   vtGroupTree,
 } from './table-runtime'
 export type { VtState, VtTreeNode } from './table-runtime'
-export { openAnnotationStore, SqliteAnnotationStore } from './annotation-store'
-export type { AnnotationStore, AnnotationRecord } from './annotation-store'
+export {
+  openNotasStore,
+  SqliteNotasStore,
+  NotasConflict,
+  SESSION_WINDOW_MS,
+  canonicalJson,
+  canonicalKey,
+  normalizeEntityRef,
+  substrateHash,
+  llaveDeFila,
+} from './notas-store'
+export type {
+  NotasStore,
+  Impresion,
+  Nota,
+  Comparticion,
+  Entrega,
+  NotaEspecie,
+  NotaContenidoTipo,
+  NotaObjetivoTipo,
+  EntregaCanal,
+  AbrirImpresionInput,
+  CrearNotaInput,
+  ComentarioResumen,
+} from './notas-store'
 export { openSqliteDb, persistSqliteDb, selectAll } from './sqlite'
 export type { SqlDb, SqlStmt } from './sqlite'
 export {

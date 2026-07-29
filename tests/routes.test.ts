@@ -37,7 +37,6 @@ function deps(over: Partial<RouteDeps> = {}): RouteDeps {
     discover: () => [REPORT],
     identityFor: () => ({ agent: 'test', user: 'ana@x.com' }),
     renderReport: async () => '<html>PI</html>',
-    handleAnnotationWrite: async () => {},
     indexReports: async (all) => all,
     renderIndexPage: async () => '<html>INDEX</html>',
     canOpenPi: async () => true,
@@ -92,13 +91,6 @@ describe('routes · servibilidad por PI (issue #52)', () => {
     expect(b.calls.status).toBe(200)
     expect(b.calls.body).toBe('<html>PI</html>')
   })
-  it('POST de anotación a un PI bloqueado → 503 (no llega al write)', async () => {
-    const handleAnnotationWrite = vi.fn(async () => {})
-    const { res, calls } = mkRes()
-    createRequestHandler(deps({ piBlocked: blockQw04, handleAnnotationWrite }))(mkReq('/qw-04/annotations', 'POST'), res)
-    expect(calls.status).toBe(503)
-    expect(handleAnnotationWrite).not.toHaveBeenCalled()
-  })
   it('sin piBlocked inyectado (clickhouse) → comportamiento previo intacto', async () => {
     const { res, calls, done } = mkRes()
     createRequestHandler(deps())(mkReq('/qw-04'), res)
@@ -147,10 +139,10 @@ describe('routes · admin / config / ready', () => {
 })
 
 describe('routes · índice y PI', () => {
-  it('POST /<slug>/annotations → handleAnnotationWrite', async () => {
-    const handleAnnotationWrite = vi.fn(async () => {})
-    createRequestHandler(deps({ handleAnnotationWrite }))(mkReq('/qw-04/annotations', 'POST'), mkRes().res)
-    expect(handleAnnotationWrite).toHaveBeenCalled()
+  it('el esquema viejo de anotaciones ya no existe: POST /<slug>/annotations → 404', async () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(deps())(mkReq('/qw-04/annotations', 'POST'), res)
+    expect(calls.status).toBe(404)
   })
   it('/ con varios PIs → renderIndexPage', async () => {
     const r2 = { ...REPORT, slug: 'qw-05', code: 'QW-05' }

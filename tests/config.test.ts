@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { configFromEnv, decideDevIdentity, parseDevIdentity } from '../server/config'
+import { configFromEnv, decideDevIdentity, deprecatedEnvWarnings, parseDevIdentity } from '../server/config'
 
 const fixedSecret = () => 'SECRET-EFIMERO'
 
@@ -16,7 +16,7 @@ describe('configFromEnv · defaults', () => {
     expect(c.indexTitle).toBe('Productos de Información')
     expect(c.policyPaths).toEqual([])
     expect(c.gateClaims).toEqual({ groups: 'x-forwarded-groups' })
-    expect(c.annotationSecret).toEqual({ value: 'SECRET-EFIMERO', ephemeral: true })
+    expect(c.csrfSecret).toEqual({ value: 'SECRET-EFIMERO', ephemeral: true })
   })
 })
 
@@ -48,9 +48,22 @@ describe('configFromEnv · engine, listas, gate y secreto', () => {
     const c = configFromEnv({ VERGIS_GATE_CLAIMS: 'viewer_area:X-Forwarded-Area, groups:x-forwarded-groups' }, fixedSecret)
     expect(c.gateClaims).toEqual({ viewer_area: 'x-forwarded-area', groups: 'x-forwarded-groups' })
   })
-  it('VERGIS_ANNOTATION_SECRET presente → no efímero', () => {
-    const c = configFromEnv({ VERGIS_ANNOTATION_SECRET: 'fijo' }, fixedSecret)
-    expect(c.annotationSecret).toEqual({ value: 'fijo', ephemeral: false })
+  it('VERGIS_CSRF_SECRET presente → no efímero', () => {
+    const c = configFromEnv({ VERGIS_CSRF_SECRET: 'fijo' }, fixedSecret)
+    expect(c.csrfSecret).toEqual({ value: 'fijo', ephemeral: false })
+  })
+  it('VERGIS_ANNOTATION_SECRET quedó DEPRECADO: no fija el CSRF y produce aviso (sin su valor)', () => {
+    const c = configFromEnv({ VERGIS_ANNOTATION_SECRET: 'viejo' }, fixedSecret)
+    expect(c.csrfSecret).toEqual({ value: 'SECRET-EFIMERO', ephemeral: true })
+    const warns = deprecatedEnvWarnings({ VERGIS_ANNOTATION_SECRET: 'viejo' })
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/DEPRECADO/)
+    expect(warns[0]).not.toContain('viejo')
+  })
+  it('los envs del store viejo de anotaciones también avisan; un entorno limpio no avisa', () => {
+    expect(deprecatedEnvWarnings({ VERGIS_ANNOTATIONS_DB: '/x/a.sqlite' })).toHaveLength(1)
+    expect(deprecatedEnvWarnings({ VERGIS_ANNOTATIONS_URL: 'postgres://x' })).toHaveLength(1)
+    expect(deprecatedEnvWarnings({})).toEqual([])
   })
   it('VERGIS_PI_ACL=on enciende la ACL; VERGIS_HOT_RELOAD=0 la apaga', () => {
     expect(configFromEnv({ VERGIS_PI_ACL: 'on' }, fixedSecret).piAclEnabled).toBe(true)

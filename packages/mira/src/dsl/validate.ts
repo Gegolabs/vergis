@@ -4,10 +4,30 @@ import { VergisError } from '@vergis/botler'
 import { normalizeDrills } from '../compose'
 import { parseIsoDuration } from '../freshness'
 
+/**
+ * Identidad de NEGOCIO de las filas de un dataset (D16): a qué entidad gobernada corresponden y qué
+ * columnas componen su llave. Habilita el gesto de comentar un registro — un comentario se clava en
+ * la entidad + la llave, no en el PI, y por eso lo dicho sobre la empleada 4021 es lo mismo se mire
+ * desde el PI que se mire.
+ *
+ * Es DESCRIPTIVA, jamás autorizadora: no concede ni niega acceso (el spec sigue authz-blind). La
+ * autorización de escribir un comentario se verifica contra el DATO, al escribir.
+ */
+export interface MiraAnchor {
+  /** La entidad gobernada, calificada por esquema (`schema.tabla`). */
+  entity: string
+  /** Columnas del dataset que componen la llave de negocio. */
+  key: string[]
+  /** Columna legible que nombra el registro en el índice por llave. */
+  display?: string
+}
+
 export interface MiraDataset {
   capability: string
   params?: Record<string, unknown>
   shape?: { type?: string; fields?: Record<string, string> }
+  /** Llave de negocio declarada (D16). Ausente ⇒ el gesto de comentar no se ofrece (fail-closed). */
+  anchor?: MiraAnchor
   /** Frescura POR-DATASET (además de la global de quality.freshness): `watermark_field` es un
    *  CAMPO del propio dataset; `max_age` una duración ISO 8601 soportada. Ver freshness.ts. */
   freshness?: { watermark_field?: string; max_age?: string; timezone?: string }
@@ -110,6 +130,9 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
 
   // Controles de cabecera: id único, source existente, default conocido (single o multi-select).
   validateControls(s)
+
+  // Llaves de negocio (`data.<ds>.anchor`): entidad calificada, llave no vacía y columnas existentes.
+  validateAnchors(s)
 
   // 2 · Referencias colgantes: cada data.<path> usada en alguna pieza existe en data.
   const pieces = hasPages ? s.pages!.map((p) => p.piece) : [s.piece as Record<string, unknown>]
@@ -846,4 +869,68 @@ export function collectDistributions(
     for (const v of Object.values(obj)) collectDistributions(v, acc)
   }
   return acc
+}
+
+/**
+ * Valida las declaraciones `data.<dataset>.anchor` (D16). El `anchor` describe la identidad de
+ * negocio de las filas — es lo que permite clavar un comentario en un REGISTRO y no en un PI.
+ *
+ * Se exige: `entity` calificada por esquema (`schema.tabla` — es la clave que unifica el comentario
+ * entre PIs, y una referencia de una sola parte no es resoluble), `key` no vacía, y —cuando el
+ * dataset declara `shape.fields`— que cada columna de la llave y el `display` existan. Una llave que
+ * apunta a un campo inexistente produciría comentarios anclados a `undefined`: silencioso y venenoso.
+ *
+ * Lo que este validador NO hace, a propósito: leer autorización. `anchor` es identidad, no permiso.
+ */
+export function validateAnchors(spec: MiraSpec): void {
+  for (const [name, ds] of Object.entries(spec.data ?? {})) {
+    const anchor = ds?.anchor
+    if (!anchor) continue
+    const entity = String(anchor.entity ?? '').trim()
+    if (!/^[^.\s]+\.[^.\s]+$/.test(entity)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'anchor-entity-unqualified',
+        path: `data.${name}.anchor.entity`,
+        value: anchor.entity,
+        message: `El anchor de '${name}' declara la entidad '${anchor.entity}', que no está calificada por esquema.`,
+        remediation: 'Declarar la entidad gobernada como `schema.tabla` (p.ej. `dbo.dim_empleado`): es la referencia que unifica el comentario entre PIs.',
+      })
+    }
+    const key = anchor.key ?? []
+    if (!Array.isArray(key) || key.length === 0) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'anchor-key-empty',
+        path: `data.${name}.anchor.key`,
+        value: anchor.key,
+        message: `El anchor de '${name}' no declara llave: sin llave no hay registro al que clavar un comentario.`,
+        remediation: 'Declarar en `key` las columnas del dataset que identifican unívocamente una fila.',
+      })
+    }
+    const fields = ds.shape?.fields
+    if (!fields) continue
+    for (const col of key) {
+      if (!(col in fields)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'anchor-key-field-dangling',
+          path: `data.${name}.anchor.key`,
+          value: col,
+          message: `La llave del anchor de '${name}' usa la columna '${col}', que no está declarada en data.${name}.shape.fields.`,
+          remediation: `Declarar '${col}' en shape.fields o corregir la llave (un comentario anclado a una columna inexistente queda colgando en silencio).`,
+        })
+      }
+    }
+    if (anchor.display && !(anchor.display in fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'anchor-display-field-dangling',
+        path: `data.${name}.anchor.display`,
+        value: anchor.display,
+        message: `El anchor de '${name}' muestra la columna '${anchor.display}', que no está declarada en data.${name}.shape.fields.`,
+        remediation: `Declarar '${anchor.display}' en shape.fields o corregir display.`,
+      })
+    }
+  }
 }

@@ -10,8 +10,8 @@ import type { ResolvedNode, TableColumn } from './piece-types'
  *    tablas es un error de spec, no un CSV vacío silencioso).
  *  - Headers = labels de las columnas declaradas; valores RAW sin formatear (el CSV es para máquinas
  *    y planillas: `0.432`, no `43.2%`). Date → ISO `YYYY-MM-DD`.
- *  - Las columnas de ANOTACIÓN (`annotation: true`) se omiten: son enriquecimiento de la capa de viz,
- *    no dato del PI.
+ *  - Las NOTAS (impresiones, anotaciones, comentarios) NUNCA viajan en el export: son la capa de
+ *    notas, no dato del PI.
  *  - VARIAS tablas → un solo CSV concatenado por SECCIONES: cada tabla precedida por una fila-título
  *    (`# <título>`, una sola celda) y separada de la anterior por una línea en blanco. Un CSV por
  *    tabla obligaría a multiplicar artefactos/nombres; la concatenación seccionada mantiene 1 PI = 1
@@ -50,7 +50,7 @@ function collectTables(node: ResolvedNode, acc: ResolvedNode[] = []): ResolvedNo
 
 /** Una tabla → líneas CSV. Con `sectionTitle`, se antepone la fila-título `# <título>`. */
 function tableToCsv(table: ResolvedNode, sectionTitle?: string): string {
-  const cols = (table.columnsSpec ?? []).filter((c) => !c.annotation)
+  const cols = table.columnsSpec ?? []
   const rows = table.rows ?? []
   const lines: string[] = []
   if (sectionTitle != null) lines.push(csvField(`# ${sectionTitle}`))

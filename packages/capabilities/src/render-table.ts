@@ -1,9 +1,10 @@
 // Render de TABLAS (estáticas e interactivas) — extraído de render-html-piece.ts (NEXT · Ola 3·B).
 // Del árbol resuelto a HTML: tabla estática (todas las filas) o interactiva (tbody SSR acotado + payload
-// JSON embebido que el runtime de tabla hidrata con orden/filtro/búsqueda/agrupar/anotar/drill). El CSS
+// JSON embebido que el runtime de tabla hidrata con orden/filtro/búsqueda/agrupar/drill). El CSS
 // interactivo (piece-css) y el runtime (table-runtime) los inyecta el ensamblador (render-html-piece).
 import { escapeHtml } from './markdown'
 import { ctxQuery, formatValue } from './piece-util'
+import { llaveCanonicaDeFila, type TablaAncla } from './notas-render'
 import type { ResolvedNode, RenderOpts, Drill, CarryCtx, TableColumn } from './piece-types'
 
 export const TABLE_SSR_MAX_ROWS = 500
@@ -21,12 +22,12 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
 
   // Heurística de plataforma (TX-11 WP4·1): una tabla DISPLAY —single_row, o que rinde 1 fila— es
   // presentación pura, no recibe maquinaria (runtime interactivo, iconos de filtro por columna, kit
-  // del Inspector). `interactive: true` explícito la conserva; una tabla con anotación también (su
-  // propósito es editar, no filtrar). El kill-switch `interactive: false` fuerza estática igual.
-  const displayByRows = node.interactive !== true && !node.annotation && rows.length === 1
+  // del Inspector). `interactive: true` explícito la conserva. El kill-switch `interactive: false`
+  // fuerza estática igual.
+  const displayByRows = node.interactive !== true && rows.length === 1
   if (node.interactive === false || displayByRows) {
     // Estática/display: sin runtime que complete después → el tbody lleva TODAS las filas.
-    const tbody = renderTableBody(cols, rows, ranges, drills, carry)
+    const tbody = renderTableBody(cols, rows, ranges, drills, carry, node.ancla)
     const head =
       cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
       (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
@@ -38,7 +39,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   // Interactiva (auto-on): recién aquí se prende la señal → runtime + gaveta + CSS interactivo.
   opts.signals.interactiveTable = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
-  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry)
+  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla)
   return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
 }
 
@@ -70,6 +71,7 @@ function renderTableBody(
   ranges: Record<string, { min: number; max: number }>,
   drills: Drill[] = [],
   carry: CarryCtx = {},
+  ancla?: TablaAncla,
 ): string {
   return rows
     .map((r) => {
@@ -81,8 +83,11 @@ function renderTableBody(
           return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
+      // Llave de negocio de la fila (solo si el dataset declaró `anchor`): es el ancla del comentario
+      // y lo que el runtime de notas usa para dibujar el marcador. Sin anchor no se emite nada.
+      const nkey = ancla ? ` data-nkey="${escapeHtml(llaveCanonicaDeFila(r, ancla.key))}" data-ndataset="${escapeHtml(ancla.dataset)}"` : ''
       // Single-drill: la fila admite doble-clic (back-compat) además del link de acciones.
-      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}">` : '<tr>'
+      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}"${nkey}>` : `<tr${nkey}>`
       return `${open}${cells}${drillActionsCell(drills, r, carry)}</tr>`
     })
     .join('\n')
@@ -109,10 +114,8 @@ function renderInteractiveTable(
     ranges: c.colorscale ? ranges[c.field] : undefined,
     sortable: c.sortable !== false,
     searchable: c.searchable !== false,
-    // La columna de anotación: sin faceta ni agrupar (texto libre); editable lo maneja el runtime.
-    filter: c.annotation ? false : c.filter,
-    groupBy: c.annotation ? false : c.groupBy,
-    annotation: c.annotation || undefined,
+    filter: c.filter,
+    groupBy: c.groupBy,
   }))
   // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
   // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.
@@ -140,12 +143,11 @@ function renderInteractiveTable(
   const chips = `<div class="vt-chips"></div>`
 
   // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.
-  // `annotation` (si la tabla la tiene): el runtime habilita la columna editable + mostrar/ocultar.
   // `drills` (si la tabla las tiene): el runtime renderiza la columna de acciones (1 link por drill);
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
   // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
   //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
-  const payload = JSON.stringify({ rows, cols: colMeta, annotation: node.annotation, drills, carryCtx: carry, ssrComplete }).replace(/</g, '\\u003c')
+  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, ssrComplete, ancla: node.ancla }).replace(/</g, '\\u003c')
 
   // Pie con el contador de filas (TX-11 WP4·3): información del documento, no control — vive en la
   // CARA de cada tabla interactiva (el runtime lo puebla) y se imprime (estado honesto).
