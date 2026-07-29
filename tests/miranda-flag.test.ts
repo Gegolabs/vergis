@@ -50,7 +50,6 @@ function deps(over: Partial<RouteDeps> = {}): RouteDeps {
     discover: () => [REPORT],
     identityFor: () => ({ agent: 't', user: 'a@x.com' }),
     renderReport: async () => '<html>PI</html>',
-    handleAnnotationWrite: async () => {},
     indexReports: async (all) => all,
     renderIndexPage: async () => '<html>INDEX</html>',
     canOpenPi: async () => true,

@@ -68,8 +68,6 @@ export interface TableColumn {
   filter?: boolean
   /** Override de la heurística: disponible para agrupar (default: igual que filter). */
   groupBy?: boolean
-  /** Columna de anotación (editable; enriquecimiento de la capa de viz). */
-  annotation?: boolean
 }
 export interface Aggregation {
   dataset?: string
@@ -135,8 +133,6 @@ export interface ResolvedNode {
   summary?: { value?: unknown; label?: string; format?: string; accent?: string; agg?: Aggregation; dataset?: string }
   /** Tabla: `false` desactiva la interactividad (orden/filtro/búsqueda/agrupar) → tabla estática. */
   interactive?: boolean
-  /** Tabla: meta de anotaciones (columna editable compartida). */
-  annotation?: { valueField: string; tokenField: string; keyField: string; endpoint: string; label: string }
   /** Tabla: acciones de drill-through por fila (a la vista `to` pasando las claves `by`). */
   drills?: Drill[]
 }

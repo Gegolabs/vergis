@@ -35,7 +35,7 @@ import { randomBytes } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
-import { type AnnotationContext, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec } from '@vergis/mira'
+import { parseSpec as parseMiraSpec, validateSpec as validateMiraSpec } from '@vergis/mira'
 import { createMiranda, type MirandaServerDeps } from './miranda'
 import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
@@ -46,7 +46,6 @@ import {
   renderHtmlPiece,
   renderCsvPiece,
   publicarArtefacto,
-  openAnnotationStore,
   parseMasterDataConfig,
   parseDomainsConfig,
   manageableDomains,
@@ -80,19 +79,17 @@ import {
   type IngestionEngineClient,
   type MasterDataEntity,
   type PiRole,
-  type AnnotationStore,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
-import { fail, readJsonBody } from './http-util'
-import { annSign as annSignHmac, verifyAnnToken } from './annotations'
+import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
-import { configFromEnv, decideDevIdentity } from './config'
+import { configFromEnv, decideDevIdentity, deprecatedEnvWarnings } from './config'
 import { avatarMenu } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -110,8 +107,10 @@ import {
 const ENGINE = (process.env['VERGIS_ENGINE'] ?? 'clickhouse').toLowerCase()
 if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGINE inválido: '${ENGINE}' (clickhouse | fabric).`)
 // Config VALIDADA de los env numéricos (lanza claro al arranque si PORT/REFRESH/TTL/MAX_ROWS no son
-// números — antes `PORT=abc` daba `listen(NaN)` tarde y feo). El secreto de anotación se maneja aparte.
+// números — antes `PORT=abc` daba `listen(NaN)` tarde y feo). El secreto CSRF se maneja aparte.
 const config = configFromEnv(process.env, () => '')
+// Envs retirados que siguen en despliegues vivos: se avisan y se ignoran (nunca se imprime su valor).
+for (const w of deprecatedEnvWarnings(process.env)) console.warn(`[vergis-rls] ${w}`)
 const PORT = config.port
 const REFRESH_MS = config.refreshMs
 
@@ -360,11 +359,6 @@ const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = p
 // El 3er argumento (dev identity) es null salvo en dev sin gate real — imposible de activar en prod.
 const identityFor = createIdentity(gateClaims, IDENTITY_MAP, config.devIdentity).identityFor
 
-// ANOTACIONES — enriquecimiento de la capa de viz. Store embebido (SQLite) reemplazable por externo.
-// Lectura: solo se fusionan anotaciones sobre las filas RLS-filtradas que el usuario ya ve.
-// Escritura: gateada por token HMAC firmado por-render — el token prueba que el server renderizó
-// ESA clave para ESA identidad (= era visible). Forjar una clave no-visible no produce token válido.
-let annStore: AnnotationStore | null = null
 // Gobierno de PI (autorización de ARTEFACTO, frente A). FLAG-GUARDED: con VERGIS_PI_ACL apagado el
 // índice/apertura siguen por acceso-a-datos (comportamiento vivo); encendido, gatean por la ACL del
 // PI (rol owner/collaborator/viewer) compuesta con la RLS de datos (que NUNCA se salta).
@@ -384,42 +378,22 @@ let miranda: MirandaHandler | null = null
 let piAclEnabled = false
 let piOwners: Record<string, string> = {}
 let defaultCollabGroups: string[] = []
-// Secreto HMAC de los tokens de anotación. Sin `VERGIS_ANNOTATION_SECRET` se genera uno aleatorio por
-// arranque: sirve para dev, pero en producción los tokens de las páginas ya abiertas NO sobreviven un
-// restart (la escritura de anotación falla hasta recargar) y varias réplicas no comparten la firma.
-const ANN_SECRET = process.env['VERGIS_ANNOTATION_SECRET'] ?? randomBytes(32).toString('hex')
-if (!process.env['VERGIS_ANNOTATION_SECRET']) {
+// Secreto HMAC de los tokens CSRF de las superficies SSR de gestión (admin, config por-PI, Miranda).
+// Sin `VERGIS_CSRF_SECRET` se genera uno aleatorio por arranque: sirve para dev, pero en producción
+// los formularios ya abiertos NO sobreviven un restart y varias réplicas no comparten la firma.
+const CSRF_SECRET = process.env['VERGIS_CSRF_SECRET'] ?? randomBytes(32).toString('hex')
+if (!process.env['VERGIS_CSRF_SECRET']) {
   console.warn(
-    '[vergis-rls] VERGIS_ANNOTATION_SECRET no definido: se generó un secreto aleatorio. Los tokens de ' +
-      'anotación NO sobreviven un restart ni se comparten entre réplicas. Define el env en producción.',
+    '[vergis-rls] VERGIS_CSRF_SECRET no definido: se generó un secreto aleatorio. Los formularios de ' +
+      'gestión ya abiertos NO sobreviven un restart ni se comparten entre réplicas. Define el env en producción.',
   )
 }
-// Época del token de anotación: bucket de 4h. Un token deja de valer cuando el bucket cambia, así
-// una identidad cuyo acceso se revocó no puede escribir con tokens de páginas viejas para siempre.
-const ANN_EPOCH_MS = 4 * 3600_000
-const annEpoch = (t = Date.now()): string => String(Math.floor(t / ANN_EPOCH_MS))
-const annSign = (piId: string, email: string, key: string): string => annSignHmac(ANN_SECRET, piId, email, key, annEpoch())
 
 // La navegación multi-vista (`?page=` + `?ctx.*`, con acumulación de repetidos para multi-select)
 // vive en ./nav.ts — extraída para testearla sin los efectos de módulo de este archivo.
 
 async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery = {}): Promise<string> {
   const identity = identityFor(headers)
-  const email = (identity.user ?? '').toLowerCase()
-  // El contexto de anotaciones se pasa solo si el store está listo; Mira lo aplica a la 1ª tabla.
-  const annotations: AnnotationContext | undefined = annStore
-    ? {
-        piId: report.slug,
-        label: 'Anotaciones',
-        endpoint: `/${report.slug}/annotations`,
-        resolve: async (keys: string[]) => {
-          const m = await annStore!.get(report.slug, keys)
-          const out: Record<string, { value: string; token: string }> = {}
-          for (const k of keys) out[k] = { value: m.get(k)?.value ?? '', token: annSign(report.slug, email, k) }
-          return out
-        },
-      }
-    : undefined
   const out = await runSpec({
     specPath: report.specPath,
     identity,
@@ -428,7 +402,6 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
     // SIN starters (no `static-data` ni vías crudas) → imposible servir dato no-gobernado.
     registerStarters: false,
     extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
-    annotations,
     page: nav.page,
     ctx: nav.ctx,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
@@ -478,26 +451,6 @@ async function piGovSummary(code: string, glabel: Map<string, string>): Promise<
     collaborators: collab.filter((g) => !isDefaultGroup(g)).map(nameOf),
     defaultCollaborators: collab.filter(isDefaultGroup).map(nameOf),
   }
-}
-
-/** POST /<slug>/annotations — upsert de una anotación; gateado por token HMAC. */
-async function handleAnnotationWrite(report: Report, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!annStore) return fail(res, 503, 'Anotaciones no disponibles')
-  const identity = identityFor(req.headers as GateHeaders)
-  const email = (identity.user ?? '').toLowerCase()
-  const body = (await readJsonBody(req)) as { key?: unknown; token?: unknown; value?: unknown }
-  const key = String(body.key ?? '')
-  const token = String(body.token ?? '')
-  const value = String(body.value ?? '')
-  // Verifica contra la época actual y la anterior (no cortar en el borde del bucket).
-  if (!verifyAnnToken(ANN_SECRET, report.slug, email, key, token, [annEpoch(), annEpoch(Date.now() - ANN_EPOCH_MS)])) {
-    res.writeHead(403, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: false, error: 'token inválido (registro no visible para esta identidad)' }))
-    return
-  }
-  await annStore.upsert(report.slug, key, value, email || undefined)
-  res.writeHead(200, { 'content-type': 'application/json' })
-  res.end(JSON.stringify({ ok: true }))
 }
 
 // Branding del índice — parametrizado por instancia (genérico por defecto, no horneado al beta).
@@ -567,7 +520,6 @@ const server = createServer(
     discover,
     identityFor,
     renderReport,
-    handleAnnotationWrite,
     indexReports,
     renderIndexPage,
     canOpenPi,
@@ -584,14 +536,6 @@ const server = createServer(
       ENGINE === 'fabric' ? { total: piState.size, serving: [...piState.values()].filter((v) => v.ok).length } : null,
   }),
 )
-
-// Store de anotaciones (no-fatal: si falla, el feature queda inhabilitado, no rompe el serving).
-try {
-  annStore = await openAnnotationStore(process.env['VERGIS_OUT'] ?? tmpdir())
-  console.log('[vergis-rls] anotaciones: store embebido listo')
-} catch (e) {
-  console.error(`[vergis-rls] anotaciones deshabilitadas: ${e instanceof Error ? e.message : String(e)}`)
-}
 
 // ADMINISTRACIÓN (no-fatal): data maestra + usuarios y roles — única superficie de ESCRITURA
 // gobernada. Independiente del motor de serving. Se habilita si la instancia declara entidades
@@ -908,7 +852,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       },
       identityOf: (h) => identityFor(h as GateHeaders),
       audit: (e) => auditLog.append(e),
-      secret: ANN_SECRET,
+      secret: CSRF_SECRET,
       brandTitle: INDEX_TITLE,
     })
     // Configuración por-PI (gateada por rol de PI, no admin): compartir/visibilidad/demanda.
@@ -925,7 +869,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         return r ? govStore.ofertasForTables(r.tables) : []
       },
       audit: (e) => auditLog.append(e),
-      secret: ANN_SECRET,
+      secret: CSRF_SECRET,
       brandTitle: INDEX_TITLE,
     })
     console.log(`[vergis-rls] administración: ${entities.length} entidad(es) · ${ADMIN_SEED.length} admin semilla · ACL PI ${piAclEnabled ? 'ON' : 'off'} · store=${useFabricStore ? 'fabric' : 'sqlite'}`)
@@ -1050,7 +994,7 @@ if (config.miranda.enabled) {
           }
         }
       },
-      secret: ANN_SECRET,
+      secret: CSRF_SECRET,
       brandTitle: INDEX_TITLE,
       announce: config.miranda.announceWebhook
         ? async (message: string) => {

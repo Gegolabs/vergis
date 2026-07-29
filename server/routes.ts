@@ -1,7 +1,7 @@
 /**
  * Router del servidor RLS — módulo del refactor createApp() (A14). `createRequestHandler(deps)` es el
  * RequestListener PURO: hace el dispatch (healthz · gate opt-in · admin · config-por-PI · gate ready ·
- * POST anotaciones · índice per-consumidor · PI) con todas sus dependencias INYECTADAS. Los getters
+ * capa de notas · índice per-consumidor · PI) con todas sus dependencias INYECTADAS. Los getters
  * (`isReady`/`getAdmin`/`getPiConfig`) se leen en call-time → reflejan el estado mutable del server
  * (admin/piConfig se asignan durante el bootstrap async). Testeable con req/res fakes.
  */
@@ -28,8 +28,6 @@ export interface RouteDeps {
   identityFor: (headers: GateHeaders) => IdentityContext
   /** Render por-consumidor de un PI (con RLS). */
   renderReport: (report: Report, headers: GateHeaders, nav: ReturnType<typeof navFromUrl>) => Promise<string>
-  /** Escritura de anotación (gateada por HMAC). Ya responde por `res`. */
-  handleAnnotationWrite: (report: Report, req: IncomingMessage, res: ServerResponse) => Promise<void>
   /** PIs visibles para la identidad (ACL de artefacto si está encendida; si no, acceso a dato). */
   indexReports: (all: Report[], identity: IdentityContext) => Promise<Report[]>
   /** HTML de la página índice (título + avatar + gobierno por PI). */
@@ -99,16 +97,6 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     if (!deps.isReady()) return fail(res, 503, 'Inicializando…')
     const all = deps.discover()
     const blockedReason = (report: Report): string | null => deps.piBlocked?.(report) ?? null
-    // POST /<slug>/annotations — escritura de anotación (único surface mutable; gateado por HMAC).
-    if (req.method === 'POST') {
-      const m = url.match(/^\/([^/]+)\/annotations\/?$/)
-      const report = m && all.find((r) => r.slug === m[1].toLowerCase())
-      if (!report) return fail(res, 404, 'Ruta no encontrada')
-      const blocked = blockedReason(report)
-      if (blocked) return fail(res, 503, `Producto de Información no disponible: ${blocked}`)
-      deps.handleAnnotationWrite(report, req, res).catch((e) => fail(res, 500, `Error al guardar anotación: ${errMsg(e)}`))
-      return
-    }
     const identity = deps.identityFor(req.headers as GateHeaders)
     const sendHtml = (html: string): void => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })

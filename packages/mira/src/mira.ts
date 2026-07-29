@@ -6,7 +6,6 @@ import {
   type InvocationContext,
 } from '@vergis/botler'
 import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
-import { applyAnnotations, type AnnotationContext } from './annotations'
 import { expectString, expectRows } from './contract'
 import type { CtxValues, PagesNav, ControlResolved } from './mira-types'
 import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues, buildControlOptions, labelForValue } from './controls'
@@ -37,6 +36,11 @@ export interface MiraOutput {
   /** Artefactos producidos: los publicados por un canal llevan `path`; los generados en memoria
    *  (p.ej. el CSV de `delivery.render`) llevan `content`. */
   artifacts: { format: string; path?: string; content?: string }[]
+  /** El ÁRBOL RESUELTO que produjo el HTML — lo que una impresión congela (vergis#84 · D1). Mira lo
+   *  expone; congelarlo o ignorarlo es decisión del llamador (cambio aditivo). */
+  resolved?: ResolvedNode
+  /** Veredicto de frescura de esta corrida: el `watermark` es la procedencia del dato congelado. */
+  freshness?: { watermark?: string; stale?: boolean }
 }
 
 /**
@@ -128,12 +132,6 @@ export class MiraBotlet implements Botlet {
     const composed = composePiece(activePiece, results, spec)
     const resolved: ResolvedNode = banner ? { layout: 'rows', elements: [banner, composed] } : composed
 
-    // 5·bis · Anotaciones (enriquecimiento solo de la capa de viz): si el llamador pasa el
-    // contexto, se fusiona la columna de anotación en la tabla destino por su clave de registro
-    // (la del `dataset` pedido, o la primera tabla del árbol por defecto).
-    const annCtx = ctx.params?.['annotations'] as AnnotationContext | undefined
-    if (annCtx) await applyAnnotations(resolved, annCtx)
-
     // 5a · Interacción declarada acotada (doc 2 §10): si hay filtro, se materializan
     // los datasets para que la Faceta filtre client-side, sin nuevas queries.
     let interactive: { datasets: Record<string, Record<string, unknown>[]>; filters: NonNullable<NonNullable<MiraSpec['interactions']>['filters']> } | undefined
@@ -158,7 +156,7 @@ export class MiraBotlet implements Botlet {
 
     // 6 · Renders declarados. Soportados: `html` (el documento servido) y `csv` (artefacto en memoria
     // con las tablas del árbol resuelto — ver render-csv-piece). PDF NO se implementa como render
-    // server-side: se cubre con el print-to-PDF del navegador (botón Imprimir de la gaveta).
+    // server-side: se cubre con el print-to-PDF del navegador (acción de la bandeja).
     const artifacts: MiraOutput['artifacts'] = []
     const renders = spec.delivery?.render ?? [{ format: 'html', target: 'web' }]
     let html = ''
@@ -203,7 +201,13 @@ export class MiraBotlet implements Botlet {
       artifacts.push({ format: 'html', path: out?.path })
     }
 
-    return { id: this.id, html, artifacts }
+    return {
+      id: this.id,
+      html,
+      artifacts,
+      resolved,
+      freshness: { watermark: freshness.watermark?.toISOString(), stale: freshness.stale },
+    }
   }
 
   /**
