@@ -292,10 +292,11 @@ function vtCell(col, r){
 }
 /* Una clave multi-valor del carry (control multi-select) se repite: &ctx.k=a&ctx.k=b (espejo de ctxQuery server-side). */
 function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ var vs=Array.isArray(m[k])?m[k]:[m[k]]; for(var i=0;i<vs.length;i++){ if(vs[i]!=null&&vs[i]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(vs[i])); } } return q; }
-function vtDrillHref(drill, r, carry){ var keys={}; for(var i=0;i<drill.by.length;i++){ var b=drill.by[i]; keys[b]=String(r[b]==null?'':r[b]); } return '?page='+encodeURIComponent(drill.to)+vtCtxQuery(carry,keys); }
-function vtDrillActions(drills, r, carry){
+/* fltQ = sufijo &flt.k=v YA serializado server-side (filtros de bandeja activos): se anexa tal cual, sin re-implementar su carry aqui. */
+function vtDrillHref(drill, r, carry, fltQ){ var keys={}; for(var i=0;i<drill.by.length;i++){ var b=drill.by[i]; keys[b]=String(r[b]==null?'':r[b]); } return '?page='+encodeURIComponent(drill.to)+vtCtxQuery(carry,keys)+(fltQ||''); }
+function vtDrillActions(drills, r, carry, fltQ){
   if(!drills||!drills.length) return '';
-  var links=drills.map(function(d){ var href=vtEsc(vtDrillHref(d,r,carry)); var label=d.label?vtEsc(d.label):'→'; var cls=d.label?'vt-drill-link':'vt-drill-link vt-drill-arrow'; var title=d.label?vtEsc(d.label):'Ver detalle'; return '<a class="'+cls+'" href="'+href+'" title="'+title+'">'+label+'</a>'; }).join('');
+  var links=drills.map(function(d){ var href=vtEsc(vtDrillHref(d,r,carry,fltQ)); var label=d.label?vtEsc(d.label):'→'; var cls=d.label?'vt-drill-link':'vt-drill-link vt-drill-arrow'; var title=d.label?vtEsc(d.label):'Ver detalle'; return '<a class="'+cls+'" href="'+href+'" title="'+title+'">'+label+'</a>'; }).join('');
   return '<td class="vt-actions">'+links+'</td>';
 }
 /* Llave canónica de negocio de una fila — espejo EXACTO de llaveCanonicaDeFila (server) y de
@@ -305,12 +306,12 @@ function vtNKey(r, key){
   var cols=key.slice().sort();
   return '{'+cols.map(function(k){ return JSON.stringify(k)+':'+JSON.stringify(r[k]==null?'':String(r[k])); }).join(',')+'}';
 }
-function vtBodyRows(cols, rows, drills, carry, ancla){
+function vtBodyRows(cols, rows, drills, carry, ancla, fltQ){
   var single = drills && drills.length===1;
   return rows.map(function(r){
     var nkey = ancla ? ' data-nkey="'+vtEsc(vtNKey(r,ancla.key))+'" data-ndataset="'+vtEsc(ancla.dataset)+'"' : '';
-    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry))+'"'+nkey+'>' : '<tr'+nkey+'>';
-    return open+cols.map(function(c){return vtCell(c,r);}).join('')+vtDrillActions(drills,r,carry)+'</tr>';
+    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry,fltQ))+'"'+nkey+'>' : '<tr'+nkey+'>';
+    return open+cols.map(function(c){return vtCell(c,r);}).join('')+vtDrillActions(drills,r,carry,fltQ)+'</tr>';
   }).join('');
 }
 function vtCounts(rows, field){ var m={}; for(var i=0;i<rows.length;i++){ var k=String(rows[i][field]==null?'':rows[i][field]); m[k]=(m[k]||0)+1; } return m; }
@@ -324,6 +325,7 @@ function vtBootstrap(root){
   var drills = payload.drills || [];
   var carry = payload.carryCtx || {};
   var ancla = payload.ancla || null;
+  var fltQ = payload.fltQ || '';
   var nactions = drills.length ? 1 : 0;
   function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
@@ -521,7 +523,7 @@ function vtBootstrap(root){
   // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
   // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
   function renderNodeTree(rc, ncols, node, depth, prefix){
-    if(node.leaf) return vtBodyRows(rc, node.rows, drills, carry, ancla);
+    if(node.leaf) return vtBodyRows(rc, node.rows, drills, carry, ancla, fltQ);
     return node.groups.map(function(g){
       var path=prefix+node.field+SEP+g.key;
       var collapsed=!!state.collapsed[path];
@@ -537,7 +539,7 @@ function vtBootstrap(root){
     if(state.groupLevels.length){
       tbody.innerHTML = renderNodeTree(rc, ncols, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
-      tbody.innerHTML = vtBodyRows(rc, view, drills, carry, ancla) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = vtBodyRows(rc, view, drills, carry, ancla, fltQ) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
     if(footEl) footEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){

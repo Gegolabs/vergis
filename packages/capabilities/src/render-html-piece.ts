@@ -10,9 +10,9 @@ import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
 import { renderInteractiveScript } from './interactive-script'
 import { renderNotasTraySection, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
-import { ctxQuery, formatValue } from './piece-util'
+import { ctxQuery, fltQuery, formatValue } from './piece-util'
 import type {
-  Interactive, PagesNav, ControlResolved, CarryCtx, RenderParams,
+  Interactive, PagesNav, ControlResolved, CarryCtx, FilterResolved, RenderParams,
   ResolvedNode, RenderOpts, RenderSignals,
 } from './piece-types'
 
@@ -39,7 +39,7 @@ const VERGIS_VERSION = (() => {
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     // Los colores del chart se hornean en el SVG server-side ⇒ el juego de tokens es el de la paleta
@@ -50,13 +50,17 @@ export const renderHtmlPiece: Capability = {
     const chartVars = chartVarMap(chartTokens)
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false }
-    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, carry, signals }
+    const flt = fltCarry ?? {}
+    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, carry, signals, fltQ: fltQuery(flt) }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
     // el control), no en la gaveta. El tab «Controles» de la gaveta queda para la maquinaria
     // (facetas de dashboard / runtime de tabla). Los selectores de alcance NO viven aquí.
     const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
-    const nav = pages ? renderPagesNav(pages, carry) : ''
-    let body = contextStrip + nav + (await renderNode(piece, opts))
+    // Franja de CHIPS de los filtros activos (#82), bajo la banda de contexto: la cara muestra el
+    // estado, el control vive en la bandeja. Sin filtros activos, la franja no existe.
+    const chips = renderFilterChips(filters ?? [], pages?.active, carry, flt)
+    const nav = pages ? renderPagesNav(pages, carry, flt) : ''
+    let body = contextStrip + chips + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
     // GAVETA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
     // los tabs Controles·Vistas·Config y el pie de versión. El shell NO se gatea por maquinaria: una
@@ -64,7 +68,11 @@ export const renderHtmlPiece: Capability = {
     // construida — capacidad #82) también merece su Inspector con Apariencia+Config. El tab
     // «Controles» reúne las facetas del dashboard / los controles del runtime de tabla; cuando no hay
     // ninguna, muestra un empty-state (no un panel en blanco).
-    const facets = interactive ? renderDashboardFacets(interactive) : ''
+    // El tab «Controles» reúne los filtros SERVER-SIDE (#82, re-render por navegación) y las facetas
+    // client-side de `interactions.filters` — en ese orden: los primeros re-anclan charts y KPIs de
+    // una vez; las segundas son el camino barato para tablas/KPIs sin gráficos.
+    const trayFilters = renderTrayFilters(filters ?? [], pages?.active, carry, flt)
+    const facets = trayFilters + (interactive ? renderDashboardFacets(interactive) : '')
     // «Controles trae maquinaria» = facetas server-rendered (dashboard) o el runtime de tabla que las
     // inyecta client-side. Decide el empty-state y el tab por defecto — NO decide si hay gaveta.
     const controlesHasMachinery = !!facets || hasTable || !!notas
@@ -88,6 +96,8 @@ export const renderHtmlPiece: Capability = {
     if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
+    if (chips) css += FILTER_CHIPS_CSS
+    if (trayFilters) css += TRAY_FILTERS_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
@@ -114,8 +124,8 @@ const PAGES_NAV_CSS = `
 
 
 /** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */
-function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}): string {
-  const q = ctxQuery(carry)
+function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}, flt: Record<string, string[]> = {}): string {
+  const q = ctxQuery(carry) + fltQuery(flt)
   const tabs = pages.items
     .map(
       (p) =>
@@ -217,6 +227,110 @@ function renderContextStrip(controls: ControlResolved[], activePage: string | un
     })
     .join('')
   return items ? `<div class="vctxbar">${items}</div>` : ''
+}
+
+/**
+ * CSS de la franja de CHIPS de filtros activos (#82). Vive bajo la banda de contexto: el control está
+ * en la bandeja, la CARA muestra el estado (TX-11 «una cosa, un lugar»). En print los chips se ocultan
+ * y queda un resumen en letra chica — un PDF no tiene botones que remover.
+ */
+const FILTER_CHIPS_CSS = `
+.vfltbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px;font-size:12px}
+.vfltbar .vflt-k{color:var(--fg-dim,#64748b);text-transform:uppercase;letter-spacing:.04em;font-size:10px}
+.vfltbar .vflt-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 6px 2px 9px;border:1px solid var(--border,#e2e8f0);border-radius:999px;background:var(--card,#f1f5f9);color:var(--fg,#1f2937)}
+.vfltbar .vflt-chip b{font-weight:600}
+.vfltbar .vflt-x{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;text-decoration:none;color:var(--fg-dim,#64748b);font-size:11px;line-height:1}
+.vfltbar .vflt-x:hover{background:var(--border,#e2e8f0);color:var(--fg,#1f2937)}
+.vfltbar .vflt-clear{margin-left:2px;font-size:11px;text-decoration:none;color:var(--fg-dim,#64748b)}
+.vfltbar .vflt-clear:hover{text-decoration:underline}
+.vflt-print{display:none}
+@media print{.vfltbar .vflt-screen{display:none!important}.vflt-print{display:inline!important;font-size:10px;color:#555}}
+`
+
+/**
+ * CSS de la sección de filtros server-side de la bandeja. Reusa las clases `.faceta*` que ya estila
+ * cada theme; solo agrega lo propio del LINK (los filtros de #82 navegan, no marcan un checkbox).
+ */
+const TRAY_FILTERS_CSS = `
+.faceta-options .vflt-opt{display:block;padding:0;text-transform:none;letter-spacing:0}
+.faceta-options .vflt-opt a{display:flex;gap:8px;align-items:center;font-size:13px;padding:4px 2px;color:var(--fg,#1f2937);text-decoration:none}
+.faceta-options .vflt-opt a:hover{color:var(--green,#2563eb)}
+.faceta-options .vflt-opt .vflt-box{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex:0 0 14px;border:1px solid var(--border,#94a3b8);border-radius:3px;font-size:10px;line-height:1}
+.faceta-options .vflt-opt.on a{font-weight:600;color:var(--green,#2563eb)}
+.faceta-options .vflt-opt.on .vflt-box{border-color:var(--green,#2563eb)}
+@media print{.faceta-options .vflt-opt{display:none}}
+`
+
+/** `?page=…&ctx…&flt…` para un href de filtro (misma página, contexto intacto, `flt` recompuesto). */
+function fltHref(activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>, omit?: { id: string; value?: string }, add?: { id: string; value: string }): string {
+  const base = activePage ? `?page=${encodeURIComponent(activePage)}` : '?'
+  let q = ctxQuery(carry) + fltQuery(flt, omit)
+  if (add) q += `&flt.${encodeURIComponent(add.id)}=${encodeURIComponent(add.value)}`
+  return base + q
+}
+
+/**
+ * Franja de chips: un chip REMOVIBLE por valor activo (`Especie: Cerezo ×`). El × navega quitando ESE
+ * valor de la URL; el re-render server-side es lo que re-ancla charts, KPIs y tablas de una vez.
+ * Sin filtros activos la franja no existe (ausencia = documento completo, sin ruido en la cara).
+ */
+function renderFilterChips(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>): string {
+  const active = filters.filter((f) => f.selected.length > 0)
+  if (active.length === 0) return ''
+  const chips = active
+    .flatMap((f) =>
+      f.selected.map((v) => {
+        const href = escapeHtml(fltHref(activePage, carry, flt, { id: f.id, value: v }))
+        return (
+          `<span class="vflt-chip vflt-screen"><b>${escapeHtml(f.label)}:</b> ${escapeHtml(v)}` +
+          `<a class="vflt-x" href="${href}" title="Quitar este filtro" aria-label="Quitar ${escapeHtml(f.label)}: ${escapeHtml(v)}">✕</a></span>`
+        )
+      }),
+    )
+    .join('')
+  // Resumen para el papel: los chips son botones y en print no tienen sentido.
+  const printSummary = active.map((f) => `${f.label}: ${f.selected.join(', ')}`).join(' · ')
+  const clearAll =
+    active.length > 1 || active[0].selected.length > 1
+      ? `<a class="vflt-clear vflt-screen" href="${escapeHtml(fltHref(activePage, carry, {}))}">limpiar todo</a>`
+      : ''
+  return (
+    `<div class="vfltbar"><span class="vflt-k vflt-screen">Filtros</span>${chips}${clearAll}` +
+    `<span class="vflt-print">Filtros — ${escapeHtml(printSummary)}</span></div>`
+  )
+}
+
+/**
+ * Sección de FILTROS SERVER-SIDE del tab «Controles» de la bandeja. Cada opción es un LINK, no un
+ * checkbox con JS: el mecanismo de #82 es navegación + re-render server-side (así se re-anclan los
+ * charts, que son SVG horneado), no recompute client-side. Las opciones ya vienen cascadeadas.
+ */
+function renderTrayFilters(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>): string {
+  return filters
+    .map((f) => {
+      const opts = f.options
+        .map((v) => {
+          const on = f.selected.includes(v)
+          // Multi: el link alterna ESE valor. Single: elegir reemplaza la selección previa.
+          const href = on
+            ? fltHref(activePage, carry, flt, { id: f.id, value: v })
+            : fltHref(activePage, carry, flt, f.multi ? undefined : { id: f.id }, { id: f.id, value: v })
+          return (
+            `<label class="vflt-opt${on ? ' on' : ''}">` +
+            `<a href="${escapeHtml(href)}" role="checkbox" aria-checked="${on}">` +
+            `<span class="vflt-box">${on ? '✓' : ''}</span> ${escapeHtml(v)}</a></label>`
+          )
+        })
+        .join('')
+      const clear = f.selected.length
+        ? `<a class="faceta-clear" href="${escapeHtml(fltHref(activePage, carry, flt, { id: f.id }))}">limpiar</a>`
+        : ''
+      const body = f.options.length
+        ? `<div class="faceta-options">${opts}</div>`
+        : `<div class="tray-empty">Sin opciones para la selección actual.</div>`
+      return `<div class="faceta" data-flt="${escapeHtml(f.id)}"><div class="faceta-title">${escapeHtml(f.label)}${clear}</div>${body}</div>`
+    })
+    .join('')
 }
 
 /** CSS de la columna de acciones de drill (links por fila + menú cuando hay varias). */

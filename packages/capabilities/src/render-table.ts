@@ -11,6 +11,7 @@ export const TABLE_SSR_MAX_ROWS = 500
 
 export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const carry = opts.carry
+  const fltQ = opts.fltQ ?? ''
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const drills = node.drills ?? []
@@ -27,7 +28,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const displayByRows = node.interactive !== true && rows.length === 1
   if (node.interactive === false || displayByRows) {
     // Estática/display: sin runtime que complete después → el tbody lleva TODAS las filas.
-    const tbody = renderTableBody(cols, rows, ranges, drills, carry, node.ancla)
+    const tbody = renderTableBody(cols, rows, ranges, drills, carry, node.ancla, fltQ)
     const head =
       cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
       (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
@@ -39,23 +40,24 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   // Interactiva (auto-on): recién aquí se prende la señal → runtime + gaveta + CSS interactivo.
   opts.signals.interactiveTable = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
-  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla)
-  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
+  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla, fltQ)
+  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete, fltQ)
 }
 
-/** href server-side de una acción de drill, preservando el carry (ctx) y agregando las claves `by`. */
-function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: CarryCtx): string {
+/** href server-side de una acción de drill: preserva el carry (ctx) + los filtros activos (flt) y
+ *  agrega las claves `by`. Un filtro que no aplique en la página destino es inofensivo allí. */
+function serverDrillHref(drill: Drill, row: Record<string, unknown>, carry: CarryCtx, fltQ = ''): string {
   const keys: Record<string, string> = {}
   for (const k of drill.by) keys[k] = String(row[k] ?? '')
-  return `?page=${encodeURIComponent(drill.to)}${ctxQuery(carry, keys)}`
+  return `?page=${encodeURIComponent(drill.to)}${ctxQuery(carry, keys)}${fltQ}`
 }
 
 /** Celda de acciones de una fila: un link por drill (etiqueta del drill, o "→" si no la tiene). */
-function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: CarryCtx): string {
+function drillActionsCell(drills: Drill[], row: Record<string, unknown>, carry: CarryCtx, fltQ = ''): string {
   if (drills.length === 0) return ''
   const links = drills
     .map((d) => {
-      const href = escapeHtml(serverDrillHref(d, row, carry))
+      const href = escapeHtml(serverDrillHref(d, row, carry, fltQ))
       const label = d.label ? escapeHtml(d.label) : '→'
       const cls = d.label ? 'vt-drill-link' : 'vt-drill-link vt-drill-arrow'
       const title = d.label ? escapeHtml(d.label) : 'Ver detalle'
@@ -72,6 +74,7 @@ function renderTableBody(
   drills: Drill[] = [],
   carry: CarryCtx = {},
   ancla?: TablaAncla,
+  fltQ = '',
 ): string {
   return rows
     .map((r) => {
@@ -87,8 +90,8 @@ function renderTableBody(
       // y lo que el runtime de notas usa para dibujar el marcador. Sin anchor no se emite nada.
       const nkey = ancla ? ` data-nkey="${escapeHtml(llaveCanonicaDeFila(r, ancla.key))}" data-ndataset="${escapeHtml(ancla.dataset)}"` : ''
       // Single-drill: la fila admite doble-clic (back-compat) además del link de acciones.
-      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}"${nkey}>` : `<tr${nkey}>`
-      return `${open}${cells}${drillActionsCell(drills, r, carry)}</tr>`
+      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry, fltQ))}"${nkey}>` : `<tr${nkey}>`
+      return `${open}${cells}${drillActionsCell(drills, r, carry, fltQ)}</tr>`
     })
     .join('\n')
 }
@@ -103,6 +106,7 @@ function renderInteractiveTable(
   drills: Drill[] = [],
   carry: CarryCtx = {},
   ssrComplete = true,
+  fltQ = '',
 ): string {
   // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
   const colMeta = cols.map((c) => ({
@@ -147,7 +151,7 @@ function renderInteractiveTable(
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
   // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
   //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
-  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, ssrComplete, ancla: node.ancla }).replace(/</g, '\\u003c')
+  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, fltQ, ssrComplete, ancla: node.ancla }).replace(/</g, '\\u003c')
 
   // Pie con el contador de filas (TX-11 WP4·3): información del documento, no control — vive en la
   // CARA de cada tabla interactiva (el runtime lo puebla) y se imprime (estado honesto).
