@@ -11,6 +11,8 @@ export type { TopNRank } from './render-chart'
 export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn, ChartSort } from './piece-types'
+export { renderNotasTraySection, llaveCanonicaDeFila, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
+export type { NotasRenderContext, TablaAncla } from './notas-render'
 export {
   TABLE_RUNTIME_SOURCE,
   vtNorm,
@@ -32,6 +34,7 @@ export {
   canonicalKey,
   normalizeEntityRef,
   substrateHash,
+  llaveDeFila,
 } from './notas-store'
 export type {
   NotasStore,

@@ -4,6 +4,7 @@
 // interactivo (piece-css) y el runtime (table-runtime) los inyecta el ensamblador (render-html-piece).
 import { escapeHtml } from './markdown'
 import { ctxQuery, formatValue } from './piece-util'
+import { llaveCanonicaDeFila, type TablaAncla } from './notas-render'
 import type { ResolvedNode, RenderOpts, Drill, CarryCtx, TableColumn } from './piece-types'
 
 export const TABLE_SSR_MAX_ROWS = 500
@@ -26,7 +27,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const displayByRows = node.interactive !== true && rows.length === 1
   if (node.interactive === false || displayByRows) {
     // Estática/display: sin runtime que complete después → el tbody lleva TODAS las filas.
-    const tbody = renderTableBody(cols, rows, ranges, drills, carry)
+    const tbody = renderTableBody(cols, rows, ranges, drills, carry, node.ancla)
     const head =
       cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('') +
       (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
@@ -38,7 +39,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   // Interactiva (auto-on): recién aquí se prende la señal → runtime + gaveta + CSS interactivo.
   opts.signals.interactiveTable = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
-  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry)
+  const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla)
   return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete)
 }
 
@@ -70,6 +71,7 @@ function renderTableBody(
   ranges: Record<string, { min: number; max: number }>,
   drills: Drill[] = [],
   carry: CarryCtx = {},
+  ancla?: TablaAncla,
 ): string {
   return rows
     .map((r) => {
@@ -81,8 +83,11 @@ function renderTableBody(
           return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
+      // Llave de negocio de la fila (solo si el dataset declaró `anchor`): es el ancla del comentario
+      // y lo que el runtime de notas usa para dibujar el marcador. Sin anchor no se emite nada.
+      const nkey = ancla ? ` data-nkey="${escapeHtml(llaveCanonicaDeFila(r, ancla.key))}" data-ndataset="${escapeHtml(ancla.dataset)}"` : ''
       // Single-drill: la fila admite doble-clic (back-compat) además del link de acciones.
-      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}">` : '<tr>'
+      const open = drills.length === 1 ? `<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="${escapeHtml(serverDrillHref(drills[0], r, carry))}"${nkey}>` : `<tr${nkey}>`
       return `${open}${cells}${drillActionsCell(drills, r, carry)}</tr>`
     })
     .join('\n')
@@ -142,7 +147,7 @@ function renderInteractiveTable(
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
   // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
   //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
-  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, ssrComplete }).replace(/</g, '\\u003c')
+  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, ssrComplete, ancla: node.ancla }).replace(/</g, '\\u003c')
 
   // Pie con el contador de filas (TX-11 WP4·3): información del documento, no control — vive en la
   // CARA de cada tabla interactiva (el runtime lo puebla) y se imprime (estado honesto).

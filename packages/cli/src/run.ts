@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Botler, type Capability, type IdentityContext, type LogEntry } from '@vergis/botler'
 import { starterCapabilities, createExecuteSqlDwh, type SqlConnectionProfile } from '@vergis/capabilities'
-import { MiraBotlet, parseSpec, type MiraSpec, type ResolvedNode } from '@vergis/mira'
+import { MiraBotlet, parseSpec, type MiraSpec, type ResolvedNode, type ResolverComentarios } from '@vergis/mira'
 
 // Caché module-level del camino de serving (work/052 F3): sin ella cada request re-lee+re-parsea el
 // schema y el spec desde disco. El schema se parsea UNA vez por ruta → misma IDENTIDAD de objeto ⇒ el
@@ -66,6 +66,13 @@ export interface RunOptions {
    * vía `extraCapabilities`.
    */
   registerStarters?: boolean
+  /**
+   * CAPA DE NOTAS (vergis#84). `render` = el contexto que viaja al HTML (endpoints + CSRF + recorte)
+   * para que la bandeja ofrezca «Imprimir»/«Anotar» y los marcadores de comentario funcionen.
+   * `resolver` = qué se ha comentado sobre las filas servidas — lo consulta el server, no Mira.
+   * Ausente ⇒ el PI se sirve sin superficie de notas (p.ej. el render de una impresión congelada).
+   */
+  notas?: { render?: unknown; resolver?: ResolverComentarios }
   /** PI multi-vista: id de la página activa (default: la 1ª). Viene de la query `?page=`. */
   page?: string
   /** Contexto del drill-through (campo→valor(es)). Viene de la query `?ctx.<campo>=` — repetido
@@ -147,6 +154,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
     trigger: 'on-demand',
     params: {
       baseDir: options.baseDir ?? process.cwd(),
+      notas: options.notas,
       page: options.page,
       ctx: options.ctx,
     },

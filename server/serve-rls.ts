@@ -24,18 +24,18 @@
  *  - [clickhouse] VERGIS_DATASETS · VERGIS_CH_URL · VERGIS_CH_ADMIN_USER/_PASS · VERGIS_CH_CONSUMER_USER · VERGIS_CH_TARGET_ROLE · VERGIS_REFRESH_MS
  *  - PORT
  */
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { watchPaths, swapRecordInPlace } from './hot-reload'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join, dirname } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
-import { parseSpec as parseMiraSpec, validateSpec as validateMiraSpec } from '@vergis/mira'
+import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
 import { createMiranda, type MirandaServerDeps } from './miranda'
 import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
@@ -61,6 +61,9 @@ import {
   createDwhMasterDataStore,
   createDwhPublisher,
   SqliteGovernanceStore,
+  openNotasStore,
+  llaveDeFila,
+  canonicalKey,
   canOpen,
   deriveIngestionMap,
   deriveEntityFreshness,
@@ -79,6 +82,8 @@ import {
   type IngestionEngineClient,
   type MasterDataEntity,
   type PiRole,
+  type NotasStore,
+  type NotasRenderContext,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
@@ -90,9 +95,11 @@ import { createRequestHandler } from './routes'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
 import { configFromEnv, decideDevIdentity, deprecatedEnvWarnings } from './config'
-import { avatarMenu } from './ui'
+import { avatarMenu, csrfFactory } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
+import { createNotas, sinDrills, type CongeladoPi, type NotasHandler } from './notas'
+import { purgarRetencion, PURGA_INTERVALO_MS } from './notas-settings'
 import type { MirandaHandler } from './miranda'
 import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from './deployment-check'
 import {
@@ -359,6 +366,11 @@ const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = p
 // El 3er argumento (dev identity) es null salvo en dev sin gate real — imposible de activar en prod.
 const identityFor = createIdentity(gateClaims, IDENTITY_MAP, config.devIdentity).identityFor
 
+// CAPA DE NOTAS (vergis#84): impresiones + anotaciones + comentarios + compartición. Store embebido
+// propio (`VERGIS_NOTES_DB`), abierto no-fatal: si falla, la capa queda deshabilitada con log y el
+// serving sigue intacto — una nota no vale una caída.
+let notasStore: NotasStore | null = null
+let notasHandler: NotasHandler | null = null
 // Gobierno de PI (autorización de ARTEFACTO, frente A). FLAG-GUARDED: con VERGIS_PI_ACL apagado el
 // índice/apertura siguen por acceso-a-datos (comportamiento vivo); encendido, gatean por la ACL del
 // PI (rol owner/collaborator/viewer) compuesta con la RLS de datos (que NUNCA se salta).
@@ -392,7 +404,17 @@ if (!process.env['VERGIS_CSRF_SECRET']) {
 // La navegación multi-vista (`?page=` + `?ctx.*`, con acumulación de repetidos para multi-select)
 // vive en ./nav.ts — extraída para testearla sin los efectos de módulo de este archivo.
 
-async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery = {}): Promise<string> {
+/**
+ * Corre un PI bajo la identidad del request. Es el ÚNICO punto de render: sirve tanto la página del
+ * PI como el congelado de una impresión (que no es otra cosa que este mismo resultado, guardado).
+ * `notas` viaja solo cuando la capa de notas está disponible — sin ella el PI se sirve idéntico.
+ */
+async function runPi(
+  report: Report,
+  headers: GateHeaders,
+  nav: NavQuery = {},
+  notas?: { render?: NotasRenderContext; resolver?: ResolverComentarios },
+): Promise<Awaited<ReturnType<typeof runSpec>>> {
   const identity = identityFor(headers)
   const out = await runSpec({
     specPath: report.specPath,
@@ -402,12 +424,53 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
     // SIN starters (no `static-data` ni vías crudas) → imposible servir dato no-gobernado.
     registerStarters: false,
     extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
+    notas,
     page: nav.page,
     ctx: nav.ctx,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
+  return out
+}
+
+async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery = {}): Promise<string> {
+  const out = await runPi(report, headers, nav, notasWiring(report, headers, nav))
   return out.html ?? ''
+}
+
+/**
+ * Contexto de notas de un render: los endpoints + CSRF que la bandeja necesita, y el resolver de
+ * comentarios para los marcadores. Null cuando el store no abrió (la capa queda deshabilitada sin
+ * afectar el serving) o cuando no hay identidad — inferirla está prohibido.
+ */
+function notasWiring(
+  report: Report,
+  headers: GateHeaders,
+  nav: NavQuery,
+): { render?: NotasRenderContext; resolver?: ResolverComentarios } | undefined {
+  if (!notasStore) return undefined
+  const email = (identityFor(headers).user ?? '').trim().toLowerCase()
+  if (!email) return undefined
+  const store = notasStore
+  const render: NotasRenderContext = {
+    imprimirUrl: `/${report.slug}/imprimir`,
+    notasUrl: `/${report.slug}/notas`,
+    comentariosUrl: `/${report.slug}/comentarios`,
+    impresionesUrl: '/impresiones',
+    csrf: csrfFactory(CSRF_SECRET)(email),
+    page: nav.page,
+    ctx: nav.ctx,
+  }
+  // Render ESCASO y fail-closed: se preguntan solo las llaves de las filas ya RLS-filtradas, y solo
+  // viajan las que tienen comentarios — el payload nunca delata la existencia de una fila no servida.
+  const resolver: ResolverComentarios = async (entity, key, rows) => {
+    const llaves = rows.map((r) => llaveDeFila(r, key))
+    const resumen = await store.comentariosDe(entity, llaves)
+    const out: Record<string, { count: number; porCampo: Record<string, number> }> = {}
+    for (const r of resumen) out[r.llave] = { count: r.count, porCampo: r.porCampo }
+    return out
+  }
+  return { render, resolver }
 }
 
 /**
@@ -517,6 +580,7 @@ const server = createServer(
     getAdmin: () => admin,
     getPiConfig: () => piConfig,
     getMiranda: () => miranda,
+    getNotas: () => notasHandler,
     discover,
     identityFor,
     renderReport,
@@ -536,6 +600,111 @@ const server = createServer(
       ENGINE === 'fabric' ? { total: piState.size, serving: [...piState.values()].filter((v) => v.ok).length } : null,
   }),
 )
+
+
+// ── CAPA DE NOTAS (vergis#84) — impresiones · anotaciones · comentarios · compartición ────────────
+// Apertura NO-FATAL (mismo patrón que el resto de los stores embebidos): si el archivo no abre, la
+// capa queda deshabilitada con log y el nodo sigue sirviendo sus PIs. Una nota no vale una caída.
+try {
+  notasStore = await openNotasStore(process.env['VERGIS_OUT'] ?? tmpdir())
+  const store = notasStore
+  // Spec parseada por slug: la necesita el gate del comentario (para leer el `anchor` del dataset y
+  // re-ejecutar su recuperación). Se lee a request-time desde el descubrimiento vivo — un spec
+  // editado en caliente entra sin restart, igual que en el serving.
+  const resolvePi = (slug: string): { code: string; name: string; slug: string; spec: MiraSpec } | undefined => {
+    const r = discover().find((x) => x.slug === slug)
+    if (!r) return undefined
+    try {
+      return { code: r.code, name: r.name, slug: r.slug, spec: parseMiraSpec(readFileSync(r.specPath, 'utf8')) as MiraSpec }
+    } catch {
+      return undefined
+    }
+  }
+  notasHandler = createNotas({
+    store,
+    resolve: resolvePi,
+    identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
+    canOpenPi: async (slug, h) => {
+      const r = discover().find((x) => x.slug === slug)
+      if (!r) return false
+      return canOpenPi(r, identityFor(h as GateHeaders))
+    },
+    // EL GATE DEL COMENTARIO: se re-ejecuta la recuperación del dataset bajo la identidad del autor.
+    // Lo que devuelve es exactamente lo que esa identidad ve — comentar una llave ausente es 403.
+    retrieve: async (slug, dataset, ctx, headers) => {
+      const r = discover().find((x) => x.slug === slug)
+      if (!r) throw new Error(`Producto de Información no encontrado: ${slug}`)
+      const spec = parseMiraSpec(readFileSync(r.specPath, 'utf8')) as MiraSpec
+      const ds = spec.data?.[dataset]
+      if (!ds) throw new Error(`El dataset '${dataset}' no existe en este Producto de Información.`)
+      const params = applyCtx(ds.params, (ctx ?? {}) as Record<string, string | string[]>)
+      const out = (await servingCap.execute(params, identityFor(headers as GateHeaders))) as { rows?: Record<string, unknown>[] }
+      return out.rows ?? []
+    },
+    // Congelar = renderizar bajo la identidad del autor y quedarse con el árbol resuelto. El
+    // congelado nace RLS-filtrado: por eso anotarlo después no vuelve a preguntar nada.
+    congelar: async (slug, pageParam, ctx, headers) => {
+      const r = discover().find((x) => x.slug === slug)
+      if (!r) throw new Error(`Producto de Información no encontrado: ${slug}`)
+      const nav: NavQuery = { page: pageParam, ctx }
+      const out = await runPi(r, headers as GateHeaders, nav, notasWiring(r, headers as GateHeaders, nav))
+      const spec = parseMiraSpec(readFileSync(r.specPath, 'utf8')) as MiraSpec
+      const specVersion = [spec.identity?.['version'], createHash('sha256').update(readFileSync(r.specPath, 'utf8')).digest('hex').slice(0, 8)]
+        .filter(Boolean)
+        .join('·')
+      return {
+        piSlug: r.slug,
+        piName: r.name,
+        title: String(spec.identity?.display_name ?? r.name),
+        page: pageParam,
+        ctx,
+        watermark: out.freshness?.watermark,
+        specVersion,
+        autor: (identityFor(headers as GateHeaders).user ?? '').toLowerCase(),
+        resolved: out.resolved ?? { type: 'markdown_block', content: '(sin contenido)' },
+      } satisfies CongeladoPi
+    },
+    // El congelado se re-renderiza SIN drills y SIN superficie de notas viva: es un documento, no una
+    // vista. Navegar desde él a dato de hoy rompería la promesa de que lo que se ve es lo que se vio.
+    renderCongelado: async (frozen) => {
+      const out = (await renderHtmlPiece.execute(
+        {
+          piece: sinDrills(frozen.resolved),
+          title: frozen.title,
+          theme: frozen.theme,
+          palette: frozen.palette,
+          meta: { date: frozen.watermark ? new Date(frozen.watermark) : undefined, code: frozen.piSlug },
+        },
+        { agent: 'vergis-notas' },
+      )) as { html?: string }
+      return out.html ?? ''
+    },
+    avatarFor: async (email) => {
+      const isAdmin = governance ? await governance.isAdmin(email) : false
+      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, signoutRd: SIGNOUT_RD || '/' })
+    },
+    audit: (e) => console.log(`[vergis-notas] ${JSON.stringify(e)}`),
+    secret: CSRF_SECRET,
+    brandTitle: INDEX_TITLE,
+  })
+  console.log('[vergis-rls] capa de notas: store embebido listo (/impresiones)')
+  // RETENCIÓN (A7): al arranque y cada 24 h. La configuración vive en platform settings; el default
+  // (P12M) está en código. Se loguea SIEMPRE lo purgado — borrar en silencio es como no borrar.
+  const purga = async (): Promise<void> => {
+    if (!governance) return // los settings viven en el store de gobierno; sin él, el default no se aplica solo
+    try {
+      const { corte, purgados } = await purgarRetencion(store, governance)
+      if (purgados.length) console.log(`[vergis-notas] retención: ${purgados.length} impresión(es) purgada(s) con actividad anterior a ${corte} — ${purgados.join(', ')}`)
+    } catch (e2) {
+      console.error(`[vergis-notas] purga de retención falló: ${e2 instanceof Error ? e2.message : String(e2)}`)
+    }
+  }
+  const timerPurga = setInterval(() => void purga(), PURGA_INTERVALO_MS)
+  timerPurga.unref?.()
+  setTimeout(() => void purga(), 5000).unref?.() // tras el bootstrap del gobierno, no compitiendo con él
+} catch (e) {
+  console.error(`[vergis-rls] capa de notas deshabilitada: ${e instanceof Error ? e.message : String(e)}`)
+}
 
 // ADMINISTRACIÓN (no-fatal): data maestra + usuarios y roles — única superficie de ESCRITURA
 // gobernada. Independiente del motor de serving. Se habilita si la instancia declara entidades
