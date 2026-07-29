@@ -370,16 +370,29 @@ describe('theme-config · default por tipo de PI', () => {
     expect(classifyPiece(mixedPiece)).toBe('dashboard')
   })
 
-  it('platformThemeDefault: reportes → paleta blanco; dashboard → sin paleta forzada', () => {
+  // #78 · la convención de fondo blanco es PAREJA para todos los PIs: los reportes ya nacían así,
+  // los dashboards se suman. El env sigue pudiendo revertirlo por instancia.
+  it('platformThemeDefault: reportes Y dashboards nacen con paleta blanco', () => {
     expect(platformThemeDefault('report').palette).toBe('blanco')
-    expect(platformThemeDefault('dashboard').palette).toBeUndefined()
+    expect(platformThemeDefault('dashboard').palette).toBe('blanco')
   })
 
-  it('resolveTheme: un reporte hereda paleta blanco; el theme del spec gana sobre el default', () => {
+  it('platformThemeDefault: VERGIS_THEME_DASHBOARD puede fijar otra combinación', () => {
+    const prev = process.env['VERGIS_THEME_DASHBOARD']
+    process.env['VERGIS_THEME_DASHBOARD'] = 'arbol@gruvbox'
+    try {
+      expect(platformThemeDefault('dashboard')).toEqual({ theme: 'arbol', palette: 'gruvbox' })
+    } finally {
+      if (prev === undefined) delete process.env['VERGIS_THEME_DASHBOARD']
+      else process.env['VERGIS_THEME_DASHBOARD'] = prev
+    }
+  })
+
+  it('resolveTheme: reporte y dashboard heredan paleta blanco; el theme del spec gana sobre el default', () => {
     const r = resolveTheme(tablePiece, 'arbol')
     expect(r.theme).toBe('arbol') // spec gana en theme
     expect(r.palette).toBe('blanco') // paleta del default de plataforma (report)
     const d = resolveTheme(dashPiece, 'arbol')
-    expect(d.palette).toBeUndefined() // dashboard sin paleta forzada
+    expect(d.palette).toBe('blanco') // #78: el dashboard también nace blanco
   })
 })

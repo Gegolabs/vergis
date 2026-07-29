@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { escapeHtml } from '../markdown'
-import type { DashboardMeta, Theme } from './index'
+import { chartVarDeclarations } from './index'
+import type { DashboardMeta, Theme, ThemeTokens } from './index'
 
 // Logo del proyecto A.R.B.O.L. embebido como data URI (autocontenido, offline).
 const LOGO_DATA_URI = (() => {
@@ -45,19 +46,50 @@ function formatDateTime(date?: string | Date): string {
   }).format(d)
 }
 
+/** Tokens de chart de la paleta Gruvbox DARK (el juego base del theme). */
+const CHART_TOKENS_GRUVBOX: ThemeTokens = {
+  chartBar: '#b8bb26',
+  chartText: '#ebdbb2',
+  chartAxis: '#504945',
+  // Acentos Gruvbox: verde · amarillo · azul · naranja · púrpura · rojo · aqua · gris.
+  chartSeries: ['#b8bb26', '#fabd2f', '#83a598', '#fe8019', '#d3869b', '#fb4934', '#8ec07c', '#a89984'],
+}
+
+/**
+ * Tokens de chart POR PALETA. Los colores del chart se hornean en el SVG server-side, así que cada
+ * paleta necesita SU juego: los tonos Gruvbox dark se lavan sobre fondo claro y el texto `#ebdbb2`
+ * desaparece sobre blanco.
+ *
+ * INVARIANTE de los tres juegos: `chartBar` es el color de la primera serie. Así el mapa hex→var
+ * asigna los mismos nombres de variable bajo cualquier paleta activa, y conmutar la Apariencia
+ * re-colorea sin que el nombre de la var dependa de con qué paleta se renderizó.
+ */
+const CHART_TOKENS_BY_PALETTE: Record<string, ThemeTokens> = {
+  gruvbox: CHART_TOKENS_GRUVBOX,
+  // Gruvbox light: acentos oscuros del mismo esquema, sobre fondo #fbf1c7.
+  claro: {
+    chartBar: '#79740e',
+    chartText: '#3c3836',
+    chartAxis: '#d5c4a1',
+    chartSeries: ['#79740e', '#b57614', '#076678', '#af3a03', '#8f3f71', '#9d0006', '#427b58', '#7c6f64'],
+  },
+  // Paleta de contraste sobre blanco: la ya probada del theme default (fondo #ffffff).
+  blanco: {
+    chartBar: '#2563eb',
+    chartText: '#334155',
+    chartAxis: '#e2e8f0',
+    chartSeries: ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ea580c', '#65a30d'],
+  },
+}
+
 /**
  * Theme "arbol" — paleta Gruvbox dark, header con logo A.R.B.O.L. + fecha,
  * réplica del dashboard referencial de QW-04 (cluster 052 del proyecto padre).
  */
 export const arbolTheme: Theme = {
   name: 'arbol',
-  tokens: {
-    chartBar: '#b8bb26',
-    chartText: '#ebdbb2',
-    chartAxis: '#504945',
-    // Acentos Gruvbox: verde · amarillo · azul · naranja · púrpura · rojo · aqua · gris.
-    chartSeries: ['#b8bb26', '#fabd2f', '#83a598', '#fe8019', '#d3869b', '#fb4934', '#8ec07c', '#a89984'],
-  },
+  tokens: CHART_TOKENS_GRUVBOX,
+  chartTokensByPalette: CHART_TOKENS_BY_PALETTE,
   palettes: [
     { id: 'gruvbox', label: 'Oscuro' },
     { id: 'claro', label: 'Claro' },
@@ -87,18 +119,24 @@ export const arbolTheme: Theme = {
     --fg: #ebdbb2; --fg-dim: #a89984;
     --green: #b8bb26; --yellow: #fabd2f; --red: #fb4934;
     --blue: #83a598; --orange: #fe8019; --purple: #d3869b; --gray: #a89984;
+    /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
+    ${chartVarDeclarations(CHART_TOKENS_BY_PALETTE['gruvbox'])}
   }
   html[data-palette="claro"] {
     --bg: #fbf1c7; --panel: #f2e5bc; --card: #ebdbb2; --border: #d5c4a1;
     --fg: #3c3836; --fg-dim: #7c6f64;
     --green: #79740e; --yellow: #b57614; --red: #9d0006;
     --blue: #076678; --orange: #af3a03; --purple: #8f3f71; --gray: #7c6f64;
+    /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
+    ${chartVarDeclarations(CHART_TOKENS_BY_PALETTE['claro'])}
   }
   html[data-palette="blanco"] {
     --bg: #ffffff; --panel: #ffffff; --card: #ffffff; --border: #e2e8f0;
     --fg: #1a1a1a; --fg-dim: #64748b;
     --green: #16a34a; --yellow: #d97706; --red: #dc2626;
     --blue: #2563eb; --orange: #ea580c; --purple: #9333ea; --gray: #64748b;
+    /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
+    ${chartVarDeclarations(CHART_TOKENS_BY_PALETTE['blanco'])}
   }
   body { transition: background .2s ease, color .2s ease; }
   * { box-sizing: border-box; }
