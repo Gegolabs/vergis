@@ -139,6 +139,12 @@ export interface ResolvedNode {
    * (p.ej. "ver el socio" y "ver la empresa"); con uno solo, además se habilita el doble-clic de fila.
    */
   drills?: Drill[]
+  /**
+   * Llave de negocio declarada por el dataset de la tabla (`data.<ds>.anchor`, D16). Es lo que
+   * permite clavar un comentario en un REGISTRO. Mira la copia del spec tal cual — es DESCRIPTIVA,
+   * no autoriza nada; `comentarios` lo puebla el server tras el render (Mira jamás lee una nota).
+   */
+  ancla?: { dataset: string; entity: string; key: string[]; display?: string; comentarios: Record<string, { count: number; porCampo: Record<string, number> }> }
 }
 
 /** Una acción de drill-through declarada en una tabla. `by` = claves de contexto que viajan al destino. */
@@ -379,6 +385,7 @@ export function composePiece(
     rows = sortRows(rows, t.sort)
     if (typeof t.limit === 'number') rows = rows.slice(0, t.limit)
     const drills = normalizeDrills(t.drillthrough)
+    const anchor = spec.data?.[dataset]?.anchor
     return {
       type: 'table',
       dataset, // permite direccionar la tabla por su dataset (p.ej. el ancla de comentarios)
@@ -389,6 +396,10 @@ export function composePiece(
       title: t.title,
       interactive: t.interactive,
       drills: drills.length ? drills : undefined,
+      // La llave de negocio del dataset viaja con la tabla (fail-closed: sin `anchor` declarado, no
+      // hay ancla y el gesto de comentar no se ofrece). `comentarios` nace vacío: quien lee el store
+      // de notas es el server, jamás Mira (D7 — el motor no lee una nota).
+      ancla: anchor ? { dataset, entity: anchor.entity, key: anchor.key, display: anchor.display, comentarios: {} } : undefined,
     }
   }
   const key = Object.keys(node)[0] ?? 'unknown'

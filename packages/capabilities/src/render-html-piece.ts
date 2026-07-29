@@ -9,6 +9,7 @@ import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
 import { renderInteractiveScript } from './interactive-script'
+import { renderNotasTraySection, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
 import { ctxQuery, formatValue } from './piece-util'
 import type {
   Interactive, PagesNav, ControlResolved, CarryCtx, RenderParams,
@@ -38,7 +39,7 @@ const VERGIS_VERSION = (() => {
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     const carry = carryCtx ?? {}
@@ -60,7 +61,7 @@ export const renderHtmlPiece: Capability = {
     const facets = interactive ? renderDashboardFacets(interactive) : ''
     // «Controles trae maquinaria» = facetas server-rendered (dashboard) o el runtime de tabla que las
     // inyecta client-side. Decide el empty-state y el tab por defecto — NO decide si hay gaveta.
-    const controlesHasMachinery = !!facets || hasTable
+    const controlesHasMachinery = !!facets || hasTable || !!notas
     // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
     const piLabel = meta?.code
       ? `${meta.code}${meta.version ? ' · v' + meta.version : ''}`
@@ -70,7 +71,7 @@ export const renderHtmlPiece: Capability = {
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
     // El shell del Inspector se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
     // Controles solo cuando `interactive`; si no, `''` (y el tab muestra su empty-state).
-    body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable) + body
+    body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable, !!notas) + body
     if (interactive) tail += renderInteractiveScript(interactive)
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
@@ -78,12 +79,21 @@ export const renderHtmlPiece: Capability = {
     let css = ''
     css += TRAY_CSS // el shell del Inspector existe SIEMPRE → su CSS también
     if (hasTable) css += TABLE_INTERACTIVE_CSS
+    if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
     if (hasTable) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
+    // La capa de NOTAS va DESPUÉS del runtime de tabla: decora un tbody que ya existe y se engancha
+    // a sus re-renders. Su contexto viaja como JSON (endpoints + CSRF + recorte), nunca interpolado
+    // en el script — el recorte lo escribe el usuario y no puede acabar como código.
+    if (notas) {
+      tail +=
+        `<script type="application/json" id="vergis-notas">${JSON.stringify(notas).replace(/</g, '\\u003c')}</script>` +
+        `<script>${NOTAS_RUNTIME_SOURCE}</script>`
+    }
     return { html: theme.wrap({ title: title ?? 'Vergis', body: body + tail, meta, palette }) }
   },
 }
@@ -345,6 +355,7 @@ function renderTrayShell(
   piLabel?: string,
   controlesHasMachinery = true,
   hasTable = false,
+  hasNotas = false,
 ): string {
   const active = activePalette || (palettes && palettes[0]?.id) || ''
   let appearance = ''
@@ -384,6 +395,9 @@ function renderTrayShell(
   const guardadosBody = hasTable
     ? ''
     : `<div class="tray-empty">Las vistas guardadas están disponibles en reportes con tabla.</div>`
+  // Los actos de la capa de notas (Imprimir · Anotar) son CONTROLES: viven en la bandeja, junto al
+  // resto de la maquinaria, jamás sueltos en el cuerpo del documento.
+  const notasKit = hasNotas ? renderNotasTraySection() : ''
   return (
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden>` +
     `<label for="vergis-tray-toggle" class="tray-tab" title="Inspector" aria-label="Abrir inspector">` +
@@ -402,7 +416,7 @@ function renderTrayShell(
     `<label for="vergis-tt-guardados" class="tray-tablabel tt-guardados">Vistas</label>` +
     `<label for="vergis-tt-config" class="tray-tablabel tt-config">Config</label>` +
     `</div>` +
-    `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${controlesBody}</div></div>` +
+    `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${notasKit}${controlesBody}</div></div>` +
     `<div class="tray-panel tray-panel-guardados"><div class="tray-saved">${guardadosBody}</div></div>` +
     `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
     // Pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible, pegado al fondo.

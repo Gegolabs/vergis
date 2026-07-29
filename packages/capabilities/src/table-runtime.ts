@@ -298,10 +298,18 @@ function vtDrillActions(drills, r, carry){
   var links=drills.map(function(d){ var href=vtEsc(vtDrillHref(d,r,carry)); var label=d.label?vtEsc(d.label):'→'; var cls=d.label?'vt-drill-link':'vt-drill-link vt-drill-arrow'; var title=d.label?vtEsc(d.label):'Ver detalle'; return '<a class="'+cls+'" href="'+href+'" title="'+title+'">'+label+'</a>'; }).join('');
   return '<td class="vt-actions">'+links+'</td>';
 }
-function vtBodyRows(cols, rows, drills, carry){
+/* Llave canónica de negocio de una fila — espejo EXACTO de llaveCanonicaDeFila (server) y de
+   llaveDeFila+canonicalKey (store): columnas ordenadas y valores coercionados a texto. Si las dos
+   implementaciones divergen, el marcador aparece o no según por dónde se pregunte. */
+function vtNKey(r, key){
+  var cols=key.slice().sort();
+  return '{'+cols.map(function(k){ return JSON.stringify(k)+':'+JSON.stringify(r[k]==null?'':String(r[k])); }).join(',')+'}';
+}
+function vtBodyRows(cols, rows, drills, carry, ancla){
   var single = drills && drills.length===1;
   return rows.map(function(r){
-    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry))+'">' : '<tr>';
+    var nkey = ancla ? ' data-nkey="'+vtEsc(vtNKey(r,ancla.key))+'" data-ndataset="'+vtEsc(ancla.dataset)+'"' : '';
+    var open = single ? '<tr class="vt-drill-row" title="Doble clic: ver detalle" data-href="'+vtEsc(vtDrillHref(drills[0],r,carry))+'"'+nkey+'>' : '<tr'+nkey+'>';
     return open+cols.map(function(c){return vtCell(c,r);}).join('')+vtDrillActions(drills,r,carry)+'</tr>';
   }).join('');
 }
@@ -315,6 +323,7 @@ function vtBootstrap(root){
   // carry (ctx de cabecera, p.ej. la semana) se preserva en cada href de drill.
   var drills = payload.drills || [];
   var carry = payload.carryCtx || {};
+  var ancla = payload.ancla || null;
   var nactions = drills.length ? 1 : 0;
   function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
@@ -512,7 +521,7 @@ function vtBootstrap(root){
   // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
   // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
   function renderNodeTree(rc, ncols, node, depth, prefix){
-    if(node.leaf) return vtBodyRows(rc, node.rows, drills, carry);
+    if(node.leaf) return vtBodyRows(rc, node.rows, drills, carry, ancla);
     return node.groups.map(function(g){
       var path=prefix+node.field+SEP+g.key;
       var collapsed=!!state.collapsed[path];
@@ -528,7 +537,7 @@ function vtBootstrap(root){
     if(state.groupLevels.length){
       tbody.innerHTML = renderNodeTree(rc, ncols, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
-      tbody.innerHTML = vtBodyRows(rc, view, drills, carry) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = vtBodyRows(rc, view, drills, carry, ancla) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
     if(footEl) footEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){

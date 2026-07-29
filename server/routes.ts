@@ -13,6 +13,7 @@ import type { Report } from './discovery'
 import type { AdminHandler } from './admin'
 import type { PiConfigHandler } from './pi-config'
 import type { MirandaHandler } from './miranda'
+import type { NotasHandler } from './notas'
 
 export interface RouteDeps {
   engine: string
@@ -24,6 +25,9 @@ export interface RouteDeps {
   /** Handler de Miranda (cluster 077) o null si el flag `MIRANDA_ENABLED` está apagado (default).
    * null ⇒ `/miranda*` cae al 404 normal: con el flag apagado la superficie es idéntica a hoy. */
   getMiranda?: () => MirandaHandler | null
+  /** Handler de la CAPA DE NOTAS (impresiones, anotaciones, comentarios, compartición) o null si el
+   *  store no abrió: sin él, sus rutas caen al 404 normal y el resto del serving sigue intacto. */
+  getNotas?: () => NotasHandler | null
   discover: () => Report[]
   identityFor: (headers: GateHeaders) => IdentityContext
   /** Render por-consumidor de un PI (con RLS). */
@@ -92,11 +96,35 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
         .catch((e) => fail(res, 500, `Error en Miranda: ${errMsg(e)}`))
       return
     }
+    // CAPA DE NOTAS — `/impresiones*` y `/<slug>/{imprimir,notas,comentarios}`. Va DESPUÉS del gate
+    // `ready` (abajo) no: va acá arriba porque `/impresiones` no sirve dato gobernado — lo que sirve
+    // es dato YA congelado bajo la RLS de quien imprimió. Las rutas por-PI sí resuelven el PI dentro
+    // del handler (que aplica su propio gate de artefacto).
+    const notas = deps.getNotas?.() ?? null
+    if (notas && (url === '/impresiones' || url.startsWith('/impresiones/'))) {
+      notas
+        .tryHandle(req, res)
+        .then((handled) => {
+          if (!handled) fail(res, 404, 'Ruta no encontrada')
+        })
+        .catch((e) => fail(res, 500, `Error en la capa de notas: ${errMsg(e)}`))
+      return
+    }
     // Gate GLOBAL solo para el ARRANQUE EN FRÍO (nada evaluado aún). Después, la servibilidad es
     // por-PI (`piBlocked`): un PI degradado responde 503 con motivo y los demás siguen (issue #52).
     if (!deps.isReady()) return fail(res, 503, 'Inicializando…')
     const all = deps.discover()
     const blockedReason = (report: Report): string | null => deps.piBlocked?.(report) ?? null
+    // Rutas de notas ATADAS A UN PI: necesitan el PI descubierto (por eso van tras el gate `ready`).
+    if (notas && /^\/[^/]+\/(imprimir|notas|comentarios)$/.test(url)) {
+      notas
+        .tryHandle(req, res)
+        .then((handled) => {
+          if (!handled) fail(res, 404, 'Ruta no encontrada')
+        })
+        .catch((e) => fail(res, 500, `Error en la capa de notas: ${errMsg(e)}`))
+      return
+    }
     const identity = deps.identityFor(req.headers as GateHeaders)
     const sendHtml = (html: string): void => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })

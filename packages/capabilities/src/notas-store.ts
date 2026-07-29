@@ -206,6 +206,20 @@ export function canonicalKey(llave: Record<string, unknown>): string {
   return canonicalJson(llave)
 }
 
+/**
+ * Llave de negocio de una fila, según las columnas declaradas en el `anchor`.
+ *
+ * Los valores se COERCIONAN A STRING a propósito: la misma llave se construye en el servidor (desde
+ * las filas servidas) y en el navegador (desde el payload de la tabla), y un `4021` numérico contra
+ * un `"4021"` textual produciría dos llaves distintas para el mismo registro — el marcador
+ * aparecería, o no, según por dónde se pregunte. La coerción a texto lo hace determinista.
+ */
+export function llaveDeFila(row: Record<string, unknown>, key: string[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const k of [...key].sort()) out[k] = row[k] == null ? '' : String(row[k])
+  return out
+}
+
 /** Normaliza una referencia de entidad gobernada a `schema.tabla` en minúscula (misma convención
  *  que `server/sql-tables.ts`: es la que unifica el comentario ENTRE PIs). */
 export function normalizeEntityRef(ref: string): string {

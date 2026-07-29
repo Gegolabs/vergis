@@ -3,6 +3,7 @@
 // (render-table, …) sin crear ciclo de imports. Aquí no vive lógica, solo el contrato del árbol
 // resuelto (ResolvedNode) y las opciones/señales del render.
 import type { DashboardMeta, ThemeTokens } from './themes'
+import type { NotasRenderContext, TablaAncla } from './notas-render'
 
 export interface FilterSpec {
   dataset: string
@@ -52,6 +53,9 @@ export interface RenderParams {
   controls?: ControlResolved[]
   /** Contexto que toda navegación (nav de páginas, drills, selectores) debe preservar (p.ej. la semana). */
   carryCtx?: CarryCtx
+  /** Capa de NOTAS (vergis#84): endpoints + CSRF + recorte vigente. Ausente ⇒ el PI se sirve sin
+   *  bandeja de notas ni marcadores (p.ej. el render de una impresión congelada, que es read-only). */
+  notas?: NotasRenderContext
 }
 
 export interface TableColumn {
@@ -135,6 +139,10 @@ export interface ResolvedNode {
   interactive?: boolean
   /** Tabla: acciones de drill-through por fila (a la vista `to` pasando las claves `by`). */
   drills?: Drill[]
+  /** Tabla: llave de negocio declarada por su dataset (`anchor`) + lo ya comentado sobre las filas
+   *  servidas. Presente ⇒ cada fila lleva su llave canónica y el gesto de comentar se ofrece;
+   *  ausente ⇒ no se ofrece (fail-closed, D16). */
+  ancla?: TablaAncla
 }
 
 /** Una acción de drill-through: a la vista `to`, pasando una o más claves de contexto `by`. */
