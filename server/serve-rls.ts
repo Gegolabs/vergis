@@ -427,6 +427,7 @@ async function runPi(
     notas,
     page: nav.page,
     ctx: nav.ctx,
+    flt: nav.flt,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')

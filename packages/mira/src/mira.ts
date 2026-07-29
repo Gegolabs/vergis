@@ -11,6 +11,7 @@ import { expectString, expectRows } from './contract'
 import type { CtxValues, PagesNav, ControlResolved } from './mira-types'
 import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues, buildControlOptions, labelForValue } from './controls'
 import { resolveActiveView, normalizeCtx, watermarkDatasetOf, isMultiControl, asSingle } from './views'
+import { applyFlt, filterCarry, filterColumn, normalizeFlt, resolveFilters, stripFilterSource, type FilterResolved } from './filters'
 import { parseSpec } from './dsl/parse'
 import { collectDataRefs, collectDatasetKeys, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
 import { checkFreshness, type FreshnessVerdict } from './freshness'
@@ -90,6 +91,18 @@ export class MiraBotlet implements Botlet {
     // 2·ter · CONTROLES DE CABECERA — ver resolveHeaderControls (muta results/ctxValues).
     const { controlsResolved, carryCtx } = await this.resolveHeaderControls(spec, ctxValues, results, host, identity)
 
+    // 2·quater · FILTROS DE BANDEJA (#82) — DESPUÉS de los controles (sus catálogos pueden depender
+    // del alcance vigente vía `:ctx.`) y ANTES de las queries de página (que llevan sus `:flt.`).
+    const { filtersResolved, filterColumns } = await this.resolveTrayFilters(
+      spec,
+      ctxValues,
+      normalizeFlt(ctx.params?.['flt']),
+      results,
+      host,
+      identity,
+    )
+    const fltCarry = filterCarry(filtersResolved)
+
     // Frescura en multi-vista: `checkFreshness` resuelve el watermark GLOBAL contra `results`. En
     // multi-vista solo se recuperan los datasets de la página activa, así que si el `watermark_field`
     // apunta a un dataset de OTRA página, quedaría sin resolver → veredicto "fresco" en silencio.
@@ -113,8 +126,10 @@ export class MiraBotlet implements Botlet {
         // `applyCtx` SIEMPRE: es no-op cuando el sql no contiene `:ctx.` (devuelve los params intactos).
         // Antes solo se aplicaba en multi-vista, y un PI de UNA vista con `controls` dejaba el `:ctx.<id>`
         // literal en el sql (falla en el motor) o hacía del control un no-op silencioso.
-        const params = applyCtx(ds.params, ctxValues, missing)
+        const fltMissing: string[] = []
+        const params = applyFlt(applyCtx(ds.params, ctxValues, missing), filtersResolved, filterColumns, fltMissing)
         if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: name, params: missing })
+        if (fltMissing.length > 0) host.log({ type: 'mira-flt-missing', botletId: this.id, dataset: name, filters: fltMissing })
         host.log({ type: 'mira-retrieve', botletId: this.id, dataset: name, capability: ds.capability })
         const out = await host.capabilityCall(ds.capability, params, identity)
         results[name] = { rows: expectRows(name, ds.capability, out) }
@@ -184,7 +199,7 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, r.theme, host, identity, notasCtx?.render)
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasCtx?.render)
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -285,6 +300,57 @@ export class MiraBotlet implements Botlet {
     return { controlsResolved, carryCtx }
   }
 
+  /**
+   * 2·quater · FILTROS DE BANDEJA (#82): recupera los catálogos, cascadea las opciones y sanea la
+   * selección de la URL.
+   *
+   * El catálogo vive SERVER-SIDE: no se materializa al HTML como las facetas client-side de
+   * `interactions.filters`; solo las opciones visibles viajan. Varios filtros que comparten `source`
+   * comparten también la recuperación (un solo `capabilityCall`).
+   *
+   * En multi-vista, un filtro se resuelve solo si su catálogo participa de la página activa o ya se
+   * recuperó — misma regla que `interactions.filters`. Los `flt.` de otras páginas siguen viajando en
+   * el carry (inofensivos donde no aplican) y reviven al volver a su página.
+   */
+  private async resolveTrayFilters(
+    spec: MiraSpec,
+    ctxValues: CtxValues,
+    requested: Record<string, string[]>,
+    results: Record<string, DatasetResult>,
+    host: BotletHost,
+    identity: IdentityContext,
+  ): Promise<{ filtersResolved: FilterResolved[]; filterColumns: Record<string, string> }> {
+    const declared = spec.filters ?? []
+    if (declared.length === 0) return { filtersResolved: [], filterColumns: {} }
+    const catalogs: Record<string, Record<string, unknown>[]> = {}
+    for (const f of declared) {
+      const [dsName] = stripFilterSource(f.source)
+      if (catalogs[dsName]) continue
+      if (results[dsName]) {
+        catalogs[dsName] = results[dsName].rows
+        continue
+      }
+      const ds = spec.data[dsName]
+      if (!ds) continue
+      const missing: string[] = []
+      const out = await host.capabilityCall(ds.capability, applyCtx(ds.params, ctxValues, missing), identity)
+      if (missing.length > 0) host.log({ type: 'mira-ctx-missing', botletId: this.id, dataset: dsName, params: missing })
+      results[dsName] = { rows: expectRows(dsName, ds.capability, out) }
+      catalogs[dsName] = results[dsName].rows
+      host.log({ type: 'mira-filter-source', botletId: this.id, dataset: dsName, rows: catalogs[dsName].length })
+    }
+    // Un filtro cuyo catálogo no se recuperó (página que no lo usa) no se resuelve ni se muestra.
+    const active = declared.filter((f) => catalogs[stripFilterSource(f.source)[0]] != null)
+    const filtersResolved = resolveFilters(active, catalogs, requested)
+    const filterColumns: Record<string, string> = {}
+    for (const f of active) filterColumns[f.id] = filterColumn(f)
+    const applied = filtersResolved.filter((f) => f.selected.length > 0)
+    if (applied.length > 0) {
+      host.log({ type: 'mira-filters', botletId: this.id, applied: applied.map((f) => `${f.id}=${f.selected.join('|')}`) })
+    }
+    return { filtersResolved, filterColumns }
+  }
+
   /** 4·bis · Banner de staleness según `quality.degradation.on_stale` (o null si el dato está fresco). */
   private staleBanner(spec: MiraSpec, freshness: FreshnessVerdict, host: BotletHost): ResolvedNode | null {
     if (!freshness.checked) return null
@@ -349,6 +415,8 @@ export class MiraBotlet implements Botlet {
     pagesNav: PagesNav | undefined,
     controlsResolved: ControlResolved[],
     carryCtx: CtxValues,
+    filters: FilterResolved[],
+    fltCarry: Record<string, string[]>,
     themeOverride: string | undefined,
     host: BotletHost,
     identity: IdentityContext,
@@ -376,6 +444,8 @@ export class MiraBotlet implements Botlet {
         controls: controlsResolved,
         carryCtx,
         notas: notasRender,
+        filters,
+        fltCarry,
       },
       identity,
     ))

@@ -56,6 +56,23 @@
         }
       }
     },
+    "filters": {
+      "type": "array",
+      "description": "Filtros de bandeja (server-side): sustracción OPCIONAL que re-ancla el documento entero. Se integran al SQL por el predicado :flt.<id>; sin selección el predicado es 1=1 (documento completo).",
+      "items": {
+        "type": "object",
+        "required": ["id", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
+          "label": { "type": "string" },
+          "source": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$", "description": "Catálogo de opciones: data.<dataset>.<campo> (un SELECT DISTINCT que corre bajo la misma RLS)." },
+          "column": { "type": "string", "pattern": "^[A-Za-z0-9_\\[\\]]+(\\.[A-Za-z0-9_\\[\\]]+)*$", "description": "Columna que el predicado filtra en las queries (default = el campo de source). Se INTERPOLA: identificador SQL, jamás una expresión." },
+          "multi": { "type": "boolean", "description": "Selección múltiple (default: un solo valor)." },
+          "depends_on": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Cascada: id de un filtro declarado ANTES, cuya selección condiciona las opciones de este." }
+        }
+      }
+    },
     "data": {
       "type": "object",
       "minProperties": 1,

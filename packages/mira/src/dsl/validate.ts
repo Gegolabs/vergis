@@ -65,6 +65,12 @@ export interface MiraSpec {
    * dato ya recuperado). Pensados para parámetros que CAMBIAN la consulta — p.ej. la semana a analizar.
    */
   controls?: MiraControl[]
+  /**
+   * Filtros de BANDEJA (server-side): sustracción OPCIONAL que re-ancla el documento entero. Hermano
+   * de `controls`, no parte de `interactions` (ese namespace es client-side y queda intacto).
+   * Se integran al SQL por el placeholder de predicado `:flt.<id>`.
+   */
+  filters?: MiraFilter[]
   data: Record<string, MiraDataset>
   quality: Record<string, unknown>
   delivery: {
@@ -72,6 +78,20 @@ export interface MiraSpec {
     channels?: { type: string; capability: string; params?: Record<string, unknown>; schedule?: string }[]
     [k: string]: unknown
   }
+}
+
+/**
+ * Un filtro de bandeja. `source` es `data.<dataset>.<campo>` (el catálogo de opciones); `column` es
+ * la columna que el predicado `:flt.<id>` filtra en las queries (default: el campo de `source`);
+ * `depends_on` encadena la cascada de opciones.
+ */
+export interface MiraFilter {
+  id: string
+  label?: string
+  source: string
+  column?: string
+  multi?: boolean
+  depends_on?: string
 }
 
 // Caché por-OBJETO de schema (no un único singleton): la compilación AJV es cara, pero un caché de un
@@ -133,6 +153,8 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
 
   // Llaves de negocio (`data.<ds>.anchor`): entidad calificada, llave no vacía y columnas existentes.
   validateAnchors(s)
+  // Filtros de bandeja (#82): vocabulario, cascada sin ciclos y correspondencia con los `:flt.` del SQL.
+  validateFilters(s)
 
   // 2 · Referencias colgantes: cada data.<path> usada en alguna pieza existe en data.
   const pieces = hasPages ? s.pages!.map((p) => p.piece) : [s.piece as Record<string, unknown>]
@@ -930,6 +952,139 @@ export function validateAnchors(spec: MiraSpec): void {
         value: anchor.display,
         message: `El anchor de '${name}' muestra la columna '${anchor.display}', que no está declarada en data.${name}.shape.fields.`,
         remediation: `Declarar '${anchor.display}' en shape.fields o corregir display.`,
+      })
+    }
+  }
+}
+
+/** Identificador SQL admisible como columna de un filtro (`dbo.tabla.[col]`) — nunca algo del usuario. */
+const SQL_IDENT = /^[A-Za-z0-9_[\]]+(\.[A-Za-z0-9_[\]]+)*$/
+
+/**
+ * Filtros de bandeja (#82). Lo que se ataja acá, y por qué:
+ *  - `id` único y sin colisión con ningún `param` de `controls` — comparten la superficie de
+ *    navegación; dos cosas distintas escribiendo la misma llave es un bug silencioso.
+ *  - `source` = `data.<dataset>.<campo>` existente: un catálogo colgante deja el filtro sin opciones,
+ *    y un filtro sin opciones descarta TODA selección — el filtro se vuelve un no-op invisible.
+ *  - `column` = identificador SQL (jamás se bindea: se interpola en el predicado). Un valor libre acá
+ *    sería una vía de inyección por el spec.
+ *  - `depends_on` apunta a un filtro declarado ANTES (cadena simple, sin ciclos) y el dataset del
+ *    dependiente contiene TAMBIÉN el campo del padre — sin eso la cascada no puede condicionar nada.
+ *  - Correspondencia con el SQL: todo `:flt.<id>` del spec tiene su filtro declarado y todo filtro
+ *    declarado se usa en alguna query. Un huérfano en cualquiera de las dos direcciones es error, no
+ *    silencio: un `:flt.` sin filtro degradaría a `1=1` (filtro que no filtra) y un filtro sin
+ *    `:flt.` sería un control en la bandeja que no mueve el documento.
+ */
+function validateFilters(spec: MiraSpec): void {
+  const filters = spec.filters ?? []
+  if (filters.length === 0) {
+    assertNoStrayFltPlaceholders(spec, new Set())
+    return
+  }
+  const seen = new Set<string>()
+  const ctrlParams = new Set((spec.controls ?? []).map((c) => c.param ?? c.id))
+  for (const f of filters) {
+    const fail = (code: string, message: string, remediation: string, path = `filters[${f.id ?? '?'}]`): never => {
+      throw new VergisError({ error: 'mira/spec-invalid', code, path, value: (f.id ?? null) as never, message, remediation })
+    }
+    if (!f.id || typeof f.id !== 'string') {
+      fail('filter-id-missing', 'Cada filtro de bandeja requiere un `id` (la llave de su predicado `:flt.<id>`).', 'Declarar `id` en cada entrada de `filters`.', 'filters[].id')
+    }
+    if (seen.has(f.id)) {
+      fail('filter-id-duplicate', `Filtro de bandeja duplicado: '${f.id}'.`, 'Cada filtro debe tener un id único.')
+    }
+    if (ctrlParams.has(f.id)) {
+      fail(
+        'filter-id-collides-control',
+        `El filtro '${f.id}' usa la misma llave que un control de cabecera.`,
+        `Renombrar el filtro o el \`param\` del control: un control es ALCANCE (siempre acota) y un filtro es SUSTRACCIÓN opcional; no pueden compartir llave.`,
+      )
+    }
+    seen.add(f.id)
+    const [dsName, field] = [stripDataRef(String(f.source ?? '')).split('.')[0], stripDataRef(String(f.source ?? '')).split('.')[1]]
+    if (!dsName || !field || !(dsName in spec.data)) {
+      fail(
+        'filter-source-dangling',
+        `El filtro '${f.id}' toma sus opciones de '${f.source}', que no resuelve a un data.<dataset>.<campo> existente.`,
+        'Declarar el dataset catálogo en `data` (una query de valores distintos) y apuntar `source` a data.<dataset>.<campo>.',
+        `filters[${f.id}].source`,
+      )
+    }
+    const ds = spec.data[dsName]
+    if (ds?.shape?.fields && !(field in ds.shape.fields)) {
+      fail(
+        'filter-source-field-dangling',
+        `El filtro '${f.id}' usa el campo '${field}' de '${dsName}', que no está declarado en data.${dsName}.shape.fields.`,
+        `Declarar '${field}' en shape.fields o corregir source.`,
+        `filters[${f.id}].source`,
+      )
+    }
+    const column = f.column && f.column !== '' ? f.column : field
+    if (!SQL_IDENT.test(column)) {
+      fail(
+        'filter-column-invalid',
+        `La columna '${column}' del filtro '${f.id}' no es un identificador SQL admisible.`,
+        'Usar solo letras, dígitos, guion bajo, punto y corchetes (p.ej. `dbo.hechos.[categoria]`). La columna se interpola en el predicado, así que no admite expresiones.',
+        `filters[${f.id}].column`,
+      )
+    }
+    if (f.depends_on != null) {
+      if (!seen.has(f.depends_on) || f.depends_on === f.id) {
+        fail(
+          'filter-depends-on-unknown',
+          `El filtro '${f.id}' declara depends_on '${f.depends_on}', que no es un filtro declarado ANTES que él.`,
+          'La cascada es una cadena simple: el padre se declara primero. Reordenar `filters` o corregir depends_on (un ciclo o una autorreferencia no es resoluble).',
+          `filters[${f.id}].depends_on`,
+        )
+      }
+      const parent = filters.find((x) => x.id === f.depends_on)!
+      const parentField = stripDataRef(String(parent.source ?? '')).split('.')[1]
+      if (ds?.shape?.fields && parentField && !(parentField in ds.shape.fields)) {
+        fail(
+          'filter-cascade-field-missing',
+          `El filtro '${f.id}' depende de '${parent.id}', pero su catálogo '${dsName}' no declara el campo '${parentField}' del padre.`,
+          `La cascada condiciona las opciones del hijo por el valor del padre EN EL MISMO catálogo: declarar '${parentField}' en data.${dsName}.shape.fields (p.ej. un SELECT DISTINCT de ambos campos).`,
+          `filters[${f.id}].depends_on`,
+        )
+      }
+    }
+  }
+  assertNoStrayFltPlaceholders(spec, seen)
+  // Filtro declarado que ningún SQL usa: un control en la bandeja que no movería nada.
+  const used = new Set<string>()
+  for (const ds of Object.values(spec.data)) {
+    const sql = ds.params?.['sql']
+    if (typeof sql !== 'string') continue
+    for (const m of sql.matchAll(/:flt\.([a-zA-Z0-9_]+)/g)) used.add(m[1])
+  }
+  for (const f of filters) {
+    if (!used.has(f.id)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'filter-unused',
+        path: `filters[${f.id}]`,
+        value: f.id,
+        message: `El filtro '${f.id}' no se usa en ninguna query: ningún SQL contiene ':flt.${f.id}'.`,
+        remediation: `Agregar el predicado a las queries que deba re-anclar (\`WHERE … AND :flt.${f.id}\`), o quitar el filtro. La granularidad la decide el spec: los datasets sin \`:flt.\` no se re-anclan.`,
+      })
+    }
+  }
+}
+
+/** Un `:flt.<id>` en el SQL sin su filtro declarado: degradaría a `1=1` — filtro que no filtra. */
+function assertNoStrayFltPlaceholders(spec: MiraSpec, declared: Set<string>): void {
+  for (const [name, ds] of Object.entries(spec.data)) {
+    const sql = ds.params?.['sql']
+    if (typeof sql !== 'string') continue
+    for (const m of sql.matchAll(/:flt\.([a-zA-Z0-9_]+)/g)) {
+      if (declared.has(m[1])) continue
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'filter-placeholder-dangling',
+        path: `data.${name}.params.sql`,
+        value: m[0],
+        message: `La query de '${name}' usa ':flt.${m[1]}' pero no hay un filtro '${m[1]}' declarado en el bloque filters.`,
+        remediation: `Declarar el filtro en \`filters\` (id, label, source) o quitar el placeholder de la query.`,
       })
     }
   }
