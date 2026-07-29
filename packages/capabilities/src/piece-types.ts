@@ -79,6 +79,23 @@ export interface Aggregation {
   den?: string
 }
 
+/**
+ * Criterio de orden de las categorías de un `distribution`, YA NORMALIZADO por compose (#81).
+ * El DSL declara `sort: magnitude | chrono | value:<serie>` (o el token legacy `-campo`); compose lo
+ * resuelve contra las métricas declaradas y el render solo lo aplica.
+ * - `magnitude` — orden por magnitud descendente (contrato histórico; en agrupado, por la SUMA de las
+ *   series). Es el default cuando el spec no declara `sort`.
+ * - `chrono` — NO se re-ordena: manda el orden de llegada de las filas, es decir el `ORDER BY` del
+ *   SQL, que es quien conoce el calendario. El motor NO parsea meses ni fechas.
+ * - `value` — orden por UNA serie declarada (`field`, con su `label` para trazar el spec).
+ * - `field` — token legacy (`-campo` / `campo`) del modo mono; compose ya pre-ordenó las filas.
+ */
+export type ChartSort =
+  | { kind: 'magnitude' }
+  | { kind: 'chrono' }
+  | { kind: 'value'; field: string; label: string }
+  | { kind: 'field'; field: string; desc: boolean }
+
 export interface ResolvedNode {
   layout?: string
   columns?: number
@@ -100,6 +117,8 @@ export interface ResolvedNode {
   metricField?: string
   /** `distribution` multi-métrica: 2+ series agrupadas (barras). Presente ⇒ modo agrupado. */
   metricsSpec?: { field: string; label: string }[]
+  /** `distribution`: criterio de orden de las categorías, ya normalizado por compose (#81). */
+  sortSpec?: ChartSort
   orientation?: string
   title?: string
   /** `series`: campo del eje x (categórico/ordinal; el SQL manda el orden de las filas). */
