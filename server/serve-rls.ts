@@ -23,6 +23,8 @@
  *  - VERGIS_CONNECTIONS perfiles SQL (Service Principal) — requerido en fabric; ingesta en clickhouse
  *  - [clickhouse] VERGIS_DATASETS · VERGIS_CH_URL · VERGIS_CH_ADMIN_USER/_PASS · VERGIS_CH_CONSUMER_USER · VERGIS_CH_TARGET_ROLE · VERGIS_REFRESH_MS
  *  - PORT
+ *  - HOST                interfaz de escucha (opcional). Sin él, TODAS las interfaces (lo que el
+ *                        contenedor necesita); con `HOST=127.0.0.1`, localhost-only (arnés de dev).
  */
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -119,6 +121,9 @@ const config = configFromEnv(process.env, () => '')
 // Envs retirados que siguen en despliegues vivos: se avisan y se ignoran (nunca se imprime su valor).
 for (const w of deprecatedEnvWarnings(process.env)) console.warn(`[vergis-rls] ${w}`)
 const PORT = config.port
+// Interfaz de escucha: sin `HOST`, Node escucha en TODAS (lo que el contenedor necesita). Con `HOST`
+// (p. ej. 127.0.0.1) el proceso queda atado a esa interfaz — el arnés de dev, localhost-only.
+const HOST = config.host
 const REFRESH_MS = config.refreshMs
 
 // Auto-chequeo de coherencia del despliegue (contrato Producto→Infra). Corre ANTES de leer specs,
@@ -1207,10 +1212,12 @@ if (config.miranda.enabled) {
   }
 }
 
-server.listen(PORT, () => {
+const listening = () => {
   const r = discover()
-  console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en :${PORT} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
-})
+  console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en ${HOST ? `${HOST}:${PORT}` : `:${PORT}`} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
+}
+if (HOST) server.listen(PORT, HOST, listening)
+else server.listen(PORT, listening)
 
 // Cierre graceful: `docker stop` envía SIGTERM. Cerrar el server drena los requests en vuelo antes de
 // salir; el timeout evita colgar el shutdown si un request queda pegado.
