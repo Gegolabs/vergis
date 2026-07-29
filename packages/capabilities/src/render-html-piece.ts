@@ -1,7 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { type Capability } from '@vergis/botler'
+import { VERGIS_VERSION_LABEL } from './version'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
@@ -15,16 +13,6 @@ import type {
   Interactive, PagesNav, ControlResolved, CarryCtx, FilterResolved, RenderParams,
   ResolvedNode, RenderOpts, RenderSignals,
 } from './piece-types'
-
-/** Versión del producto (fuente única: package.json raíz). Se muestra en el pie de la gaveta. */
-const VERGIS_VERSION = (() => {
-  try {
-    const p = resolve(dirname(fileURLToPath(import.meta.url)), '../../../package.json')
-    return (JSON.parse(readFileSync(p, 'utf8')) as { version?: string }).version ?? '0.1.0'
-  } catch {
-    return '0.1.0'
-  }
-})()
 
 /**
  * `render-html-piece` — árbol de pieza resuelto (compuesto por Mira) → HTML estático
@@ -498,7 +486,7 @@ function renderTrayShell(
   const footer =
     `<div class="tray-foot">` +
     (piLabel ? `<div class="tray-version tray-piversion">${escapeHtml(piLabel)}</div>` : '') +
-    `<div class="tray-version">Mira v${escapeHtml(VERGIS_VERSION)}</div>` +
+    `<div class="tray-version">${escapeHtml(VERGIS_VERSION_LABEL)}</div>` +
     `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>` +
     `</div>`
   // Tab por defecto (radio `checked`): Controles cuando trae maquinaria (facetas de dashboard o
