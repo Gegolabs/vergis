@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAdmin, type AdminHandler } from '../server/admin'
-import { timeline, esResiduo, lastCompletedStart, diagnosticoDeFalla, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
+import { timeline, esResiduo, lastCompletedStart, diagnosticoDeFalla, LOG_ANEJO_TITULAR, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
 import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, type RunRecord, type OneLakeEntry } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
@@ -35,11 +35,14 @@ const ARCHIVED: OneLakeEntry[] = [
   { path: 'Files/intake/_processed/W28/saldos VH WK28.xlsx', isDirectory: false, size: 110760, lastModified: '2026-07-13T16:19:00Z' },
 ]
 
+/** El log como lo devuelve el wiring (#86): contenido + mtime opcional del archivo. */
+const mkLog = (text: string, lastModified?: string): CargasOps['log'] => async () => ({ text, lastModified })
+
 function ops(over: Partial<CargasOps> = {}): CargasOps {
   return {
     history: async () => HISTORY,
     runs: async () => RUNS,
-    log: async () => '[ingest] ✔ DONE commit W28: 7626 filas',
+    log: mkLog('[ingest] ✔ DONE commit W28: 7626 filas'),
     landing: async () => LANDING,
     archived: async () => ARCHIVED,
     rerun: vi.fn(async () => {}),
@@ -128,7 +131,7 @@ describe('admin-cargas · diagnóstico de la falla (issue #85)', () => {
   })
 
   it('corrida fallida con ✖ en el log → el motivo es titular visible sin expandir; state=[dead] queda de detalle', async () => {
-    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: async () => LOG_ABORTADO }))
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: mkLog(LOG_ABORTADO) }))
     const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
     const visible = antesDelLog(res.body)
     expect(visible).toContain('✖ ABORTADO: archivo sin filas de datos (1 filas)')
@@ -136,14 +139,14 @@ describe('admin-cargas · diagnóstico de la falla (issue #85)', () => {
   })
 
   it('corrida fallida SIN ✖ en el log → comportamiento anterior intacto (solo el estado genérico)', async () => {
-    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: async () => '[ingest] ▶ inicio' }))
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: mkLog('[ingest] ▶ inicio') }))
     const visible = antesDelLog((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
     expect(visible).toContain('state=[dead]')
     expect(visible).not.toContain('✖ ABORTADO')
   })
 
   it('corrida Completed con ✖ residual de una corrida vieja → NO hay titular de falla', async () => {
-    const admin = await mkAdmin(ops({ log: async () => LOG_ABORTADO })) // RUNS[0] = Completed
+    const admin = await mkAdmin(ops({ log: mkLog(LOG_ABORTADO) })) // RUNS[0] = Completed
     const visible = antesDelLog((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
     expect(visible).not.toContain('ABORTADO')
     expect(visible).toContain('✓ Listo')
@@ -156,6 +159,60 @@ describe('admin-cargas · diagnóstico de la falla (issue #85)', () => {
     expect(t[0].html).toContain('state=[dead]') // el genérico degradado a sub
     expect(t[2].html).not.toContain(diag) // la Failed histórica conserva su render
     expect(t[2].html).toContain('state=[dead]')
+  })
+})
+
+// ─── Degradación honesta con el log añejo (issue #86) ───────────────────────
+/** Lo visible SIN expandir el log, cuando el `<details>` avisa que el log es de otra corrida. */
+const antesDelLogAñejo = (html: string): string => html.split('Log de una corrida anterior')[0]
+
+describe('admin-cargas · log añejo: el job murió sin escribirlo (issue #86)', () => {
+  it('(a) Failed + log con mtime ANTERIOR al inicio → titular honesto, sin el ✖ viejo, log rotulado «corrida anterior»', async () => {
+    // La corrida arranca 09:00; el log quedó escrito el día antes ⇒ es de la corrida previa.
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: mkLog(LOG_ABORTADO, '2026-07-13T16:19:00Z') }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    const visible = antesDelLogAñejo(body)
+    expect(visible).toContain(LOG_ANEJO_TITULAR)
+    expect(visible).not.toContain('ABORTADO') // el ✖ viejo NO se presenta como diagnóstico actual
+    expect(visible).toContain('state=[dead]') // el estado genérico sigue de sub
+    expect(body).toContain('Log de una corrida anterior') // el log sigue disponible, rotulado
+    expect(body).not.toContain('Log de la última conversión')
+    expect(body).toContain('ABORTADO') // …y su contenido íntegro dentro del <details>
+  })
+
+  it('(a·timeline) la fila Failed más reciente usa la misma regla y el mismo texto', async () => {
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: mkLog(LOG_ABORTADO, '2026-07-13T16:19:00Z') }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    // La tabla de Actividad, aislada (el `<h3>` la abre; «Landing» abre la siguiente sección).
+    const actividad = (body.split('<h3 class="sub">Actividad</h3>')[1] ?? '').split('<h3 class="sub">Landing')[0]
+    expect(actividad).toContain(LOG_ANEJO_TITULAR)
+    expect(actividad).not.toContain('ABORTADO')
+  })
+
+  it('(b) Failed + log con mtime POSTERIOR al inicio → comportamiento #85 (el ✖ titula)', async () => {
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: mkLog(LOG_ABORTADO, '2026-07-14T09:00:10Z') }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    const visible = antesDelLog(body)
+    expect(visible).toContain('✖ ABORTADO: archivo sin filas de datos (1 filas)')
+    expect(visible).not.toContain(LOG_ANEJO_TITULAR)
+    expect(body).toContain('Log de la última conversión')
+  })
+
+  it('(c) Failed + mtime ausente → fail-safe: comportamiento #85 idéntico', async () => {
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: async () => ({ text: LOG_ABORTADO, lastModified: undefined }) }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    const visible = antesDelLog(body)
+    expect(visible).toContain('✖ ABORTADO: archivo sin filas de datos (1 filas)')
+    expect(visible).not.toContain(LOG_ANEJO_TITULAR)
+    expect(body).toContain('Log de la última conversión')
+  })
+
+  it('(d) Completed + log añejo → ninguna marca de añejez (el gate es por Failed)', async () => {
+    const admin = await mkAdmin(ops({ log: mkLog(LOG_ABORTADO, '2026-07-01T10:00:00Z') })) // RUNS[0] = Completed
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(body).not.toContain(LOG_ANEJO_TITULAR)
+    expect(body).toContain('Log de la última conversión')
+    expect(antesDelLog(body)).toContain('✓ Listo')
   })
 })
 
@@ -304,7 +361,7 @@ describe('admin-cargas · dedup por contenido (issue #62)', () => {
   })
 
   it('badge «sin cambios en el dato» cuando el log de la corrida Completed trae el marcador [delta]', async () => {
-    const admin = await mkAdmin(ops({ log: async () => '[ingest] DONE commit\n[delta] sin cambios en el dato' }))
+    const admin = await mkAdmin(ops({ log: mkLog('[ingest] DONE commit\n[delta] sin cambios en el dato') }))
     const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
     expect(res.body).toContain('sin cambios en el dato')
   })

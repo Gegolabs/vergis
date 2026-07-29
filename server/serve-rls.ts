@@ -704,9 +704,21 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             },
             runs: (slot, top) =>
               slot.trigger ? jobStatus.listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, top) : Promise.resolve([]),
-            log: (slot) => {
+            // El log CON su mtime (issue #86): sin saber de cuándo es el archivo, el de una corrida
+            // anterior se presentaría como diagnóstico de la actual. El `list` extra es tolerante —
+            // si falla o la entry no aparece, `lastModified` queda undefined y nada se degrada.
+            log: async (slot) => {
               const p = slotLogPath(slot)
-              return p ? reader.read(slot.target, p) : Promise.resolve(null)
+              if (!p) return null
+              const text = await reader.read(slot.target, p)
+              if (text == null) return null
+              let lastModified: string | undefined
+              try {
+                const base = p.split('/').pop() ?? p
+                lastModified = (await reader.list(slot.target, parentDir(p)))
+                  .find((e) => !e.isDirectory && (e.path === p || (e.path.split('/').pop() ?? '') === base))?.lastModified
+              } catch { /* sin mtime: fail-safe, no se afirma añejez */ }
+              return { text, lastModified }
             },
             landing: (slot) => reader.list(slot.target, slot.target.path),
             archived: (slot) => reader.list(slot.target, `${parentDir(slot.target.path)}/_processed`, { recursive: true }),
