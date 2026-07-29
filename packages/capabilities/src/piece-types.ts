@@ -37,6 +37,20 @@ export interface ControlResolved {
   /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
   multi?: boolean
 }
+/**
+ * Un filtro de bandeja ya resuelto por Mira (#82): sus opciones vigentes (cascadeadas) y la selección
+ * efectiva. Su superficie es el tab «Controles» de la bandeja + un chip removible en la cara.
+ * Semántica: SUSTRACCIÓN opcional (sin selección = documento completo) — a diferencia del control de
+ * cabecera, que es ALCANCE (siempre acota).
+ */
+export interface FilterResolved {
+  id: string
+  label: string
+  multi: boolean
+  options: string[]
+  selected: string[]
+}
+
 /** Valor(es) de una clave de contexto a preservar en la navegación (multi-select → varios). */
 export type CarryCtx = Record<string, string | string[]>
 export interface RenderParams {
@@ -56,6 +70,10 @@ export interface RenderParams {
   /** Capa de NOTAS (vergis#84): endpoints + CSRF + recorte vigente. Ausente ⇒ el PI se sirve sin
    *  bandeja de notas ni marcadores (p.ej. el render de una impresión congelada, que es read-only). */
   notas?: NotasRenderContext
+  /** Filtros de bandeja resueltos (#82): control en la bandeja, chip en la cara. */
+  filters?: FilterResolved[]
+  /** Selección activa de filtros, a preservar en toda navegación (`flt.<id>` repetido). */
+  fltCarry?: Record<string, string[]>
 }
 
 export interface TableColumn {
@@ -156,6 +174,12 @@ export interface RenderOpts {
   tokens: ThemeTokens
   /** Mapa hex→CSS var para abrir los colores horneados del SVG al conmutador de Apariencia (#78). */
   chartVars?: Record<string, string>
+  /**
+   * Sufijo de query con los filtros de bandeja activos (`&flt.k=v…`), YA serializado. Se calcula una
+   * vez server-side y se anexa a todo href de navegación (drills incluidos), también en el runtime
+   * client-side de la tabla — así el carry de los `flt.` no se re-implementa en dos lugares.
+   */
+  fltQ?: string
   interactive: boolean
   /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
   carry: CarryCtx
