@@ -6,10 +6,11 @@ import { staticData } from './static-data'
 
 export { staticData } from './static-data'
 export { renderHtmlPiece } from './render-html-piece'
-export { CHART_MAX_BARS, chartCacheStats, groupedTopN } from './render-chart'
+export { CHART_MAX_BARS, chartCacheStats, groupedTopN, labelledDomain } from './render-chart'
+export type { TopNRank } from './render-chart'
 export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
-export type { ResolvedNode, TableColumn } from './piece-types'
+export type { ResolvedNode, TableColumn, ChartSort } from './piece-types'
 export {
   TABLE_RUNTIME_SOURCE,
   vtNorm,

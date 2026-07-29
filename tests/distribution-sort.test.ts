@@ -153,10 +153,11 @@ describe('#81 · render agrupado: el mismo dato en tres órdenes distintos', () 
     const orders = [m, c, v].map((o) => axisLabels(o.html ?? '', CATS).join('|'))
     expect(new Set(orders).size).toBe(3)
   })
-  it('cualquier orden dibuja las 3×2 = 6 marcas (ninguno vacía el chart)', async () => {
+  it('cualquier orden dibuja las 3×2 = 6 barras (ninguno vacía el chart)', async () => {
     for (const s of ['magnitude', 'chrono', 'value:Alfa']) {
       const out = await render(GROUPED_YAML(s), ROWS)
-      expect(((out.html ?? '').match(/role-mark/g) ?? []).length, s).toBe(6)
+      // 6 barras + 1 contenedor de la capa de rótulos (#80).
+      expect(((out.html ?? '').match(/role-mark/g) ?? []).length, s).toBe(6 + 1)
     }
   })
 })

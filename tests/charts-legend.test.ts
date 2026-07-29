@@ -88,8 +88,8 @@ describe('#79 · leyenda top-right', () => {
     const html = await renderPiece(GROUPED)
     expect(html).toContain('>Alfa<')
     expect(html).toContain('>Beta<')
-    // 2 categorías × 2 series = 4 marcas.
-    expect((html.match(/role-mark/g) ?? []).length).toBe(4)
+    // 2 categorías × 2 series = 4 barras, + 1 contenedor de la capa de rótulos (#80).
+    expect((html.match(/role-mark/g) ?? []).length).toBe(4 + 1)
   })
 
   it('distribution mono-métrica no emite leyenda (sin regresión)', async () => {

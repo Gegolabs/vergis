@@ -81,6 +81,34 @@ que no declara `sort` renderiza idéntico.
   campo. En modo **agrupado** ese token se rechaza (`distribution-sort-unknown`): ahí nunca tuvo
   efecto, y aceptarlo sería prometer un orden que no ocurre.
 
+### Rótulos de valor sobre las marcas
+
+Cada barra (y cada sub-barra del modo agrupado) lleva su valor rotulado. Es **convención de
+plataforma**, no un opcional del spec: un gráfico de barras sin cifra obliga a estimar contra el eje.
+
+- El rótulo se **pre-computa server-side** y viaja como un campo del dato; Vega solo lo pinta. El
+  formateador es el mismo `vtFormat` de las tablas — no hay una segunda implementación de formato en
+  expresiones Vega que pueda divergir.
+- **Formato**: el `format` declarado en el `distribution` si lo hay; sin él, `abbr`.
+- El rótulo es parte del SVG ⇒ **se imprime**, sin trabajo extra.
+- La holgura del dominio cuantitativo (~10 %) evita que el rótulo de la marca más larga se corte
+  contra el borde. La anti-colisión fina entre rótulos vecinos (rotar/omitir) es decisión del motor y
+  **no se declara por spec**.
+
+#### Formato `abbr` — magnitud abreviada (es-CL)
+
+| Valor | `abbr` | `int_0` |
+|--|--|--|
+| `1234567` | `1,2M` | `1.234.567` |
+| `340000` | `340K` | `340.000` |
+| `2500000000` | `2.500M` | `2.500.000.000` |
+| `999` | `999` | `999` |
+
+Escalera de **dos** sufijos a propósito: K (miles) y M (millones). No se usa «B»: en español
+«billón» es 10¹², así que 2,5·10⁹ se rotula `2.500M` — millones, la unidad idiomática — en vez de un
+`2,5B` que se leería mil veces mayor. Coma decimal y punto de miles como el resto del formateador; un
+decimal solo si la mantisa es menor a 100.
+
 ## 3 · `series` — líneas de N series sobre un eje
 
 ```yaml

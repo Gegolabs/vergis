@@ -1,0 +1,139 @@
+# Banco de pruebas visual del paquete de charts (#79 leyenda · #80 rótulos · #81 orden).
+# Datos ESTÁTICOS (capability `static-data`): se renderiza sin Fabric ni credenciales.
+#
+#   npm run vergis -- run examples/charts-lab.yaml --out /tmp/vergis-out
+#
+# El mismo dato aparece tres veces con los tres criterios de `sort`, para que la diferencia de orden
+# sea visible de un vistazo. Dominio deliberadamente NEUTRO (sedes y trimestres): el Producto es
+# genérico, ninguna instancia se asoma a los ejemplos del repo.
+mira_version: "1.0"
+
+identity:
+  id: charts-lab
+  display_name: "Banco de charts"
+  classification: public
+
+piece:
+  layout: rows
+  elements:
+    - markdown_block:
+        content: |
+          # Banco de charts
+
+          Tres criterios de orden sobre el MISMO dato, leyenda arriba a la derecha y rótulo de valor
+          por marca. El corte de los datos es {{ data.corte.periodo }}.
+
+    - layout: grid
+      columns: 3
+      elements:
+        - kpi:
+            metric: data.corte.total
+            label: "Total del período"
+            format: int_0
+        - kpi:
+            metric: data.corte.sedes
+            label: "Sedes"
+            format: int_0
+        - dato:
+            label: "Corte"
+            value: data.corte.periodo
+
+    # ── #79 + #80 · leyenda top-right y rótulos, en barras agrupadas ──
+    - distribution:
+        dimension: data.trimestres.periodo
+        metrics:
+          - { field: plan, label: "Plan" }
+          - { field: real, label: "Real" }
+        orientation: vertical
+        sort: chrono
+        title: "Trimestres — Plan vs Real (sort: chrono, el orden del SQL)"
+
+    - distribution:
+        dimension: data.trimestres.periodo
+        metrics:
+          - { field: plan, label: "Plan" }
+          - { field: real, label: "Real" }
+        orientation: vertical
+        sort: magnitude
+        title: "Trimestres — Plan vs Real (sort: magnitude, por la suma de las series)"
+
+    - distribution:
+        dimension: data.trimestres.periodo
+        metrics:
+          - { field: plan, label: "Plan" }
+          - { field: real, label: "Real" }
+        orientation: vertical
+        sort: value:Real
+        title: "Trimestres — Plan vs Real (sort: value:Real, por UNA serie)"
+
+    # ── #80 · rótulo abreviado por defecto vs `format` declarado, en barras simples ──
+    - distribution:
+        dimension: data.sedes.sede
+        metric: data.sedes.monto
+        title: "Sedes por monto (sin format ⇒ rótulo abreviado)"
+
+    - distribution:
+        dimension: data.sedes.sede
+        metric: data.sedes.monto
+        format: int_0
+        title: "Sedes por monto (format: int_0 ⇒ rótulo completo)"
+
+    # ── #79 · leyenda top-right en líneas ──
+    - series:
+        data: data.trimestres
+        x: periodo
+        metrics:
+          - { field: plan, label: "Plan" }
+          - { field: real, label: "Real" }
+        title: "Evolución trimestral"
+
+data:
+  corte:
+    capability: static-data
+    params:
+      rows:
+        - { periodo: "2026-T4", total: 9250000, sedes: 6 }
+    shape:
+      type: single_row
+      fields: { periodo: string, total: integer, sedes: integer }
+
+  # Orden de llegada = cronológico (lo que haría un ORDER BY del SQL). Las magnitudes están elegidas
+  # para que los tres criterios de `sort` produzcan tres órdenes DISTINTOS y visibles.
+  trimestres:
+    capability: static-data
+    params:
+      rows:
+        - { periodo: "T1", plan: 1200000, real: 980000 }
+        - { periodo: "T2", plan: 1500000, real: 2400000 }
+        - { periodo: "T3", plan: 900000, real: 1750000 }
+        - { periodo: "T4", plan: 2100000, real: 1120000 }
+    shape:
+      type: rows
+      fields: { periodo: string, plan: number, real: number }
+
+  sedes:
+    capability: static-data
+    params:
+      rows:
+        - { sede: "Norte", monto: 3400000 }
+        - { sede: "Centro", monto: 2750000 }
+        - { sede: "Sur", monto: 1234567 }
+        - { sede: "Insular", monto: 340000 }
+        - { sede: "Austral", monto: 999 }
+    shape:
+      type: rows
+      fields: { sede: string, monto: number }
+
+quality:
+  freshness: { max_age: PT0S, source_watermark: ignore }
+  refresh: { mode: on-demand }
+  degradation: { on_capability_fail: agentic_fallback }
+
+delivery:
+  render:
+    - { format: html, target: web }
+  channels:
+    - type: file
+      capability: publicar-artefacto
+      params: { path: charts-lab.html }
+      schedule: on_refresh
