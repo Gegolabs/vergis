@@ -31,11 +31,23 @@ export interface IntakeUploadEvent {
   dupOf?: string
 }
 
+/**
+ * El log de la última conversión, CON la marca de cuándo se escribió (issue #86).
+ *
+ * El contenido solo no basta: si el job murió antes de escribir, el archivo que se lee es el de la
+ * corrida ANTERIOR. `lastModified` (ISO, del listado de OneLake) permite detectarlo. Es opcional a
+ * propósito — fail-safe: sin mtime no se afirma añejez y todo se comporta como antes.
+ */
+export interface CargaLog {
+  text: string
+  lastModified?: string
+}
+
 /** Operaciones de la consola — las inyecta el wiring (serve-rls) y las consume admin.ts. */
 export interface CargasOps {
   history(slot: IntakeSlot, limit: number): Promise<IntakeUploadEvent[]>
   runs(slot: IntakeSlot, top: number): Promise<RunRecord[]>
-  log(slot: IntakeSlot): Promise<string | null>
+  log(slot: IntakeSlot): Promise<CargaLog | null>
   landing(slot: IntakeSlot): Promise<OneLakeEntry[]>
   archived(slot: IntakeSlot): Promise<OneLakeEntry[]>
   rerun(slot: IntakeSlot, by: string): Promise<void>
@@ -52,7 +64,7 @@ export interface SlotCargas {
   slot: IntakeSlot
   runs: RunRecord[] | 'error'
   history: IntakeUploadEvent[] | 'error'
-  log: string | null
+  log: CargaLog | null
   landing: OneLakeEntry[] | 'error'
   archived: OneLakeEntry[] | 'error'
   /** #56: ¿el processRef del trigger está registrado como proceso (con engine_ref)? */
@@ -125,7 +137,18 @@ export function diagnosticoDeFalla(log: string | null): string | null {
   return found.length > 300 ? found.slice(0, 300) + '…' : found
 }
 
-/** Línea de tiempo fusionada: cargas + corridas, más reciente primero. */
+/**
+ * Titular de la falla cuando el log quedó añejo (issue #86): el job no alcanzó a escribirlo, así que
+ * lo único honesto que puede decirse es que murió antes — no el `✖` de la corrida anterior.
+ */
+export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
+
+/**
+ * Línea de tiempo fusionada: cargas + corridas, más reciente primero.
+ *
+ * `diagnostico` es el TITULAR de la falla más reciente (la línea `✖` del log, o el aviso de log añejo
+ * de #86): lo decide la página, que es la que conoce la frescura del log.
+ */
 export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   if (history !== 'error') {
@@ -174,16 +197,26 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
       ? `<p class="msg err">⚠ El trigger de este slot (<code>${escapeHtml(s.trigger.processRef)}</code>) no está registrado como proceso en <a href="/admin/sources">Fuentes</a> → la entidad no aparece en Frescura ni la vigila el monitor. Registrarlo en <code>sources.yaml</code>.</p>`
       : ''
 
+    const logText = sc.log?.text ?? null
+
     // #62 (capa «delta neto cero»): el pipeline emite `[delta] sin cambios en el dato` en su log
     // cuando la corrida dejó el dato idéntico (convención del contrato de ingesta) → badge honesto.
-    const sinCambios = last?.status === 'Completed' && !!sc.log && sc.log.includes('[delta] sin cambios en el dato')
+    const sinCambios = last?.status === 'Completed' && !!logText && logText.includes('[delta] sin cambios en el dato')
+
+    // #86 · degradación honesta: el job falló y el archivo de log NO se tocó en esta corrida (su mtime
+    // es anterior al inicio) ⇒ murió antes de escribir y lo que se lee es de la corrida ANTERIOR. Su
+    // `✖` no describe esta falla: no se titula con él. Sin mtime (`undefined` o no parseable) la
+    // comparación es falsa y el comportamiento queda idéntico al de #85 (fail-safe).
+    const logAñejo = last?.status === 'Failed' && !!sc.log?.lastModified &&
+      Date.parse(sc.log.lastModified) < Date.parse(last.startedAt)
 
     // #85 · el MOTIVO real manda: con la corrida fallida, la línea `✖` del log es el titular y el
     // estado genérico del job (`state=[dead]`) degrada a detalle. El gate por `Failed` es duro: el log
     // puede conservar una línea `✖` de una corrida anterior a una que sí completó.
-    const diag = last?.status === 'Failed' ? diagnosticoDeFalla(sc.log) : null
-    const motivoLast = diag
-      ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${last?.error ? `<div class="sub">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
+    const diag = last?.status === 'Failed' && !logAñejo ? diagnosticoDeFalla(logText) : null
+    const titular = logAñejo ? LOG_ANEJO_TITULAR : diag
+    const motivoLast = titular
+      ? `<div style="color:var(--err)">${escapeHtml(titular)}</div>${last?.error ? `<div class="sub">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
       : last?.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(last.error.slice(0, 300))}</div>` : ''
     const estado = last
       ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${motivoLast}`
@@ -191,8 +224,8 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
 
     const rerun = s.trigger ? postForm(action, token, { slot: s.id, accion: 'rerun' }, 'Correr conversión de nuevo', 'La conversión re-procesará TODOS los archivos del landing. ¿Continuar?') : ''
 
-    const logHtml = sc.log?.trim()
-      ? `<details class="guia"><summary class="sub">Log de la última conversión</summary><pre class="sub" style="white-space:pre-wrap;overflow-x:auto;max-height:260px;overflow-y:auto">${escapeHtml((sc.log.length > 4000 ? '…' + sc.log.slice(-4000) : sc.log).trim())}</pre></details>`
+    const logHtml = logText?.trim()
+      ? `<details class="guia"><summary class="sub">${logAñejo ? 'Log de una corrida anterior' : 'Log de la última conversión'}</summary><pre class="sub" style="white-space:pre-wrap;overflow-x:auto;max-height:260px;overflow-y:auto">${escapeHtml((logText.length > 4000 ? '…' + logText.slice(-4000) : logText).trim())}</pre></details>`
       : ''
 
     // Los sidecars `<archivo>.meta.json` (issue #76) son metadata, no archivos de datos: no se listan.
@@ -217,7 +250,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th><th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, diag).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
