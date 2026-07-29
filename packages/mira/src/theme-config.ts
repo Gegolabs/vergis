@@ -8,7 +8,8 @@
  *
  * Precedencia: el theme explícito del spec (`delivery.render.theme`) gana; si falta, el default
  * de plataforma para el tipo; la PALETA siempre viene del default de plataforma (los specs aún no
- * la declaran). Default de Producto: los REPORTES usan la paleta `blanco` (fondo claro).
+ * la declaran). Default de Producto: paleta `blanco` (fondo claro) para AMBOS tipos — reportes y
+ * dashboards (#78).
  */
 
 export type PiKind = 'report' | 'dashboard'
@@ -28,8 +29,10 @@ function parseSpec(spec: string | undefined): ThemeChoice {
 export function platformThemeDefault(kind: PiKind): ThemeChoice {
   const env = kind === 'report' ? process.env['VERGIS_THEME_REPORT'] : process.env['VERGIS_THEME_DASHBOARD']
   const parsed = parseSpec(env)
-  if (kind === 'report') return { theme: parsed.theme, palette: parsed.palette ?? 'blanco' }
-  return { theme: parsed.theme, palette: parsed.palette }
+  // Fondo BLANCO para ambos tipos (#78): los reportes ya nacían así; los dashboards se suman, porque
+  // la convención pedida es pareja para todos los PIs. `VERGIS_THEME_DASHBOARD` sigue pudiendo fijar
+  // otra combinación por instancia (`theme@paleta`).
+  return { theme: parsed.theme, palette: parsed.palette ?? 'blanco' }
 }
 
 /** Tipos de elemento que delatan un dashboard (vs un reporte tabular). */
