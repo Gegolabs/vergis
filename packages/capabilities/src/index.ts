@@ -6,8 +6,20 @@ import { staticData } from './static-data'
 
 export { staticData } from './static-data'
 export { renderHtmlPiece } from './render-html-piece'
-export { CHART_MAX_BARS, chartCacheStats, groupedTopN, labelledDomain, themeChartSvg } from './render-chart'
-export type { TopNRank } from './render-chart'
+export {
+  CHART_MAX_BARS,
+  chartCacheStats,
+  groupedTopN,
+  labelledDomain,
+  themeChartSvg,
+  labelMode,
+  labelWidthPx,
+  barStepPx,
+  lanesPadFraction,
+  assignLanes,
+  markTopPx,
+} from './render-chart'
+export type { TopNRank, LabelMode } from './render-chart'
 export { TABLE_SSR_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn, ChartSort, FilterResolved } from './piece-types'
