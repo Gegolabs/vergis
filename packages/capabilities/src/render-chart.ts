@@ -189,6 +189,145 @@ export function themeChartSvg(svg: string, varMap: Record<string, string>): stri
 /** Campo sintético que lleva el rótulo YA formateado server-side (#80). Vega solo lo pinta. */
 const LABEL_FIELD = '__label'
 
+/** Campo sintético con el CARRIL del rótulo (0 = bajo, 1 = alto) en el modo `lanes` (#97). */
+const LABEL_LANE_FIELD = '__lane'
+
+/** Tamaño de fuente de los rótulos de valor; lo comparten la marca y la métrica de ancho. */
+const LABEL_FONT_PX = 11
+
+/**
+ * Ancho por carácter de un rótulo de valor a `LABEL_FONT_PX`, en px — CALIBRADO, no adivinado.
+ * Medido con `getComputedTextLength()` en Chrome sobre `<text font-family="sans-serif"
+ * font-size="11px">` (el mismo markup que emite Vega; el `textMetrics` server-side de Vega no sirve
+ * de referencia porque sin `canvas` cae a una estimación de ~8,8 px/char, 40% sobre lo real):
+ *
+ *   `204K` → 25,70 px (6,43/char) · `88,9K` → 28,75 px (5,75/char) · `1.234.567` → 48,94 px (5,44/char)
+ *
+ * Se toma el MÁXIMO observado por carácter (6,5) porque el rótulo más ancho es el que decide la
+ * colisión: sobrestimar degrada a `lanes` de más (legible), subestimar deja rótulos fundidos.
+ */
+const LABEL_CHAR_PX = 6.5
+
+/** Aire mínimo entre dos rótulos vecinos para que se lean como dos (no basta con que no se toquen). */
+const LABEL_GAP_PX = 2
+
+/** Separación del rótulo respecto de la marca que rotula, en px (el `dy` del carril bajo). */
+const LABEL_DY_PX = 4
+
+/**
+ * Altura de la MANCHA de tinta de un rótulo, en px — también CALIBRADA en Chrome, con
+ * `measureText().actualBoundingBoxAscent + actualBoundingBoxDescent` a `11px sans-serif`:
+ *
+ *   `204K` → 8,10 · `88,9K` → 9,52 · `1.234.567` → 7,93 · `(otros)` → 10,26 (el paréntesis baja)
+ *
+ * Se toma 10,5 (sobre el máximo observado). Dos rótulos con las cajas cruzadas en x se leen como uno
+ * solo si sus líneas base distan MENOS que esto; a partir de acá se leen como dos renglones.
+ */
+const LABEL_INK_H_PX = 10.5
+
+/**
+ * Cuánto sube el carril alto respecto del bajo, en px: `dy: -4` (bajo, el de siempre) vs
+ * `dy: -(LABEL_DY_PX + LABEL_LANE_RISE_PX)`.
+ *
+ * Es DOS veces la altura de tinta, y ese factor 2 es lo que hace demostrable la anti-colisión. La
+ * línea base de un rótulo es `techo de su barra + dy`, así que la alzada del carril se CANCELA cuando
+ * la barra vecina es más baja justo en esa medida — con una alzada de 12 px, dos barras que difieren
+ * ~12 px dejan sus rótulos a 0 px de distancia y fundidos. Con `alzada = 2 · tinta`: si el carril bajo
+ * colisiona (diferencia de techos < tinta), el alto queda a `|Δ − alzada| > tinta`, o sea SIEMPRE
+ * libre. Un carril de repuesto solo sirve si se demuestra que nunca queda igual de ocupado.
+ */
+const LABEL_LANE_RISE_PX = 2 * LABEL_INK_H_PX
+
+/** Ancho estimado en px de un rótulo de valor ya formateado. */
+export function labelWidthPx(text: string): number {
+  return text.length * LABEL_CHAR_PX
+}
+
+/**
+ * Modo de la capa de rótulos de un chart VERTICAL (#97):
+ * - `single`: los rótulos caben uno al lado del otro — comportamiento histórico.
+ * - `lanes`: no caben en un carril pero sí en dos, subiendo al de repuesto los que estorban.
+ * - `none`: ni en dos carriles caben — el chart no rotula. La legibilidad manda: dos rótulos fundidos
+ *   no informan menos que ninguno, informan MAL (se leen como un número que no existe).
+ */
+export type LabelMode = 'single' | 'lanes' | 'none'
+
+/**
+ * Decide el modo de rótulos a partir del rótulo MÁS ANCHO y del paso en px entre marcas vecinas.
+ * Puro y testeable: es la única regla de anti-colisión, y no se declara por spec (decisión del motor).
+ */
+export function labelMode(labels: string[], stepPx: number): LabelMode {
+  if (labels.length === 0) return 'single'
+  const widest = Math.max(...labels.map(labelWidthPx)) + LABEL_GAP_PX
+  if (widest <= stepPx) return 'single'
+  if (widest <= stepPx * 2) return 'lanes'
+  return 'none'
+}
+
+/**
+ * Paso en px entre los CENTROS de dos marcas vecinas — el denominador de la anti-colisión. MEDIDO
+ * sobre el SVG emitido (posiciones reales de los `<text>` de la capa de rótulos), no derivado del
+ * álgebra de bandas de Vega:
+ *
+ * - Mono (1 serie): el paso es exactamente `ancho / nBarras` (medido en n = 2, 3, 6, 9, 12 → 160,00 ·
+ *   106,67 · 53,33 · 35,56 · 26,67 px, idénticos a `320/n`).
+ * - Agrupado (N series): las sub-barras de una categoría quedan MÁS juntas que el reparto uniforme
+ *   porque el padding entre categorías se cobra aparte. Medido: 3×2 → 0,750 · 2×2 → 0,727 · 6×3 →
+ *   0,774 · 9×2 → 0,783 · 12×2 → 0,787 del reparto uniforme. Se usa el mínimo observado (0,72), que
+ *   es el caso peor.
+ */
+export function barStepPx(plotWidthPx: number, nBars: number, nSeries: number): number {
+  const uniform = plotWidthPx / Math.max(1, nBars * Math.max(1, nSeries))
+  return nSeries > 1 ? uniform * 0.72 : uniform
+}
+
+/**
+ * Holgura del dominio que necesita el carril ALTO del modo `lanes` para no cortarse contra el techo
+ * del lienzo. El pad se expresa como fracción del rango de datos, y una fracción `f` deja
+ * `f/(1+f) · alto` px sobre la marca máxima: se despeja la `f` que garantiza los px de un rótulo del
+ * carril alto (su separación de la marca, su alzada y su mancha de tinta).
+ */
+export function lanesPadFraction(plotHeightPx: number): number {
+  const need = LABEL_DY_PX + LABEL_LANE_RISE_PX + LABEL_INK_H_PX
+  if (plotHeightPx <= need * 2) return 1
+  return Math.max(0.1, need / (plotHeightPx - need))
+}
+
+/**
+ * Posición vertical (px desde el techo del área de plot) del techo de la marca de valor `v` — o sea,
+ * dónde va la línea base de su rótulo antes de aplicar el `dy` del carril. La escala cuantitativa es
+ * LINEAL y su dominio lo fijamos nosotros (`labelledDomain`), así que la posición es predecible
+ * server-side con exactitud, y no hay que rendear para saber qué rótulos se van a estorbar.
+ */
+export function markTopPx(value: number, domain: [number, number], plotHeightPx: number): number {
+  const [lo, hi] = domain
+  if (hi === lo) return plotHeightPx
+  return (plotHeightPx * (hi - value)) / (hi - lo)
+}
+
+/**
+ * Reparte los rótulos entre los dos carriles del modo `lanes` (0 = bajo, 1 = alto), recorriendo las
+ * marcas EN ORDEN DE IZQUIERDA A DERECHA con la posición de cada techo ya predicha.
+ *
+ * Solo hay que mirar al vecino INMEDIATO: en modo `lanes` el rótulo más ancho mide a lo más dos pasos
+ * (`labelMode`), así que dos cajas separadas por dos pasos o más no pueden cruzarse en x. Regla: se
+ * usa el carril bajo salvo que su línea base quede a menos de una mancha de tinta de la del vecino ya
+ * colocado; en ese caso sube al alto, que por la elección de la alzada (2 × tinta) está garantizado
+ * libre. Puro y testeable — la alternancia NO es por paridad del índice: la paridad ciega sube
+ * rótulos que ya estaban separados y, peor, deja fundidos los pares cuyo desnivel de barras cancela
+ * justo la alzada del carril.
+ */
+export function assignLanes(topsPx: number[]): number[] {
+  const lanes: number[] = []
+  let prevBaseline: number | undefined
+  for (const top of topsPx) {
+    const lane = prevBaseline !== undefined && Math.abs(top - prevBaseline) < LABEL_INK_H_PX ? 1 : 0
+    lanes.push(lane)
+    prevBaseline = top - lane * LABEL_LANE_RISE_PX
+  }
+  return lanes
+}
+
 /**
  * Formato del rótulo de una marca: el `format` declarado de la métrica si lo hay; sin él, `abbr`.
  * Decisión de plataforma — un chart sin formato explícito rotula abreviado, que es lo legible sobre
@@ -203,8 +342,9 @@ function labelFormat(declared?: string): string {
  * borde del lienzo. El texto vive fuera de la barra (al final en horizontal, encima en vertical), y
  * Vega dimensiona la escala solo por los DATOS: sin este margen el rótulo del máximo queda mochado.
  * Se expande ~10% del rango, y se conserva el 0 como base cuando todos los valores son del mismo signo.
+ * `padFrac` sube esa holgura cuando el rótulo vive más arriba de lo normal (carril alto de #97).
  */
-export function labelledDomain(values: number[]): [number, number] | undefined {
+export function labelledDomain(values: number[], padFrac = 0.1): [number, number] | undefined {
   const finite = values.filter((v) => Number.isFinite(v))
   if (finite.length === 0) return undefined
   const lo = Math.min(0, ...finite)
@@ -212,22 +352,46 @@ export function labelledDomain(values: number[]): [number, number] | undefined {
   const span = hi - lo
   // Dato degenerado (todo cero): un dominio [0,0] no es escala válida.
   if (span === 0) return [lo, hi + 1]
-  const pad = span * 0.1
+  const pad = span * padFrac
   return [lo < 0 ? lo - pad : lo, hi + pad]
 }
 
 /**
- * Capa de rótulos (#80): mismo encoding posicional que las barras (se hereda del top-level), texto
- * pre-computado en los datos. El color sale del theme; la anti-colisión fina (rotar/omitir) es
- * decisión del motor y NO se declara por spec.
+ * Capas de rótulos (#80 · #97): mismo encoding posicional que las barras (se hereda del top-level),
+ * texto pre-computado en los datos. El color sale del theme; la anti-colisión es decisión del motor y
+ * NO se declara por spec.
+ *
+ * En horizontal el rótulo va al final de la barra y el paso vertical entre barras (≥22 px) siempre
+ * alcanza: una sola capa. En vertical el modo lo decide `labelMode()`: `single` emite la misma capa
+ * histórica; `lanes` emite DOS capas filtradas por el carril pre-computado (`__lane`, patrón #80: el
+ * dato viaja resuelto y Vega solo pinta); `none` no emite ninguna.
  */
-function labelLayer(horizontal: boolean, tokens: ThemeTokens) {
-  return {
-    mark: horizontal
-      ? ({ type: 'text', align: 'left', baseline: 'middle', dx: 4, fontSize: 11, color: tokens.chartText } as const)
-      : ({ type: 'text', align: 'center', baseline: 'bottom', dy: -4, fontSize: 11, color: tokens.chartText } as const),
-    encoding: { text: { field: LABEL_FIELD, type: 'nominal' as const } },
+function labelLayers(horizontal: boolean, tokens: ThemeTokens, mode: LabelMode) {
+  const encoding = { text: { field: LABEL_FIELD, type: 'nominal' as const } }
+  if (horizontal) {
+    return [
+      {
+        mark: {
+          type: 'text',
+          align: 'left',
+          baseline: 'middle',
+          dx: 4,
+          fontSize: LABEL_FONT_PX,
+          color: tokens.chartText,
+        } as const,
+        encoding,
+      },
+    ]
   }
+  if (mode === 'none') return []
+  const vertical = (dy: number) =>
+    ({ type: 'text', align: 'center', baseline: 'bottom', dy, fontSize: LABEL_FONT_PX, color: tokens.chartText }) as const
+  if (mode === 'single') return [{ mark: vertical(-LABEL_DY_PX), encoding }]
+  return [0, 1].map((lane) => ({
+    transform: [{ filter: `datum.${LABEL_LANE_FIELD} === ${lane}` }],
+    mark: vertical(lane === 0 ? -LABEL_DY_PX : -(LABEL_DY_PX + LABEL_LANE_RISE_PX)),
+    encoding,
+  }))
 }
 
 export async function renderDistribution(
@@ -254,19 +418,38 @@ export async function renderDistribution(
   // Rótulo de cada marca (#80), pre-computado server-side: Vega solo lo pinta, y así el formato NO
   // se duplica en expresiones Vega (el formateador único es `vtFormat`, que ya viaja al browser).
   const fmt = labelFormat(node.format)
-  const values = rows.map((r) => ({ ...r, [LABEL_FIELD]: vtFormat(r[metric], fmt) }))
-  const domain = labelledDomain(rows.map((r) => Number(r[metric])))
+  const texts = rows.map((r) => vtFormat(r[metric], fmt))
+  const width = 320
+  const height = Math.max(120, rows.length * 34)
+  // Anti-colisión (#97): en vertical el paso horizontal por barra es `320 / nBarras`, y un rótulo de
+  // 5 caracteres ya no cabe pasadas ~11 barras. En horizontal no hay colisión que resolver.
+  const nums = rows.map((r) => Number(r[metric]))
+  const wanted: LabelMode = horizontal ? 'single' : labelMode(texts, barStepPx(width, rows.length, 1))
+  // El carril alto necesita más techo que el rótulo de siempre: se le da el pad que lo garantiza. El
+  // dominio se fija ANTES de repartir carriles porque es lo que traduce valores a px.
+  const domain = labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
+  // Sin dominio (ningún valor finito) no hay px que predecir: el reparto de carriles no aplica.
+  const mode: LabelMode = wanted === 'lanes' && !domain ? 'single' : wanted
+  const lanes = mode === 'lanes' && domain ? assignLanes(nums.map((v) => markTopPx(v, domain, height))) : []
+  const values = rows.map((r, i) =>
+    mode === 'lanes'
+      ? { ...r, [LABEL_FIELD]: texts[i], [LABEL_LANE_FIELD]: lanes[i] }
+      : { ...r, [LABEL_FIELD]: texts[i] },
+  )
   const quant = { field: metric, type: 'quantitative' as const, title: null, ...(domain ? { scale: { domain } } : {}) }
   // `sort: null` ⇒ manda el orden de las filas, ya resuelto por applyChartSort.
   const cat = { field: dim, type: 'nominal' as const, sort: null, title: null }
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
-    width: 320,
-    height: Math.max(120, rows.length * 34),
+    width,
+    height,
     data: { values },
     encoding: horizontal ? { y: cat, x: quant } : { x: cat, y: quant },
-    layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar } }, labelLayer(horizontal, tokens)],
+    layer: [
+      { mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar } },
+      ...labelLayers(horizontal, tokens, mode),
+    ],
     config: chartAxisConfig(tokens),
   }
   // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
@@ -305,15 +488,26 @@ async function renderDistributionGrouped(
   // hace trivial y de paso deja el spec sin transform. `serie` = label (lo que ve la leyenda).
   const labels = metrics.map((m) => m.label)
   const fmt = labelFormat(node.format)
-  const values = rows.flatMap((r) =>
-    metrics.map((m) => {
-      const valor = Number(r[m.field]) || 0
-      return { [dim]: r[dim], serie: m.label, valor, [LABEL_FIELD]: vtFormat(valor, fmt) }
-    }),
-  )
   const colors = seriesColors(tokens, metrics.length)
   const nSeries = Math.max(1, metrics.length)
-  const domain = labelledDomain(values.map((v) => v.valor))
+  const width = horizontal ? 360 : Math.max(320, rows.length * 26 * nSeries)
+  // Barras agrupadas ocupan más: el alto (horizontal) escala con categorías × series, acotado.
+  const height = horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * nSeries)) : 260
+  // Anti-colisión (#97): acá el paso lo marca la SUB-barra (categoría × serie), no la categoría, y el
+  // orden de `nums` es CORRELATIVO de izquierda a derecha (categoría × serie) — el que pide `assignLanes`.
+  const nums = rows.flatMap((r) => metrics.map((m) => Number(r[m.field]) || 0))
+  const texts = nums.map((v) => vtFormat(v, fmt))
+  const wanted: LabelMode = horizontal ? 'single' : labelMode(texts, barStepPx(width, rows.length, nSeries))
+  const domain = labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
+  const mode: LabelMode = wanted === 'lanes' && !domain ? 'single' : wanted
+  const lanes = mode === 'lanes' && domain ? assignLanes(nums.map((v) => markTopPx(v, domain, height))) : []
+  const values = rows.flatMap((r, ri) =>
+    metrics.map((m, si) => {
+      const k = ri * nSeries + si
+      const base = { [dim]: r[dim], serie: m.label, valor: nums[k], [LABEL_FIELD]: texts[k] }
+      return mode === 'lanes' ? { ...base, [LABEL_LANE_FIELD]: lanes[k] } : base
+    }),
+  )
   const quant = { field: 'valor', type: 'quantitative' as const, title: null, ...(domain ? { scale: { domain } } : {}) }
   // `sort: null` ⇒ manda el orden de las filas, ya resuelto por applyChartSort.
   const cat = { field: dim, type: 'nominal' as const, sort: null, title: null }
@@ -327,13 +521,12 @@ async function renderDistributionGrouped(
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
-    width: horizontal ? 360 : Math.max(320, rows.length * 26 * nSeries),
-    // Barras agrupadas ocupan más: el alto (horizontal) escala con categorías × series, acotado.
-    height: horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * nSeries)) : 260,
+    width,
+    height,
     data: { values },
     encoding: horizontal ? { y: cat, x: quant, yOffset: offset, color } : { x: cat, y: quant, xOffset: offset, color },
     // Un rótulo POR SUB-BARRA: la capa de texto hereda el encoding posicional y el offset de serie.
-    layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2 } }, labelLayer(horizontal, tokens)],
+    layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2 } }, ...labelLayers(horizontal, tokens, mode)],
     config: chartAxisConfig(tokens),
   }
   // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
