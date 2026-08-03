@@ -50,12 +50,18 @@ function chartAxisConfig(tokens: ThemeTokens) {
 
 /**
  * Config de la leyenda de los charts multi-serie — CONVENCIÓN DE PLATAFORMA, no declarable por spec
- * (el spec declara QUÉ se grafica; la plataforma decide CÓMO se ve). Arriba a la derecha, horizontal
- * y sin título: Vega-Lite reserva el espacio de la leyenda FUERA del área de plot, así que no pisa
- * marcas; el título del chart es un `<h3>` HTML fuera del SVG, así que tampoco colisiona con él.
+ * (el spec declara QUÉ se grafica; la plataforma decide CÓMO se ve). Horizontal, sin título y ARRIBA.
+ *
+ * `orient: 'top'` y no `'top-right'` (#96): los orient de ESQUINA (`top-right`, `top-left`, …) son
+ * posicionamiento DENTRO del rectángulo de datos — Vega no les reserva espacio y la leyenda se dibuja
+ * encima de las marcas (medido: con `top-right` el grupo de leyenda caía 100% dentro del área de plot
+ * en los tres tipos de chart, pisando la barra más alta y el cruce de curvas). Solo los orient de
+ * BORDE (`top`, `bottom`, `left`, `right`) entran en el layout del lienzo: Vega les reserva una banda
+ * propia y el área de plot se desplaza, así que la leyenda queda FUERA. El título del chart es un
+ * `<h3>` HTML fuera del SVG, así que la banda superior tampoco colisiona con él.
  */
 function chartLegendConfig() {
-  return { orient: 'top-right', title: null, direction: 'horizontal' } as const
+  return { orient: 'top', title: null, direction: 'horizontal' } as const
 }
 
 /**
