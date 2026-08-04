@@ -607,8 +607,13 @@ export interface MiraControl {
    * de `source`). El valor escrito sigue siendo el de `source`; solo cambia el texto visible.
    */
   display?: string
-  /** Valor inicial cuando no llega `ctx.<id>` en la URL: el mayor / menor / primero de las opciones. */
-  default?: 'max' | 'min' | 'first'
+  /**
+   * Valor inicial cuando no llega `ctx.<id>` en la URL: `max` (mayor/más reciente) · `min` · `first`
+   * (primera de aparición) — o un VALOR LITERAL del dominio (#92). El literal se valida contra las
+   * opciones resueltas al render; si ese día no está en el dominio, cae al comportamiento sin
+   * default (fail-safe). Los keywords ganan sobre un valor homónimo del dominio.
+   */
+  default?: 'max' | 'min' | 'first' | (string & {})
   /**
    * Selección única (default true). Con `single: false` el control es MULTI-SELECT: los valores viajan
    * como parámetro repetido (`?ctx.<id>=a&ctx.<id>=b`) y en la query el placeholder `:ctx.<id>` DEBE
@@ -728,14 +733,17 @@ function validateControls(spec: MiraSpec): void {
         remediation: `Declarar '${c.display}' en shape.fields o corregir display.`,
       })
     }
-    if (c.default != null && !['max', 'min', 'first'].includes(c.default)) {
+    // `default` (#92): keywords `max|min|first` con su semántica de siempre, o un LITERAL — cualquier
+    // otro string no vacío. El literal NO se valida aquí contra el dominio (las opciones se resuelven
+    // por SQL al render); allá es fail-safe: fuera del dominio cae al comportamiento sin default.
+    if (c.default != null && (typeof c.default !== 'string' || c.default === '')) {
       throw new VergisError({
         error: 'mira/spec-invalid',
         code: 'control-default-invalid',
         path: `controls[${c.id}].default`,
         value: c.default,
-        message: `default '${c.default}' inválido para el control '${c.id}'. Valores: max | min | first.`,
-        remediation: 'Usar max (más reciente), min o first, u omitir default.',
+        message: `default inválido para el control '${c.id}': debe ser un string no vacío.`,
+        remediation: 'Usar max (más reciente), min, first, o un valor literal del dominio; u omitir default.',
       })
     }
     // `single: false` (multi-select) es válido: el control se renderiza como grupo de checkboxes,
