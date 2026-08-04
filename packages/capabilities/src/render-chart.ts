@@ -537,9 +537,31 @@ async function renderDistributionGrouped(
 
 
 /**
- * `series` — líneas de N series sobre un eje. Vega-Lite con `fold` (wide→long) + `color` por serie;
- * el eje x es ORDINAL en el orden de llegada de las filas (`sort: null` — el SQL manda, NO se
- * re-ordena alfabético). Marca de línea con puntos, leyenda abajo, paleta del theme. Mismo LRU.
+ * Cada cuántos puntos se rotula una línea (#94): 1 = todos. El paso horizontal entre puntos
+ * (`plotWidthPx / nPoints`) se compara contra el rótulo MÁS ANCHO (misma calibración que las barras:
+ * `labelWidthPx`); si no caben todos, se rotula cada k-ésimo con `k` mínimo tal que los rotulados
+ * queden a ≥ un ancho de rótulo entre sí. El ÚLTIMO punto de cada serie se rotula siempre (es el
+ * valor que el lector busca en una línea acumulada), salvo stride degenerado (k > nPoints: ni uno).
+ */
+export function seriesLabelStride(nPoints: number, texts: string[], plotWidthPx: number): number {
+  if (nPoints <= 1) return 1
+  const step = plotWidthPx / nPoints
+  const widest = Math.max(...texts.map(labelWidthPx), 0) + LABEL_GAP_PX
+  return Math.max(1, Math.ceil(widest / step))
+}
+
+/**
+ * `series` — líneas de N series sobre un eje. Vega-Lite con datos LARGOS pre-computados server-side
+ * (una fila por punto y serie) + `color` por serie; el eje x es ORDINAL en el orden de llegada de las
+ * filas (`sort: null` — el SQL manda, NO se re-ordena alfabético). Marca de línea con puntos, leyenda
+ * abajo, paleta del theme. Mismo LRU.
+ *
+ * Rótulos de valor sobre los puntos (#94, contraparte de #80): texto pre-computado (`__label`, Vega
+ * solo pinta), adelgazado por `seriesLabelStride` cuando los puntos no dan el ancho, y en DOS
+ * carriles verticales alternados por serie (pares arriba del punto, impares abajo) para que el caso
+ * típico de dos líneas cercanas (Base vs Actual) no funda sus rótulos. La anti-colisión es decisión
+ * del motor y NO se declara por spec. El dominio Y gana holgura arriba y abajo para que ningún
+ * rótulo se corte contra el borde del plot.
  */
 export async function renderSeries(
   node: ResolvedNode,
@@ -549,26 +571,54 @@ export async function renderSeries(
   const rows = node.rows ?? []
   const x = node.xField ?? 'x'
   const series = node.seriesSpec ?? []
-  // Datos re-etiquetados por LABEL (clave = etiqueta de la serie); el fold opera sobre los labels.
   const labels = series.map((s) => s.label)
-  const values = rows.map((r) => {
-    const o: Record<string, unknown> = { [x]: r[x] }
-    for (const s of series) o[s.label] = Number(r[s.field])
-    return o
+  const fmt = labelFormat(node.format)
+  // Datos LARGOS server-side (patrón del agrupado #80): una fila por (punto × serie), con el rótulo
+  // ya formateado, su carril (paridad de la serie) y si se muestra (stride).
+  const nums: number[] = []
+  const texts: string[] = []
+  for (const r of rows) for (const s of series) { const v = Number(r[s.field]); nums.push(v); texts.push(Number.isFinite(v) ? vtFormat(v, fmt) : '') }
+  const stride = seriesLabelStride(rows.length, texts, 640)
+  const values: Record<string, unknown>[] = []
+  rows.forEach((r, i) => {
+    series.forEach((s, si) => {
+      const v = Number(r[s.field])
+      values.push({
+        [x]: r[x],
+        serie: s.label,
+        valor: v,
+        [LABEL_FIELD]: Number.isFinite(v) ? vtFormat(v, fmt) : '',
+        [LABEL_LANE_FIELD]: si % 2,
+        __show: i % stride === 0 || i === rows.length - 1 ? 1 : 0,
+      })
+    })
   })
   const colors = seriesColors(tokens, Math.max(1, series.length))
+  const domain = labelledDomain(nums, 0.12)
+  const pointLabel = (lane: 0 | 1) => ({
+    transform: [{ filter: `datum.__show === 1 && datum.${LABEL_LANE_FIELD} === ${lane}` }],
+    mark: {
+      type: 'text',
+      align: 'center',
+      baseline: lane === 0 ? 'bottom' : 'top',
+      dy: lane === 0 ? -(LABEL_DY_PX + 3) : LABEL_DY_PX + 3,
+      fontSize: LABEL_FONT_PX,
+      color: tokens.chartText,
+    } as const,
+    encoding: { text: { field: LABEL_FIELD, type: 'nominal' as const } },
+  })
+  const labelLayersSeries = [pointLabel(0), ...(series.length > 1 ? [pointLabel(1)] : [])]
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
     width: 640,
     height: 240,
     data: { values },
-    transform: [{ fold: labels, as: ['serie', 'valor'] }],
-    mark: { type: 'line', point: true },
+    layer: [{ mark: { type: 'line', point: true } }, ...labelLayersSeries],
     encoding: {
       // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
       x: { field: x, type: 'ordinal', sort: null, title: null },
-      y: { field: 'valor', type: 'quantitative', title: null },
+      y: { field: 'valor', type: 'quantitative', title: null, ...(domain ? { scale: { domain, zero: false } } : {}) },
       color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
     },
     config: chartAxisConfig(tokens),
