@@ -4,7 +4,7 @@ import { TABLE_INTERACTIVE_CSS } from '../packages/capabilities/src/piece-css'
 
 /**
  * Export CSV de la vista actual (issue #61 / TX-01): el runtime de tabla ofrece «Descargar CSV»
- * en la gaveta común. El handler exporta la VISTA (vtApply: filtros + búsqueda aplicados), con
+ * en la bandeja común. El handler exporta la VISTA (vtApply: filtros + búsqueda aplicados), con
  * columnas visibles (las notas nunca viajan), separador ';' (Excel es-CL) y BOM UTF-8.
  */
 describe('table-runtime · export CSV (issue #61)', () => {

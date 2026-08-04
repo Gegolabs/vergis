@@ -41,7 +41,7 @@ export const renderHtmlPiece: Capability = {
     const flt = fltCarry ?? {}
     const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, carry, signals, fltQ: fltQuery(flt) }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
-    // el control), no en la gaveta. El tab «Controles» de la gaveta queda para la maquinaria
+    // el control), no en la bandeja. El tab «Controles» de la bandeja queda para la maquinaria
     // (facetas de dashboard / runtime de tabla). Los selectores de alcance NO viven aquí.
     const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
     // Franja de CHIPS de los filtros activos (#82), bajo la banda de contexto: la cara muestra el
@@ -50,7 +50,7 @@ export const renderHtmlPiece: Capability = {
     const nav = pages ? renderPagesNav(pages, carry, flt) : ''
     let body = contextStrip + chips + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
-    // GAVETA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
+    // BANDEJA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
     // los tabs Controles·Vistas·Config y el pie de versión. El shell NO se gatea por maquinaria: una
     // vista de dashboard puro (KPIs+charts, sin tabla, con la interactividad de gráficos aún no
     // construida — capacidad #82) también merece su Inspector con Apariencia+Config. El tab
@@ -62,7 +62,7 @@ export const renderHtmlPiece: Capability = {
     const trayFilters = renderTrayFilters(filters ?? [], pages?.active, carry, flt)
     const facets = trayFilters + (interactive ? renderDashboardFacets(interactive) : '')
     // «Controles trae maquinaria» = facetas server-rendered (dashboard) o el runtime de tabla que las
-    // inyecta client-side. Decide el empty-state y el tab por defecto — NO decide si hay gaveta.
+    // inyecta client-side. Decide el empty-state y el tab por defecto — NO decide si hay bandeja.
     const controlesHasMachinery = !!facets || hasTable || !!notas
     // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
     const piLabel = meta?.code
@@ -165,7 +165,7 @@ function ctxNavBase(cId: string, activePage: string | undefined, carry: CarryCtx
 /**
  * Banda de contexto activo = EL selector de alcance (TX-11 WP1). Por control con valor vigente emite
  * un sello clickeable: single → `<select>` nativo estilizado (a11y gratis) con las mismas opciones y
- * navegación que el control histórico de la gaveta; multi → `<details>` cuyo summary muestra el valor
+ * navegación que el control histórico de la bandeja; multi → `<details>` cuyo summary muestra el valor
  * unido y cuyo popover reúne los checkboxes existentes. Por ítem se emite además `.vctx-print` (texto
  * plano) — en print el widget `.vctx-screen` se oculta y queda el texto (el sello impreso es «OC …»).
  */
@@ -449,7 +449,7 @@ function renderSemaforo(node: ResolvedNode, opts: RenderOpts): string {
 }
 
 /**
- * Gaveta (off-canvas, desde la derecha) — **shell común a TODOS los PI** (dashboard y tabla).
+ * Bandeja (off-canvas, desde la derecha) — **shell común a TODOS los PI** (dashboard y tabla).
  * El CTA es una uña/pestaña que sobresale del borde derecho (overlay universal, ajeno al
  * contenido). Al abrir, el contenido se encoge a la izquierda. Apertura/cierre por toggle CSS
  * puro. `sections` es el contenido específico del PI (facetas de dashboard server-rendered, o
@@ -486,7 +486,7 @@ function renderTrayShell(
   const restore =
     `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}` +
     `try{var t=localStorage.getItem('vergis:tray:'+location.pathname);if(t!==null){var c=document.getElementById('vergis-tray-toggle');if(c)c.checked=(t==='1');}}catch(e){}})();</script>`
-  // Pie de la gaveta (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
+  // Pie de la bandeja (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
   // Pie del inspector: versión del PI (instancia) + versión de Mira (motor) — pistas DISTINTAS.
   const footer =
     `<div class="tray-foot">` +
@@ -540,7 +540,7 @@ function renderTrayShell(
   )
 }
 
-/** Sección de la gaveta específica del dashboard: las facetas (catálogo-selector) por filtro. */
+/** Sección de la bandeja específica del dashboard: las facetas (catálogo-selector) por filtro. */
 function renderDashboardFacets(it: Interactive): string {
   return it.filters
     .map((f) => {

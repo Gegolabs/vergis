@@ -1,5 +1,5 @@
 // JS embebido de la interacción declarada acotada — extraído de render-html-piece.ts (NEXT · Ola 3·B).
-// Genera el <script> que filtra client-side (facetas de la gaveta) y recomputa KPIs/semáforo sobre los
+// Genera el <script> que filtra client-side (facetas de la bandeja) y recomputa KPIs/semáforo sobre los
 // datasets materializados, SIN nuevas queries. Browser-only: el test `new Function(...)` solo valida
 // sintaxis (no comportamiento) — editar con cuidado.
 import { SAVED_VIEWS_JS } from './table-runtime'

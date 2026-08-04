@@ -213,10 +213,10 @@ describe('render-html-piece · tabla interactiva', () => {
     rows: ROWS,
   }
 
-  it('auto-on: gaveta común + ícono/popover por columna + headers ordenables + datos embebidos', async () => {
+  it('auto-on: bandeja común + ícono/popover por columna + headers ordenables + datos embebidos', async () => {
     const { html } = (await renderHtmlPiece.execute({ piece, title: 'X', theme: 'arbol' }, { agent: 'test' })) as { html: string }
     expect(html).toContain('class="table vtable"')
-    // gaveta común (shell) emitida también para PI tabular
+    // bandeja común (shell) emitida también para PI tabular
     expect(html).toContain('id="vergis-tray-toggle"')
     expect(html).toContain('class="tray"')
     expect(html).toContain('tray-sections')
@@ -236,9 +236,9 @@ describe('render-html-piece · tabla interactiva', () => {
     expect(html).toContain('function vtBootstrap')
     expect(html).toContain('.vtable .vt-col-pop')
     expect(html.match(/function vtBootstrap/g)).toHaveLength(1)
-    // los controles globales NO van inline (los inyecta el runtime en la gaveta)
+    // los controles globales NO van inline (los inyecta el runtime en la bandeja)
     expect(html).not.toContain('class="vt-controls"')
-    // gaveta de 3 tabs: Controles · Guardados · Config
+    // bandeja de 3 tabs: Controles · Guardados · Config
     expect(html).toContain('id="vergis-tt-controles"')
     expect(html).toContain('id="vergis-tt-guardados"')
     expect(html).toContain('id="vergis-tt-config"')
@@ -266,7 +266,7 @@ describe('render-html-piece · tabla interactiva', () => {
     expect(html).not.toContain('vtable')
     expect(html).not.toContain('vt-filter-btn')
     expect(html).not.toContain('function vtBootstrap')
-    // El runtime de tabla se apaga, pero la gaveta universal (Apariencia+Config) igual existe.
+    // El runtime de tabla se apaga, pero la bandeja universal (Apariencia+Config) igual existe.
     expect(html).toContain('<aside class="tray"')
     expect(html).toContain('<table>') // sigue habiendo tabla
     expect(html).toContain('Ana Pérez')
@@ -293,7 +293,7 @@ describe('render-html-piece · tabla interactiva', () => {
       { piece: dashPiece, title: 'X', theme: 'arbol', interactive } as never,
       { agent: 'test' },
     )) as { html: string }
-    expect(html).toContain('class="tray-saved"') // tab Vistas en la gaveta común
+    expect(html).toContain('class="tray-saved"') // tab Vistas en la bandeja común
     expect(html).toContain('vergisSavedViews(') // mismo snippet de Vistas que la tabla
     expect(html).toContain('dashSnapshot') // snapshot propio del dashboard (selección de facetas)
     expect(html).toContain('class="faceta"') // faceta del dashboard server-rendered

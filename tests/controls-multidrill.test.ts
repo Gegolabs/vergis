@@ -167,11 +167,11 @@ describe('render · control de cabecera default=max', () => {
     expect(out.ok).toBe(true)
     const html = out.html ?? ''
     // TX-11: el selector de alcance vive en la BANDA de contexto (el sello ES el control), como
-    // <select> estilizado, con W21 seleccionada — YA NO en la gaveta (sin vt-ctl-select).
+    // <select> estilizado, con W21 seleccionada — YA NO en la bandeja (sin vt-ctl-select).
     expect(html).toContain('class="vctxbar"')
     expect(html).toContain('vctx-sel') // sello clickeable (<select> nativo estilizado)
     expect(html).toContain('<option value="W21" selected>W21</option>')
-    expect(html).not.toContain('vt-ctl-select') // el control salió de la gaveta (WP2)
+    expect(html).not.toContain('vt-ctl-select') // el control salió de la bandeja (WP2)
     expect(html).toMatch(/<select class="[^"]*vctx-sel[^"]*"/)
     // La query de clientes se bindeó con @ctx_semana = 'W21' (injection-safe, sin :ctx.).
     const clientes = calls.find((c) => /dbo\.saldo/.test(c.sql))!
