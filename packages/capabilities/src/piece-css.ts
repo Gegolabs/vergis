@@ -1,6 +1,6 @@
 // CSS por-documento de las piezas interactivas — extraído de render-html-piece.ts (NEXT · Ola 3·B).
 // Constantes de estilo PURAS (sin lógica): el runtime de tabla (orden/filtro/búsqueda/agrupar/anotar/
-// drill) y la gaveta común (tabs Controles·Guardados·Config). Usan las variables del theme con fallback
+// drill) y la bandeja común (tabs Controles·Guardados·Config). Usan las variables del theme con fallback
 // al look claro → sirven en `arbol` (define las vars) y en `default` (cae al fallback). Se inyectan una
 // vez por documento cuando corresponde (ver renderHtmlPiece). Aquí viven separadas de la lógica de render.
 
@@ -71,8 +71,8 @@ export const TABLE_INTERACTIVE_CSS = `
 @media print{.vtable .vt-filter-btn,.vtable td.vt-drill-arrow,.vtable .vt-chip-x{display:none!important}.vtable .vt-chips{display:block;margin:0 0 6px;font-size:10px;color:var(--fg-dim,#64748b)}.vtable .vt-chips::before{content:"Filtros: ";font-weight:600}.vtable .vt-chip{display:inline;background:none!important;border:none!important;padding:0;border-radius:0;margin:0;color:var(--fg-dim,#64748b);cursor:default}.vtable .vt-chip:not(:first-child)::before{content:"· "}}
 `
 
-/** CSS de la gaveta común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
- *  Se inyecta una vez por documento cuando hay gaveta (dashboard o tabla). Variables del theme
+/** CSS de la bandeja común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
+ *  Se inyecta una vez por documento cuando hay bandeja (dashboard o tabla). Variables del theme
  *  con fallback claro → sirve en arbol y default. */
 export const TRAY_CSS = `
 .tray{display:flex;flex-direction:column}

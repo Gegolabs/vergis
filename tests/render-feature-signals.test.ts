@@ -17,7 +17,7 @@ const cols = [{ field: 'a', label: 'A' }]
 const rows = [{ a: '1' }, { a: '2' }]
 
 describe('render · gating por señales', () => {
-  it('tabla interactiva (default) → incluye el runtime de tabla y el shell de gaveta', async () => {
+  it('tabla interactiva (default) → incluye el runtime de tabla y el shell de bandeja', async () => {
     const html = await render({ type: 'table', columnsSpec: cols, rows })
     expect(html).toContain('class="table vtable"')
     expect(html).toContain('vtBootstrap') // marcador del runtime embebido (autoarranque por .vtable)

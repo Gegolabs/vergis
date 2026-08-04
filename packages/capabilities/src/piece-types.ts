@@ -34,7 +34,7 @@ export interface ControlResolved {
   displayLabel?: string
   /** Solo multi-select: los valores seleccionados. */
   values?: string[]
-  /** `true` si el control es multi-select (grupo de checkboxes en la gaveta). */
+  /** `true` si el control es multi-select (grupo de checkboxes en la bandeja). */
   multi?: boolean
 }
 /**
@@ -57,7 +57,7 @@ export interface RenderParams {
   piece: ResolvedNode
   title?: string
   theme?: string
-  /** Paleta inicial del theme (default por tipo de PI; el usuario la cambia en la gaveta). */
+  /** Paleta inicial del theme (default por tipo de PI; el usuario la cambia en la bandeja). */
   palette?: string
   meta?: DashboardMeta
   interactive?: Interactive
@@ -190,7 +190,7 @@ export interface RenderOpts {
 
 /** Qué features aparecieron en el árbol renderizado (las marca quien las emite, no un sniff de string). */
 export interface RenderSignals {
-  /** Hay al menos una tabla INTERACTIVA (runtime de orden/filtro/búsqueda + gaveta + CSS interactivo). */
+  /** Hay al menos una tabla INTERACTIVA (runtime de orden/filtro/búsqueda + bandeja + CSS interactivo). */
   interactiveTable: boolean
   /** Hay celdas de acciones de drill (`vt-actions`) → requiere DRILL_ACTIONS_CSS. */
   drillActions: boolean
