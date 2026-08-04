@@ -112,6 +112,33 @@ export function diffAlertState(
   return { notify, recovered, next }
 }
 
+/** Clave de `platform_setting` donde vive el estado de alertas de frescura entre reinicios. */
+export const FRESHNESS_ALERT_STATE_KEY = 'freshness.alert_state'
+
+/**
+ * Lee el estado de alertas persistido. El dedup del monitor (`diffAlertState`) solo funciona si el
+ * estado previo SOBREVIVE al reinicio: en RAM, cada restart re-notifica todo lo que siga fallando —
+ * ruido que además entrena a ignorar la alerta.
+ *
+ * Fail-safe por diseño: si el valor está corrupto o es de una forma vieja, se devuelve `{}` en vez de
+ * propagar. El costo de equivocarse es una notificación de más (recuperable); el de reventar el
+ * monitor, quedarse ciego.
+ */
+export function parseAlertState(raw: string | null): Record<string, 'failed' | 'missed'> {
+  if (!raw) return {}
+  try {
+    const v: unknown = JSON.parse(raw)
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+    const out: Record<string, 'failed' | 'missed'> = {}
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (val === 'failed' || val === 'missed') out[k] = val
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 /** Costura con el motor de ejecución (Fabric u otro). La impl. concreta se inyecta. */
 export interface IngestionEngineClient {
   /** Historial de corridas de un proceso (Fabric: *item job instances*). */

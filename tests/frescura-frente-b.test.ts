@@ -5,6 +5,7 @@ import {
   createFabricEngineClient,
   freshnessAlerts,
   diffAlertState,
+  parseAlertState,
   SqliteGovernanceStore,
   type TokenProvider,
   type EngineRef,
@@ -201,5 +202,50 @@ describe('GovernanceStore · engine_ref del proceso y dominio de la fuente', () 
     await g.upsertProcess('p_buk', 'Ingesta Buk', 'buk', { workspaceId: 'W', itemId: 'I', jobType: '' })
     expect((await g.listProcesses()).find((x) => x.id === 'p_buk')!.engine?.jobType).toBe('Pipeline')
     await g.close()
+  })
+})
+
+describe('P-31 · el estado de alertas sobrevive al reinicio', () => {
+  it('parseAlertState: lee lo que setSetting guardó', () => {
+    const guardado = JSON.stringify({ 'ingest-finanzas': 'failed', 'ingest-ventas': 'missed' })
+    expect(parseAlertState(guardado)).toEqual({ 'ingest-finanzas': 'failed', 'ingest-ventas': 'missed' })
+  })
+
+  it('parseAlertState: sin estado previo (primer arranque) devuelve vacío', () => {
+    expect(parseAlertState(null)).toEqual({})
+    expect(parseAlertState('')).toEqual({})
+  })
+
+  it('parseAlertState: es fail-safe ante basura, forma vieja o razones desconocidas', () => {
+    expect(parseAlertState('{no es json')).toEqual({})
+    expect(parseAlertState('["ingest-a"]')).toEqual({})
+    expect(parseAlertState('null')).toEqual({})
+    expect(parseAlertState(JSON.stringify({ a: 'failed', b: 'explotó', c: 42 }))).toEqual({ a: 'failed' })
+  })
+
+  it('el ciclo completo NO re-notifica tras un reinicio', () => {
+    const procs = [
+      { processId: 'ingest-finanzas', runs: [{ status: 'Failed' as const, startedAt: new Date(Date.now() - 60_000).toISOString() }], requiredCadenceSeconds: 86_400 },
+    ]
+    // Sesión 1: la alerta es nueva → se notifica y el estado se persiste.
+    const s1 = diffAlertState({}, freshnessAlerts(procs, Date.now()))
+    expect(s1.notify).toHaveLength(1)
+    const persistido = JSON.stringify(s1.next)
+
+    // Reinicio: el estado se hidrata desde el store y la MISMA falla ya no vuelve a gritar.
+    const s2 = diffAlertState(parseAlertState(persistido), freshnessAlerts(procs, Date.now()))
+    expect(s2.notify).toHaveLength(0)
+    expect(s2.recovered).toHaveLength(0)
+
+    // Si en cambio el estado se hubiera perdido (el comportamiento viejo), habría re-notificado.
+    expect(diffAlertState({}, freshnessAlerts(procs, Date.now())).notify).toHaveLength(1)
+  })
+
+  it('tras el reinicio, la recuperación se sigue detectando', () => {
+    const persistido = JSON.stringify({ 'ingest-finanzas': 'failed' })
+    const sano = [{ processId: 'ingest-finanzas', runs: [{ status: 'Completed' as const, startedAt: new Date().toISOString() }], requiredCadenceSeconds: 86_400 }]
+    const s = diffAlertState(parseAlertState(persistido), freshnessAlerts(sano, Date.now()))
+    expect(s.recovered).toEqual(['ingest-finanzas'])
+    expect(s.next).toEqual({})
   })
 })

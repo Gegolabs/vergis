@@ -73,6 +73,8 @@ import {
   reconcilePlan,
   freshnessAlerts,
   diffAlertState,
+  parseAlertState,
+  FRESHNESS_ALERT_STATE_KEY,
   type GroupSeed,
   type DomainDecl,
   type IntakeSlot,
@@ -944,9 +946,18 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           console.error('[vergis-rls] freshness slack:', e instanceof Error ? e.message : e)
         }
       }
+      // El estado de alertas SOBREVIVE al reinicio (P-31): vive en el store de gobierno, no en RAM.
+      // Sin esto, cada restart re-notifica todo lo que siga fallando — y una alerta que grita lo ya
+      // sabido entrena a ignorarla. Se hidrata en el primer tick (no en el arranque: el monitor no
+      // debe demorar el boot ni romperlo si el store todavía no responde).
       let alertState: Record<string, 'failed' | 'missed'> = {}
+      let hydrated = false
       const tick = async (): Promise<void> => {
         try {
+          if (!hydrated) {
+            alertState = parseAlertState(await govStore.getSetting(FRESHNESS_ALERT_STATE_KEY))
+            hydrated = true
+          }
           const f = await freshnessInputs()
           const reqOf = new Map(deriveIngestionMap(f.mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
           const procs = await Promise.all(
@@ -959,7 +970,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               })),
           )
           const { notify, recovered, next } = diffAlertState(alertState, freshnessAlerts(procs, Date.now()))
+          const cambio = JSON.stringify(next) !== JSON.stringify(alertState)
           alertState = next
+          // Se escribe SOLO en transición: el tick corre cada pocos minutos y el estado casi nunca
+          // cambia; persistir en cada vuelta sería escritura pura sin información.
+          if (cambio) await govStore.setSetting(FRESHNESS_ALERT_STATE_KEY, JSON.stringify(next), 'freshness-monitor')
           for (const a of notify) await postSlack(`:warning: *Frescura* — proceso \`${a.processId}\` ${a.reason === 'failed' ? 'falló' : 'atrasada (no corre a tiempo)'}${a.lastError ? ` — ${a.lastError}` : ''}`)
           for (const pid of recovered) await postSlack(`:white_check_mark: *Frescura* — proceso \`${pid}\` recuperado`)
         } catch (e) {
