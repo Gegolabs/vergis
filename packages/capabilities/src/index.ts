@@ -18,6 +18,7 @@ export {
   lanesPadFraction,
   assignLanes,
   markTopPx,
+  seriesLabelStride,
 } from './render-chart'
 export type { TopNRank, LabelMode } from './render-chart'
 export { TABLE_SSR_MAX_ROWS } from './render-table'
