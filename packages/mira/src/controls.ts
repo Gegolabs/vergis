@@ -52,13 +52,21 @@ function cmpVals(a: string, b: string): number {
 
 /**
  * Valor de un control: si `current` (de la URL) es una opción válida, gana; si no, el default sobre
- * las opciones (`max` = mayor/más reciente, `min` = menor, `first` = primera de aparición). Sin
- * opciones, respeta lo pedido; sin nada, cadena vacía.
+ * las opciones (`max` = mayor/más reciente, `min` = menor, `first` = primera de aparición — y
+ * cualquier OTRO string es un LITERAL, #92: si es una de las opciones resueltas, gana; si no está en
+ * el dominio al momento del render, cae al comportamiento sin default — fail-safe, no fail-closed,
+ * porque el dominio lo produce el SQL y puede moverse bajo un spec quieto). Los keywords conservan su
+ * semántica aunque el dominio contenga un valor homónimo. Sin opciones, respeta lo pedido; sin nada,
+ * cadena vacía.
  */
-export function resolveControlValue(current: string | undefined, options: string[], def?: 'max' | 'min' | 'first'): string {
+export function resolveControlValue(current: string | undefined, options: string[], def?: string): string {
   if (current != null && current !== '' && (options.length === 0 || options.includes(current))) return current
   if (options.length === 0) return ''
   if (def === 'first') return options[0]
+  if (def != null && def !== 'max' && def !== 'min') {
+    // Literal (#92): validado contra las opciones RESUELTAS; fuera del dominio → default de siempre.
+    if (options.includes(def)) return def
+  }
   const sorted = [...options].sort(cmpVals)
   return def === 'min' ? sorted[0] : sorted[sorted.length - 1]
 }
@@ -131,7 +139,7 @@ export function labelForValue(pairs: ControlOption[], value: string): string {
 export function resolveControlValues(
   current: string | string[] | undefined,
   options: string[],
-  def?: 'max' | 'min' | 'first',
+  def?: string,
 ): string[] {
   const asked = (current == null ? [] : Array.isArray(current) ? current : [current]).filter((v) => v !== '')
   const valid = options.length === 0 ? asked : asked.filter((v) => options.includes(v))
