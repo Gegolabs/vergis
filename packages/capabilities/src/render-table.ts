@@ -18,7 +18,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const ranges = colorscaleRanges(cols, rows)
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
   // Las señales las marca quien emite la feature (no un sniff del HTML de salida): drills → celdas
-  // `vt-actions`; tabla interactiva (default salvo `interactive:false`) → runtime + gaveta + CSS.
+  // `vt-actions`; tabla interactiva (default salvo `interactive:false`) → runtime + bandeja + CSS.
   if (drills.length > 0) opts.signals.drillActions = true
 
   // Heurística de plataforma (TX-11 WP4·1): una tabla DISPLAY —single_row, o que rinde 1 fila— es
@@ -37,7 +37,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
       `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
     )
   }
-  // Interactiva (auto-on): recién aquí se prende la señal → runtime + gaveta + CSS interactivo.
+  // Interactiva (auto-on): recién aquí se prende la señal → runtime + bandeja + CSS interactivo.
   opts.signals.interactiveTable = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
   const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla, fltQ)
@@ -142,8 +142,8 @@ function renderInteractiveTable(
     .join('') + (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
 
   // Los controles globales (búsqueda en toda la tabla, agrupar, limpiar, conteo) NO van inline:
-  // el runtime los inyecta en la GAVETA COMÚN (.tray-sections). Inline solo quedan los chips de
-  // filtros activos (feedback visible sin abrir la gaveta) y el ícono por columna en el header.
+  // el runtime los inyecta en la BANDEJA COMÚN (.tray-sections). Inline solo quedan los chips de
+  // filtros activos (feedback visible sin abrir la bandeja) y el ícono por columna en el header.
   const chips = `<div class="vt-chips"></div>`
 
   // Datos embebidos (raw, ya RLS-filtrados) + meta. Escape de `<` para no romper el </script>.

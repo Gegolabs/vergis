@@ -338,11 +338,11 @@ function vtBootstrap(root){
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
   var footEl = root.querySelector('.vt-count-foot'); // pie de la CARA de esta tabla (contador de filas)
-  var badge = document.getElementById('vergis-count'); // uña/pestaña de la gaveta común
+  var badge = document.getElementById('vergis-count'); // uña/pestaña de la bandeja común
   var SEP = '~|~'; // separador de path de grupo (token improbable en datos reales)
   function colLabel(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?(c.label||c.field):field; }
 
-  // ---- KIT de afordancias en la GAVETA COMÚN (.tray-sections): buscar, agrupar (multinivel),
+  // ---- KIT de afordancias en la BANDEJA COMÚN (.tray-sections): buscar, agrupar (multinivel),
   //      descargar, limpiar. El contador de filas YA NO vive aquí: es pie de la CARA (footEl). El kit
   //      se marca (.vt-kit + label + nº filas) para que el coordinador imponga UN kit por página
   //      (con selector de objetivo si hay ≥2 tablas interactivas) — TX-11 WP4·2. ----

@@ -1,6 +1,6 @@
-// TX-11 · Superficie de estado («cara = estado · gaveta = maquinaria · print = estado como texto»).
+// TX-11 · Superficie de estado («cara = estado · bandeja = maquinaria · print = estado como texto»).
 // Cobertura de la convención: el sello de alcance en la banda (single/multi), el par screen/print, la
-// salida de los controles de la gaveta, la heurística de tabla display, el kit único, el contador al
+// salida de los controles de la bandeja, la heurística de tabla display, el kit único, el contador al
 // pie y los chips imprimibles. Ver work/078-plan-tx11-superficie-estado.
 import { describe, it, expect } from 'vitest'
 import { renderHtmlPiece, TABLE_RUNTIME_SOURCE, type ResolvedNode } from '@vergis/capabilities'
@@ -66,29 +66,29 @@ describe('TX-11 WP1 · par screen/print (el sello impreso es texto plano)', () =
   })
 })
 
-describe('TX-11 WP2 · los controles salen de la gaveta', () => {
-  it('PI con control + tabla: el sello está en la banda; la gaveta NO trae el control', async () => {
+describe('TX-11 WP2 · los controles salen de la bandeja', () => {
+  it('PI con control + tabla: el sello está en la banda; la bandeja NO trae el control', async () => {
     const html = await render({
       piece: table2(),
       controls: [{ id: 'oc', label: 'OC', options: ['A', 'B'], value: 'A' }],
     })
     expect(html).toContain('class="vctxbar"')
     expect(html).toContain('vctx-sel')
-    expect(html).toContain('tray-sections') // la gaveta existe (por la tabla interactiva)
+    expect(html).toContain('tray-sections') // la bandeja existe (por la tabla interactiva)
     expect(html).not.toContain('vt-ctl-select') // pero el control YA NO vive en ella
     expect(html).not.toContain('vt-ctl-multi')
   })
 
-  it('PI con controles + sin tabla → el sello está en la banda; la gaveta universal existe pero NO aloja el control', async () => {
+  it('PI con controles + sin tabla → el sello está en la banda; la bandeja universal existe pero NO aloja el control', async () => {
     const html = await render({
       piece: banner, // sin tabla ni interactividad
       controls: [{ id: 'oc', label: 'OC', options: ['A', 'B'], value: 'A' }],
     })
     expect(html).toContain('class="vctxbar"') // el sello sí está (en la banda)
-    // La gaveta/Inspector es UNIVERSAL (Apariencia + Config): existe aunque no haya maquinaria.
+    // La bandeja/Inspector es UNIVERSAL (Apariencia + Config): existe aunque no haya maquinaria.
     expect(html).toContain('id="vergis-tray-toggle"')
     expect(html).toContain('<aside class="tray"')
-    // pero el control NO se cuela a la gaveta (vive en la banda) → Controles muestra su empty-state.
+    // pero el control NO se cuela a la bandeja (vive en la banda) → Controles muestra su empty-state.
     expect(html).not.toContain('vt-ctl-select')
     expect(html).not.toContain('vt-ctl-multi')
     expect(html).toContain('Esta vista no tiene filtros disponibles.')
@@ -101,7 +101,7 @@ describe('TX-11 WP4·1 · heurística de tabla display', () => {
     expect(html).toContain('class="table"')
     expect(html).not.toContain('vtable')
     expect(html).not.toContain('vt-filter-btn')
-    // NO hay maquinaria de tabla, pero la gaveta universal (Apariencia+Config) igual existe;
+    // NO hay maquinaria de tabla, pero la bandeja universal (Apariencia+Config) igual existe;
     // el tab Controles queda con su empty-state (no un panel en blanco).
     expect(html).toContain('<aside class="tray"')
     expect(html).toContain('Esta vista no tiene filtros disponibles.')
