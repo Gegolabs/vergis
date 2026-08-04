@@ -1,7 +1,7 @@
 // Multi-select en controles de cabecera (work/052 R3-3): `single: false` es válido; los valores
 // viajan como parámetro repetido (`?ctx.week=a&ctx.week=b` — navFromUrl los acumula con getAll);
 // Mira expande `:ctx.<id>` a N binds (CONTRATO: el placeholder vive dentro de paréntesis de IN en el
-// spec: `WHERE semana IN (:ctx.semana)`); la gaveta renderiza el control como grupo de checkboxes.
+// spec: `WHERE semana IN (:ctx.semana)`); la bandeja renderiza el control como grupo de checkboxes.
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -124,11 +124,11 @@ describe('render · control multi como sello con popover en la banda de contexto
   it('sello <details> con checkboxes marcados y onchange que repite ctx.<id>', async () => {
     const { out } = await render({ semana: ['W20', 'W21'] })
     const html = out.html ?? ''
-    // El multi vive en la BANDA como sello <details> con checkboxes (WP1), no en la gaveta.
+    // El multi vive en la BANDA como sello <details> con checkboxes (WP1), no en la bandeja.
     expect(html).toContain('class="vctxbar"')
     expect(html).toContain('vctx-multi')
     expect(html).toContain('data-ctl="semana"')
-    expect(html).not.toContain('vt-ctl-multi') // ya no vive en la gaveta (WP2)
+    expect(html).not.toContain('vt-ctl-multi') // ya no vive en la bandeja (WP2)
     // Los valores seleccionados vienen marcados.
     expect(html).toMatch(/value="W20" checked/)
     expect(html).toMatch(/value="W21" checked/)
