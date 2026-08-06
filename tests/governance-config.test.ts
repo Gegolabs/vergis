@@ -76,6 +76,17 @@ describe('governance-config · forma de los items', () => {
     expect(cfg.sources[0].domain).toBe('cartera')
   })
 
+  it('parsea el logs: de un proceso (#99) — lakehouseId obligatorio, workspaceId/dir opcionales', () => {
+    const cfg = parseSourcesConfig({
+      sources: [SOURCE],
+      processes: [{ id: 'p1', label: 'P1', sourceId: 'sap', logs: { lakehouseId: 'lk', dir: 'Files/x/_logs' } }],
+    })
+    expect(cfg.processes?.[0].logs).toEqual({ lakehouseId: 'lk', dir: 'Files/x/_logs' })
+    expect(() =>
+      parseSourcesConfig({ sources: [SOURCE], processes: [{ id: 'p', label: 'P', sourceId: 's', logs: { dir: 'Files' } }] }),
+    ).toThrow(/'lakehouseId'/)
+  })
+
   it('item de sources sin campo obligatorio lanza nombrándolo', () => {
     expect(() => parseSourcesConfig({ sources: [{ id: 'sap', label: 'SAP' }] })).toThrow(/'oferta'/)
     expect(() => parseSourcesConfig({ sources: [{ label: 'SAP', oferta: 'P1D' }] })).toThrow(/'id'/)

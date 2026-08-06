@@ -141,6 +141,16 @@ export function parseSourcesConfig(doc: unknown): SourcesConfig {
         }
         proc.engine = engine
       }
+      // `logs:` (issue #99): dónde deja el proceso sus logs POR CORRIDA. Ausente = no los ofrece
+      // (workspace default = el del engine; dir default RUN_LOG_DIR_DEFAULT).
+      if (o['logs'] != null) {
+        const l = obj(o['logs'])
+        proc.logs = { lakehouseId: reqString(l, 'lakehouseId', `${where}.logs`) }
+        const lw = optString(l, 'workspaceId', `${where}.logs`)
+        if (lw !== undefined) proc.logs.workspaceId = lw
+        const ld = optString(l, 'dir', `${where}.logs`)
+        if (ld !== undefined) proc.logs.dir = ld
+      }
       return proc
     })
   }
