@@ -4,6 +4,9 @@ import {
   createSinks,
   renderSlackText,
   fanout,
+  forEvent,
+  renderEmailSubject,
+  renderEmailText,
   composeFreshnessAlert,
   composeFreshnessRecovery,
   fmtDur,
@@ -30,7 +33,9 @@ describe('notify · config declarativa (VERGIS_NOTIFY)', () => {
 
   it('un destino válido toma el id por defecto ⟨type⟩-⟨i+1⟩', () => {
     expect(parseNotifyConfig({ destinations: [{ type: 'slack-webhook', url: 'https://hooks.slack.com/x' }] })).toEqual({
-      destinations: [{ id: 'slack-webhook-1', type: 'slack-webhook', url: 'https://hooks.slack.com/x' }],
+      // `events` ausente ⇒ ['alerts'] (issue #102): la suscripción por defecto es EXACTA la
+      // semántica de #100 — un destino jamás recibe el digest sin haberlo pedido.
+      destinations: [{ id: 'slack-webhook-1', type: 'slack-webhook', url: 'https://hooks.slack.com/x', events: ['alerts'] }],
     })
   })
 
@@ -225,5 +230,137 @@ describe('notify · fmtDur', () => {
     expect(fmtDur(5_400)).toBe('90 min')
     expect(fmtDur(93_600)).toBe('26 h')
     expect(fmtDur(259_200)).toBe('3 d')
+  })
+})
+
+// ── Deltas del issue #102: routing por flujo, destino email y bloque report ──────────────────────
+
+describe('notify · routing por flujo (events) y bloque report', () => {
+  const slack = { id: 'ops-slack', type: 'slack-webhook', url: 'https://hooks.slack.com/x' }
+
+  it('`events` ausente ⇒ [alerts]; lista vacía o valor desconocido LANZAN', () => {
+    expect(parseNotifyConfig({ destinations: [slack] }).destinations[0]!.events).toEqual(['alerts'])
+    expect(() => parseNotifyConfig({ destinations: [{ ...slack, events: [] }] })).toThrow(/destino #0 con events inválido/)
+    expect(() => parseNotifyConfig({ destinations: [{ ...slack, events: ['digest'] }] })).toThrow(/destino #0 con events inválido 'digest'/)
+    expect(() => parseNotifyConfig({ destinations: [{ ...slack, events: 'reports' }] })).toThrow(/destino #0 con events inválido/)
+  })
+
+  it('forEvent filtra los destinos por flujo y CONSERVA el bloque report', () => {
+    const cfg = parseNotifyConfig({
+      destinations: [
+        { ...slack, events: ['alerts', 'reports'] },
+        { id: 'puente', type: 'webhook', url: 'https://interno/hook' },
+      ],
+      report: { at: '07:30', timezone: 'America/Santiago' },
+    })
+    expect(forEvent(cfg, 'alerts').destinations.map((d) => d.id)).toEqual(['ops-slack', 'puente'])
+    expect(forEvent(cfg, 'reports').destinations.map((d) => d.id)).toEqual(['ops-slack'])
+    expect(forEvent(cfg, 'reports').report).toEqual({ at: '07:30', every: 'daily', timezone: 'America/Santiago' })
+  })
+
+  it('el bloque report toma sus defaults y valida hora, cadencia, weekday y timezone', () => {
+    const cfg = parseNotifyConfig({ destinations: [{ ...slack, events: ['reports'] }], report: {} })
+    expect(cfg.report).toEqual({ at: '07:00', every: 'daily' })
+    expect(parseNotifyConfig({ destinations: [{ ...slack, events: ['reports'] }], report: { every: 'weekly' } }).report).toEqual({
+      at: '07:00',
+      every: 'weekly',
+      weekday: 'monday',
+    })
+    const conReport = (report: unknown): unknown => parseNotifyConfig({ destinations: [{ ...slack, events: ['reports'] }], report })
+    expect(() => conReport({ at: '25:00' })).toThrow(/report\.at inválido '25:00'/)
+    expect(() => conReport({ at: '7:00' })).toThrow(/report\.at inválido/)
+    expect(() => conReport({ every: 'hourly' })).toThrow(/report\.every inválido 'hourly'/)
+    expect(() => conReport({ weekday: 'monday' })).toThrow(/report\.weekday solo aplica a weekly/)
+    expect(() => conReport({ timezone: 'America/Nowhere' })).toThrow(/report\.timezone inválida 'America\/Nowhere'/)
+  })
+
+  it('config contradictoria LANZA en el boot: report sin receptor, y receptor sin report', () => {
+    expect(() => parseNotifyConfig({ destinations: [slack], report: { at: '07:30' } })).toThrow(/ningún destino se suscribe a 'reports'/)
+    expect(() => parseNotifyConfig({ destinations: [{ ...slack, events: ['reports'] }] })).toThrow(/el destino 'ops-slack' se suscribe a 'reports' pero no hay bloque report/)
+  })
+})
+
+describe('notify · destino email-smtp', () => {
+  const emailOk = {
+    type: 'email-smtp',
+    events: ['reports'],
+    smtp: { host: 'smtp.relay.cl', port: 587, user: 'u1', passEnv: 'VERGIS_TEST_SMTP_PASS' },
+    from: 'Vergis <v@x.cl>',
+    to: ['ops@x.cl'],
+  }
+  const conEmail = (email: Record<string, unknown>): unknown => parseNotifyConfig({ destinations: [email], report: { at: '07:30' } })
+
+  it('parsea con sus defaults (tls starttls, authMethod plain, id email-smtp-1)', () => {
+    const cfg = parseNotifyConfig({ destinations: [emailOk], report: { at: '07:30' } })
+    expect(cfg.destinations[0]).toEqual({
+      id: 'email-smtp-1',
+      type: 'email-smtp',
+      events: ['reports'],
+      smtp: { host: 'smtp.relay.cl', port: 587, tls: 'starttls', authMethod: 'plain', user: 'u1', passEnv: 'VERGIS_TEST_SMTP_PASS' },
+      from: 'Vergis <v@x.cl>',
+      to: ['ops@x.cl'],
+    })
+  })
+
+  it('forma inválida LANZA nombrando el destino: puerto, to, from, user sin passEnv, auth en claro', () => {
+    expect(() => conEmail({ ...emailOk, smtp: { ...emailOk.smtp, host: '' } })).toThrow(/destino 'email-smtp-1' sin smtp\.host/)
+    expect(() => conEmail({ ...emailOk, smtp: { ...emailOk.smtp, port: 0 } })).toThrow(/con smtp\.port inválido/)
+    expect(() => conEmail({ ...emailOk, smtp: { ...emailOk.smtp, port: 'quinientos' } })).toThrow(/con smtp\.port inválido/)
+    expect(() => conEmail({ ...emailOk, to: [] })).toThrow(/con to inválido/)
+    expect(() => conEmail({ ...emailOk, to: ['no-es-una-direccion'] })).toThrow(/con to inválido/)
+    expect(() => conEmail({ ...emailOk, from: '  ' })).toThrow(/sin from/)
+    expect(() => conEmail({ ...emailOk, smtp: { host: 'h', port: 587, user: 'u1' } })).toThrow(/declara smtp\.user sin smtp\.passEnv/)
+    expect(() => conEmail({ ...emailOk, smtp: { ...emailOk.smtp, tls: 'none' } })).toThrow(/declara auth sobre tls 'none' \(credenciales en claro\)/)
+    expect(() => conEmail({ ...emailOk, smtp: { ...emailOk.smtp, tls: 'ssl' } })).toThrow(/con smtp\.tls inválido 'ssl'/)
+  })
+
+  it('createSinks resuelve la contraseña del ENTORNO al crear el sink y envía por el cliente SMTP inyectado', async () => {
+    process.env['VERGIS_TEST_SMTP_PASS'] = 'clave-del-entorno'
+    try {
+      const cfg = parseNotifyConfig({ destinations: [emailOk], report: { at: '07:30' } })
+      const capt: { cfg: unknown; mail: unknown }[] = []
+      const sinks = createSinks(cfg, undefined, async (c, m) => void capt.push({ cfg: c, mail: m }))
+      const aviso: Notification = {
+        severity: 'warning',
+        title: 'Reporte de ingestión — 2026-08-06',
+        lines: ['a', 'b'],
+        links: [{ label: 'Fuentes e ingestas', url: 'https://x/admin/sources' }],
+        data: {},
+      }
+      await sinks[0]!.send(aviso)
+      expect(capt).toHaveLength(1)
+      expect(capt[0]!.cfg).toEqual({ host: 'smtp.relay.cl', port: 587, tls: 'starttls', auth: { user: 'u1', pass: 'clave-del-entorno', method: 'plain' } })
+      expect(capt[0]!.mail).toEqual({ from: 'Vergis <v@x.cl>', to: ['ops@x.cl'], subject: renderEmailSubject(aviso), text: renderEmailText(aviso) })
+    } finally {
+      delete process.env['VERGIS_TEST_SMTP_PASS']
+    }
+  })
+
+  it('la env de passEnv ausente TUMBA la creación del sink nombrando la variable (boot fail-closed)', () => {
+    delete process.env['VERGIS_TEST_SMTP_PASS']
+    const cfg = parseNotifyConfig({ destinations: [emailOk], report: { at: '07:30' } })
+    expect(() => createSinks(cfg, undefined, async () => {})).toThrow(/destino 'email-smtp-1': la variable VERGIS_TEST_SMTP_PASS no está definida/)
+  })
+
+  it('renderEmailSubject marca el warning con ⚠; renderEmailText es texto plano con los enlaces al pie', () => {
+    const base: Notification = {
+      severity: 'info',
+      title: 'Reporte de ingestión — 2026-08-06 — 3 corrieron · 0 con fallo · 0 no corrieron debiendo',
+      lines: ['período: x → y', 'Corrieron bien (3):'],
+      links: [],
+      data: {},
+    }
+    expect(renderEmailSubject(base)).toBe(base.title)
+    expect(renderEmailSubject({ ...base, severity: 'warning' })).toBe(`⚠ ${base.title}`)
+    expect(renderEmailText(base)).toBe(`${base.title}\n\nperíodo: x → y\nCorrieron bien (3):`)
+    expect(
+      renderEmailText({
+        ...base,
+        links: [
+          { label: 'Fuentes e ingestas', url: 'https://x/admin/sources' },
+          { label: 'Log — Cargas', url: 'https://x/log' },
+        ],
+      }),
+    ).toBe(`${base.title}\n\nperíodo: x → y\nCorrieron bien (3):\n\nFuentes e ingestas: https://x/admin/sources\nLog — Cargas: https://x/log\n`)
   })
 })
