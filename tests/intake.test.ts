@@ -105,7 +105,8 @@ describe('intake · metadata requerida (issue #76)', () => {
     const slot = parseIntakeConfig(META_SLOT)[0]
     expect(slot.meta).toHaveLength(4)
     expect(slot.meta![0]).toEqual({ id: 'empresa_rut', label: 'Empresa (receptor)', type: 'rut', required: true })
-    expect(slot.meta![1].options).toEqual(['V0', 'V1', 'V2'])
+    // #109 · las options se normalizan a { value, label }: sin etiqueta declarada, label = value.
+    expect(slot.meta![1].options).toEqual([{ value: 'V0', label: 'V0' }, { value: 'V1', label: 'V1' }, { value: 'V2', label: 'V2' }])
     expect(slot.meta![2]).toEqual({ id: 'folios', label: 'Folios', type: 'number' })
   })
 
@@ -114,11 +115,11 @@ describe('intake · metadata requerida (issue #76)', () => {
     expect(slot.meta).toBeUndefined()
   })
 
-  it('schema mal formado = fallo ruidoso: type inválido · enum sin options · options_ref no soportado · id dup · required no-bool', () => {
+  it('schema mal formado = fallo ruidoso: type inválido · enum sin options · options_ref sin catálogo · id dup · required no-bool', () => {
     const base = { id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }
     expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'fecha' }] }] })).toThrow(/type inválido/)
     expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'enum' }] }] })).toThrow(/requiere 'options'/)
-    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'enum', options_ref: 'cat' }] }] })).toThrow(/options_ref no soportado/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'enum', options_ref: 'cat' }] }] })).toThrow(/catálogo desconocido/)
     expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'string' }, { id: 'x', label: 'Y', type: 'string' }] }] })).toThrow(/duplicado/)
     expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'x', label: 'X', type: 'string', required: 'si' }] }] })).toThrow(/booleano/)
     expect(() => parseIntakeConfig({ slots: [{ ...base, meta: [{ id: 'BAD-ID', label: 'X', type: 'string' }] }] })).toThrow(/id inválido/)
@@ -286,5 +287,121 @@ describe('intake · metadata derivada del nombre (#95)', () => {
     expect(tokenFromFilename({ patterns: ['Listado * {c}.xlsx'] }, 'Listado EasyDoc VH.xlsx')).toBe('VH')
     // El token no cruza puntos ni espacios: `Listado EasyDoc VH extra.xlsx` no calza el patrón cerrado.
     expect(tokenFromFilename({ patterns: ['Listado EasyDoc {c}.xlsx'] }, 'Listado EasyDoc VH extra.xlsx')).toBe(null)
+  })
+})
+
+// ─── #109 · catálogo de la instancia como fuente de opciones (`options_ref`) ──
+
+/** El caso motivador: `empresa_rut` deja de ser texto libre validado y pasa a ser dropdown de catálogo. */
+const CATALOGO = {
+  catalogs: [
+    {
+      id: 'empresas_gh',
+      label: 'Empresas del grupo',
+      options: [
+        { value: '96835510-4', label: 'Hijuelas S.A.' },
+        { value: '77130310-2', label: 'Agrícola El Tranque' },
+        'OTRO',
+      ],
+    },
+  ],
+  slots: [{
+    id: 'facturas', label: 'Facturas', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/f' },
+    meta: [{ id: 'empresa_rut', label: 'Empresa (receptor)', type: 'enum', required: true, options_ref: 'empresas_gh' }],
+  }],
+}
+
+const conCatalogo = (meta: unknown[], catalogs: unknown[] = CATALOGO.catalogs) => ({
+  catalogs,
+  slots: [{ id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' }, meta }],
+})
+
+describe('intake · catálogo de opciones de la instancia (#109)', () => {
+  it('resuelve la referencia en parse-time: options con labels + optionsRef; la entrada string ≡ value=label', () => {
+    const f = parseIntakeConfig(CATALOGO)[0].meta![0]
+    expect(f.optionsRef).toBe('empresas_gh')
+    expect(f.options).toEqual([
+      { value: '96835510-4', label: 'Hijuelas S.A.' },
+      { value: '77130310-2', label: 'Agrícola El Tranque' },
+      { value: 'OTRO', label: 'OTRO' },
+    ])
+  })
+
+  it('el bloque `catalogs` es opcional: ausente = cero catálogos (no lanza)', () => {
+    expect(parseIntakeConfig({ slots: [] })).toEqual([])
+    expect(parseIntakeConfig({ catalogs: [], slots: [] })).toEqual([])
+    expect(() => parseIntakeConfig({ catalogs: 'no-lista', slots: [] })).toThrow(/`catalogs` debe ser una lista/)
+  })
+
+  it('un catálogo declarado y no referenciado es válido (sin warning)', () => {
+    expect(parseIntakeConfig({ catalogs: CATALOGO.catalogs, slots: [{ id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }] })).toHaveLength(1)
+  })
+
+  it('catálogo mal declarado = fallo ruidoso: sin options · value duplicado · value vacío · id dup · id inválido', () => {
+    const slots = [{ id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }]
+    expect(() => parseIntakeConfig({ catalogs: [{ id: 'c' }], slots })).toThrow(/catálogo 'c' requiere 'options'/)
+    expect(() => parseIntakeConfig({ catalogs: [{ id: 'c', options: [] }], slots })).toThrow(/requiere 'options'/)
+    expect(() => parseIntakeConfig({ catalogs: [{ id: 'c', options: ['A', 'A'] }], slots })).toThrow(/value duplicado 'A'/)
+    expect(() => parseIntakeConfig({ catalogs: [{ id: 'c', options: ['A', { label: 'sin value' }] }], slots })).toThrow(/opción #1 sin 'value'/)
+    expect(() => parseIntakeConfig({ catalogs: [{ id: 'c', options: ['A'] }, { id: 'c', options: ['B'] }], slots })).toThrow(/id de catálogo duplicado 'c'/)
+    expect(() => parseIntakeConfig({ catalogs: [{ id: 'MALO', options: ['A'] }], slots })).toThrow(/catálogo #0 con id inválido/)
+  })
+
+  it('la referencia del campo es fail-closed: desconocida · junto a options · en type no-enum · enum sin ninguna', () => {
+    expect(() => parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'enum', options_ref: 'noexiste' }])))
+      .toThrow(/catálogo desconocido 'noexiste' \(declarados: empresas_gh\)/)
+    expect(() => parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'enum', options_ref: 'noexiste' }], [])))
+      .toThrow(/no hay catálogos declarados/)
+    expect(() => parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'enum', options: ['A'], options_ref: 'empresas_gh' }])))
+      .toThrow(/no ambos/)
+    expect(() => parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'string', options_ref: 'empresas_gh' }])))
+      .toThrow(/'options_ref' solo aplica a type enum/)
+    expect(() => parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'enum' }])))
+      .toThrow(/requiere 'options' \(lista no vacía\) u 'options_ref'/)
+  })
+
+  it('las options inline también admiten { value, label } (mismo parser que el catálogo)', () => {
+    const f = parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'enum', options: [{ value: 'V0', label: 'Borrador' }, 'V1'] }]))[0].meta![0]
+    expect(f.options).toEqual([{ value: 'V0', label: 'Borrador' }, { value: 'V1', label: 'V1' }])
+    expect(f.optionsRef).toBeUndefined()
+    expect(() => parseIntakeConfig(conCatalogo([{ id: 'x', label: 'X', type: 'enum', options: ['A', 'A'] }]))).toThrow(/value duplicado/)
+  })
+
+  it('validateMeta: la pertenencia se mide por `value` — esta es la compuerta del POST, no el <select>', () => {
+    const slot = parseIntakeConfig(CATALOGO)[0]
+    expect(validateMeta(slot, { empresa_rut: '96835510-4' })).toEqual({ ok: true, values: { empresa_rut: '96835510-4' } })
+    // Un HTML manipulado con un RUT fuera del catálogo NO pasa (y el mensaje nombra el catálogo).
+    expect((validateMeta(slot, { empresa_rut: '12345678-5' }) as { error: string }).error)
+      .toBe('«Empresa (receptor)»: \'12345678-5\' no está en el catálogo «empresas_gh».')
+    // El `label` jamás es un valor aceptable: lo que viaja es el value.
+    expect(validateMeta(slot, { empresa_rut: 'Hijuelas S.A.' }).ok).toBe(false)
+  })
+
+  it('validateMeta: el enum inline conserva su mensaje actual (regresión cero)', () => {
+    const slot = parseIntakeConfig(META_SLOT)[0]
+    expect((validateMeta(slot, { empresa_rut: '96835510-4', version: 'V9' }) as { error: string }).error)
+      .toBe('«Versión»: \'V9\' no es una opción válida.')
+  })
+
+  it('from_filename + options_ref: doble compuerta — el valor derivado también debe estar en el catálogo', () => {
+    const doc = {
+      catalogs: CATALOGO.catalogs,
+      slots: [{
+        id: 'documentos', label: 'D', accept: '*.xlsx', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' },
+        meta: [{
+          id: 'empresa_rut', label: 'Empresa (receptor)', type: 'enum', required: true, options_ref: 'empresas_gh',
+          from_filename: { pattern: 'Listado EasyDoc {codigo}.xlsx', catalog: { VH: '96835510-4', IVL: '76526723-4' } },
+        }],
+      }],
+    }
+    const slot = parseIntakeConfig(doc)[0]
+    // Derivado y dentro del catálogo de la instancia → pasa, y el value es lo que viaja al sidecar.
+    expect(validateMeta(slot, {}, 'Listado EasyDoc VH.xlsx')).toEqual({ ok: true, values: { empresa_rut: '96835510-4' } })
+    // Derivado pero FUERA del catálogo → falla nombrando archivo y catálogo.
+    expect((validateMeta(slot, {}, 'Listado EasyDoc IVL.xlsx') as { error: string }).error)
+      .toBe('El valor \'76526723-4\' derivado del nombre \'Listado EasyDoc IVL.xlsx\' no está en el catálogo «empresas_gh» de «Empresa (receptor)».')
+    // Los errores de #95 (nombre fuera de convención / token fuera del catálogo de tokens) siguen intactos.
+    expect((validateMeta(slot, {}, 'Factura VH.xlsx') as { error: string }).error).toMatch(/no declara «Empresa \(receptor\)»/)
+    expect((validateMeta(slot, {}, 'Listado EasyDoc ZZZ.xlsx') as { error: string }).error).toMatch(/no está en el catálogo de «Empresa \(receptor\)»/)
   })
 })
