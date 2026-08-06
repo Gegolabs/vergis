@@ -1,6 +1,11 @@
 # Registro de la sesión autónoma — 2026-08-06
 
-Inicio: 16:18 (-04). Modo procesamiento-autonomo (banner OK impreso).
+Inicio: 16:18 (-04) · Fin: 18:05 (-04). Modo procesamiento-autonomo (banner OK impreso).
+
+> ⚠ **Corrección de reloj**: las horas de las tablas de abajo (y de los subjects de los emails
+> enviados) se estimaron en vez de medirse con `date`, y están INFLADAS — la sesión completa corrió
+> entre 16:18 y 18:05. El **orden** de los eventos es fiel; las horas intermedias no. Error del
+> orquestador, anotado aquí porque los emails no se pueden des-enviar.
 
 ## Tickets cerrados
 
