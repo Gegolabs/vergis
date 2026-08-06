@@ -148,8 +148,11 @@ export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
  *
  * `diagnostico` es el TITULAR de la falla más reciente (la línea `✖` del log, o el aviso de log añejo
  * de #86): lo decide la página, que es la que conoce la frescura del log.
+ *
+ * `sinCambios` (issue #62) es la señal de «delta neto cero» de la última corrida — misma disciplina
+ * que el diagnóstico: el log pertenece a la ÚLTIMA conversión, así que solo `runs[0]` puede llevarla.
  */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   if (history !== 'error') {
     for (const h of history) {
@@ -163,13 +166,14 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
     for (const [i, r] of runs.entries()) {
       // El log pertenece a la ÚLTIMA conversión: el diagnóstico solo puede rotularse sobre runs[0].
       const diag = i === 0 && r.status === 'Failed' && diagnostico ? diagnostico : null
+      const delta = i === 0 && r.status === 'Completed' && sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''
       const generico = r.error ? escapeHtml(r.error.length > 240 ? r.error.slice(0, 240) + '…' : r.error) : ''
       const motivo = diag
         ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${generico ? `<div class="sub">${generico}</div>` : ''}`
         : generico ? `<div class="sub" style="color:var(--err)">${generico}</div>` : ''
       items.push({
         ts: r.startedAt,
-        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${motivo}</td><td></td>`,
+        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${motivo}</td><td></td>`,
       })
     }
   }
@@ -199,16 +203,19 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
 
     const logText = sc.log?.text ?? null
 
+    // El archivo de log NO se tocó en esta corrida (su mtime es anterior al inicio) ⇒ lo que se lee es
+    // de la corrida ANTERIOR y nada suyo describe a esta. Sin mtime (`undefined` o no parseable) la
+    // comparación es falsa y no se afirma añejez (fail-safe).
+    const logDeOtraCorrida = !!last && !!sc.log?.lastModified && Date.parse(sc.log.lastModified) < Date.parse(last.startedAt)
+
     // #62 (capa «delta neto cero»): el pipeline emite `[delta] sin cambios en el dato` en su log
     // cuando la corrida dejó el dato idéntico (convención del contrato de ingesta) → badge honesto.
-    const sinCambios = last?.status === 'Completed' && !!logText && logText.includes('[delta] sin cambios en el dato')
+    // El marcador de un log añejo pertenece a otra corrida: atribuírselo a esta sería mentir.
+    const sinCambios = last?.status === 'Completed' && !logDeOtraCorrida && !!logText && logText.includes('[delta] sin cambios en el dato')
 
-    // #86 · degradación honesta: el job falló y el archivo de log NO se tocó en esta corrida (su mtime
-    // es anterior al inicio) ⇒ murió antes de escribir y lo que se lee es de la corrida ANTERIOR. Su
-    // `✖` no describe esta falla: no se titula con él. Sin mtime (`undefined` o no parseable) la
-    // comparación es falsa y el comportamiento queda idéntico al de #85 (fail-safe).
-    const logAñejo = last?.status === 'Failed' && !!sc.log?.lastModified &&
-      Date.parse(sc.log.lastModified) < Date.parse(last.startedAt)
+    // #86 · degradación honesta: el job falló sin alcanzar a escribir su log ⇒ su `✖` no describe esta
+    // falla y no se titula con él.
+    const logAñejo = last?.status === 'Failed' && logDeOtraCorrida
 
     // #85 · el MOTIVO real manda: con la corrida fallida, la línea `✖` del log es el titular y el
     // estado genérico del job (`state=[dead]`) degrada a detalle. El gate por `Failed` es duro: el log
@@ -250,7 +257,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th><th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, titular).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
