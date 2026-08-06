@@ -48,12 +48,14 @@ import {
   type MasterDataStore,
   type RunRecord,
   type RunStatus,
+  type IntakeUploadStore,
+  type IntakeUploadRow,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
-import { cargasBody, type CargasOps, type SlotCargas, type IntakeUploadEvent } from './admin-cargas'
+import { cargasBody, type CargasOps, type SlotCargas } from './admin-cargas'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
 interface Chrome {
@@ -107,6 +109,11 @@ export interface AdminDeps {
   intakeLog?: (slot: IntakeSlot) => Promise<string | null>
   /** Consola de cargas (issue #58): historial + landing + retiro/reactivación + re-run. Opcional. */
   cargas?: CargasOps
+  /** Registro de cargas (issue #62): dedup por contenido + pre-check. Sin él, ambos degradan a no-op. */
+  intakeUploads?: IntakeUploadStore
+  /** Dispara (fire-and-forget) el indexado retroactivo de `_processed/` del slot si aún no corrió.
+   * Lo implementa el wiring: ni la subida ni el pre-check esperan por él. Opcional. */
+  intakeBackfill?: (slot: IntakeSlot) => void
   /** Grupos gestionados por Mira (sección «Grupos»). Opcional. */
   groupStore?: GroupStore
   /** Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional. */
@@ -207,7 +214,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 
       // ── GESTIÓN DE DOMINIO · /admin/dominio/<id> = MENÚ; /<id>/ingesta y /<id>/intake/<slot> ──
       // El home del dominio es un menú de facetas (tarjetas); cada operación vive en su propia página.
-      const di = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)(?:\/([a-z]+)(?:\/([a-z][a-z0-9_]*))?)?$/)
+      const di = path.match(/^\/admin\/dominio\/([a-z][a-z0-9_-]*)(?:\/([a-z]+)(?:\/([a-z][a-z0-9_]*)(?:\/(precheck))?)?)?$/)
       if (di) {
         const domain = domainById(di[1])
         if (!domain) {
@@ -234,7 +241,13 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           redirect(res, `/admin/dominio/${domain.id}/frescura`)
           return true
         }
-        if (section === 'intake' && slotId && req.method === 'POST') {
+        // Pre-check de duplicados (issue #62): CONSULTIVO — viaja con hashes, no con archivos, y se
+        // responde antes de que los bytes salgan del browser. Jamás rechaza por duplicado.
+        if (section === 'intake' && slotId && di[4] === 'precheck' && req.method === 'POST') {
+          await handlePrecheck(deps, domain, slotId, req, res, token)
+          return true
+        }
+        if (section === 'intake' && slotId && !di[4] && req.method === 'POST') {
           await handleIntake(deps, nav, domain, slotId, req, res, token, email)
           return true
         }
@@ -413,6 +426,58 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 }
 
 // ─── Ingesta de archivos (gestión de dominio) ────────────────────────────────
+/**
+ * Cómo se NOMBRA la carga original en el aviso de duplicado (issue #62).
+ *
+ * Formato ya en producción para las cargas vividas (`<filename> · <YYYY-MM-DD HH:MM> UTC`): el audit
+ * log lo trae escrito así desde 0.7.0 y no se re-formatea. Para una fila derivada del indexado
+ * retroactivo de `_processed/` lo único que se sabe es que el archivo YA fue procesado, y eso dice.
+ */
+export function dupLabel(row: Pick<IntakeUploadRow, 'filename' | 'uploadedAt' | 'origen'>): string {
+  const cuando = `${row.uploadedAt.slice(0, 16).replace('T', ' ')} UTC`
+  return row.origen === 'retro' ? `${row.filename} · procesado el ${cuando}` : `${row.filename} · ${cuando}`
+}
+
+const SHA_RE = /^[0-9a-f]{64}$/
+
+/**
+ * Pre-check de duplicados por hash (issue #62): el browser calcula el SHA-256 de cada archivo y
+ * pregunta ANTES de subir. Consultivo por contrato — sin store responde `{dups:[]}` y el form se
+ * envía sin aviso previo; el server siempre recalcula el sha con sus propios bytes al recibir.
+ */
+async function handlePrecheck(
+  deps: AdminDeps,
+  domain: DomainDecl,
+  slotId: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+): Promise<void> {
+  const slot = (deps.intakeSlots ?? []).find((s) => s.id === slotId && (s.domain ?? '') === domain.id)
+  const json = (code: number, body: unknown): void => {
+    res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify(body))
+  }
+  const f = await readForm(req)
+  requireCsrf(f, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
+  if (!slot) {
+    json(404, { dups: [] })
+    return
+  }
+  if (!deps.intakeUploads) {
+    json(200, { dups: [] })
+    return
+  }
+  deps.intakeBackfill?.(slot) // primer contacto con el slot: indexa `_processed/` en background
+  const shas = [...new Set((f['shas'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter((s) => SHA_RE.test(s)))].slice(0, 50)
+  const dups: { sha256: string; filename: string; uploadedAt: string; origen: string }[] = []
+  for (const sha of shas) {
+    const prev = await deps.intakeUploads.findUploadBySha(slot.id, sha).catch(() => null)
+    if (prev) dups.push({ sha256: sha, filename: prev.filename, uploadedAt: prev.uploadedAt, origen: prev.origen })
+  }
+  json(200, { dups })
+}
+
 async function handleIntake(
   deps: AdminDeps,
   nav: Chrome,
@@ -435,11 +500,22 @@ async function handleIntake(
     redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: no se adjuntó ningún archivo.')}`)
     return
   }
+  deps.intakeBackfill?.(slot) // el indexado retroactivo de `_processed/` converge solo, en background
+  // Identidad del CONTENIDO (issue #62): el sha se calcula una vez por archivo y acompaña a la carga
+  // en todos sus registros — incluidos los rechazos, que también son historia del slot.
+  const shas = uploads.map((u) => createHash('sha256').update(u.bytes).digest('hex'))
+  const uploadRow = (i: number, ok: boolean, extra: Partial<Omit<IntakeUploadRow, 'id'>> = {}): Omit<IntakeUploadRow, 'id'> => ({
+    slotId: slot.id, filename: uploads[i]!.filename, sha256: shas[i]!, bytes: uploads[i]!.bytes.length,
+    uploadedBy: by, uploadedAt: new Date().toISOString(), ok, triggered: false, origen: 'upload', ...extra,
+  })
+  const registrar = async (row: Omit<IntakeUploadRow, 'id'>): Promise<number | undefined> =>
+    deps.intakeUploads ? await deps.intakeUploads.recordUpload(row).catch(() => undefined) : undefined
   // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
   // dejar la semana a medio cargar). El SJD failure-safe espera el set consistente, no archivos sueltos.
-  for (const u of uploads) {
+  for (const [i, u] of uploads.entries()) {
     const v = validateUpload(slot, u.filename, u.bytes.length)
     if (!v.ok) {
+      await registrar(uploadRow(i, false, { error: v.error }))
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
       redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + v.error)}`)
       return
@@ -453,22 +529,15 @@ async function handleIntake(
   const submittedMeta: Record<string, string> = {}
   for (const [k, v] of Object.entries(fields)) if (k.startsWith('meta_')) submittedMeta[k.slice('meta_'.length)] = v
   const metaPorArchivo: { values: Record<string, string>; verify?: Record<string, string> }[] = []
-  for (const u of uploads) {
+  for (const [i, u] of uploads.entries()) {
     const metaCheck = validateMeta(slot, submittedMeta, u.filename)
     if (!metaCheck.ok) {
+      await registrar(uploadRow(i, false, { error: metaCheck.error }))
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: metaCheck.error })
       redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + metaCheck.error)}`)
       return
     }
     metaPorArchivo.push({ values: metaCheck.values, ...(metaCheck.verify ? { verify: metaCheck.verify } : {}) })
-  }
-  // Dedup por CONTENIDO (issue #62): SHA-256 de los bytes vs cargas previas del slot — el NOMBRE no
-  // participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
-  // re-procesar idéntico es legítimo (re-materialización); lo que se elimina es la sorpresa.
-  const previas = deps.cargas ? await deps.cargas.history(slot, 500).catch(() => [] as IntakeUploadEvent[]) : []
-  const dupDe = (sha: string): string | null => {
-    const p = previas.find((e) => e.ok && e.sha256 === sha)
-    return p ? `${p.filename} · ${p.ts.slice(0, 16).replace('T', ' ')} UTC` : null
   }
   // UN SOLO disparo por LOTE (no uno por archivo: N triggers = N corridas = throttling de capacidad).
   const willTrigger = !!(slot.trigger && deps.intake.runNow)
@@ -478,13 +547,19 @@ async function handleIntake(
   const uploadedAt = new Date().toISOString()
   // Aterriza cada crudo en la landing zone OneLake (staging). El pipeline/SJD lee de ahí y transforma.
   const duplicados: string[] = []
+  // Dedup por CONTENIDO (issue #62): el sha vs las cargas previas del slot en el registro — el NOMBRE
+  // no participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
+  // re-procesar idéntico es legítimo (re-materialización); lo que se elimina es la sorpresa.
+  // Check-then-insert POR ARCHIVO y en orden: dos idénticos del MISMO lote también se detectan.
   for (const [i, u] of uploads.entries()) {
-    const sha256 = createHash('sha256').update(u.bytes).digest('hex')
-    const dupOf = dupDe(sha256)
+    const sha256 = shas[i]!
+    const previa = deps.intakeUploads ? await deps.intakeUploads.findUploadBySha(slot.id, sha256).catch(() => null) : null
+    const dupOf = previa ? dupLabel(previa) : null
     if (dupOf) duplicados.push(`«${u.filename}» es idéntico a ${dupOf}`)
     const m = metaPorArchivo[i]!
     const sidecar = hasMeta ? buildSidecar(slot.id, m.values, by, uploadedAt, m.verify) : undefined
     await deps.intake.put(slot.target, u.filename, u.bytes, sidecar)
+    await registrar(uploadRow(i, true, { uploadedAt, triggered: willTrigger, ...(previa ? { dupOfId: previa.id } : {}) }))
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}) })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
@@ -835,6 +910,41 @@ function metaFieldsHtml(slot: IntakeSlot): string {
   }).join('')
 }
 
+/**
+ * Pre-check de duplicados en el CLIENTE (issue #62), sin librerías: antes de que los bytes salgan del
+ * browser calcula el SHA-256 de cada archivo (`crypto.subtle`), consulta el endpoint `/precheck` y —si
+ * el contenido ya fue procesado— pregunta «¿Continuar?». Preguntar después de subir sería teatro: la
+ * conversión ya estaría corriendo.
+ *
+ * FAIL-SAFE por contrato: sin `crypto.subtle`, con el fetch caído o lento (3 s), el form se envía SIN
+ * aviso previo. El server recalcula el sha con sus propios bytes y el aviso post-hoc del redirect es
+ * la red de seguridad. El pre-check nunca bloquea una carga: aceptar es siempre posible.
+ */
+const PRECHECK_JS = `(function(f){
+  if(!f||f.dataset.pc)return; f.dataset.pc='1';
+  f.addEventListener('submit',function(ev){
+    if(f.dataset.go){f.dataset.go='';return}
+    var inp=f.querySelector('input[type=file]'); var fs=inp&&inp.files?[].slice.call(inp.files):[];
+    if(!fs.length||!(window.crypto&&crypto.subtle&&crypto.subtle.digest))return;
+    ev.preventDefault();
+    var send=function(){f.dataset.go='1';f.submit()};
+    var hex=function(b){return [].map.call(new Uint8Array(b),function(x){return ('0'+x.toString(16)).slice(-2)}).join('')};
+    Promise.all(fs.map(function(x){return x.arrayBuffer().then(function(b){return crypto.subtle.digest('SHA-256',b)}).then(hex)}))
+      .then(function(shas){
+        var body=new URLSearchParams(); body.set('_csrf',f._csrf.value); body.set('shas',shas.join(','));
+        return fetch(f.action+'/precheck',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:body,signal:AbortSignal.timeout(3000)})
+          .then(function(r){return r.json()}).then(function(j){
+            var by={}; (j.dups||[]).forEach(function(d){by[d.sha256]=d});
+            for(var i=0;i<shas.length;i++){var d=by[shas[i]]; if(!d)continue;
+              var cuando=String(d.uploadedAt||'').slice(0,16).replace('T',' ')+' UTC';
+              if(!confirm('«'+fs[i].name+'» es idéntico a «'+d.filename+'», procesado el '+cuando+'; re-procesarlo no cambiará el dato. ¿Continuar?'))return;
+            }
+            send();
+          })
+      }).catch(send);
+  });
+})(document.currentScript.previousElementSibling)`
+
 /** Formulario compacto de carga manual de un slot (mismo write-path que el intake). */
 function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
   return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:320px">
@@ -843,7 +953,7 @@ function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
        ${metaFieldsHtml(slot)}
        <button class="add">Subir</button>
        ${slot.accept ? `<div class="sub" style="flex-basis:100%">patrón: <code>${escapeHtml(slot.accept)}</code> · máx. ${Math.round(slotMaxBytes(slot) / (1024 * 1024))} MB c/u</div>` : ''}
-     </form>`
+     </form><script>${PRECHECK_JS}</script>`
 }
 
 /** Consola de CARGAS de un dominio (issue #58): arma los datos por slot (paralelo, tolerante a

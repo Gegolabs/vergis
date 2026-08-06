@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Readable } from 'node:stream'
+import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAdmin, type AdminHandler } from '../server/admin'
 import { timeline, esResiduo, lastCompletedStart, diagnosticoDeFalla, LOG_ANEJO_TITULAR, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
-import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, type RunRecord, type OneLakeEntry } from '@vergis/capabilities'
+import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, SqliteGovernanceStore, type RunRecord, type OneLakeEntry, type IntakeUploadStore } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
 const SECRET = 'test-secret'
@@ -52,20 +53,21 @@ function ops(over: Partial<CargasOps> = {}): CargasOps {
   }
 }
 
-function mkAdmin(cargas: CargasOps, audit: LogEventInput[] = []): Promise<AdminHandler> {
-  return (async () =>
-    createAdmin({
-      entities: ENTITIES,
-      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
-      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
-      domains: DOMAINS,
-      intakeSlots: SLOTS,
-      intake: { put: async () => {} },
-      cargas,
-      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
-      audit: (e) => audit.push(e),
-      secret: SECRET,
-    }))()
+/** El arnés: el registro de cargas (#62) es parte del wiring normal, así que va inyectado. */
+async function mkAdmin(cargas: CargasOps, audit: LogEventInput[] = [], intakeUploads?: IntakeUploadStore): Promise<AdminHandler> {
+  return createAdmin({
+    entities: ENTITIES,
+    mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+    adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+    domains: DOMAINS,
+    intakeSlots: SLOTS,
+    intake: { put: async () => {} },
+    cargas,
+    intakeUploads: intakeUploads ?? (await SqliteGovernanceStore.open(null, {})),
+    identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+    audit: (e) => audit.push(e),
+    secret: SECRET,
+  })
 }
 
 function mockReq(method: string, url: string, user: string, body = '', ct?: string): IncomingMessage {
@@ -323,35 +325,184 @@ const mockReqBuf = (method: string, url: string, user: string, body: Buffer, ct:
   return r
 }
 
-describe('admin-cargas · dedup por contenido (issue #62)', () => {
-  it('carga idéntica a una previa → audit con sha256 + dupOf y aviso en el redirect (sin bloquear)', async () => {
+/** Multipart con VARIOS archivos (lote): el dedup interno del lote se juega acá. */
+const mpMany = (fields: Record<string, string>, files: { filename: string; bytes: Buffer }[]): { body: Buffer; ct: string } => {
+  const B = 'testboundary62'
+  const parts: Buffer[] = []
+  for (const [k, v] of Object.entries(fields)) parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`))
+  for (const f of files) {
+    parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="file"; filename="${f.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`), f.bytes, Buffer.from('\r\n'))
+  }
+  parts.push(Buffer.from(`--${B}--\r\n`))
+  return { body: Buffer.concat(parts), ct: `multipart/form-data; boundary=${B}` }
+}
+const shaOf = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+const subir = async (admin: AdminHandler, token: string, filename: string, bytes: Buffer) => {
+  const mp = mpOne({ _csrf: token }, filename, bytes)
+  return go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
+}
+
+describe('admin-cargas · dedup por contenido contra el registro de cargas (issue #62)', () => {
+  it('(a) mismo byte-a-byte con NOMBRE distinto → dupOf en el audit, dup_of en el store, aviso sin bloquear', async () => {
     const bytes = Buffer.from('mismo-contenido-exacto')
-    const { createHash } = await import('node:crypto')
-    const sha = createHash('sha256').update(bytes).digest('hex')
     const audit: LogEventInput[] = []
-    const o = ops({ history: async () => [{ ...HISTORY[0], sha256: sha }] })
-    const admin = await mkAdmin(o, audit)
+    const store = await SqliteGovernanceStore.open(null, {})
+    const admin = await mkAdmin(ops(), audit, store)
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
-    const mp = mpOne({ _csrf: token }, 'copia (1) (1).xlsx', bytes)
-    const res = await go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
-    expect(res.statusCode).toBe(303) // avisa, NO bloquea: la carga entra igual
-    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('idéntico a saldos VH WK28.xlsx')
-    const ev = audit.find((e) => (e as { type?: string }).type === 'intake') as { sha256?: string; dupOf?: string }
-    expect(ev.sha256).toBe(sha)
-    expect(ev.dupOf).toContain('saldos VH WK28.xlsx')
+    const primera = await subir(admin, token, 'saldos VH WK28.xlsx', bytes)
+    expect(decodeURIComponent(primera.headers['location'] ?? '')).not.toContain('idéntico')
+    const segunda = await subir(admin, token, 'copia (1) (1).xlsx', bytes)
+    expect(segunda.statusCode).toBe(303) // avisa, NO bloquea: la carga entra igual
+    expect(decodeURIComponent(segunda.headers['location'] ?? '')).toContain('idéntico a saldos VH WK28.xlsx')
+    const evs = audit.filter((e) => (e as { type?: string }).type === 'intake') as { sha256?: string; dupOf?: string }[]
+    expect(evs[0].sha256).toBe(shaOf(bytes))
+    expect(evs[0].dupOf).toBeUndefined()
+    expect(evs[1].dupOf).toContain('saldos VH WK28.xlsx')
+    const rows = await store.listUploads('saldos', 10)
+    expect(rows).toHaveLength(2)
+    const original = rows.find((r) => r.filename === 'saldos VH WK28.xlsx')!
+    expect(rows.find((r) => r.filename === 'copia (1) (1).xlsx')!.dupOfId).toBe(original.id)
+    await store.close()
   })
 
-  it('carga con contenido NUEVO → sha256 registrado, sin dupOf ni aviso', async () => {
+  it('(b) contenido distinto → sha256 registrado, sin dupOf ni aviso', async () => {
     const audit: LogEventInput[] = []
-    const o = ops({ history: async () => [{ ...HISTORY[0], sha256: 'otra-cosa' }] })
-    const admin = await mkAdmin(o, audit)
+    const store = await SqliteGovernanceStore.open(null, {})
+    const admin = await mkAdmin(ops(), audit, store)
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
-    const mp = mpOne({ _csrf: token }, 'nuevo.xlsx', Buffer.from('contenido-distinto'))
-    const res = await go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
+    await subir(admin, token, 'previo.xlsx', Buffer.from('contenido-previo'))
+    const res = await subir(admin, token, 'nuevo.xlsx', Buffer.from('contenido-distinto'))
     expect(decodeURIComponent(res.headers['location'] ?? '')).not.toContain('idéntico')
-    const ev = audit.find((e) => (e as { type?: string }).type === 'intake') as { sha256?: string; dupOf?: string }
+    const ev = audit.filter((e) => (e as { type?: string }).type === 'intake')[1] as { sha256?: string; dupOf?: string }
     expect(ev.sha256).toHaveLength(64)
     expect(ev.dupOf).toBeUndefined()
+    expect((await store.listUploads('saldos', 10)).every((r) => r.dupOfId === undefined)).toBe(true)
+    await store.close()
+  })
+
+  it('(c) el duplicado contra una fila del indexado retroactivo dice «procesado el»', async () => {
+    const bytes = Buffer.from('lo-que-ya-estaba-en-_processed')
+    const audit: LogEventInput[] = []
+    const store = await SqliteGovernanceStore.open(null, {})
+    await store.recordUpload({
+      slotId: 'saldos', filename: 'saldos VH WK25.xlsx', sha256: shaOf(bytes), bytes: bytes.length,
+      uploadedBy: '(retro: _processed)', uploadedAt: '2026-06-22T11:03:00Z', ok: true, triggered: false, origen: 'retro',
+    })
+    const admin = await mkAdmin(ops(), audit, store)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await subir(admin, token, 'saldos VH WK25 (1).xlsx', bytes)
+    const msg = decodeURIComponent(res.headers['location'] ?? '')
+    expect(msg).toContain('idéntico a saldos VH WK25.xlsx · procesado el 2026-06-22 11:03 UTC')
+    const ev = audit.find((e) => (e as { type?: string }).type === 'intake') as { dupOf?: string }
+    expect(ev.dupOf).toContain('procesado el')
+    await store.close()
+  })
+
+  it('(d) dos archivos IDÉNTICOS en el mismo lote: el segundo ve al primero ya registrado', async () => {
+    const bytes = Buffer.from('mismo-contenido-en-el-lote')
+    const audit: LogEventInput[] = []
+    const store = await SqliteGovernanceStore.open(null, {})
+    const admin = await mkAdmin(ops(), audit, store)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const mp = mpMany({ _csrf: token }, [{ filename: 'a.xlsx', bytes }, { filename: 'a (1).xlsx', bytes }])
+    const res = await go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('«a (1).xlsx» es idéntico a a.xlsx')
+    const rows = await store.listUploads('saldos', 10)
+    expect(rows.find((r) => r.filename === 'a (1).xlsx')!.dupOfId).toBe(rows.find((r) => r.filename === 'a.xlsx')!.id)
+    await store.close()
+  })
+
+  it('(e) precheck: JSON con la carga original del sha duplicado; sha desconocido → dups vacío; CSRF inválido → 403', async () => {
+    const bytes = Buffer.from('contenido-ya-procesado')
+    const store = await SqliteGovernanceStore.open(null, {})
+    const admin = await mkAdmin(ops(), [], store)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    await subir(admin, token, 'saldos VH WK28.xlsx', bytes)
+    const sha = shaOf(bytes)
+    const pc = await go(admin, mockReq('POST', '/admin/dominio/cartera/intake/saldos/precheck', STEWARD, `_csrf=${token}&shas=${sha}`, 'application/x-www-form-urlencoded'))
+    expect(pc.statusCode).toBe(200)
+    expect(pc.headers['content-type']).toContain('application/json')
+    const j = JSON.parse(pc.body) as { dups: { sha256: string; filename: string; uploadedAt: string; origen: string }[] }
+    expect(j.dups).toHaveLength(1)
+    expect(j.dups[0]).toMatchObject({ sha256: sha, filename: 'saldos VH WK28.xlsx', origen: 'upload' })
+    expect(Date.parse(j.dups[0].uploadedAt)).not.toBeNaN()
+    // sha desconocido (y basura, que se ignora sin romper) → nada que avisar
+    const vacio = await go(admin, mockReq('POST', '/admin/dominio/cartera/intake/saldos/precheck', STEWARD, `_csrf=${token}&shas=${'f'.repeat(64)},basura`, 'application/x-www-form-urlencoded'))
+    expect(JSON.parse(vacio.body)).toEqual({ dups: [] })
+    const malCsrf = await go(admin, mockReq('POST', '/admin/dominio/cartera/intake/saldos/precheck', STEWARD, `_csrf=nope&shas=${sha}`, 'application/x-www-form-urlencoded'))
+    expect(malCsrf.statusCode).toBe(403)
+    await store.close()
+  })
+
+  it('(f) la subida NUNCA se rechaza por duplicada: 303 siempre, y el archivo aterriza igual', async () => {
+    const bytes = Buffer.from('re-materializacion-legitima')
+    const puestos: string[] = []
+    const store = await SqliteGovernanceStore.open(null, {})
+    const admin = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      intakeSlots: SLOTS,
+      intake: { put: async (_t, filename) => { puestos.push(filename) } },
+      cargas: ops(),
+      intakeUploads: store,
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    for (const n of ['uno.xlsx', 'dos.xlsx', 'tres.xlsx']) expect((await subir(admin, token, n, bytes)).statusCode).toBe(303)
+    expect(puestos).toEqual(['uno.xlsx', 'dos.xlsx', 'tres.xlsx'])
+    await store.close()
+  })
+
+  it('sin store inyectado el flujo degrada: sube igual, sin dedup, y el precheck responde dups vacío', async () => {
+    const audit: LogEventInput[] = []
+    const admin = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      cargas: ops(),
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: (e) => audit.push(e),
+      secret: SECRET,
+    })
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const bytes = Buffer.from('sin-store')
+    await subir(admin, token, 'a.xlsx', bytes)
+    const res = await subir(admin, token, 'a (1).xlsx', bytes)
+    expect(res.statusCode).toBe(303)
+    expect(decodeURIComponent(res.headers['location'] ?? '')).not.toContain('idéntico')
+    const pc = await go(admin, mockReq('POST', '/admin/dominio/cartera/intake/saldos/precheck', STEWARD, `_csrf=${token}&shas=${shaOf(bytes)}`, 'application/x-www-form-urlencoded'))
+    expect(JSON.parse(pc.body)).toEqual({ dups: [] })
+  })
+
+  it('una subida rechazada por validación queda registrada (ok=0, con su motivo)', async () => {
+    const store = await SqliteGovernanceStore.open(null, {})
+    const admin = await mkAdmin(ops(), [], store)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await subir(admin, token, 'gigante.xlsx', Buffer.alloc(2048)) // maxBytes del slot = 1024
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Error')
+    const rows = await store.listUploads('saldos', 10)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].ok).toBe(false)
+    expect(rows[0].error).toBeTruthy()
+    // Un rechazo NO es la «original» de nadie: el dedup no lo cita.
+    expect(await store.findUploadBySha('saldos', rows[0].sha256)).toBeNull()
+    await store.close()
+  })
+
+  it('el form trae el pre-check en el cliente (SHA-256 + POST al /precheck del slot)', async () => {
+    const admin = await mkAdmin(ops())
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(body).toContain("crypto.subtle.digest('SHA-256'")
+    expect(body).toContain("f.action+'/precheck'")
+    expect(body).toContain('¿Continuar?')
   })
 
   it('timeline marca la carga duplicada con el aviso', () => {
@@ -359,11 +510,48 @@ describe('admin-cargas · dedup por contenido (issue #62)', () => {
     expect(t[0].html).toContain('contenido idéntico a original.xlsx')
     expect(t[0].html).toContain('re-procesarlo no cambia el dato')
   })
+})
 
-  it('badge «sin cambios en el dato» cuando el log de la corrida Completed trae el marcador [delta]', async () => {
-    const admin = await mkAdmin(ops({ log: mkLog('[ingest] DONE commit\n[delta] sin cambios en el dato') }))
-    const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
-    expect(res.body).toContain('sin cambios en el dato')
+// ─── «Delta neto cero»: la señal de que la corrida no cambió el dato (issue #62) ──
+/** La tabla de Actividad, aislada del resto de la página. */
+const actividadDe = (html: string): string => (html.split('<h3 class="sub">Actividad</h3>')[1] ?? '').split('<h3 class="sub">Landing')[0]
+
+describe('admin-cargas · delta neto cero (issue #62)', () => {
+  const LOG_DELTA = '[ingest] ✔ DONE commit W28: 7626 filas\n[delta] sin cambios en el dato'
+
+  it('(a) Completed + marcador [delta] → señalado en «Última conversión» Y en la fila de Conversión del timeline', async () => {
+    const admin = await mkAdmin(ops({ log: mkLog(LOG_DELTA, '2026-07-13T16:20:00Z') })) // RUNS[0] arranca 16:17:47
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(antesDelLog(body)).toContain('sin cambios en el dato')
+    expect(actividadDe(body)).toContain('sin cambios en el dato')
+  })
+
+  it('(b) log AÑEJO (mtime anterior al inicio de la corrida) → en ninguna: el marcador es de otra corrida', async () => {
+    const admin = await mkAdmin(ops({ log: mkLog(LOG_DELTA, '2026-07-01T10:00:00Z') }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(antesDelLog(body)).not.toContain('sin cambios en el dato')
+    expect(actividadDe(body)).not.toContain('sin cambios en el dato')
+  })
+
+  it('(c) corrida Failed con el marcador en el log → en ninguna', async () => {
+    const admin = await mkAdmin(ops({ runs: async () => RUNS_FALLIDA, log: mkLog(LOG_DELTA, '2026-07-14T09:00:10Z') }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(antesDelLog(body)).not.toContain('sin cambios en el dato')
+    expect(actividadDe(body)).not.toContain('sin cambios en el dato')
+  })
+
+  it('(d) sin mtime → fail-safe: el marcador vale (no se afirma añejez)', async () => {
+    const admin = await mkAdmin(ops({ log: mkLog(LOG_DELTA) }))
+    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(antesDelLog(body)).toContain('sin cambios en el dato')
+    expect(actividadDe(body)).toContain('sin cambios en el dato')
+  })
+
+  it('timeline: la señal solo puede ir en runs[0] Completed', () => {
+    expect(timeline([], RUNS, 30, null, true)[0].html).toContain('sin cambios en el dato')
+    expect(timeline([], RUNS, 30, null, true)[1].html).not.toContain('sin cambios en el dato')
+    expect(timeline([], RUNS_FALLIDA, 30, null, true)[0].html).not.toContain('sin cambios en el dato') // Failed
+    expect(timeline([], RUNS, 30, null, false)[0].html).not.toContain('sin cambios en el dato')
   })
 })
 

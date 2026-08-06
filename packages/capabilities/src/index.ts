@@ -109,6 +109,7 @@ export { effectiveRole, canOpen, canCollaborate, canGovern, rankOf, higher } fro
 export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } from './pi-authz'
 export type { SourceRow, ProcessRow, EngineRef, SourceRegistryStore } from './governance-store'
 export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } from './governance-store'
+export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
 export { canTransition, isMirandaState, MIRANDA_STATES } from './miranda-session'
 export type { MirandaSessionState, MirandaMessageRole, MirandaArtifactKind } from './miranda-session'
 export {
