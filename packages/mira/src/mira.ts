@@ -186,12 +186,22 @@ export class MiraBotlet implements Botlet {
     const asOfParam = ctx.params?.['asOf'] as PiAsOfParam | undefined
     if (notasCtx?.resolver) await applyNotas(resolved, notasCtx.resolver)
 
+    // MODO PRINT (issue #65 · D4): el mismo render, para PAPEL. Lo pide el llamador (el endpoint
+    // `/<slug>/pdf` del serving), nunca el spec — el PDF es un canal de descarga de la plataforma.
+    // `pdfUrl` es su contracara: la URL de descarga que la bandeja ofrece cuando la feature está ON.
+    const print = ctx.params?.['print'] === true
+    const pdfUrl = ctx.params?.['pdfUrl'] as string | undefined
+
     // 5a · Interacción declarada acotada (doc 2 §10): si hay filtro, se materializan
     // los datasets para que la Faceta filtre client-side, sin nuevas queries.
     let interactive: { datasets: Record<string, Record<string, unknown>[]>; filters: NonNullable<NonNullable<MiraSpec['interactions']>['filters']> } | undefined
     // En multi-vista, un filtro solo aplica a la página cuyo dataset se recuperó.
     const filters = (spec.interactions?.filters ?? []).filter((f) => !isMulti || f.dataset in results)
-    if (filters.length > 0) {
+    if (print && filters.length > 0) {
+      // En papel no hay quién filtre: los datasets materializados son munición del script client-side.
+      // No se materializan (el documento no engorda con payloads que nadie va a usar).
+      host.log({ type: 'mira-interaction-skipped', botletId: this.id, reason: 'print' })
+    } else if (filters.length > 0) {
       // Tope de materialización: los datasets se embeben COMPLETOS en el HTML para el filtrado
       // client-side. Sin cota, un dataset grande produce un documento de decenas de MB. Superado el
       // tope, NO se materializa (render sin facetas; la tabla sigue interactiva por su runtime).
@@ -209,8 +219,9 @@ export class MiraBotlet implements Botlet {
     }
 
     // 6 · Renders declarados. Soportados: `html` (el documento servido) y `csv` (artefacto en memoria
-    // con las tablas del árbol resuelto — ver render-csv-piece). PDF NO se implementa como render
-    // server-side: se cubre con el print-to-PDF del navegador (acción de la bandeja).
+    // con las tablas del árbol resuelto — ver render-csv-piece). PDF no es un formato de DELIVERY del
+    // spec: la plataforma ofrece «Descargar PDF» server-side (endpoint + sidecar HTML→PDF) sobre este
+    // mismo render en modo print — un PI no lo declara, lo ofrece la instancia que monta el sidecar.
     const artifacts: MiraOutput['artifacts'] = []
     const renders = spec.delivery?.render ?? [{ format: 'html', target: 'web' }]
     let html = ''
@@ -231,7 +242,7 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasCtx?.render, asOfParam)
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasCtx?.render, asOfParam, print, pdfUrl)
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -243,7 +254,9 @@ export class MiraBotlet implements Botlet {
         error: 'mira/render',
         code: 'no-html-output',
         message: `Ningún render de delivery.render produjo HTML (formatos: ${renders.map((r) => r.format).join(', ')}).`,
-        remediation: 'Declarar al menos un render con format: html (csv es adicional; PDF = print-to-PDF del navegador).',
+        remediation:
+          'Declarar al menos un render con format: html (csv es adicional; el PDF no es formato de delivery: ' +
+          'la plataforma lo ofrece como descarga server-side sobre este mismo render).',
       })
     }
 
@@ -454,6 +467,8 @@ export class MiraBotlet implements Botlet {
     identity: IdentityContext,
     notasRender?: unknown,
     asOfParam?: PiAsOfParam,
+    print?: boolean,
+    pdfUrl?: string,
   ): Promise<string> {
     // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
     const { theme, palette } = resolveTheme(resolved, themeOverride)
@@ -478,6 +493,8 @@ export class MiraBotlet implements Botlet {
         notas: notasRender,
         filters,
         fltCarry,
+        print,
+        pdfUrl,
       },
       identity,
     ))

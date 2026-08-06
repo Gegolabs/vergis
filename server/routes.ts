@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse, RequestListener } from 'node:http
 import type { GateHeaders, IdentityContext } from '@vergis/botler'
 import { navFromUrl } from './nav'
 import { fail } from './http-util'
+import { contentDisposition, PdfUnavailableError } from './pdf'
 import type { Report } from './discovery'
 import type { AdminHandler } from './admin'
 import type { PiConfigHandler } from './pi-config'
@@ -32,6 +33,13 @@ export interface RouteDeps {
   identityFor: (headers: GateHeaders) => IdentityContext
   /** Render por-consumidor de un PI (con RLS). */
   renderReport: (report: Report, headers: GateHeaders, nav: ReturnType<typeof navFromUrl>) => Promise<string>
+  /**
+   * «Descargar PDF» server-side (issue #65): el MISMO render por-consumidor, en modo print, pasado al
+   * sidecar de conversión. AUSENTE = la feature está apagada (sin `VERGIS_PDF_SERVICE_URL`) y la ruta
+   * `/<slug>/pdf` NI SIQUIERA se intercepta: cae al slug-lookup y responde el 404 de siempre. La
+   * superficie sin la env es idéntica a la de antes del issue.
+   */
+  renderPdf?: (report: Report, headers: GateHeaders, nav: ReturnType<typeof navFromUrl>) => Promise<{ pdf: Uint8Array; filename: string }>
   /** PIs visibles para la identidad (ACL de artefacto si está encendida; si no, acceso a dato). */
   indexReports: (all: Report[], identity: IdentityContext) => Promise<Report[]>
   /** HTML de la página índice (título + avatar + gobierno por PI). */
@@ -141,6 +149,43 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
           sendHtml(await deps.renderIndexPage(visible, identity))
         })
         .catch((e) => fail(res, 500, errMsg(e)))
+      return
+    }
+    // DESCARGA PDF (#65 · D7) — `/<slug>/pdf` con EXACTAMENTE los gates de la página del PI: mismo
+    // token de gate (arriba), mismo `ready`, mismo `piBlocked`, mismo `canOpenPi`, misma identidad al
+    // render. Sin `renderPdf` inyectado el match NO intercepta (la URL sigue al slug-lookup → 404).
+    // Sin CSRF: es un GET de descarga, no muta estado.
+    const pdfMatch = url.match(/^\/([^/]+)\/pdf$/)
+    if (pdfMatch && deps.renderPdf) {
+      const renderPdf = deps.renderPdf
+      const pdfReport = all.find((r) => r.slug === pdfMatch[1].toLowerCase())
+      if (!pdfReport) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
+      const pdfBlocked = blockedReason(pdfReport)
+      if (pdfBlocked) return fail(res, 503, `Producto de Información no disponible: ${pdfBlocked}`)
+      deps
+        .canOpenPi(pdfReport, identity)
+        .then(async (allowed) => {
+          if (!allowed) return fail(res, 403, `No tienes acceso a este Producto de Información. <a href="/">Ver disponibles</a>`)
+          const { pdf, filename } = await renderPdf(pdfReport, req.headers as GateHeaders, navFromUrl(req.url ?? '/'))
+          res.writeHead(200, {
+            'content-type': 'application/pdf',
+            'content-disposition': contentDisposition(filename),
+            'cache-control': 'no-store',
+          })
+          res.end(Buffer.from(pdf))
+        })
+        .catch((e) => {
+          // El detalle técnico (URL interna del sidecar, status, causa) va al LOG, nunca al cuerpo.
+          if (e instanceof PdfUnavailableError) {
+            console.error(`[vergis-rls] PDF no disponible (${pdfReport.slug}): ${e.detail}`)
+            return fail(
+              res,
+              503,
+              'La generación de PDF no está disponible en este momento (el servicio de conversión no respondió). Intenta de nuevo o usa Imprimir.',
+            )
+          }
+          fail(res, 500, `Error al generar el PDF: ${errMsg(e)}`)
+        })
       return
     }
     const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()

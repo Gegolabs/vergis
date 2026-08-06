@@ -30,6 +30,27 @@ describe('configFromEnv · validación numérica (cierra el hallazgo NaN)', () =
   it('PORT numérico válido se respeta', () => {
     expect(configFromEnv({ PORT: '9090' }, fixedSecret).port).toBe(9090)
   })
+  it('VERGIS_PDF_TIMEOUT_MS no numérico → lanza', () => {
+    expect(() => configFromEnv({ VERGIS_PDF_TIMEOUT_MS: 'abc' }, fixedSecret)).toThrow(/VERGIS_PDF_TIMEOUT_MS/)
+  })
+})
+
+// «Descargar PDF» server-side (#65 · D11). El fail-closed vive en el valor: `serviceUrl` vacío = la
+// feature no existe (ni endpoint ni botón), y es el ÚNICO interruptor.
+describe('configFromEnv · PDF server-side (#65)', () => {
+  it('sin env → apagado, con el timeout por defecto', () => {
+    const c = configFromEnv({}, fixedSecret)
+    expect(c.pdf.serviceUrl).toBe('')
+    expect(c.pdf.timeoutMs).toBe(30000)
+  })
+  it('con envs → poblados (la URL se recorta)', () => {
+    const c = configFromEnv({ VERGIS_PDF_SERVICE_URL: '  http://vergis-pdf:9090 ', VERGIS_PDF_TIMEOUT_MS: '5000' }, fixedSecret)
+    expect(c.pdf.serviceUrl).toBe('http://vergis-pdf:9090')
+    expect(c.pdf.timeoutMs).toBe(5000)
+  })
+  it('env presente pero en blanco → apagado (no una URL vacía que falle en runtime)', () => {
+    expect(configFromEnv({ VERGIS_PDF_SERVICE_URL: '   ' }, fixedSecret).pdf.serviceUrl).toBe('')
+  })
 })
 
 describe('configFromEnv · engine, listas, gate y secreto', () => {

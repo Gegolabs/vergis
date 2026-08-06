@@ -27,19 +27,22 @@ import type {
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry, print, pdfUrl } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
+    // PAPEL (#65 · D6): en modo print manda la paleta declarada por el theme, ANTES de resolver los
+    // tokens — los hex se hornean en el SVG y el `@media print` no los alcanza.
+    const effPalette = print ? (theme.printPalette ?? palette) : palette
     // Los colores del chart se hornean en el SVG server-side ⇒ el juego de tokens es el de la paleta
     // ACTIVA, no el del theme a secas (los tonos calibrados para fondo oscuro se lavan sobre blanco).
-    const chartTokens = resolveChartTokens(theme, palette)
+    const chartTokens = resolveChartTokens(theme, effPalette)
     // …y además se abren a CSS vars, para que el conmutador de Apariencia re-coloree los gráficos
     // sin re-compilar Vega en el browser (el contrato del motor es SVG server-side).
     const chartVars = chartVarMap(chartTokens)
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false }
     const flt = fltCarry ?? {}
-    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, carry, signals, fltQ: fltQuery(flt) }
+    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, print: !!print, carry, signals, fltQ: fltQuery(flt) }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
     // el control), no en la bandeja. El tab «Controles» de la bandeja queda para la maquinaria
     // (facetas de dashboard / runtime de tabla). Los selectores de alcance NO viven aquí.
@@ -63,9 +66,14 @@ export const renderHtmlPiece: Capability = {
     // client-side de `interactions.filters` — en ese orden: los primeros re-anclan charts y KPIs de
     // una vez; las segundas son el camino barato para tablas/KPIs sin gráficos.
     const trayFilters = renderTrayFilters(filters ?? [], pages?.active, carry, flt)
-    const facets = trayFilters + (interactive ? renderDashboardFacets(interactive) : '')
-    // «Controles trae maquinaria» = facetas server-rendered (dashboard) o el runtime de tabla que las
-    // inyecta client-side. Decide el empty-state y el tab por defecto — NO decide si hay bandeja.
+    // Grupo «Descargar» a nivel de DOCUMENTO (#65 · D9): el PDF congela el documento entero con la
+    // vista y los filtros SERVER-SIDE vigentes. Server-rendered y por-documento — distinto del kit
+    // «Descargar» por-TABLA que el runtime inyecta client-side (ese exporta UNA tabla, en CSV).
+    const descargarSection = !print && pdfUrl ? renderDescargarSection(pdfUrl, pages?.active, carry, flt) : ''
+    const facets = trayFilters + (interactive ? renderDashboardFacets(interactive) : '') + descargarSection
+    // «Controles trae maquinaria» = facetas server-rendered (dashboard), el grupo Descargar o el
+    // runtime de tabla que las inyecta client-side. Decide el empty-state y el tab por defecto — NO
+    // decide si hay bandeja.
     const controlesHasMachinery = !!facets || hasTable || !!notas
     // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
     const piLabel = meta?.code
@@ -74,34 +82,41 @@ export const renderHtmlPiece: Capability = {
         ? `v${meta.version}`
         : ''
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
-    // El shell del Inspector se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
-    // Controles solo cuando `interactive`; si no, `''` (y el tab muestra su empty-state).
-    body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable, !!notas) + body
-    if (interactive) tail += renderInteractiveScript(interactive)
+    // PAPEL (#65 · D4): en print NO se compone el shell del Inspector ni viaja NINGÚN script — en un
+    // motor de print el JS no corre, así que un botón o un runtime embebido solo prometerían algo que
+    // el papel no puede cumplir. Queda la CARA: banda de contexto, chips, nav de la vista activa.
+    if (!print) {
+      // El shell del Inspector se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
+      // Controles solo cuando `interactive`; si no, `''` (y el tab muestra su empty-state).
+      body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable, !!notas) + body
+      if (interactive) tail += renderInteractiveScript(interactive)
+    }
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
     // aplicaba el CSS al llegar al `<style>` del final). Todo el CSS por-documento va junto, arriba.
     let css = ''
-    css += TRAY_CSS // el shell del Inspector existe SIEMPRE → su CSS también
+    if (!print) css += TRAY_CSS // el shell del Inspector existe SIEMPRE (salvo en papel) → su CSS también
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
     if (chips) css += FILTER_CHIPS_CSS
     if (trayFilters) css += TRAY_FILTERS_CSS
+    if (descargarSection) css += TRAY_PDF_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
+    if (print) css += PRINT_TRUNC_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
-    if (hasTable) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
+    if (hasTable && !print) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
     // La capa de NOTAS va DESPUÉS del runtime de tabla: decora un tbody que ya existe y se engancha
     // a sus re-renders. Su contexto viaja como JSON (endpoints + CSRF + recorte), nunca interpolado
     // en el script — el recorte lo escribe el usuario y no puede acabar como código.
-    if (notas) {
+    if (notas && !print) {
       tail +=
         `<script type="application/json" id="vergis-notas">${JSON.stringify(notas).replace(/</g, '\\u003c')}</script>` +
         `<script>${NOTAS_RUNTIME_SOURCE}</script>`
     }
-    return { html: theme.wrap({ title: title ?? 'Vergis', body: body + tail, meta, palette }) }
+    return { html: theme.wrap({ title: title ?? 'Vergis', body: body + tail, meta, palette: effPalette }) }
   },
 }
 
@@ -111,7 +126,36 @@ const PAGES_NAV_CSS = `
 .vpages a{font-size:13px;padding:8px 16px;text-decoration:none;color:var(--fg-dim,#64748b);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
 .vpages a:hover{color:var(--fg,#1f2937)}
 .vpages a.active{color:var(--green,#2563eb);border-bottom-color:var(--green,#2563eb);font-weight:600}
+@media print{.vpages{border-bottom:none}.vpages a{display:none}.vpages a.active{display:inline-block;border:none;padding:0 0 6px;font-size:12px}}
 `
+
+/**
+ * CSS del grupo «Descargar» de la bandeja (#65 · D9). Paridad visual con el botón de export del kit
+ * por-tabla, sin tocar `piece-css.ts` (territorio del runtime de tabla).
+ */
+const TRAY_PDF_CSS = `
+.tray .tray-pdfbtn{display:block;width:100%;box-sizing:border-box;text-align:center;padding:8px;font-size:12px;background:var(--card,#fff);color:var(--fg-dim,#64748b);border:1px solid var(--border,#e2e8f0);border-radius:7px;text-decoration:none}
+.tray .tray-pdfbtn:hover{color:var(--green,#16a34a);border-color:var(--green,#16a34a)}
+`
+
+/** Fila de truncamiento de una tabla en papel (#65 · D5): discreta, pero VISIBLE — nunca un corte mudo. */
+const PRINT_TRUNC_CSS = `
+tr.vt-trunc td{padding:6px 8px;font-size:11px;font-style:italic;color:var(--fg-dim,#64748b);text-align:center}
+`
+
+/**
+ * Grupo «Descargar» del tab Controles (#65 · D9) — a nivel de DOCUMENTO: el PDF congela el documento
+ * completo con la vista y los filtros SERVER-SIDE vigentes (el href los preserva). Es un link simple:
+ * la conversión ocurre en el servidor, no hay nada que ejecutar en el browser.
+ */
+function renderDescargarSection(pdfUrl: string, activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>): string {
+  const q = (activePage ? `&page=${encodeURIComponent(activePage)}` : '') + ctxQuery(carry) + fltQuery(flt)
+  const href = q ? `${pdfUrl}?${q.slice(1)}` : pdfUrl
+  return (
+    `<div class="faceta tray-descargar"><div class="faceta-title">Descargar</div>` +
+    `<a class="tray-pdfbtn" href="${escapeHtml(href)}" title="El documento completo como PDF, con la vista y filtros actuales del servidor">Descargar PDF</a></div>`
+  )
+}
 
 
 /** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */

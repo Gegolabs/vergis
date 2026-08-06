@@ -69,6 +69,15 @@ services:
       VERGIS_SIGNOUT_RD: <url-logout-idp>         # logout completo del IdP (opcional; vacío = interno)
       # VERGIS_PI_ACL: "1"                        # activa la ACL de artefacto de PIs (default off)
       # VERGIS_CONFIG_CHECK: strict               # strict (default) | warn | off
+
+      # --- «Descargar PDF» server-side (issue #65) --------------------------------------------------
+      VERGIS_PDF_SERVICE_URL: http://vergis-pdf:9090  # sidecar HTML→PDF (servicio de abajo, red interna).
+                                                  #   FAIL-CLOSED: quitar el servicio + esta env apaga la
+                                                  #   feature ENTERA — ni botón en la bandeja ni endpoint
+                                                  #   /<slug>/pdf (la URL vuelve al 404 de siempre). Es UN
+                                                  #   solo interruptor: un botón muerto es imposible.
+      # VERGIS_PDF_TIMEOUT_MS: "30000"            # espera máxima de la conversión (default 30 s). Agotada,
+                                                  #   el endpoint responde 503 con mensaje claro.
     volumes:
       # A cada env de arriba que referencia un path le corresponde un montaje. Si falta uno, el motor
       # lo detecta al arrancar y falla ruidoso (ese fue el modo de falla del incidente del avatar).
@@ -93,6 +102,22 @@ services:
     # settings auto-asignables → alcance de red al HTTP de CH = bypass total de la row-policy. Igual que
     # acá: nada de data-plane se publica; el único ingress público es Caddy (TLS) → oauth2-proxy (SSO).
     expose: ["8080"]
+
+  # Sidecar HTML→PDF (issue #65). Convierte el render en modo print de un PI —que ya nació filtrado por
+  # la RLS de quien lo pidió— en un PDF. Es MUDO respecto a identidad: convierte lo que le llega; su
+  # seguridad es que SOLO vergis lo alcanza (red interna) y que su url_fetcher bloquea todo lo que no sea
+  # un data: URI (nada de SSRF ni de file://). Sin estado: un POST, un PDF, adiós.
+  #
+  # El directorio `pdf-sidecar/` se VENDOREA desde `deploy/pdf-sidecar/` del repo del producto (Dockerfile
+  # + app.py, autocontenidos). Cuando exista imagen publicada, reemplazar `build:` por `image:`.
+  vergis-pdf:
+    build: ./pdf-sidecar
+    restart: unless-stopped
+    # `expose` y JAMÁS `ports:` — mismo supuesto de red D2 que vergis: el sidecar vive solo en la red
+    # interna del compose. Publicarlo al host daría a cualquiera un conversor HTML→PDF gratuito.
+    expose: ["9090"]
+    # environment:
+    #   PDF_MAX_HTML_BYTES: "20971520"          # tope del HTML aceptado (default 20 MiB)
 
   # SSO delante del motor: reenvía el email del usuario autenticado como X-Forwarded-Email. Genérico
   # (aquí oauth2-proxy con un IdP OIDC); reemplaza issuer/client por los de tu tenant. Secretos en env_file.

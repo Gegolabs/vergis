@@ -50,6 +50,14 @@ export interface Theme {
   chartTokensByPalette?: Record<string, ThemeTokens>
   /** Paletas que el theme ofrece para conmutar en vivo (selector de apariencia en la bandeja). */
   palettes?: Palette[]
+  /**
+   * Paleta de PAPEL (issue #65 · D6): en modo print MANDA sobre la paleta activa. Los colores del
+   * chart se hornean en el SVG server-side, así que un documento renderizado en una paleta oscura
+   * produce charts con texto claro que se lava sobre blanco — el `@media print` repinta fondo y texto
+   * pero no los hex ya horneados. Un theme sin `printPalette` cae a la paleta activa (si sus tokens
+   * son únicos, como en `default`, no hay nada que corregir).
+   */
+  printPalette?: string
   /** Envuelve el body semántico en el documento HTML completo (head, css, cromo).
    *  `controls` (opcional) es el disparador de interacción (Faceta), ubicado en el header.
    *  `palette` (opcional) fija la paleta inicial del theme (default-theme por tipo de PI). */

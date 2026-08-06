@@ -516,7 +516,9 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
       path: 'delivery.render',
       value: renders.map((r) => r.format).join(', '),
       message: `delivery.render no declara ningún render con format: html (declara: ${renders.map((r) => r.format).join(', ')}).`,
-      remediation: 'Incluir { format: html, target: web }. HTML es el único formato de render soportado hoy.',
+      remediation:
+        'Incluir { format: html, target: web }. Los formatos de DELIVERY son html y csv; el PDF no se declara ' +
+        'en el spec — la plataforma ofrece «Descargar PDF» server-side cuando la instancia monta el sidecar de conversión.',
     })
   }
 

@@ -9,14 +9,38 @@ import type { ResolvedNode, RenderOpts, Drill, CarryCtx, TableColumn } from './p
 
 export const TABLE_SSR_MAX_ROWS = 500
 
+/**
+ * Techo de filas de una tabla en modo PRINT (issue #65 · D5). Un PDF de decenas de miles de filas no
+ * es un documento de lectura sino una exportación de datos — y para eso está el CSV. Por encima del
+ * techo la tabla se corta y lo DICE con una fila visible (nunca un truncamiento mudo).
+ */
+export const TABLE_PRINT_MAX_ROWS = 5000
+
 export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const carry = opts.carry
   const fltQ = opts.fltQ ?? ''
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
-  const drills = node.drills ?? []
+  const drills = opts.print ? [] : (node.drills ?? [])
   const ranges = colorscaleRanges(cols, rows)
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
+
+  // PRINT (D5): SIEMPRE estática y COMPLETA — el tope SSR de 500 es un contrato con el runtime JS, que
+  // en un motor de print no corre; respetarlo entregaría un PDF mutilado. Sin drills (una columna de
+  // acciones no clickeable es ruido en papel), sin payload embebido, sin scroll-wrapper.
+  if (opts.print) {
+    const shown = rows.length > TABLE_PRINT_MAX_ROWS ? rows.slice(0, TABLE_PRINT_MAX_ROWS) : rows
+    const head = cols.map((c) => `<th class="align-${c.align ?? 'left'}">${escapeHtml(c.label ?? c.field)}</th>`).join('')
+    const trunc =
+      rows.length > TABLE_PRINT_MAX_ROWS
+        ? `<tr class="vt-trunc"><td colspan="${cols.length}">… mostrando ${TABLE_PRINT_MAX_ROWS} de ${rows.length} filas — el detalle completo se descarga en CSV</td></tr>`
+        : ''
+    const tbody = renderTableBody(cols, shown, ranges, [], carry, node.ancla, fltQ) + trunc
+    return (
+      `<section class="table">${titleHtml}` +
+      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
+    )
+  }
   // Las señales las marca quien emite la feature (no un sniff del HTML de salida): drills → celdas
   // `vt-actions`; tabla interactiva (default salvo `interactive:false`) → runtime + bandeja + CSS.
   if (drills.length > 0) opts.signals.drillActions = true
