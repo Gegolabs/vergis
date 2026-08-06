@@ -97,7 +97,7 @@ export { createFabricScheduler, createFabricEngineClient } from './fabric-engine
 export type { FabricScheduler, EngineResolver } from './fabric-engine'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
-export { SqliteGovernanceStore, GovernanceConflict } from './governance-store'
+export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION } from './governance-store'
 export type {
   GovernanceStore,
   GroupStore,
@@ -115,6 +115,7 @@ export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } 
 export type { SourceRow, ProcessRow, EngineRef, ProcessLogsRef, SourceRegistryStore } from './governance-store'
 export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } from './governance-store'
 export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
+export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from './governance-store'
 export { parseGroupsConfig, parsePiOwnersConfig, parseSourcesConfig } from './governance-config'
 export type { SourcesConfig } from './governance-config'
 export { requireRootKey } from './config-root'

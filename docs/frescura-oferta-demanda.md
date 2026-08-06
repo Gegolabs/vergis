@@ -102,9 +102,12 @@ maestra.
 | Mapa de fuentes en Administración | ✅ |
 | Observabilidad — **lógica** (clasificar fallidas/faltantes) | ✅ `ingestion-observability.ts` (unit-tested) |
 | Observabilidad — cliente del motor (leer run-history Fabric) + vista por entidad | ✅ `fabric-engine.ts` + Frescura por dominio (`admin.ts`) |
-| Observabilidad — **alerta autónoma** (push a Slack ante fallida/faltante) | ✅ monitor periódico config-gated (`VERGIS_FRESHNESS_SLACK_WEBHOOK` + `_POLL_MS`); dedup por transición (`freshnessAlerts`/`diffAlertState`) |
+| Observabilidad — **proyección local** (corridas + schedule observados) | ✅ `ingestion_run` / `ingestion_process_state` en `GovernanceStore`; la vista lee la proyección y el motor nunca entra al request path — con el motor caído se sirve lo último conocido, marcado con su edad |
+| **Lazo de frescura** (observar → alertar → reconciliar) | ✅ `server/freshness-loop.ts`, cada `VERGIS_FRESHNESS_POLL_MS` (default 5 min; `0` lo apaga). Las alertas Slack se gatean con `VERGIS_FRESHNESS_SLACK_WEBHOOK`; la observación y el reconcile corren igual |
+| Observabilidad — **alerta autónoma** (push a Slack ante fallida/faltante) | ✅ fase 2 del lazo; dedup por transición (`freshnessAlerts`/`diffAlertState`), estado persistido en `platform_setting`. Con el motor caído clasifica sobre lo proyectado: un motor sin respuesta no es un proceso atrasado |
 | Reconciliador — **lógica** (deseado→real, plan set/noop) | ✅ `ingestion-observability.ts` (unit-tested) |
 | Reconciliador — push del schedule al motor (API) | ✅ `fabric-engine.ts` (`createFabricScheduler`) + «aplicar cadencia» (`admin.ts`) |
+| Reconciliador — **periódico con debounce** | ✅ fase 3 del lazo (`VERGIS_RECONCILE_AUTO=off` la apaga). No re-empuja el mismo deseado al mismo proceso dentro de `VERGIS_RECONCILE_DEBOUNCE_MS` (default 6 h) — el motor redondea el schedule a minutos y un deseado no múltiplo de 60 no converge nunca; un deseado que cambia se empuja de inmediato. Tras cada push se re-observa el schedule y se registra lo leído |
 | Engine_ref del proceso (proceso↔item Fabric) + dominio de la fuente (tag) | ✅ `governance-store.ts` (migración idempotente) |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/038`.
