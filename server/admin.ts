@@ -52,12 +52,13 @@ import {
   type IntakeUploadStore,
   type IntakeUploadRow,
   type OneLakeEntry,
+  type RevertPlan,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
-import { cargasBody, type CargasOps, type SlotCargas } from './admin-cargas'
+import { cargasBody, revertPlanBody, type CargasOps, type SlotCargas } from './admin-cargas'
 import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -310,7 +311,14 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           if (!slot) msg = 'Error: slot desconocido.'
           else {
             try {
-              msg = await handleCargasAccion(deps, slot, f, email)
+              const r = await handleCargasAccion(deps, slot, f, email)
+              if (typeof r !== 'string') {
+                // #63 · excepción puntual al PRG: la confirmación de una reversión ES una página (el
+                // plan derivado). Los errores siguen cayendo al redirect con su `msg`.
+                send(res, 200, adminPage(deps, nav, `${domain.label} · Revertir carga`, revertPlanBody(domain.id, domain.label, slot, r.plan, token, r.aviso)))
+                return true
+              }
+              msg = r
             } catch (e) {
               msg = `Error: ${errMsg(e)}`
             }
@@ -1046,6 +1054,8 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
     log: await ops.log(slot).catch(() => null),
     landing: await ops.landing(slot).catch(() => 'error' as const),
     archived: await ops.archived(slot).catch(() => 'error' as const),
+    // #63 · tolerante como los demás: sin registro de reversiones la Actividad simplemente no las muestra.
+    reverts: ops.reverts ? await ops.reverts(slot, 30).catch(() => []) : [],
     procesoRegistrado: !slot.trigger || engineIds.size === 0 || engineIds.has(slot.trigger.processRef),
   })))
   const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
@@ -1136,8 +1146,31 @@ async function corridaPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, par
   return page({ ...base, run, resolucion, consolaMotorHref })
 }
 
-/** Despacha una acción POST de la consola de cargas. Devuelve el mensaje PRG. Todo auditado. */
-async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<string, string>, by: string): Promise<string> {
+/**
+ * El ANCLA de una reversión (#63): la carga (`upload=<id>`) o un archivo del histórico (`archivo=`).
+ *
+ * El guard del archivo es el mismo de `restore`: anti-traversal y solo dentro de `_processed/` — una
+ * ruta arbitraria del lakehouse jamás llega al motor.
+ */
+function revertRefDeForm(f: Record<string, string>): { uploadId?: number; archivedPath?: string } {
+  const upload = (f['upload'] ?? '').trim()
+  if (upload) {
+    const id = Number(upload)
+    if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Id de carga inválido.')
+    return { uploadId: id }
+  }
+  const ruta = f['archivo'] ?? ''
+  if (!ruta || ruta.includes('..') || !/\/_processed\//.test('/' + ruta)) throw new ValidationError('Solo se revierten cargas del histórico _processed/.')
+  return { archivedPath: ruta }
+}
+
+/**
+ * Despacha una acción POST de la consola de cargas. Todo auditado.
+ *
+ * Devuelve el mensaje PRG, **salvo** en la confirmación de una reversión (#63): ahí devuelve el plan
+ * derivado para que el ruteo responda 200 con la página. Un plan no cabe en un `msg` de query string.
+ */
+async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<string, string>, by: string): Promise<string | { plan: RevertPlan; aviso?: string }> {
   const ops = deps.cargas!
   const accion = f['accion'] ?? ''
   if (accion === 'rerun') {
@@ -1160,19 +1193,34 @@ async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<s
     deps.audit({ type: 'intake-restore', slot: slot.id, domain: slot.domain ?? '', filename: ruta, by })
     return `«${ruta.split('/').pop()}» reactivado en el landing. Corré la conversión para materializarlo.`
   }
-  if (accion === 'revert') {
-    // «Revertir esta carga» (issue #63): compensación derivada del layout `_processed/<clave>/` —
-    // el directorio ES el ledger carga→clave. El archivo revertido va a _retirado/ (tag revertido);
-    // si la clave tiene versión previa archivada, se reactiva y se re-corre (last-wins restaura).
-    const ruta = f['archivo'] ?? ''
-    if (!ruta || ruta.includes('..') || !/\/_processed\//.test('/' + ruta)) throw new ValidationError('Solo se revierten cargas del histórico _processed/.')
-    if (!ops.revert) throw new ValidationError('La reversión no está disponible en esta instancia.')
-    const r = await ops.revert(slot, ruta, by)
-    deps.audit({ type: 'intake-revert', slot: slot.id, domain: slot.domain ?? '', filename: ruta, by, clave: r.clave, compensada: r.compensada, reactivado: r.reactivado ?? '' })
-    if (r.compensada) {
-      return `Carga revertida: «${ruta.split('/').pop()}» → _retirado/. Se reactivó la versión previa de la clave «${r.clave}» (${r.reactivado}) y la conversión está corriendo — el dato vuelve al estado anterior.`
-    }
-    return `Carga revertida: «${ruta.split('/').pop()}» → _retirado/. ⚠ La clave «${r.clave || '—'}» no tiene versión previa archivada: el dato materializado queda sin origen y su retiro del warehouse requiere compensación del pipeline (correr la conversión NO lo elimina).`
+  // ── «Revertir esta carga» (issue #63): derivar el plan → confirmarlo → ejecutarlo ──
+  // El mapeo carga→claves lo mantiene el convertidor en `_processed/<clave>/`: el plan se DERIVA de
+  // ahí, no de un registro paralelo. Una acción destructiva sobre el dato se confirma leyendo, clave
+  // por clave, qué va a pasar — incluido lo que no va a pasar y por qué.
+  if (accion === 'revert-plan') {
+    if (!ops.revertPlan) throw new ValidationError('La reversión no está disponible en esta instancia.')
+    return { plan: await ops.revertPlan(slot, revertRefDeForm(f)) }
+  }
+  if (accion === 'revert-exec') {
+    if (!ops.revertExec) throw new ValidationError('La reversión no está disponible en esta instancia.')
+    const hash = (f['hash'] ?? '').trim()
+    if (!hash) throw new ValidationError('Falta el sello del plan confirmado.')
+    const ref = revertRefDeForm(f)
+    const out = await ops.revertExec(slot, hash, ref, by)
+    // Fail-closed: el slot cambió entre confirmar y ejecutar ⇒ no se ejecuta nada, se re-confirma.
+    if (!out.ok) return { plan: out.plan, aviso: 'El estado del slot cambió desde que viste este plan — revisalo de nuevo.' }
+    const r = out.result
+    const claves = r.resumen.map((c) => `${c.clave}:${c.accion}`).join(',')
+    deps.audit({
+      type: 'intake-revert', slot: slot.id, domain: slot.domain ?? '', filename: r.filename, by,
+      ...(r.uploadId != null ? { uploadId: r.uploadId } : {}), claves, landingRetirado: r.landingRetirado,
+    })
+    const hechos = r.resumen.filter((c) => c.accion === 'rematerializar' || c.accion === 'vaciar').map((c) => `«${c.clave}» ${c.accion === 'vaciar' ? 'queda vacía' : 'vuelve a su versión anterior'}`)
+    const sinTocar = r.resumen.filter((c) => c.accion !== 'rematerializar' && c.accion !== 'vaciar')
+    const detalle = hechos.length ? ` ${hechos.join('; ')}.` : ' Ninguna clave requería compensación.'
+    const cola = r.convirtiendo ? ' La conversión compensatoria está corriendo — el resultado aparece en «Actividad» en ~1-3 min.' : ''
+    const nota = sinTocar.length ? ` ${sinTocar.length} clave(s) quedaron SIN tocar (revisá el detalle en la fila ↩️ de Actividad).` : ''
+    return `Reversión ejecutada: «${r.filename}».${detalle}${r.landingRetirado ? ' La copia del landing se retiró.' : ''}${cola}${nota}`
   }
   throw new ValidationError(`Acción desconocida: ${accion}`)
 }
