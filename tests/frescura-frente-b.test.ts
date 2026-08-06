@@ -116,6 +116,39 @@ describe('createFabricScheduler · get/set', () => {
     expect(post.url).toMatch(/\/jobs\/sparkjob\/schedules$/)
     expect(JSON.parse(post.body!).configuration.interval).toBe(60)
   })
+
+  // #107 · pausa: se apaga el schedule SIN tocar su configuración (eco de la leída). Con el motor
+  // aceptando el PATCH, la pausa es reversible sin perder la cadencia que ya estaba escrita.
+  it('setScheduleEnabled(false): PATCH con enabled:false y ECO de la configuración leída', async () => {
+    const calls: SCall[] = []
+    const cfg = { type: 'Cron' as const, interval: 120 }
+    const sched = createFabricScheduler(tokens, { fetch: schedMock([{ id: 's1', enabled: true, configuration: cfg }], calls), now: fixedClock })
+    await sched.setScheduleEnabled(eng, false)
+    const write = calls.find((c) => c.method === 'PATCH')!
+    expect(write.url).toContain('/jobs/sparkjob/schedules/s1')
+    expect(JSON.parse(write.body!)).toEqual({ enabled: false, configuration: cfg })
+  })
+
+  it('setScheduleEnabled(false) sin schedules: CERO escrituras y resuelve (no hay nada que apagar)', async () => {
+    const calls: SCall[] = []
+    const sched = createFabricScheduler(tokens, { fetch: schedMock([], calls), now: fixedClock })
+    await sched.setScheduleEnabled(eng, false)
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
+  it('setScheduleEnabled(true) sin schedule: lanza nombrando setScheduleSeconds (habilitar exige cadencia)', async () => {
+    const sched = createFabricScheduler(tokens, { fetch: schedMock([]), now: fixedClock })
+    await expect(sched.setScheduleEnabled(eng, true)).rejects.toThrow(/setScheduleSeconds/)
+  })
+
+  it('setScheduleEnabled: un error HTTP del motor lanza con su status (la pausa NO se da por buena)', async () => {
+    const fetchErr = (async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'GET') return { ok: true, status: 200, text: async () => '', json: async () => ({ value: [{ id: 's1', enabled: true, configuration: { type: 'Cron', interval: 60 } }] }) } as unknown as Response
+      return { ok: false, status: 403, text: async () => 'Forbidden', json: async () => ({}) } as unknown as Response
+    }) as unknown as typeof fetch
+    const sched = createFabricScheduler(tokens, { fetch: fetchErr, now: fixedClock })
+    await expect(sched.setScheduleEnabled(eng, false)).rejects.toThrow(/403/)
+  })
 })
 
 // ─── Engine client (resuelve processRef → EngineRef) ─────────────────────────
@@ -137,6 +170,14 @@ describe('createFabricEngineClient · resuelve engine_ref', () => {
     const client = createFabricEngineClient(tokens, resolver, { fetch: schedMock([]), now: fixedClock })
     await expect(client.setScheduleSeconds('unknown', 3_600)).rejects.toThrow(/engine_ref/)
     expect(await client.getScheduleSeconds('unknown')).toBeNull()
+  })
+
+  it('setScheduleEnabled sin engine_ref: apagar es no-op, encender lanza (#107)', async () => {
+    const calls: SCall[] = []
+    const client = createFabricEngineClient(tokens, resolver, { fetch: schedMock([], calls), now: fixedClock })
+    await client.setScheduleEnabled('unknown', false) // resuelve sin tocar el motor
+    expect(calls).toEqual([])
+    await expect(client.setScheduleEnabled('unknown', true)).rejects.toThrow(/engine_ref/)
   })
 })
 

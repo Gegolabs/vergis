@@ -12,6 +12,11 @@
  *                que cambia empuja ya. Tras un set exitoso se RE-OBSERVA el schedule y se registra
  *                lo leído, nunca lo prometido: el motor puede haber redondeado.
  * El render de Frescura lee SOLO la proyección: el request path jamás toca el motor.
+ *
+ * PAUSA (#107): la pausa apaga la ALERTA y el RECONCILE, nunca la OBSERVACIÓN. Un proceso que un
+ * steward pausó a propósito sigue siendo observable (sus corridas y su schedule se proyectan igual),
+ * pero no produce `missed` —sería ruido que entrena a ignorar alertas— y el lazo jamás le re-habilita
+ * el schedule que alguien apagó a mano.
  */
 import type { LogEventInput } from '@vergis/botler'
 import {
@@ -78,6 +83,8 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
       const nowIso = new Date(nowMs).toISOString()
       const { procs, mapInput } = await deps.inputs()
       const observables = procs.filter((p) => p.engine)
+      // Los pausados (#107) se observan igual; quedan fuera de las fases 2 y 3.
+      const pausados = new Set(procs.filter((p) => p.pausedAt != null).map((p) => p.id))
       const reqOf = new Map(deriveIngestionMap(mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
 
       // ── Fase 1 · observar ────────────────────────────────────────────────────────────────────
@@ -110,12 +117,17 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
         const proyectadas = fallidas.length
           ? new Map((await deps.store.listRunSnapshots()).map((s) => [s.processId, s.runs]))
           : new Map<string, RunRecord[]>()
-        const clasificables = lote.map((o) => ({
+        const clasificables = lote.filter((o) => !pausados.has(o.processId)).map((o) => ({
           processId: o.processId,
           runs: o.error != null ? (proyectadas.get(o.processId) ?? []) : (o.runs ?? []),
           requiredCadenceSeconds: reqOf.get(o.processId) ?? Number.POSITIVE_INFINITY,
         }))
-        const { notify, recovered, next } = diffAlertState(alertState, freshnessAlerts(clasificables, nowMs))
+        const { notify, recovered: recovNoPausa, next } = diffAlertState(alertState, freshnessAlerts(clasificables, nowMs))
+        // Pausar no es «recuperarse»: un proceso pausado sale de la clasificación, así que su estado
+        // previo se CONSERVA tal cual y no se anuncia recuperación que nadie observó. Al reanudarlo, el
+        // dedup sigue valiendo (si seguía fallando no se re-notifica; si se arregló, ahí sí recupera).
+        const recovered = recovNoPausa.filter((pid) => !pausados.has(pid))
+        for (const pid of recovNoPausa) if (pausados.has(pid)) next[pid] = alertState[pid]
         const cambio = JSON.stringify(next) !== JSON.stringify(alertState)
         alertState = next
         // Se escribe SOLO en transición: el tick corre cada pocos minutos y el estado casi nunca
@@ -132,6 +144,8 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
         const reobs: ProcessObservation[] = []
         for (const o of lote) {
           if (o.error != null) continue
+          // El lazo JAMÁS re-habilita lo que un steward pausó (#107).
+          if (pausados.has(o.processId)) continue
           const desired = reqOf.get(o.processId)
           if (desired == null) continue
           if (reconcilePlan(desired, o.scheduleSeconds ?? null).action !== 'set') continue

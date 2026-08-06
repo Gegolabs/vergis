@@ -109,5 +109,6 @@ maestra.
 | Reconciliador — push del schedule al motor (API) | ✅ `fabric-engine.ts` (`createFabricScheduler`) + «aplicar cadencia» (`admin.ts`) |
 | Reconciliador — **periódico con debounce** | ✅ fase 3 del lazo (`VERGIS_RECONCILE_AUTO=off` la apaga). No re-empuja el mismo deseado al mismo proceso dentro de `VERGIS_RECONCILE_DEBOUNCE_MS` (default 6 h) — el motor redondea el schedule a minutos y un deseado no múltiplo de 60 no converge nunca; un deseado que cambia se empuja de inmediato. Tras cada push se re-observa el schedule y se registra lo leído |
 | Engine_ref del proceso (proceso↔item Fabric) + dominio de la fuente (tag) | ✅ `governance-store.ts` (migración idempotente) |
+| **Gestión por rol** — registro editable in-app (fuentes/procesos/salidas/mapeos, admins de plataforma) + pausa/reanudación por proceso (stewards del dominio) | ✅ `/admin/sources` y Frescura del dominio (`admin.ts`). La oferta —insumo de la cadencia— se edita in-app; la demanda sigue viviendo en cada PI. La semilla `VERGIS_SOURCES` **no pisa lo gestionado in-app** y no resucita lo dado de baja. Un proceso pausado se sigue observando, pero el lazo no lo alerta ni le corrige el schedule, y «Aplicar cadencia» lo rechaza |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/038`.
