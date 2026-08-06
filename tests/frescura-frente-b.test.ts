@@ -7,13 +7,13 @@ import {
   diffAlertState,
   parseAlertState,
   SqliteGovernanceStore,
-  type TokenProvider,
+  type TokenSource,
   type EngineRef,
   type DeriveMapInput,
   type RunRecord,
 } from '@vergis/capabilities'
 
-const tokens: TokenProvider = { getToken: async () => 'BEARER123' }
+const tokens: TokenSource = { getToken: async () => ({ token: 'BEARER123', expiresAt: Number.MAX_SAFE_INTEGER }) }
 
 // ─── Proyección por ENTIDAD (la vista de Frescura del dominio) ───────────────
 describe('deriveEntityFreshness · por entidad', () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus, type TokenProvider } from '@vergis/capabilities'
+import { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus, type TokenSource } from '@vergis/capabilities'
 
-const tokens: TokenProvider = { getToken: async () => 'BEARER123' }
+const tokens: TokenSource = { getToken: async () => ({ token: 'BEARER123', expiresAt: Number.MAX_SAFE_INTEGER }) }
 
 interface Call {
   url: string

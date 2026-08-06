@@ -2,6 +2,7 @@ import sql from 'mssql'
 import { openSqliteDb, persistSqliteDb, selectAll, type SqlDb } from './sqlite'
 import { pkColumn, type MasterDataColumn, type MasterDataEntity } from './master-data'
 import type { SqlConnectionProfile } from './execute-sql-dwh'
+import { credentialProviderFor } from './aad-token'
 
 /**
  * Almacenamiento de las filas de una entidad de data maestra. Es una COSTURA con dos impls:
@@ -128,14 +129,13 @@ export function createDwhMasterDataStore(profiles: Record<string, SqlConnectionP
     if (existing) return existing
     const p = profiles[ref]
     if (!p) throw new Error(`master-data(fabric): database_ref '${ref}' no configurado.`)
+    // Fail-closed: un perfil sin credencial resoluble lanza ACÁ, antes de tocar la red.
+    const provider = credentialProviderFor(p, { label: `database_ref '${ref}'` })
     const cfg: sql.config = {
       server: p.server,
       database: p.database,
       port: p.port ?? 1433,
-      authentication: {
-        type: 'azure-active-directory-service-principal-secret',
-        options: { tenantId: p.tenantId, clientId: p.clientId, clientSecret: p.clientSecret },
-      },
+      authentication: provider.sqlAuth(),
       options: { encrypt: true, trustServerCertificate: false },
       connectionTimeout: 30000,
       requestTimeout: 60000,

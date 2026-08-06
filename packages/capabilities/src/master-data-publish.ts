@@ -2,6 +2,7 @@ import sql from 'mssql'
 import { pkColumn, type MasterDataColumn, type MasterDataEntity } from './master-data'
 import type { MasterDataRow } from './master-data-store'
 import type { SqlConnectionProfile } from './execute-sql-dwh'
+import { credentialProviderFor } from './aad-token'
 
 /**
  * PUBLICADOR de data maestra — realiza el modelo de publicación (ver
@@ -85,11 +86,13 @@ export function createDwhPublisher(profiles: Record<string, SqlConnectionProfile
     if (existing) return existing
     const p = profiles[ref]
     if (!p) throw new Error(`publish: database_ref '${ref}' no configurado.`)
+    // Fail-closed: un perfil sin credencial resoluble lanza ACÁ, antes de tocar la red.
+    const provider = credentialProviderFor(p, { label: `database_ref '${ref}'` })
     const created = new sql.ConnectionPool({
       server: p.server,
       database: p.database,
       port: p.port ?? 1433,
-      authentication: { type: 'azure-active-directory-service-principal-secret', options: { tenantId: p.tenantId, clientId: p.clientId, clientSecret: p.clientSecret } },
+      authentication: provider.sqlAuth(),
       options: { encrypt: true, trustServerCertificate: false },
       connectionTimeout: 30000,
       requestTimeout: 120000,
