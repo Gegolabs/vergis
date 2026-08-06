@@ -1198,6 +1198,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         const [sources, processes, outputs] = await Promise.all([govStore.listSources(), govStore.listProcesses(), govStore.listProcessOutputs()])
         return { sources, processes, outputs }
       },
+      // Gestión in-app del registro (#107): el registro deja de ser propiedad exclusiva del yaml. Lo
+      // editado acá sobrevive a la re-siembra de `VERGIS_SOURCES` y lo dado de baja no resucita.
+      sourcesAdmin: govStore,
       // Estado por proceso para la vista de Fuentes (#101): lo último conocido de la proyección (#105) +
       // salud con la MISMA clasificación de Frescura. Una lectura de proyección por GET; el motor, jamás.
       // Sin motor no se cablea: la vista queda como el registro puro (no se fabrican columnas de estado
@@ -1262,17 +1265,44 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             health,
             actualScheduleSeconds: observedAt ? (s?.scheduleSeconds ?? null) : null,
             projection: { observedAt, stale, lastError: s?.lastError ?? null, off },
+            ...(proc.pausedAt ? { paused: { at: proc.pausedAt, by: proc.pausedBy } } : {}),
           }
         })
+      },
+      // Pausa/reanudación de un proceso (#107). PAUSAR: el motor primero — si no acepta deshabilitar el
+      // schedule, NADA se registra (jamás un «pausado» en el producto con el motor corriendo).
+      // REANUDAR: se limpia el flag primero y se empuja la cadencia derivada; si el empuje falla, el lazo
+      // converge en el tick siguiente (el proceso ya no está pausado) y la página muestra el estado real.
+      pauseProcess: async (processId: string, paused: boolean, by: string) => {
+        const engine = fabricWiring.engine
+        if (!engine) throw new Error('Sin conexión al motor: no se puede pausar ni reanudar.')
+        if (paused) {
+          await engine.setScheduleEnabled(processId, false)
+          await govStore.setProcessPaused(processId, true, by)
+          auditLog.append({ type: 'frescura-pausa', process: processId, paused: true, by })
+          return
+        }
+        await govStore.setProcessPaused(processId, false, by)
+        auditLog.append({ type: 'frescura-pausa', process: processId, paused: false, by })
+        const row = deriveIngestionMap((await freshnessInputs()).mapInput).find((m) => m.processId === processId)
+        if (!row) return
+        try {
+          await engine.setScheduleSeconds(processId, row.requiredCadenceSeconds)
+        } catch (e) {
+          console.error('[vergis-rls] reanudar: no se pudo re-habilitar el schedule (el lazo converge):', e instanceof Error ? e.message : e)
+        }
       },
       // Driver del reconciliador («aplicar cadencia»): empuja la cadencia derivada del proceso al schedule
       // del motor (one-way, idempotente). Devuelve el plan (set/noop) para feedback.
       applyCadence: async (processId: string, by: string) => {
         const engine = fabricWiring.engine
         if (!engine) throw new Error('Sin conexión al motor: no se puede aplicar la cadencia.')
-        const map = deriveIngestionMap((await freshnessInputs()).mapInput)
+        const f = await freshnessInputs()
+        const map = deriveIngestionMap(f.mapInput)
         const row = map.find((m) => m.processId === processId)
         if (!row) throw new Error(`Proceso desconocido: ${processId}`)
+        // #107 · aplicar cadencia a un pausado lo re-habilitaría (setScheduleSeconds escribe enabled:true).
+        if (f.procs.find((p) => p.id === processId)?.pausedAt != null) throw new Error('El proceso está pausado — reanúdalo antes de aplicar cadencia.')
         const actual = await engine.getScheduleSeconds(processId)
         const plan = reconcilePlan(row.requiredCadenceSeconds, actual)
         if (plan.action === 'set') {

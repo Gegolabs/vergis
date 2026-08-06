@@ -109,6 +109,7 @@ function fakeEngine(behavior: Record<string, RunRecord[] | 'throw' | 'hang'>): I
     },
     async getScheduleSeconds(): Promise<number | null> { return null },
     async setScheduleSeconds(): Promise<void> {},
+    async setScheduleEnabled(): Promise<void> {},
   }
   return e
 }

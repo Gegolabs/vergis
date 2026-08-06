@@ -43,6 +43,7 @@ import {
   type EntityFreshnessRow,
   type SourceRow,
   type ProcessRow,
+  type SourceRegistryStore,
   type ProcessHealth,
   type MasterDataEntity,
   type MasterDataRow,
@@ -104,6 +105,8 @@ export interface DomainEntityFreshness extends EntityFreshnessRow {
   health?: ProcessHealth
   /** Schedule observado del proceso en el motor (segundos); null si no tiene o aún no se observó. */
   actualScheduleSeconds?: number | null
+  /** Pausa explícita del proceso (#107): el steward la puso, el lazo la respeta. */
+  paused?: { at: string; by?: string }
   /** Edad y salud del refresco que alimenta esta fila (#105): lo mostrado es lo último conocido. */
   projection?: FreshnessProjectionMeta
 }
@@ -184,6 +187,8 @@ export interface AdminDeps {
   ingestionMap?: () => Promise<IngestionMapRow[]>
   /** Registro de fuentes (vista Fuentes en Plataforma): fuentes + procesos + salidas (topología). Opcional. */
   sourceRegistry?: () => Promise<{ sources: SourceRow[]; processes: ProcessRow[]; outputs: { processId: string; tableRef: string }[] }>
+  /** Escritura del registro de fuentes (#107). Sin él, `/admin/sources` queda GET-only (solo lectura). */
+  sourcesAdmin?: SourceRegistryStore
   /** Estado por proceso para la vista de Fuentes (issue #101). Opcional: sin él, la vista es el
    * registro puro (sin columnas de estado) — instancias sin motor. */
   processStates?: () => Promise<ProcessIngestionState[]>
@@ -191,6 +196,8 @@ export interface AdminDeps {
   domainFreshness?: (domainId: string) => Promise<DomainEntityFreshness[]>
   /** Driver del reconciliador: empuja la cadencia derivada de un proceso al schedule del motor. Opcional. */
   applyCadence?: (processId: string, by: string) => Promise<{ action: 'set' | 'noop'; desiredSeconds: number }>
+  /** Pausa/reanudación de un proceso (#107): motor primero, store después. Lo implementa el wiring. */
+  pauseProcess?: (processId: string, paused: boolean, by: string) => Promise<void>
   /** Nº de PIs servidos (para el tile del dashboard). Opcional. */
   piCount?: number
   /** Settings de plataforma (título del catálogo, etc.). Opcional. */
@@ -354,13 +361,24 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           send(res, 200, await domainFreshnessPage(deps, nav, domain, token, url.searchParams.get('msg') ?? undefined))
           return true
         }
-        if (section === 'frescura' && deps.applyCadence && req.method === 'POST') {
+        // Un solo POST para las acciones por proceso de Frescura: `accion` rutea. Ausente = «aplicar»
+        // (la conducta de siempre: los forms ya publicados no llevan el campo).
+        if (section === 'frescura' && (deps.applyCadence ?? deps.pauseProcess) && req.method === 'POST') {
           const f = await readForm(req)
           requireCsrf(f, token)
+          const accion = (f['accion'] ?? '').trim()
           let msg: string
           try {
-            const plan = await deps.applyCadence(f['process'] ?? '', email)
-            msg = plan.action === 'set' ? 'Cadencia aplicada al motor.' : 'El schedule ya estaba en la cadencia requerida.'
+            if (accion === 'pausar' || accion === 'reanudar') {
+              if (!deps.pauseProcess) throw new ValidationError('La pausa de procesos no está disponible en esta instancia.')
+              await deps.pauseProcess(f['process'] ?? '', accion === 'pausar', email)
+              msg = accion === 'pausar' ? 'Proceso pausado.' : 'Proceso reanudado.'
+            } else if (!deps.applyCadence) {
+              throw new ValidationError('Aplicar cadencia no está disponible en esta instancia.')
+            } else {
+              const plan = await deps.applyCadence(f['process'] ?? '', email)
+              msg = plan.action === 'set' ? 'Cadencia aplicada al motor.' : 'El schedule ya estaba en la cadencia requerida.'
+            }
           } catch (e) {
             msg = `Error: ${errMsg(e)}`
           }
@@ -447,7 +465,24 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       // Fuentes (registro técnico): gestión de PLATAFORMA — conectar fuentes + su oferta + topología.
       if (deps.sourceRegistry && path === '/admin/sources' && req.method === 'GET') {
         if (!isAdmin) return denyPlatform()
-        send(res, 200, await sourcesPage(deps, nav))
+        send(res, 200, await sourcesPage(deps, nav, token, url.searchParams.get('msg') ?? undefined, url.searchParams.get('edit') ?? undefined, url.searchParams.get('editp') ?? undefined))
+        return true
+      }
+      // Gestión in-app del registro (#107): alta/edición/baja de fuentes, procesos, salidas y mapeos.
+      // TODAS son de plataforma (solo admin): un steward no gestiona el registro transversal.
+      if (deps.sourceRegistry && deps.sourcesAdmin && path.startsWith('/admin/sources/') && req.method === 'POST') {
+        if (!isAdmin) return denyPlatform()
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        try {
+          const msg = await handleSourcesWrite(deps, deps.sourcesAdmin, path.slice('/admin/sources/'.length), f, email)
+          redirect(res, `/admin/sources?msg=${encodeURIComponent(msg)}`)
+        } catch (e) {
+          // Todo lo que puede fallar acá es entrada del cliente: la valida la ruta (dominio declarado,
+          // fuente existente, tripleta del motor) o el store (slug, oferta). 409 solo el conflicto de
+          // dependientes; el resto se re-renderiza con 400 para que el admin corrija sin perder la vista.
+          send(res, e instanceof GovernanceConflict ? 409 : 400, await sourcesPage(deps, nav, token, `Error: ${errMsg(e)}`))
+        }
         return true
       }
 
@@ -913,7 +948,7 @@ async function platformPage(deps: AdminDeps, nav: Chrome, token: string, msg?: s
  * de procesos→entidades que alimenta — MÁS el estado de sus ingestas cuando hay quien las observe (#101):
  * schedule observado y última corrida por proceso, leídos de la proyección local (#105), nunca del motor.
  * Sin `processStates` cableada (instancia sin motor) la vista es el registro puro: cero columnas fabricadas. */
-async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
+async function sourcesPage(deps: AdminDeps, nav: Chrome, token?: string, msg?: string, editSource?: string, editProcess?: string): Promise<string> {
   // Una sola lectura de estado para TODA la tabla (cero awaits por fila). Si falla, la página no miente
   // ni revienta: degrada al registro puro con un aviso (el instrumento declara su propio fallo).
   const statesSafe = async (): Promise<{ map: Map<string, ProcessIngestionState> | null; aviso: boolean }> => {
@@ -929,13 +964,30 @@ async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
   const conEstado = states != null
   const outsOf = (pid: string): string[] => outputs.filter((o) => o.processId === pid).map((o) => o.tableRef)
   const procsOf = (sid: string): ProcessRow[] => processes.filter((p) => p.sourceId === sid)
+  // Gestión in-app (#107): los forms solo existen si hay con qué escribir. Sin `sourcesAdmin` la vista
+  // es exactamente la de siempre (solo lectura) — regresión cero para instancias que gestionan por yaml.
+  const gest = deps.sourcesAdmin != null && token != null
+  const csrfIn = `<input type="hidden" name="_csrf" value="${token ?? ''}">`
+  const post = (action: string, campos: string, label: string, cls: string, confirmar?: string): string =>
+    `<form method="post" action="/admin/sources/${action}" style="display:inline"${confirmar ? ` onsubmit="return confirm('${confirmar}')"` : ''}>${csrfIn}${campos}<button class="${cls}">${label}</button></form>`
+  const procedencia = (managed?: boolean): string => `<span class="sub">${managed ? 'gestionada in-app' : 'semilla (yaml)'}</span>`
   const procCell = (p: ProcessRow): string => {
     const k = p.engine ? engineKind(p.engine.jobType) : null
     // Con columnas de estado, «no observable» lo dice la columna de estado: repetirlo acá sería ruido.
     const motor = !k
       ? conEstado ? '' : ' <span class="sub">· sin motor (no observable)</span>'
       : ` <span class="sub">· ${escapeHtml(k.label)}</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
-    return `<div><span class="c">${escapeHtml(p.id)}</span> ${escapeHtml(p.label)}${motor}<div class="sub">${outsOf(p.id).map(escapeHtml).join(', ') || '—'}</div></div>`
+    const outs = outsOf(p.id)
+    const salidas = gest
+      ? outs.map((t) => `${escapeHtml(t)} ${post('output-remove', `<input type="hidden" name="process" value="${escapeHtml(p.id)}"><input type="hidden" name="table" value="${escapeHtml(t)}">`, '×', 'del')}`).join(' ') || '—'
+      : outs.map(escapeHtml).join(', ') || '—'
+    const acciones = gest
+      ? `<div class="sub">${
+          p.pausedAt ? '⏸ pausado · ' : ''
+        }<a class="edit" href="/admin/sources?editp=${encodeURIComponent(p.id)}">Editar</a> ${post('process-delete', `<input type="hidden" name="id" value="${escapeHtml(p.id)}">`, 'Eliminar', 'del', `¿Dar de baja el proceso ${escapeHtml(p.id)} del registro?`)}
+          ${post('output-add', `<input type="hidden" name="process" value="${escapeHtml(p.id)}"><input name="table" placeholder="esquema.tabla" required>`, '+ salida', 'add')}</div>`
+      : ''
+    return `<div><span class="c">${escapeHtml(p.id)}</span> ${escapeHtml(p.label)}${motor}${gest ? ` · ${procedencia(p.managed)}` : ''}<div class="sub">${salidas}</div>${acciones}</div>`
   }
   // Sin observación del motor no se afirma nada del schedule: `—` (no «sin schedule», que afirmaría
   // haber mirado). Observado y vacío ⇒ «sin schedule»: la ausencia ES información.
@@ -968,8 +1020,11 @@ async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
       const domCell = s.domain
         ? `<a href="/admin/dominio/${encodeURIComponent(s.domain)}/frescura">${escapeHtml(s.domain)}</a>`
         : '<span class="sub">—</span>'
-      const head = `<td${span}><span class="c">${escapeHtml(s.id)}</span> ${escapeHtml(s.label)}</td><td${span}>${escapeHtml(s.oferta)}</td><td${span}>${domCell}</td>`
-      const tail = `<td${span} class="sub">${escapeHtml(s.connectedBy ?? '—')}</td>`
+      const head = `<td${span}><span class="c">${escapeHtml(s.id)}</span> ${escapeHtml(s.label)}${gest ? `<div>${procedencia(s.managed)}</div>` : ''}</td><td${span}>${escapeHtml(s.oferta)}</td><td${span}>${domCell}</td>`
+      const gestSource = gest
+        ? `<div class="sub"><a class="edit" href="/admin/sources?edit=${encodeURIComponent(s.id)}">Editar</a> ${post('source-delete', `<input type="hidden" name="id" value="${escapeHtml(s.id)}">`, 'Eliminar', 'del', `¿Dar de baja la fuente ${escapeHtml(s.id)} del registro?`)}</div>`
+        : ''
+      const tail = `<td${span} class="sub">${escapeHtml(s.connectedBy ?? '—')}${gestSource}</td>`
       if (!ps.length) {
         const vacio = conEstado ? '<td><span class="sub">—</span></td><td><span class="sub">—</span></td>' : ''
         return `<tr>${head}<td><span class="sub">—</span></td>${vacio}${tail}</tr>`
@@ -983,15 +1038,152 @@ async function sourcesPage(deps: AdminDeps, nav: Chrome): Promise<string> {
     ? `<p class="sub">Registro y estado de las fuentes: cada fuente, su <b>oferta</b>, su dominio y sus procesos de ingestión con su <b>última corrida</b>, su <b>schedule observado</b> y su salud. El detalle (brecha vs. demanda, corridas, cadencia) vive en la <b>Frescura</b> de cada dominio.</p>`
     : `<p class="sub">Registro técnico de fuentes: cada fuente, su <b>oferta</b> (cada cuánto se actualiza), su dominio y los procesos de ingestión que alimenta. La <b>frescura</b> (brecha vs. demanda, corridas, schedule) se gestiona en cada dominio.</p>`
   const aviso = st.aviso ? '<p class="msg err">⚠ No se pudo leer el estado de las ingestas — se muestra solo el registro.</p>' : ''
+  const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
   const cols = conEstado
     ? '<th>Fuente</th><th>Oferta</th><th>Dominio</th><th>Proceso → entidades</th><th>Schedule</th><th>Última corrida</th><th>Conectada por</th>'
     : '<th>Fuente</th><th>Oferta</th><th>Dominio</th><th>Procesos → entidades</th><th>Conectada por</th>'
+  // ── Forms de gestión (#107). Editar = el mismo form pre-poblado vía `?edit=`/`?editp=`. ──
+  let gestion = ''
+  if (gest) {
+    const eS = editSource ? sources.find((s) => s.id === editSource) : undefined
+    const eP = editProcess ? processes.find((p) => p.id === editProcess) : undefined
+    const domOpts = (sel?: string): string =>
+      `<option value="">(sin dominio)</option>${(deps.domains ?? []).map((d) => `<option value="${escapeHtml(d.id)}"${d.id === sel ? ' selected' : ''}>${escapeHtml(d.label)}</option>`).join('')}`
+    const srcOpts = (sel?: string): string =>
+      sources.map((s) => `<option value="${escapeHtml(s.id)}"${s.id === sel ? ' selected' : ''}>${escapeHtml(s.id)} · ${escapeHtml(s.label)}</option>`).join('')
+    const mapeos = await deps.sourcesAdmin!.listTableSources()
+    const mapRows = mapeos
+      .map((m) => `<tr><td><span class="c">${escapeHtml(m.tableRef)}</span></td><td>${escapeHtml(m.sourceId)}</td><td class="r">${post('table-map-remove', `<input type="hidden" name="table" value="${escapeHtml(m.tableRef)}">`, 'Quitar', 'del')}</td></tr>`)
+      .join('')
+    gestion = `
+      <h2>${eS ? `Editar la fuente <code>${escapeHtml(eS.id)}</code>` : 'Conectar una fuente'}</h2>
+      <form method="post" action="/admin/sources/source" class="grid">${csrfIn}
+        <label class="fld"><span>Id *</span><input name="id" value="${escapeHtml(eS?.id ?? '')}" pattern="[a-z][a-z0-9_-]*" required ${eS ? 'readonly' : ''}></label>
+        <label class="fld"><span>Nombre *</span><input name="label" value="${escapeHtml(eS?.label ?? '')}" required></label>
+        <label class="fld"><span>Oferta * (duración ISO-8601 o <code>evento</code>)</span><input name="oferta" value="${escapeHtml(eS?.oferta ?? '')}" placeholder="PT1H" required></label>
+        <label class="fld"><span>Dominio</span><select name="domain">${domOpts(eS?.domain)}</select></label>
+        <div class="actions"><button class="add">${eS ? 'Guardar cambios' : 'Conectar'}</button>${eS ? '<a class="cancel" href="/admin/sources">Cancelar</a>' : ''}</div>
+      </form>
+      <h2>${eP ? `Editar el proceso <code>${escapeHtml(eP.id)}</code>` : 'Registrar un proceso'}</h2>
+      <form method="post" action="/admin/sources/process" class="grid">${csrfIn}
+        <label class="fld"><span>Id *</span><input name="id" value="${escapeHtml(eP?.id ?? '')}" pattern="[a-z][a-z0-9_-]*" required ${eP ? 'readonly' : ''}></label>
+        <label class="fld"><span>Nombre *</span><input name="label" value="${escapeHtml(eP?.label ?? '')}" required></label>
+        <label class="fld"><span>Fuente *</span><select name="source" required>${srcOpts(eP?.sourceId)}</select></label>
+        <label class="fld"><span>Workspace del motor</span><input name="engine_workspace" value="${escapeHtml(eP?.engine?.workspaceId ?? '')}"></label>
+        <label class="fld"><span>Item del motor</span><input name="engine_item" value="${escapeHtml(eP?.engine?.itemId ?? '')}"></label>
+        <label class="fld"><span>Tipo de job</span><input name="engine_job_type" value="${escapeHtml(eP?.engine?.jobType ?? '')}" placeholder="sparkjob"></label>
+        <div class="actions"><button class="add">${eP ? 'Guardar cambios' : 'Registrar'}</button>${eP ? '<a class="cancel" href="/admin/sources">Cancelar</a>' : ''}</div>
+      </form>
+      <p class="sub">El proceso apunta a un item <b>ya publicado</b> en el motor: los tres campos del motor van juntos o ninguno. La baja solo saca el proceso del registro de Mira — el item del motor y su schedule no se tocan.</p>
+      <h2>Mapeos tabla → fuente</h2>
+      <table><thead><tr><th>Tabla</th><th>Fuente</th><th></th></tr></thead><tbody>${mapRows || '<tr><td colspan="3" class="sub">Sin mapeos.</td></tr>'}</tbody></table>
+      <form method="post" action="/admin/sources/table-map" class="row">${csrfIn}
+        <input name="table" placeholder="esquema.tabla" required>
+        <select name="source" required>${srcOpts()}</select>
+        <button class="add">Mapear</button>
+      </form>`
+  }
   return adminPage(deps, nav,
     'Fuentes',
-    `${bajada}${aviso}
+    `${feedback}${bajada}${aviso}
      <table><thead><tr>${cols}</tr></thead>
-     <tbody>${rows || `<tr><td colspan="${conEstado ? 7 : 5}" class="sub">Sin fuentes registradas.</td></tr>`}</tbody></table>`,
+     <tbody>${rows || `<tr><td colspan="${conEstado ? 7 : 5}" class="sub">Sin fuentes registradas.</td></tr>`}</tbody></table>
+     ${gestion}`,
   )
+}
+
+/**
+ * Escritura del registro de fuentes (#107) — gestión de PLATAFORMA, fail-closed en la ruta (defensa en
+ * profundidad: el store valida slugs y oferta; acá se valida lo que el store NO puede saber —que el
+ * dominio esté declarado, que la fuente exista, que la tripleta del motor esté completa, y que una baja
+ * no deje dependientes colgando). Devuelve el mensaje de éxito para el PRG.
+ */
+async function handleSourcesWrite(deps: AdminDeps, store: SourceRegistryStore, op: string, f: Record<string, string>, by: string): Promise<string> {
+  const val = (k: string): string => (f[k] ?? '').trim()
+  const audit = (o: string, target: string, detalle: Record<string, unknown> = {}): void =>
+    deps.audit({ type: 'sources-write', op: o, target, by, ...detalle })
+  switch (op) {
+    case 'source': {
+      const id = val('id').toLowerCase()
+      const domain = val('domain').toLowerCase()
+      // Un dominio con typo dejaría la fuente huérfana de TODA vista de steward, en silencio.
+      if (domain && !(deps.domains ?? []).some((d) => d.id === domain)) throw new ValidationError(`Dominio no declarado: '${domain}'.`)
+      await store.upsertSource(id, val('label'), val('oferta'), { domain: domain || undefined, connectedBy: by, managed: true })
+      audit('source-upsert', id, { oferta: val('oferta').toUpperCase(), domain: domain || null })
+      return `Fuente ${id} guardada.`
+    }
+    case 'source-delete': {
+      const id = val('id').toLowerCase()
+      const [procs, maps] = await Promise.all([store.listProcesses(), store.listTableSources()])
+      const depProcs = procs.filter((p) => p.sourceId === id).map((p) => p.id)
+      const depMaps = maps.filter((m) => m.sourceId === id).map((m) => m.tableRef)
+      if (depProcs.length || depMaps.length) {
+        throw new GovernanceConflict(
+          `No se puede dar de baja la fuente '${id}': la referencian ${[
+            depProcs.length ? `los procesos ${depProcs.join(', ')}` : '',
+            depMaps.length ? `los mapeos de ${depMaps.join(', ')}` : '',
+          ].filter(Boolean).join(' y ')}.`,
+        )
+      }
+      await store.deleteSource(id)
+      audit('source-delete', id)
+      return `Fuente ${id} dada de baja del registro.`
+    }
+    case 'process': {
+      const id = val('id').toLowerCase()
+      const sourceId = val('source').toLowerCase()
+      if (!(await store.listSources()).some((s) => s.id === sourceId)) throw new ValidationError(`Fuente desconocida: '${sourceId}'.`)
+      const ws = val('engine_workspace')
+      const item = val('engine_item')
+      const jt = val('engine_job_type')
+      // Tripleta completa o nada: un engine_ref a medias es un proceso que se cree observable y no lo es.
+      const partes = [ws, item, jt].filter(Boolean).length
+      if (partes > 0 && partes < 3) throw new ValidationError('El motor se declara completo (workspace, item y tipo de job) o no se declara.')
+      const engine = partes === 3 ? { workspaceId: ws, itemId: item, jobType: jt } : undefined
+      await store.upsertProcess(id, val('label'), sourceId, engine, undefined, { managed: true })
+      audit('process-upsert', id, { source: sourceId, engine: engine ? `${ws}/${item}/${jt}` : null })
+      return `Proceso ${id} guardado.`
+    }
+    case 'process-delete': {
+      const id = val('id').toLowerCase()
+      await store.deleteProcess(id)
+      audit('process-delete', id)
+      return `Proceso ${id} dado de baja del registro (el item del motor no se tocó).`
+    }
+    case 'output-add': {
+      const p = val('process').toLowerCase()
+      const t = val('table')
+      if (!t) throw new ValidationError('La salida necesita una tabla.')
+      if (!(await store.listProcesses()).some((x) => x.id === p)) throw new ValidationError(`Proceso desconocido: '${p}'.`)
+      await store.setProcessOutput(p, t)
+      audit('output-add', p, { table: t })
+      return `Salida ${t} agregada a ${p}.`
+    }
+    case 'output-remove': {
+      const p = val('process').toLowerCase()
+      const t = val('table')
+      await store.removeProcessOutput(p, t)
+      audit('output-remove', p, { table: t })
+      return `Salida ${t} quitada de ${p}.`
+    }
+    case 'table-map': {
+      const t = val('table')
+      const s = val('source').toLowerCase()
+      if (!t) throw new ValidationError('El mapeo necesita una tabla.')
+      if (!(await store.listSources()).some((x) => x.id === s)) throw new ValidationError(`Fuente desconocida: '${s}'.`)
+      await store.setTableSource(t, s)
+      audit('table-map', t, { source: s })
+      return `Tabla ${t} mapeada a ${s}.`
+    }
+    case 'table-map-remove': {
+      const t = val('table')
+      await store.deleteTableSource(t)
+      audit('table-map-remove', t)
+      return `Mapeo de ${t} quitado.`
+    }
+    default:
+      throw new ValidationError(`Operación desconocida: '${op}'.`)
+  }
 }
 
 /** Tipo de motor que corre el proceso, legible, + si es un Notebook (debe migrar a Spark Job). */
@@ -1396,7 +1588,21 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
             ? escapeHtml(secondsToDuration(r.actualScheduleSeconds))
             : '<span class="sub">sin schedule</span>'
       const drift = r.engine && observado && r.requiredCadenceSeconds != null && r.actualScheduleSeconds !== r.requiredCadenceSeconds
-      const aplicar = drift && deps.applyCadence && r.processId
+      // #107 · un proceso pausado no se «aplica»: la cadencia empujada lo re-habilitaría por la puerta
+      // de atrás. La fila lo dice y ofrece Reanudar en su lugar.
+      const accionForm = (accion: string, label: string, cls: string): string =>
+        `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId!)}"><input type="hidden" name="accion" value="${accion}"><button class="${cls}">${label}</button></form>`
+      const pausaNota = r.paused
+        ? `<div class="sub">⏸ pausado${r.paused.by ? ` por ${escapeHtml(r.paused.by)}` : ''} · ${escapeHtml(fmtWhen(r.paused.at))}</div>`
+        : ''
+      const pausa = deps.pauseProcess && r.processId && r.engine
+        ? r.paused
+          ? `<div>${accionForm('reanudar', 'Reanudar', 'add')}</div>`
+          : observado && r.actualScheduleSeconds != null
+            ? `<div>${accionForm('pausar', 'Pausar', 'del')}</div>`
+            : ''
+        : ''
+      const aplicar = drift && !r.paused && deps.applyCadence && r.processId
         ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
         : ''
       const slot = slotFor(r)
@@ -1406,7 +1612,7 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
       return `<tr${warn ? ' style="color:var(--err)"' : ''}>
         <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}${pis ? `<div class="sub">PIs: ${pis}</div>` : ''}</td>
         <td>${demanda}</td><td>${oferta}</td><td>${req}</td>
-        <td>${sched}${aplicar ? `<div>${aplicar}</div>` : ''}</td>
+        <td>${sched}${pausaNota}${aplicar ? `<div>${aplicar}</div>` : ''}${pausa}</td>
         <td>${freshnessHealthCell(r, runLogHrefOfEntity)}</td>
         <td>${alimentar}</td></tr>`
     })
@@ -1654,6 +1860,6 @@ function errMsg(e: unknown): string {
 function statusForError(e: unknown): number {
   if (e instanceof CsrfError) return 403
   if (e instanceof ValidationError) return 400
-  if (e instanceof MasterDataConflict || e instanceof AdminLockout) return 409
+  if (e instanceof MasterDataConflict || e instanceof AdminLockout || e instanceof GovernanceConflict) return 409
   return 500
 }
