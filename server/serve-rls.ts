@@ -30,10 +30,15 @@
  * alerta y reconcilia el schedule. La vista de Frescura lee SOLO la proyección:
  *  - VERGIS_FRESHNESS_POLL_MS       cadencia del lazo (default 300000 = 5 min; `0` lo apaga). Solo
  *                                   arranca si hay motor cableado.
- *  - VERGIS_FRESHNESS_SLACK_WEBHOOK gatea SOLO las alertas: sin webhook, observación y reconcile
- *                                   corren igual (la proyección es la memoria del producto).
  *  - VERGIS_RECONCILE_AUTO          `off` apaga la corrección automática del schedule (default on).
  *  - VERGIS_RECONCILE_DEBOUNCE_MS   ventana de re-push del mismo desired (default 21600000 = 6 h).
+ *
+ * Avisos salientes (issue #100) — el destino es declarativo, el producto no conoce el canal:
+ *  - VERGIS_NOTIFY      ruta al YAML de destinos (`slack-webhook` | `webhook`, N simultáneos). Sin
+ *                       él, avisos apagados: observación y reconcile corren igual (la proyección es
+ *                       la memoria del producto).
+ *  - VERGIS_PUBLIC_URL  URL pública de la instancia, base de los enlaces profundos del aviso.
+ *                       REQUERIDA si hay destinos declarados (si no, el arranque LANZA).
  */
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -106,11 +111,13 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
+import { createSinks, fanout, type Notification } from './notify'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
 import { fail } from './http-util'
 import { createRequestHandler } from './routes'
+import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
 import { configFromEnv, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
@@ -454,6 +461,7 @@ async function runPi(
   headers: GateHeaders,
   nav: NavQuery = {},
   notas?: { render?: NotasRenderContext; resolver?: ResolverComentarios },
+  opts?: { print?: boolean },
 ): Promise<Awaited<ReturnType<typeof runSpec>>> {
   const identity = identityFor(headers)
   // Corte as-of por INGESTA: lo derivan la topología de procesos + el run-history del motor, con caché
@@ -473,6 +481,11 @@ async function runPi(
     flt: nav.flt,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
     asOf,
+    // PAPEL (#65 · D4): el PDF es este MISMO render en modo print — misma identidad, misma RLS.
+    print: opts?.print,
+    // …y su contracara (#65 · D9): la URL de descarga que la bandeja ofrece. Sale del MISMO valor de
+    // config que inyecta `renderPdf` en el router: sin sidecar no hay endpoint NI botón.
+    pdfUrl: config.pdf.serviceUrl && !opts?.print ? `/${report.slug}/pdf` : undefined,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out
@@ -482,6 +495,28 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
   const out = await runPi(report, headers, nav, notasWiring(report, headers, nav))
   return out.html ?? ''
 }
+
+/**
+ * «Descargar PDF» server-side (#65) — o `undefined` cuando la instancia no monta el sidecar. Ese
+ * `undefined` ES el fail-closed: sin él el router no intercepta `/<slug>/pdf` y la URL responde el 404
+ * de siempre. El mismo `config.pdf.serviceUrl` puebla el `pdfUrl` del render, así que botón y endpoint
+ * no pueden desalinearse.
+ *
+ * El PDF va SIN capa de notas (D13): las notas tienen su propio artefacto congelado (`/impresiones`),
+ * con otras garantías; marcadores vivos en un papel prometerían una interacción que no existe.
+ */
+const renderPdf = config.pdf.serviceUrl
+  ? async (report: Report, headers: GateHeaders, nav: NavQuery): Promise<{ pdf: Uint8Array; filename: string }> => {
+      const out = await runPi(report, headers, nav, undefined, { print: true })
+      const convert = createPdfClient({ serviceUrl: config.pdf.serviceUrl, timeoutMs: config.pdf.timeoutMs })
+      const filtered = !!nav.flt && Object.keys(nav.flt).length > 0
+      return {
+        pdf: await convert(out.html ?? ''),
+        filename: pdfFilename(report.name, nav.page, new Date().toISOString().slice(0, 10), filtered),
+      }
+    }
+  : undefined
+if (config.pdf.serviceUrl) console.log(`[vergis-rls] PDF server-side activo → ${config.pdf.serviceUrl}`)
 
 /**
  * Contexto de notas de un render: los endpoints + CSRF que la bandeja necesita, y el resolver de
@@ -629,6 +664,7 @@ const server = createServer(
     discover,
     identityFor,
     renderReport,
+    renderPdf,
     indexReports,
     renderIndexPage,
     canOpenPi,
@@ -1099,35 +1135,32 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Lazo de frescura (#105): observa el motor → proyección local; alerta (dedup por transición);
     // reconcilia el schedule con debounce. La vista lee SOLO la proyección — el motor nunca en el
     // request path. Nace encendido cuando hay motor: la memoria del producto no puede depender de que
-    // alguien configure Slack (el webhook gatea SOLO las alertas). No mantiene vivo el proceso.
-    const freshnessSlack = process.env['VERGIS_FRESHNESS_SLACK_WEBHOOK'] ?? ''
+    // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
+    // proceso.
+    const notifySinks = createSinks(INSTANCE_CFG.notify)
     const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 300_000)
     const reconcileAuto = (process.env['VERGIS_RECONCILE_AUTO'] ?? 'on').toLowerCase() !== 'off'
     const reconcileDebounceMs = Number(process.env['VERGIS_RECONCILE_DEBOUNCE_MS'] ?? 21_600_000)
     if (fabricWiring.engine && freshnessPollMs > 0) {
-      const postSlack = freshnessSlack
-        ? async (text: string): Promise<void> => {
-            try {
-              await fetch(freshnessSlack, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
-            } catch (e) {
-              console.error('[vergis-rls] freshness slack:', e instanceof Error ? e.message : e)
-            }
-          }
-        : undefined
       const loop = createFreshnessLoop(
         {
           engine: fabricWiring.engine,
           store: govStore,
           inputs: freshnessInputs,
-          postAlert: postSlack,
+          // Fan-out a los destinos declarados: un destino caído se loguea y no tumba el tick.
+          ...(notifySinks.length ? { notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)) } : {}),
+          domains: domainsCfg,
           audit: (e) => auditLog.append(e),
           log: (l) => console.log(`[vergis-rls] ${l}`),
         },
-        { reconcile: reconcileAuto, reconcileDebounceMs },
+        { reconcile: reconcileAuto, reconcileDebounceMs, publicUrl: INSTANCE_CFG.publicUrl },
       )
       setInterval(() => void loop.tick(), freshnessPollMs).unref?.()
       setTimeout(() => void loop.tick(), 10_000).unref?.() // primer tick tras el bootstrap (patrón de la purga)
-      console.log(`[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · alertas ${freshnessSlack ? 'Slack' : 'off'})`)
+      console.log(
+        `[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
+          `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
+      )
     }
     admin = createAdmin({
       entities,
@@ -1165,6 +1198,36 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         const [sources, processes, outputs] = await Promise.all([govStore.listSources(), govStore.listProcesses(), govStore.listProcessOutputs()])
         return { sources, processes, outputs }
       },
+      // Estado por proceso para la vista de Fuentes (#101): lo último conocido de la proyección (#105) +
+      // salud con la MISMA clasificación de Frescura. Una lectura de proyección por GET; el motor, jamás.
+      // Sin motor no se cablea: la vista queda como el registro puro (no se fabrican columnas de estado
+      // donde no hay quien observe).
+      processStates: fabricWiring.engine
+        ? async () => {
+            const f = await freshnessInputs()
+            const reqOf = new Map(deriveIngestionMap(f.mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
+            const snaps = new Map((await govStore.listRunSnapshots()).map((s) => [s.processId, s]))
+            const ahora = Date.now()
+            const off = freshnessPollMs <= 0
+            return f.procs
+              .filter((p) => p.engine)
+              .map((p) => {
+                const s = snaps.get(p.id)
+                const observedAt = s?.observedAt ?? null
+                const runs = observedAt ? (s?.runs ?? []) : []
+                const req = reqOf.get(p.id)
+                const health = observedAt && req != null ? classifyProcess(runs, req, ahora) : undefined
+                const stale = off || (observedAt != null && ahora - Date.parse(observedAt) > 3 * freshnessPollMs)
+                return {
+                  processId: p.id,
+                  runs,
+                  scheduleSeconds: observedAt ? (s?.scheduleSeconds ?? null) : null,
+                  health,
+                  projection: { observedAt, stale, lastError: s?.lastError ?? null, off },
+                }
+              })
+          }
+        : undefined,
       // Frescura por entidad de un dominio (vista de dominio): proyección por entidad enriquecida con
       // LO ÚLTIMO OBSERVADO del motor (#105) — corridas, schedule y salud salen de la proyección local
       // del store, no de una llamada al motor: el request path jamás pega a Fabric. Con el motor caído

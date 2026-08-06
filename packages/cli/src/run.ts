@@ -90,6 +90,13 @@ export interface RunOptions {
    *  deriva (`createAsOfProvider`) y lo inyecta acá; sin él, el header dirá «corte no disponible»
    *  salvo que el spec declare marca de agua. */
   asOf?: PiAsOf
+  /** Modo PRINT (issue #65 · D4): render para PAPEL — mismo pipeline, misma identidad, mismos
+   *  `page/ctx/flt`, pero sin maquinaria (sin bandeja, sin scripts, tablas estáticas y completas).
+   *  Es lo que se manda al sidecar HTML→PDF; también sirve al print del navegador. */
+  print?: boolean
+  /** URL de descarga del PDF de este documento (issue #65 · D9). Presente ⇒ la bandeja emite el grupo
+   *  «Descargar». La puebla el serving cuando la feature está ON — jamás el spec. */
+  pdfUrl?: string
 }
 
 export interface RunOutcome {
@@ -167,6 +174,8 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
       ctx: options.ctx,
       flt: options.flt,
       asOf: options.asOf,
+      print: options.print,
+      pdfUrl: options.pdfUrl,
     },
   })
   botler.stop()

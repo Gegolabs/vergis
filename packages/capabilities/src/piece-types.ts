@@ -74,6 +74,20 @@ export interface RenderParams {
   filters?: FilterResolved[]
   /** Selección activa de filtros, a preservar en toda navegación (`flt.<id>` repetido). */
   fltCarry?: Record<string, string[]>
+  /**
+   * Modo PRINT (issue #65 · D4): el documento se rinde para PAPEL (el sidecar HTML→PDF, o el print
+   * del navegador). Mismo pipeline, misma identidad, mismo árbol resuelto — pero sin maquinaria: sin
+   * shell de bandeja, sin ningún `<script>` (en un motor de print el JS no corre, así que mandarlo
+   * solo puede mentir) y con las tablas estáticas y completas. La CARA sí se conserva: banda de
+   * contexto, chips de filtros y banner de staleness imprimen el estado bajo el que se generó.
+   */
+  print?: boolean
+  /**
+   * URL de descarga del PDF server-side de ESTE documento (issue #65 · D9). Presente ⇒ la bandeja
+   * emite el grupo «Descargar» con el botón «Descargar PDF». Ausente ⇒ no existe el botón (la feature
+   * está apagada: sin `VERGIS_PDF_SERVICE_URL` no hay ni endpoint ni botón — el mismo `if`).
+   */
+  pdfUrl?: string
 }
 
 export interface TableColumn {
@@ -181,6 +195,9 @@ export interface RenderOpts {
    */
   fltQ?: string
   interactive: boolean
+  /** Modo PRINT (issue #65 · D5): las tablas se rinden estáticas y COMPLETAS (sin runtime, sin
+   *  scroll-wrapper, sin payload JSON, sin drills) hasta `TABLE_PRINT_MAX_ROWS`. */
+  print?: boolean
   /** Contexto a preservar en los hrefs de drill (p.ej. la semana del control de cabecera). */
   carry: CarryCtx
   /** Señales que el render acumula para decidir qué CSS/runtime inyectar arriba. Evita re-inspeccionar
