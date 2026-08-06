@@ -33,10 +33,15 @@
  *  - VERGIS_RECONCILE_AUTO          `off` apaga la corrección automática del schedule (default on).
  *  - VERGIS_RECONCILE_DEBOUNCE_MS   ventana de re-push del mismo desired (default 21600000 = 6 h).
  *
- * Avisos salientes (issue #100) — el destino es declarativo, el producto no conoce el canal:
- *  - VERGIS_NOTIFY      ruta al YAML de destinos (`slack-webhook` | `webhook`, N simultáneos). Sin
- *                       él, avisos apagados: observación y reconcile corren igual (la proyección es
- *                       la memoria del producto).
+ * Avisos salientes (issue #100) y reporte periódico (issue #102) — el destino es declarativo, el
+ * producto no conoce el canal:
+ *  - VERGIS_NOTIFY      ruta al YAML de destinos (`slack-webhook` | `webhook` | `email-smtp` —el
+ *                       relay de la instancia—, N simultáneos). Cada destino declara `events`
+ *                       (`alerts` | `reports`; default `[alerts]`), y el bloque `report:` (hora,
+ *                       timezone, cadencia) enciende el reporte periódico INCONDICIONAL: se envía
+ *                       siempre, con novedades o sin ellas. Sin el env, avisos apagados y sin
+ *                       reporte: observación y reconcile corren igual (la proyección es la memoria
+ *                       del producto).
  *  - VERGIS_PUBLIC_URL  URL pública de la instancia, base de los enlaces profundos del aviso.
  *                       REQUERIDA si hay destinos declarados (si no, el arranque LANZA).
  */
@@ -51,7 +56,7 @@ import { resolve, join, dirname } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext } from '@vergis/botler'
+import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
 import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
 import { createMiranda, type MirandaServerDeps } from './miranda'
 import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
@@ -108,7 +113,8 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
-import { createSinks, fanout, type Notification } from './notify'
+import { createSinks, fanout, forEvent, type Notification } from './notify'
+import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
@@ -825,6 +831,14 @@ const GOVERNANCE_DB = process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.
 const INSTANCE_CFG = loadInstanceConfig(process.env)
 if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTANCE_CFG.summary}`)
 
+// Sinks por flujo (issues #100/#102): la creación resuelve passEnv/caFile de los destinos email —
+// config rota tumba el BOOT con nombre (patrón #117), no muere como «administración deshabilitada».
+const alertSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'alerts'))
+const reportSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'reports'))
+// El reporte lee la proyección del store de gobierno: sin bloque de gobierno no hay qué reportar.
+if (INSTANCE_CFG.notify.report && !(process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length))
+  throw new Error('VERGIS_NOTIFY declara report: pero la instancia no tiene bloque de gobierno (VERGIS_MASTER_DATA o VERGIS_ADMIN_SEED).')
+
 if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
   try {
     const entities = INSTANCE_CFG.entities
@@ -1124,7 +1138,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // request path. Nace encendido cuando hay motor: la memoria del producto no puede depender de que
     // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
     // proceso.
-    const notifySinks = createSinks(INSTANCE_CFG.notify)
+    const notifySinks = alertSinks
     const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 300_000)
     const reconcileAuto = (process.env['VERGIS_RECONCILE_AUTO'] ?? 'on').toLowerCase() !== 'off'
     const reconcileDebounceMs = Number(process.env['VERGIS_RECONCILE_DEBOUNCE_MS'] ?? 21_600_000)
@@ -1147,6 +1161,30 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       console.log(
         `[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
           `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
+      )
+    }
+    // Reporte periódico de lo ejecutado (issue #102): latido incondicional — se envía SIEMPRE a la
+    // hora configurada, con novedades o sin ellas. Un día sin correo = señal de problema, por diseño.
+    // Independiente del lazo de frescura y del motor: se gatea SOLO por `report:` declarado.
+    const reportCfg = INSTANCE_CFG.notify.report
+    if (reportCfg) {
+      const tzReporte = reportCfg.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+      const reportLoop = createReportLoop(
+        {
+          store: govStore,
+          inputs: freshnessInputs,
+          domains: domainsCfg.map((d) => ({ id: d.id, label: d.label })),
+          sinks: reportSinks,
+          audit: (e) => auditLog.append(e as LogEventInput),
+          log: (l) => console.log(`[vergis-rls] ${l}`),
+        },
+        { schedule: reportCfg, timezone: tzReporte, baseUrl: INSTANCE_CFG.publicUrl, freshnessPollMs, engineCabled: !!fabricWiring.engine },
+      )
+      setInterval(() => void reportLoop.tick(), REPORT_CHECK_MS).unref?.()
+      setTimeout(() => void reportLoop.tick(), 15_000).unref?.() // catch-up al arrancar (ventana perdida)
+      console.log(
+        `[vergis-rls] reporte periódico activo (${reportCfg.every === 'weekly' ? `semanal ${reportCfg.weekday ?? 'monday'}` : 'diario'} ` +
+          `a las ${reportCfg.at} ${tzReporte} · ${reportSinks.length} destino(s))`,
       )
     }
     admin = createAdmin({
