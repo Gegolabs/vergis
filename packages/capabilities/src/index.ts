@@ -21,7 +21,7 @@ export {
   seriesLabelStride,
 } from './render-chart'
 export type { TopNRank, LabelMode } from './render-chart'
-export { TABLE_SSR_MAX_ROWS } from './render-table'
+export { TABLE_SSR_MAX_ROWS, TABLE_PRINT_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn, ChartSort, FilterResolved } from './piece-types'
 export { renderNotasTraySection, llaveCanonicaDeFila, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'

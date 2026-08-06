@@ -75,6 +75,8 @@ export const arbolTheme: Theme = {
     { id: 'claro', label: 'Claro' },
     { id: 'blanco', label: 'Blanco' },
   ],
+  // Papel (#65 · D6): «blanco» es el juego calibrado sobre fondo blanco de este theme.
+  printPalette: 'blanco',
   wrap({ title, body, meta, controls, palette }: { title: string; body: string; meta?: DashboardMeta; controls?: string; palette?: string }) {
     const initialPalette = palette && ['gruvbox', 'claro', 'blanco'].includes(palette) ? palette : 'gruvbox'
     const logo = LOGO_DATA_URI ? `<img class="logo" src="${LOGO_DATA_URI}" alt="A.R.B.O.L.">` : ''
