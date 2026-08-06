@@ -154,3 +154,42 @@ describe('GovernanceStore · registro de cargas del intake (issue #62)', () => {
     await g2.close()
   })
 })
+
+// Issue #99: el proceso declara dónde deja sus logs por corrida.
+describe('GovernanceStore · logs por corrida del proceso (#99)', () => {
+  it('upsert con logs → listProcesses lo devuelve sin inventar defaults', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.upsertSource('sap', 'SAP', 'P1D', { domain: 'finanzas' })
+    await g.upsertProcess('p_finanzas', 'Ingesta Finanzas', 'sap', { workspaceId: 'WS', itemId: 'SJD', jobType: 'sparkjob' }, { lakehouseId: 'LH' })
+    const p = (await g.listProcesses()).find((x) => x.id === 'p_finanzas')
+    expect(p?.logs).toEqual({ lakehouseId: 'LH' })
+    await g.close()
+  })
+
+  it('un upsert posterior SIN logs no borra el ref registrado', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.upsertSource('sap', 'SAP', 'P1D')
+    await g.upsertProcess('p_finanzas', 'Ingesta', 'sap', undefined, { lakehouseId: 'LH', workspaceId: 'WS2', dir: 'Files/otro/_logs' })
+    await g.upsertProcess('p_finanzas', 'Ingesta (renombrada)', 'sap')
+    const p = (await g.listProcesses()).find((x) => x.id === 'p_finanzas')
+    expect(p?.label).toBe('Ingesta (renombrada)')
+    expect(p?.logs).toEqual({ lakehouseId: 'LH', workspaceId: 'WS2', dir: 'Files/otro/_logs' })
+    await g.close()
+  })
+
+  it('logs sin lakehouseId lanza', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.upsertSource('sap', 'SAP', 'P1D')
+    await expect(g.upsertProcess('p_x', 'X', 'sap', undefined, { lakehouseId: '  ' })).rejects.toThrow(/lakehouseId/)
+    await g.close()
+  })
+
+  it('la semilla GovernanceSeed.processes[].logs persiste', async () => {
+    const g = await SqliteGovernanceStore.open(null, {
+      sources: [{ id: 'sap', label: 'SAP', oferta: 'P1D' }],
+      processes: [{ id: 'p_finanzas', label: 'Ingesta', sourceId: 'sap', engine: { workspaceId: 'WS', itemId: 'SJD', jobType: 'sparkjob' }, logs: { lakehouseId: 'LH' } }],
+    })
+    expect((await g.listProcesses())[0]?.logs).toEqual({ lakehouseId: 'LH' })
+    await g.close()
+  })
+})

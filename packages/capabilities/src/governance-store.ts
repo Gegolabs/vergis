@@ -117,6 +117,13 @@ export interface EngineRef {
   /** Tipo de job del motor (Fabric: 'Pipeline' | 'sparkjob' | 'RunNotebook'…). */
   jobType: string
 }
+/** Dónde escribe un proceso sus logs POR CORRIDA (issue #99). El workspace default es el del engine. */
+export interface ProcessLogsRef {
+  lakehouseId: string
+  workspaceId?: string
+  /** Default `Files/code/_logs` (RUN_LOG_DIR_DEFAULT). */
+  dir?: string
+}
 export interface ProcessRow {
   id: string
   label: string
@@ -124,6 +131,8 @@ export interface ProcessRow {
   sourceId: string
   /** Item del motor que lo corre. Ausente = aún no observable (sin run-history ni schedule). */
   engine?: EngineRef
+  /** Ubicación de sus logs por corrida. Ausente = el proceso no declara logs (issue #99). */
+  logs?: ProcessLogsRef
 }
 
 /** Registro de fuentes y procesos de ingestión (frente B): oferta + mapeos tabla↔fuente, proceso↔tablas. */
@@ -135,7 +144,7 @@ export interface SourceRegistryStore {
   listTableSources(): Promise<{ tableRef: string; sourceId: string }[]>
   /** Ofertas de las fuentes que producen estas tablas (para el techo de demanda de un PI). */
   ofertasForTables(tableRefs: string[]): Promise<string[]>
-  upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef): Promise<void>
+  upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef, logs?: ProcessLogsRef): Promise<void>
   listProcesses(): Promise<ProcessRow[]>
   deleteProcess(id: string): Promise<void>
   setProcessOutput(processId: string, tableRef: string): Promise<void>
@@ -298,8 +307,17 @@ const TABLE_SOURCE_DDL = `CREATE TABLE IF NOT EXISTS table_source (
 );`
 const PROCESS_DDL = `CREATE TABLE IF NOT EXISTS ingestion_process (
   process_id TEXT PRIMARY KEY, label TEXT NOT NULL, source_id TEXT NOT NULL,
-  engine_workspace TEXT, engine_item TEXT, engine_job_type TEXT
+  engine_workspace TEXT, engine_item TEXT, engine_job_type TEXT,
+  logs_workspace TEXT, logs_lakehouse TEXT, logs_dir TEXT
 );`
+
+/** Columnas del `logs:` de un proceso (issue #99), validadas. Lanza si el ref viene sin lakehouse. */
+function logsCols(logs: ProcessLogsRef | undefined, processId: string): [string | null, string | null, string | null] {
+  if (!logs) return [null, null, null]
+  const lh = logs.lakehouseId?.trim() ?? ''
+  if (!lh) throw new Error(`logs del proceso '${processId}' requiere lakehouseId.`)
+  return [logs.workspaceId?.trim() || null, lh, logs.dir?.trim().replace(/\/+$/, '') || null]
+}
 
 /** Agrega columnas faltantes a una tabla existente (migración idempotente para DBs ya creadas). */
 function ensureColumns(db: SqlDb, table: string, cols: string[]): void {
@@ -375,7 +393,7 @@ export interface GovernanceSeed {
   /** Registro de fuentes de la instancia (frente B): fuentes, mapeos tabla→fuente, procesos. */
   sources?: { id: string; label: string; oferta: string; domain?: string; connectedBy?: string }[]
   tableSources?: { tableRef: string; sourceId: string }[]
-  processes?: { id: string; label: string; sourceId: string; engine?: EngineRef }[]
+  processes?: { id: string; label: string; sourceId: string; engine?: EngineRef; logs?: ProcessLogsRef }[]
   processOutputs?: { processId: string; tableRef: string }[]
 }
 
@@ -400,6 +418,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(TABLE_SOURCE_DDL)
     db.run(PROCESS_DDL)
     ensureColumns(db, 'ingestion_process', ['engine_workspace TEXT', 'engine_item TEXT', 'engine_job_type TEXT'])
+    ensureColumns(db, 'ingestion_process', ['logs_workspace TEXT', 'logs_lakehouse TEXT', 'logs_dir TEXT'])
     db.run(PROCESS_OUTPUT_DDL)
     db.run(MIRANDA_SESSION_DDL)
     db.run(MIRANDA_MESSAGE_DDL)
@@ -441,12 +460,15 @@ export class SqliteGovernanceStore implements GovernanceStore {
       db.run(`INSERT INTO table_source (table_ref, source_id) VALUES (?,?) ON CONFLICT(table_ref) DO UPDATE SET source_id=excluded.source_id`, [ts.tableRef.trim(), ts.sourceId.trim().toLowerCase()])
     for (const p of seed.processes ?? [])
       db.run(
-        `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type) VALUES (?,?,?,?,?,?)
+        `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir) VALUES (?,?,?,?,?,?,?,?,?)
          ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
            engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
            engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
-           engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type)`,
-        [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null],
+           engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type),
+           logs_workspace=COALESCE(excluded.logs_workspace, ingestion_process.logs_workspace),
+           logs_lakehouse=COALESCE(excluded.logs_lakehouse, ingestion_process.logs_lakehouse),
+           logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)`,
+        [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null, ...logsCols(p.logs, p.id)],
       )
     for (const po of seed.processOutputs ?? [])
       db.run(`INSERT INTO process_output (process_id, table_ref) VALUES (?,?) ON CONFLICT(process_id, table_ref) DO NOTHING`, [po.processId.trim().toLowerCase(), po.tableRef.trim()])
@@ -743,25 +765,28 @@ export class SqliteGovernanceStore implements GovernanceStore {
     }
     return out
   }
-  async upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef): Promise<void> {
+  async upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef, logs?: ProcessLogsRef): Promise<void> {
     const pid = id.trim().toLowerCase()
     if (!SLUG_RE.test(pid)) throw new Error(`Id de proceso inválido '${id}'.`)
     if (engine && (!engine.workspaceId?.trim() || !engine.itemId?.trim())) {
       throw new Error(`engine_ref del proceso '${id}' requiere workspaceId e itemId.`)
     }
-    // COALESCE: un upsert sin engine NO borra el engine ya registrado (preserva el ref existente).
+    // COALESCE: un upsert sin engine (o sin logs) NO borra el ref ya registrado.
     this.db.run(
-      `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type) VALUES (?,?,?,?,?,?)
+      `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir) VALUES (?,?,?,?,?,?,?,?,?)
        ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
          engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
          engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
-         engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type)`,
-      [pid, label.trim() || pid, sourceId.trim().toLowerCase(), engine?.workspaceId?.trim() ?? null, engine?.itemId?.trim() ?? null, engine?.jobType?.trim() || (engine ? 'Pipeline' : null)],
+         engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type),
+         logs_workspace=COALESCE(excluded.logs_workspace, ingestion_process.logs_workspace),
+         logs_lakehouse=COALESCE(excluded.logs_lakehouse, ingestion_process.logs_lakehouse),
+         logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)`,
+      [pid, label.trim() || pid, sourceId.trim().toLowerCase(), engine?.workspaceId?.trim() ?? null, engine?.itemId?.trim() ?? null, engine?.jobType?.trim() || (engine ? 'Pipeline' : null), ...logsCols(logs, id)],
     )
     this.persist()
   }
   async listProcesses(): Promise<ProcessRow[]> {
-    return selectAll(this.db, `SELECT process_id, label, source_id, engine_workspace, engine_item, engine_job_type FROM ingestion_process ORDER BY process_id ASC`).map((r) => {
+    return selectAll(this.db, `SELECT process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir FROM ingestion_process ORDER BY process_id ASC`).map((r) => {
       const row: ProcessRow = { id: String(r['process_id']), label: String(r['label']), sourceId: String(r['source_id']) }
       if (r['engine_workspace'] != null && r['engine_item'] != null) {
         row.engine = {
@@ -769,6 +794,13 @@ export class SqliteGovernanceStore implements GovernanceStore {
           itemId: String(r['engine_item']),
           jobType: r['engine_job_type'] != null ? String(r['engine_job_type']) : 'Pipeline',
         }
+      }
+      if (r['logs_lakehouse'] != null) {
+        // Los defaults (workspace del engine, dir de convención) los resuelve el consumidor, no el store.
+        const logsRef: ProcessLogsRef = { lakehouseId: String(r['logs_lakehouse']) }
+        if (r['logs_workspace'] != null) logsRef.workspaceId = String(r['logs_workspace'])
+        if (r['logs_dir'] != null) logsRef.dir = String(r['logs_dir'])
+        row.logs = logsRef
       }
       return row
     })

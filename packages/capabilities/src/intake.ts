@@ -259,6 +259,14 @@ export const DEFAULT_INGEST_LOG = 'Files/code/_ingest_log.txt'
 export const slotLogPath = (slot: IntakeSlot): string | null =>
   slot.log === false ? null : slot.log ?? DEFAULT_INGEST_LOG
 
+/** Directorio de logs POR CORRIDA del slot (issue #99): hermano `_logs/` del log declarado.
+ *  Default (`Files/code/_ingest_log.txt`) → `Files/code/_logs`. null si `log: false`. */
+export const slotRunLogsDir = (slot: IntakeSlot): string | null => {
+  const p = slotLogPath(slot)
+  if (!p) return null
+  return `${p.includes('/') ? p.replace(/\/[^/]*$/, '') : p}/_logs`
+}
+
 function parseTarget(raw: unknown, slotId: string): IntakeTarget {
   const o = (raw ?? {}) as Record<string, unknown>
   const workspaceId = String(o['workspaceId'] ?? '')
