@@ -45,6 +45,22 @@ function err(code: string, path: string, value: unknown, message: string, remedi
  *  - **legacy por-tabla** (`policies`): una entrada por dataset físico.
  */
 export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; datasets?: unknown }) | undefined): Map<string, PolicyDecl> {
+  // Clave raíz AUSENTE (#117): un `policies.yaml` decapitado por un sed/merge sigue siendo YAML
+  // válido y hoy resolvería a un mapa vacío — deny total con cara de sano. «Declara cero» sigue
+  // siendo legítimo y se escribe `policies: []`.
+  const root = doc as Record<string, unknown> | null | undefined
+  const declara = (k: string): boolean => root != null && typeof root === 'object' && !Array.isArray(root) && k in root
+  if (!declara('policies') && !declara('entities') && !declara('datasets')) {
+    throw err('root-missing', '', doc, `El documento no declara ninguna clave raíz del policy store ('policies', o 'entities'/'datasets').`, `Para un store vacío deliberado, usa 'policies: []'.`)
+  }
+  // Presente pero con forma inválida (incluye `clave:` nula): error de tipo nombrando la clave.
+  // `isEntityStore` exige `Array.isArray`, así que sin este chequeo un `entities:` nulo caería al
+  // camino legacy y devolvería un mapa vacío en silencio.
+  for (const k of ['policies', 'entities', 'datasets']) {
+    if (declara(k) && !Array.isArray(root![k])) {
+      throw err('root-type', k, root![k], `'${k}' debe ser una lista.`, `Para declarar «no hay», usa '${k}: []'.`)
+    }
+  }
   // Coexistencia de ambas formas: la entidad-canónica ganaría y `policies` se ignoraría en silencio
   // (en una migración a medias, políticas legacy activas desaparecerían — deny silencioso). Fail-loud.
   const legacyPolicies = (doc as { policies?: unknown } | undefined)?.policies

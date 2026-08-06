@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { debounce, createCachedScanner, watchPaths, swapRecordInPlace } from '../server/hot-reload'
+import { debounce, createCachedScanner, watchPaths, swapRecordInPlace, reloadLiveList } from '../server/hot-reload'
+import { parseDomainsConfig } from '@vergis/capabilities'
 
 describe('swapRecordInPlace (issue #50 · hot-reload de perfiles de conexión)', () => {
   it('muta IN-PLACE la misma referencia: altas, cambios y bajas', () => {
@@ -140,5 +141,78 @@ describe('watchPaths', () => {
     un()
     rmSync(dir, { recursive: true, force: true })
     expect(fired).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('reloadLiveList (issue #50 · endurecido en #117: rechaza y conserva)', () => {
+  const D = (id: string): { id: string } => ({ id })
+
+  it('load() lanza → la lista viva queda INTACTA (misma referencia) y err recibe el mensaje', () => {
+    const live = [D('cartera'), D('personas')]
+    const ref = live
+    const logs: string[] = []
+    const errs: string[] = []
+    const ok = reloadLiveList(
+      live,
+      () => {
+        throw new Error(`domains: falta la clave raíz 'domains' — …`)
+      },
+      'dominios',
+      'cambio en /etc/vergis/domains.yaml',
+      (m) => logs.push(m),
+      (m) => errs.push(m),
+    )
+    expect(ok).toBe(false)
+    expect(live).toBe(ref)
+    expect(live.map((d) => d.id)).toEqual(['cartera', 'personas'])
+    expect(logs).toEqual([])
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain('recarga de dominios falló (cambio en /etc/vergis/domains.yaml); dominios vigentes conservados')
+    expect(errs[0]).toContain(`falta la clave raíz 'domains'`)
+  })
+
+  it('load() ok con cambio → splice in-place (la referencia capturada ve lo nuevo) + log con el conteo', () => {
+    const live = [D('cartera')]
+    const capturada = live // lo que un consumidor guardó al arrancar
+    const logs: string[] = []
+    const ok = reloadLiveList(live, () => [D('cartera'), D('riesgo')], 'dominios', 'watch', (m) => logs.push(m), () => {})
+    expect(ok).toBe(true)
+    expect(capturada.map((d) => d.id)).toEqual(['cartera', 'riesgo'])
+    expect(logs).toEqual(['[hot-reload] dominios (watch): 2 declarado(s)'])
+  })
+
+  it('load() ok sin cambio → ni log ni splice', () => {
+    const live = [D('cartera')]
+    const logs: string[] = []
+    const errs: string[] = []
+    const ok = reloadLiveList(live, () => [D('cartera')], 'dominios', 'watch', (m) => logs.push(m), (m) => errs.push(m))
+    expect(ok).toBe(true)
+    expect(logs).toEqual([])
+    expect(errs).toEqual([])
+  })
+
+  it('keptLabel nombra lo conservado cuando difiere de la etiqueta (slots de ingesta)', () => {
+    const errs: string[] = []
+    reloadLiveList(
+      [D('saldos')],
+      () => {
+        throw new Error('boom')
+      },
+      'slots de ingesta',
+      'watch',
+      () => {},
+      (m) => errs.push(m),
+      'slots',
+    )
+    expect(errs[0]).toBe('[hot-reload] recarga de slots de ingesta falló (watch); slots vigentes conservados: boom')
+  })
+
+  it('el caso integrador: un parser que lanza por clave raíz ausente conserva lo vigente', () => {
+    const live = parseDomainsConfig({ domains: [{ id: 'cartera', label: 'Cartera' }] })
+    const errs: string[] = []
+    const ok = reloadLiveList(live, () => parseDomainsConfig({ otra: 1 }), 'dominios', 'watch', () => {}, (m) => errs.push(m))
+    expect(ok).toBe(false)
+    expect(live.map((d) => d.id)).toEqual(['cartera'])
+    expect(errs[0]).toContain(`falta la clave raíz 'domains'`)
   })
 })

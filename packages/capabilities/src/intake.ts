@@ -12,6 +12,8 @@
  * INSTANCIA en `intake/slots.yaml`.
  */
 
+import { requireRootKey } from './config-root'
+
 /** Destino OneLake del crudo: carpeta `Files/...` de un Lakehouse (landing zone / staging). */
 export interface IntakeTarget {
   workspaceId: string
@@ -119,9 +121,7 @@ const DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 
 /** Valida y normaliza la config declarativa de intake (`{ slots: [...] }`). */
 export function parseIntakeConfig(doc: unknown): IntakeSlot[] {
-  const root = (doc ?? {}) as { slots?: unknown }
-  const raw = root.slots
-  if (raw === undefined) return []
+  const raw = requireRootKey(doc, 'intake', 'slots')
   if (!Array.isArray(raw)) throw new Error('intake: `slots` debe ser una lista.')
   const seen = new Set<string>()
   return raw.map((s, i) => parseSlot(s, i, seen))

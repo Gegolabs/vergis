@@ -1,0 +1,112 @@
+// Fase de carga de la config declarativa de instancia (issue #117): env + readFile inyectados, sin
+// disco. Lo que se prueba es el contrato de tres estados — env ausente, clave raíz ausente (fatal),
+// clave presente y vacía (legítima) — y la línea de conteos del arranque.
+
+import { describe, it, expect } from 'vitest'
+import { loadInstanceConfig, type EnvLike, type ReadFile } from '../server/instance-config'
+
+/** `readFile` de mentira: mapa ruta-sufijo → contenido YAML. */
+const fs = (files: Record<string, string>): ReadFile => {
+  return (path: string) => {
+    const hit = Object.entries(files).find(([name]) => path.endsWith(name))
+    if (!hit) throw new Error(`ENOENT: ${path}`)
+    return hit[1]
+  }
+}
+
+describe('instance-config · clave raíz ausente es fatal (#117)', () => {
+  it('env definido + archivo sin la clave → lanza con ENV, ruta y clave', () => {
+    const env: EnvLike = { VERGIS_DOMAINS: 'cfg/domains.yaml' }
+    const read = fs({ 'domains.yaml': 'otra: 1\n' })
+    expect(() => loadInstanceConfig(env, read)).toThrow(/VERGIS_DOMAINS/)
+    expect(() => loadInstanceConfig(env, read)).toThrow(/domains\.yaml/)
+    expect(() => loadInstanceConfig(env, read)).toThrow(/falta la clave raíz 'domains'/)
+    // la ruta va absoluta
+    try {
+      loadInstanceConfig(env, read)
+    } catch (e) {
+      expect((e as Error).message).toMatch(/\(\/.*domains\.yaml\)/)
+    }
+  })
+
+  it('archivo vacío o solo-comentarios también es «ausente»', () => {
+    for (const contenido of ['', '# nada\n']) {
+      expect(() => loadInstanceConfig({ VERGIS_INTAKE: 'slots.yaml' }, fs({ 'slots.yaml': contenido }))).toThrow(
+        /VERGIS_INTAKE .*falta la clave raíz 'slots'/s,
+      )
+    }
+  })
+
+  it('cada env declarado se valida, aunque no haya data maestra ni admins', () => {
+    const casos: [string, string, string][] = [
+      ['VERGIS_GROUPS', 'groups.yaml', 'groups'],
+      ['VERGIS_PI_OWNERS', 'owners.yaml', 'owners'],
+      ['VERGIS_SOURCES', 'sources.yaml', 'sources'],
+      ['VERGIS_MASTER_DATA', 'md.yaml', 'entities'],
+    ]
+    for (const [env, file, key] of casos) {
+      expect(() => loadInstanceConfig({ [env]: file }, fs({ [file]: 'roto: 1\n' }))).toThrow(
+        new RegExp(`${env} .*falta la clave raíz '${key}'`, 's'),
+      )
+    }
+  })
+
+  it('un YAML que ni parsea también sale envuelto con ENV y ruta', () => {
+    expect(() => loadInstanceConfig({ VERGIS_DOMAINS: 'd.yaml' }, fs({ 'd.yaml': 'a: [1,\n' }))).toThrow(/VERGIS_DOMAINS \(\/.*d\.yaml\):/)
+  })
+})
+
+describe('instance-config · «declara cero» y el resumen de conteos', () => {
+  it('clave presente y vacía → carga 0, sin error, reportado en el summary', () => {
+    const cfg = loadInstanceConfig(
+      { VERGIS_DOMAINS: 'd.yaml', VERGIS_GROUPS: 'g.yaml', VERGIS_PI_OWNERS: 'o.yaml' },
+      fs({ 'd.yaml': 'domains: []\n', 'g.yaml': 'groups: []\n', 'o.yaml': 'owners: {}\n' }),
+    )
+    expect(cfg.domains).toEqual([])
+    expect(cfg.groupSeeds).toEqual([])
+    expect(cfg.piOwners).toEqual({})
+    expect(cfg.summary).toBe('groups 0 · domains 0 · pi-owners 0')
+  })
+
+  it('env no definido → ni error ni mención en el summary', () => {
+    const cfg = loadInstanceConfig({}, fs({}))
+    expect(cfg.summary).toBe('')
+    expect(cfg).toMatchObject({ entities: [], groupSeeds: [], domains: [], intakeSlots: [], piOwners: {}, sourceReg: {} })
+  })
+
+  it('el summary compone los conteos de las seis configs, con los cuatro de sources', () => {
+    const cfg = loadInstanceConfig(
+      {
+        VERGIS_GROUPS: 'g.yaml',
+        VERGIS_DOMAINS: 'd.yaml',
+        VERGIS_PI_OWNERS: 'o.yaml',
+        VERGIS_SOURCES: 's.yaml',
+        VERGIS_INTAKE: 'i.yaml',
+        VERGIS_MASTER_DATA: 'm.yaml',
+      },
+      fs({
+        'g.yaml': 'groups:\n  - id: analistas\n',
+        'd.yaml': 'domains:\n  - id: cartera\n    label: Cartera\n  - id: personas\n    label: Personas\n',
+        'o.yaml': 'owners:\n  pi-1: ana@gh.cl\n',
+        's.yaml':
+          'sources:\n  - id: sap\n    label: SAP\n    oferta: P1D\n' +
+          'tableSources:\n  - tableRef: qw04.areas\n    sourceId: sap\n  - tableRef: qw04.otra\n    sourceId: sap\n' +
+          'processes:\n  - id: p1\n    label: P1\n    sourceId: sap\n' +
+          'processOutputs: []\n',
+        'i.yaml': 'slots:\n  - id: saldos\n    label: Saldos\n    target: { workspaceId: w, lakehouseId: l, path: Files/x }\n',
+        'm.yaml': 'entities:\n  - id: rel\n    label: Rel\n    columns:\n      - name: rut\n        pk: true\n',
+      }),
+    )
+    expect(cfg.summary).toBe(
+      'groups 1 · domains 2 · pi-owners 1 · sources 1 (tablas 2 · procesos 1 · salidas 0) · intake-slots 1 · master-data 1',
+    )
+    expect(cfg.sourceReg).toMatchObject({ sources: [{ id: 'sap', label: 'SAP', oferta: 'P1D' }] })
+    expect(cfg.intakeSlots[0].id).toBe('saldos')
+    expect(cfg.entities[0].id).toBe('rel')
+  })
+
+  it('claves secundarias de sources ausentes no aparecen como error y cuentan 0', () => {
+    const cfg = loadInstanceConfig({ VERGIS_SOURCES: 's.yaml' }, fs({ 's.yaml': 'sources: []\n' }))
+    expect(cfg.summary).toBe('sources 0 (tablas 0 · procesos 0 · salidas 0)')
+  })
+})

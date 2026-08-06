@@ -105,6 +105,39 @@ export function createCachedScanner<T>(scan: () => T): {
 }
 
 /**
+ * Validate-before-swap de una LISTA VIVA (dominios, slots de ingesta — issue #50, endurecido en #117).
+ *
+ * `load()` corre primero y solo si devuelve sin lanzar se toca `live`: un archivo roto (o decapitado,
+ * que desde #117 también lanza) deja la lista vigente INTACTA y reporta por `err`. El swap es un
+ * splice in-place porque los consumidores capturaron esa misma referencia y la leen a request-time.
+ *
+ * @returns `true` si `load()` no lanzó (haya cambiado o no), `false` si se conservó lo vigente.
+ */
+export function reloadLiveList<T>(
+  live: T[],
+  load: () => T[],
+  label: string,
+  reason: string,
+  log: (m: string) => void = console.log,
+  err: (m: string) => void = console.error,
+  /** Cómo se nombra lo conservado en el mensaje de error (default: `label`). */
+  keptLabel: string = label,
+): boolean {
+  let next: T[]
+  try {
+    next = load()
+  } catch (e) {
+    err(`[hot-reload] recarga de ${label} falló (${reason}); ${keptLabel} vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
+    return false
+  }
+  if (next.length !== live.length || JSON.stringify(next) !== JSON.stringify(live)) {
+    live.splice(0, live.length, ...next)
+    log(`[hot-reload] ${label} (${reason}): ${live.length} declarado(s)`)
+  }
+  return true
+}
+
+/**
  * Swap IN-PLACE de un registro vivo `{ clave: valor }` (issue #50: perfiles de conexión). Todos los
  * consumidores capturaron la MISMA referencia y resuelven por clave a call-time — mutarla in-place
  * equivale a un hot-reload sin re-cablear nada. Devuelve el diff en CONTEOS + claves (jamás valores:
