@@ -102,6 +102,7 @@ import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } fro
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
 import { fail } from './http-util'
 import { createRequestHandler } from './routes'
+import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
 import { configFromEnv, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
@@ -445,6 +446,7 @@ async function runPi(
   headers: GateHeaders,
   nav: NavQuery = {},
   notas?: { render?: NotasRenderContext; resolver?: ResolverComentarios },
+  opts?: { print?: boolean },
 ): Promise<Awaited<ReturnType<typeof runSpec>>> {
   const identity = identityFor(headers)
   // Corte as-of por INGESTA: lo derivan la topología de procesos + el run-history del motor, con caché
@@ -464,6 +466,11 @@ async function runPi(
     flt: nav.flt,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
     asOf,
+    // PAPEL (#65 · D4): el PDF es este MISMO render en modo print — misma identidad, misma RLS.
+    print: opts?.print,
+    // …y su contracara (#65 · D9): la URL de descarga que la bandeja ofrece. Sale del MISMO valor de
+    // config que inyecta `renderPdf` en el router: sin sidecar no hay endpoint NI botón.
+    pdfUrl: config.pdf.serviceUrl && !opts?.print ? `/${report.slug}/pdf` : undefined,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out
@@ -473,6 +480,28 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
   const out = await runPi(report, headers, nav, notasWiring(report, headers, nav))
   return out.html ?? ''
 }
+
+/**
+ * «Descargar PDF» server-side (#65) — o `undefined` cuando la instancia no monta el sidecar. Ese
+ * `undefined` ES el fail-closed: sin él el router no intercepta `/<slug>/pdf` y la URL responde el 404
+ * de siempre. El mismo `config.pdf.serviceUrl` puebla el `pdfUrl` del render, así que botón y endpoint
+ * no pueden desalinearse.
+ *
+ * El PDF va SIN capa de notas (D13): las notas tienen su propio artefacto congelado (`/impresiones`),
+ * con otras garantías; marcadores vivos en un papel prometerían una interacción que no existe.
+ */
+const renderPdf = config.pdf.serviceUrl
+  ? async (report: Report, headers: GateHeaders, nav: NavQuery): Promise<{ pdf: Uint8Array; filename: string }> => {
+      const out = await runPi(report, headers, nav, undefined, { print: true })
+      const convert = createPdfClient({ serviceUrl: config.pdf.serviceUrl, timeoutMs: config.pdf.timeoutMs })
+      const filtered = !!nav.flt && Object.keys(nav.flt).length > 0
+      return {
+        pdf: await convert(out.html ?? ''),
+        filename: pdfFilename(report.name, nav.page, new Date().toISOString().slice(0, 10), filtered),
+      }
+    }
+  : undefined
+if (config.pdf.serviceUrl) console.log(`[vergis-rls] PDF server-side activo → ${config.pdf.serviceUrl}`)
 
 /**
  * Contexto de notas de un render: los endpoints + CSRF que la bandeja necesita, y el resolver de
@@ -620,6 +649,7 @@ const server = createServer(
     discover,
     identityFor,
     renderReport,
+    renderPdf,
     indexReports,
     renderIndexPage,
     canOpenPi,
