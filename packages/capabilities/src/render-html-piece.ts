@@ -46,7 +46,10 @@ export const renderHtmlPiece: Capability = {
     const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
     // Franja de CHIPS de los filtros activos (#82), bajo la banda de contexto: la cara muestra el
     // estado, el control vive en la bandeja. Sin filtros activos, la franja no existe.
-    const chips = renderFilterChips(filters ?? [], pages?.active, carry, flt)
+    // …y la MISMA franja hospeda los chips VIVOS de las facetas client-side (#114): una sola
+    // superficie de estado de filtros por documento, sin importar quién los aplique.
+    const hasFacets = !!(interactive && interactive.filters.length > 0)
+    const chips = renderFilterChips(filters ?? [], pages?.active, carry, flt, hasFacets)
     const nav = pages ? renderPagesNav(pages, carry, flt) : ''
     let body = contextStrip + chips + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
@@ -229,6 +232,7 @@ const FILTER_CHIPS_CSS = `
 .vfltbar .vflt-chip b{font-weight:600}
 .vfltbar .vflt-x{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;text-decoration:none;color:var(--fg-dim,#64748b);font-size:11px;line-height:1}
 .vfltbar .vflt-x:hover{background:var(--border,#e2e8f0);color:var(--fg,#1f2937)}
+.vfltbar .vflt-live .vflt-x{cursor:pointer}
 .vfltbar .vflt-clear{margin-left:2px;font-size:11px;text-decoration:none;color:var(--fg-dim,#64748b)}
 .vfltbar .vflt-clear:hover{text-decoration:underline}
 .vflt-print{display:none}
@@ -261,10 +265,25 @@ function fltHref(activePage: string | undefined, carry: CarryCtx, flt: Record<st
  * Franja de chips: un chip REMOVIBLE por valor activo (`Especie: Cerezo ×`). El × navega quitando ESE
  * valor de la URL; el re-render server-side es lo que re-ancla charts, KPIs y tablas de una vez.
  * Sin filtros activos la franja no existe (ausencia = documento completo, sin ruido en la cara).
+ *
+ * `hasFacets` (#114): el documento declara facetas client-side. Entonces la franja se emite SIEMPRE
+ * como contenedor (con `hidden` si aún no trae chips server) y lleva los dos slots vivos que
+ * `update()` mantiene: `#vergis-flt-live` (chips de pantalla) y `#vergis-flt-live-print` (resumen).
+ * Sin filtros activos NI facetas → nada (byte a byte como antes: ausencia = documento completo).
  */
-function renderFilterChips(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>): string {
+function renderFilterChips(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>, hasFacets = false): string {
   const active = filters.filter((f) => f.selected.length > 0)
-  if (active.length === 0) return ''
+  if (active.length === 0 && !hasFacets) return ''
+  // Slots que el script client rellena; solo existen si hay facetas que puedan poblarlos. El `id` de
+  // la franja también: sin facetas no hay script que la busque, y la marca extra sería ruido.
+  const live = hasFacets
+    ? `<span id="vergis-flt-live"></span><span class="vflt-print" id="vergis-flt-live-print"></span>`
+    : ''
+  const barId = hasFacets ? ' id="vergis-fltbar"' : ''
+  if (active.length === 0) {
+    // Solo facetas: contenedor vacío y oculto, listo para que `update()` lo pueble y lo muestre.
+    return `<div class="vfltbar"${barId} hidden><span class="vflt-k vflt-screen">Filtros</span>${live}</div>`
+  }
   const chips = active
     .flatMap((f) =>
       f.selected.map((v) => {
@@ -283,7 +302,7 @@ function renderFilterChips(filters: FilterResolved[], activePage: string | undef
       ? `<a class="vflt-clear vflt-screen" href="${escapeHtml(fltHref(activePage, carry, {}))}">limpiar todo</a>`
       : ''
   return (
-    `<div class="vfltbar"><span class="vflt-k vflt-screen">Filtros</span>${chips}${clearAll}` +
+    `<div class="vfltbar"${barId}><span class="vflt-k vflt-screen">Filtros</span>${chips}${live}${clearAll}` +
     `<span class="vflt-print">Filtros — ${escapeHtml(printSummary)}</span></div>`
   )
 }
