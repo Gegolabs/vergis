@@ -4,6 +4,41 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.14.0 — 2026-08-06
+
+**El barrido del backlog** — 15 frentes en una sesión (issues #61 #62 #63 #65 #66 #95 #99 #100 #101
+#102 #105 #106 #107·f1 #108 #109 #114 #117; PRs #118–#134). Tests 1039 → 1409.
+
+- **Observabilidad de ingestas completa**: log de cada corrida —fallida Y exitosa— desde el producto
+  (#99, convención `_logs/run-<ts>.txt` en OneLake); proyección local `ingestion_run` — la vista de
+  Frescura ya no toca el motor al abrirse, y con el motor caído sirve lo último conocido con
+  staleness visible (#105); estado por proceso en la vista transversal de Fuentes (#101); avisos con
+  destino declarativo (`VERGIS_NOTIFY`) y enlaces profundos (#100); reporte periódico por email
+  **enviado siempre** — un día sin correo es señal de problema, no día tranquilo (#102, SMTP propio
+  sin dependencias).
+- **Intake transaccional**: registro de cargas en el GovernanceStore con pre-check de duplicado
+  «¿Continuar?» y retro-indexado de `_processed/` (#62); «Revertir esta carga» de primera clase con
+  plan sellado por hash y compensación por clave (#63); `options_ref` — catálogo de la instancia
+  como fuente de opciones, dropdown con validación server-side (#109); metadata derivada del nombre
+  del archivo por convención declarada (#95).
+- **Gestión por rol, fase 1** (#107, issue abierto para la fase 2): fuentes/procesos/salidas
+  gestionables in-app con precedencia sobre la semilla YAML (`managed_at` + tombstones), cadencia y
+  pausa/reanudación desde Frescura.
+- **Render**: chips de filtros activos visibles en el cuerpo del PI (#114); corte as-of «Datos
+  al …» como convención de plataforma en el header — y «Generado» eliminado: dos renders del mismo
+  dato son byte-idénticos (#108); export CSV con celda única cliente/delivery, anti formula-injection
+  y fix de BIGINT con signo (#61); «Descargar PDF» server-side con sidecar WeasyPrint (#65).
+- **Robustez y auth**: fail-closed ante la clave raíz ausente en los 8 YAML de instancia — «declara
+  cero» (`clave: []`) sigue siendo legítimo; sin opt-out (#117); puerto `CredentialProvider`
+  (secret/federated/imds) — el clientSecret deja de estar cableado en el código (#66).
+- **Docs**: arquitectura multi-reporte y gobierno de permisos (#106).
+
+**⚠ Notas de despliegue**: (a) #117 — verificar los YAML de la instancia antes de subir: un archivo
+decapitado ya no arranca; (b) los modos passwordless de #66 no se activan sin sus gates manuales;
+(c) gates manuales pendientes contra motor/canales vivos: contrato escritor de `_logs/` (#99),
+rate limits del poll (#105), Slack (#100), relay SMTP (#102), sidecar PDF (#65), pausa real (#107),
+contrato D8 del convertidor (#63).
+
 ## 0.13.0 — 2026-07-28
 
 **La capa de notas — impresiones, anotaciones y comentarios** (vergis#84, cierra #60). Lo que una
