@@ -1,5 +1,6 @@
 import { VergisError, type Capability } from '@vergis/botler'
 import type { ResolvedNode, TableColumn } from './piece-types'
+import { vtCsvCell } from './table-runtime'
 
 /**
  * `render-csv-piece` — árbol de pieza resuelto (compuesto por Mira) → artefacto CSV de LA(S) TABLA(S).
@@ -10,6 +11,11 @@ import type { ResolvedNode, TableColumn } from './piece-types'
  *    tablas es un error de spec, no un CSV vacío silencioso).
  *  - Headers = labels de las columnas declaradas; valores RAW sin formatear (el CSV es para máquinas
  *    y planillas: `0.432`, no `43.2%`). Date → ISO `YYYY-MM-DD`.
+ *  - La REGLA DE CELDA (RAW, Date→ISO, neutralización de formula injection, quoting RFC 4180) vive
+ *    en `vtCsvCell` de `table-runtime` — una sola fuente de verdad, compartida con el export del
+ *    cliente (GH #61 / D4); acá se la invoca con separador `,`. La neutralización antepone `'` a un
+ *    string que empieza con `= @`, tab o CR, o con `+`/`-` sin ser número: un string numérico con
+ *    signo (`-2644239500`, como entregan los drivers los BIGINT) ya NO se corrompe (GH #61 / D5).
  *  - Las NOTAS (impresiones, anotaciones, comentarios) NUNCA viajan en el export: son la capa de
  *    notas, no dato del PI.
  *  - VARIAS tablas → un solo CSV concatenado por SECCIONES: cada tabla precedida por una fila-título
@@ -53,25 +59,8 @@ function tableToCsv(table: ResolvedNode, sectionTitle?: string): string {
   const cols = table.columnsSpec ?? []
   const rows = table.rows ?? []
   const lines: string[] = []
-  if (sectionTitle != null) lines.push(csvField(`# ${sectionTitle}`))
-  lines.push(cols.map((c) => csvField(c.label ?? c.field)).join(','))
-  for (const r of rows) lines.push(cols.map((c) => csvField(rawValue(r[c.field]))).join(','))
+  if (sectionTitle != null) lines.push(vtCsvCell(`# ${sectionTitle}`, ','))
+  lines.push(cols.map((c) => vtCsvCell(c.label ?? c.field, ',')).join(','))
+  for (const r of rows) lines.push(cols.map((c) => vtCsvCell(r[c.field], ',')).join(','))
   return lines.join('\n') + '\n'
-}
-
-/** Valor RAW para CSV: sin formatear (números tal cual); Date → ISO fecha; null/undefined → vacío. */
-function rawValue(v: unknown): string {
-  if (v == null) return ''
-  if (v instanceof Date) return v.toISOString().slice(0, 10)
-  const s = String(v)
-  // Neutralización de formula injection: una celda de TEXTO que empieza con un caracter de fórmula
-  // (`= + - @`, tab o CR) se ejecuta al abrir en Excel/Sheets. Se antepone `'` solo a strings —
-  // los números crudos (que el diseño exige sin formatear) quedan intactos.
-  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) return `'${s}`
-  return s
-}
-
-/** Escapa un campo según RFC 4180: se cita si contiene coma, comilla o salto de línea. */
-function csvField(s: string): string {
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }

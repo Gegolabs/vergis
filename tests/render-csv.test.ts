@@ -78,6 +78,22 @@ describe('delivery.render format csv', () => {
     expect(out.csv).not.toContain('no debe viajar')
   })
 
+  // GH #61 / D5: la regla de celda es la compartida (`vtCsvCell`) — neutraliza la fórmula, pero
+  // deja intacto el string numérico con signo (así entregan los drivers los BIGINT).
+  it('neutraliza la formula injection sin corromper el string numérico con signo', async () => {
+    const piece: ResolvedNode = {
+      type: 'table',
+      columnsSpec: [
+        { field: 'link', label: 'Link' },
+        { field: 'saldo', label: 'Saldo' },
+      ],
+      rows: [{ link: '=HYPERLINK("http://x")', saldo: '-2644239500' }],
+    }
+    const out = (await renderCsvPiece.execute({ piece }, { agent: 'test' })) as { csv: string }
+    const lines = out.csv.trimEnd().split('\n')
+    expect(lines[1]).toBe('"\'=HYPERLINK(""http://x"")",-2644239500')
+  })
+
   it('pieza sin tablas → fail-loud (no un CSV vacío silencioso)', async () => {
     const piece: ResolvedNode = { type: 'kpi', value: 1, label: 'x' }
     await expect(renderCsvPiece.execute({ piece, title: 'SinTablas' }, { agent: 'test' })).rejects.toThrow(/tabla/)

@@ -36,6 +36,9 @@ export {
   vtApply,
   vtGroup,
   vtGroupTree,
+  vtCsvCell,
+  vtCsv,
+  vtCsvName,
 } from './table-runtime'
 export type { VtState, VtTreeNode } from './table-runtime'
 export {

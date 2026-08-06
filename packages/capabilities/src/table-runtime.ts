@@ -228,11 +228,92 @@ export function vtGroupTree(rows: Record<string, unknown>[], fields: string[]): 
 }
 
 /**
+ * Una celda CSV — la ÚNICA regla de celda de la plataforma (GH #61 / D4). La usan el export del
+ * cliente (viaja al browser en PURE_FNS) y el CSV de delivery (`render-csv-piece` la importa),
+ * con el separador como parámetro: `;` en el cliente (Excel es-CL usa coma decimal) y `,` en
+ * delivery. El separador es OBLIGATORIO: un default de parámetro es riesgo evitable en código
+ * que viaja serializado por `toString`.
+ *
+ * Valor RAW (sin formatear: `640838`, no `640.838`); `null`/`undefined` → vacío; `Date` → ISO
+ * `YYYY-MM-DD`; strings tal cual.
+ *
+ * Neutralización de formula injection (D5): se antepone `'` a un STRING que empieza con
+ * `= @`, tab o CR, o que empieza con `+`/`-` y NO es un número. La excepción numérica importa:
+ * los drivers SQL entregan los BIGINT como string (`"-2644239500"`) y prefijarlos los corrompe.
+ * Los `number` nativos jamás se tocan.
+ *
+ * Quoting RFC 4180: se cita si el valor contiene comilla, salto de línea o el separador; la
+ * comilla interna se dobla.
+ */
+export function vtCsvCell(v: unknown, sep: string): string {
+  if (v == null) return ''
+  if (v instanceof Date) return v.toISOString().slice(0, 10)
+  let s = String(v)
+  if (typeof v === 'string') {
+    const inj = /^[=@\t\r]/.test(s) || (/^[+-]/.test(s) && Number.isNaN(Number(s)))
+    if (inj) s = "'" + s
+  }
+  const needsQuote = s.indexOf('"') >= 0 || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0 || s.indexOf(sep) >= 0
+  return needsQuote ? '"' + s.replace(/"/g, '""') + '"' : s
+}
+
+/**
+ * Armado del CSV del export del cliente (GH #61 / D6): línea de header (`label ?? field`) más
+ * una línea por fila, con las COLUMNAS VISIBLES únicamente — los campos ocultos del payload
+ * (tokens de notas, claves de drill) no están en `cols` y por eso no viajan: garantía estructural.
+ * Separador `;`, líneas unidas con CRLF (convención Windows/Excel).
+ *
+ * SIN BOM: el BOM es asunto del envoltorio (el handler lo antepone en el Blob; el CSV de delivery
+ * lo mantiene opt-in).
+ */
+export function vtCsv(cols: { field: string; label?: string }[], rows: Record<string, unknown>[]): string {
+  const lines = [cols.map((c) => vtCsvCell(c.label == null ? c.field : c.label, ';')).join(';')]
+  for (const r of rows) lines.push(cols.map((c) => vtCsvCell(r[c.field], ';')).join(';'))
+  return lines.join('\r\n')
+}
+
+/**
+ * Nombre del archivo descargado (GH #61 / D7): `<doc>--<tabla>--YYYY-MM-DD[--filtrado].csv`.
+ * El título del documento identifica el PI; el rótulo del kit distingue CUÁL tabla cuando la
+ * página trae varias; la fecha ancla la foto; el sufijo `--filtrado` avisa que lo descargado NO
+ * es el dataset completo. Separador `--` entre segmentos porque los slugs internos usan `-`.
+ * Si el slug de la tabla es vacío o igual al del documento, el segmento se omite (sin
+ * `reporte--reporte`).
+ *
+ * AUTOCONTENIDA a propósito (el slug es una función local): viaja al browser vía `.toString()`.
+ */
+export function vtCsvName(docTitle: unknown, kitLabel: unknown, dateISO: string, filtered: boolean): string {
+  const slug = function (s: unknown): string {
+    return String(s == null ? '' : s)
+      .trim()
+      .replace(/[^\wÀ-ÿ -]+/g, '')
+      .replace(/\s+/g, '-')
+      .toLowerCase()
+  }
+  const base = slug(docTitle) || 'tabla'
+  const tabla = slug(kitLabel)
+  const mid = tabla && tabla !== base ? '--' + tabla : ''
+  return base + mid + '--' + dateISO + (filtered ? '--filtrado' : '') + '.csv'
+}
+
+/**
  * Fuente JS que se inyecta en el navegador: las funciones puras de arriba (vía toString,
  * sin tipos tras la transpilación de esbuild) + el cableado del DOM. Se emite UNA vez por
  * documento; cada `.vtable` se autoarranca leyendo su JSON embebido.
  */
-const PURE_FNS = [vtNorm, vtIsNumericCol, vtDistinct, vtIsCategorical, vtFormat, vtApply, vtGroup, vtGroupTree]
+const PURE_FNS = [
+  vtNorm,
+  vtIsNumericCol,
+  vtDistinct,
+  vtIsCategorical,
+  vtFormat,
+  vtApply,
+  vtGroup,
+  vtGroupTree,
+  vtCsvCell,
+  vtCsv,
+  vtCsvName,
+]
 
 /**
  * Snippet COMPARTIDO del tab "Vistas" (presets) — lo usan TODOS los PI (tabla y dashboard).
@@ -374,20 +455,22 @@ function vtBootstrap(root){
     var gsTimer; gs.addEventListener('input', function(){ clearTimeout(gsTimer); gsTimer=setTimeout(function(){ state.globalSearch=gs.value; render(); }, 150); });
     sec.querySelector('.vt-clear-all').addEventListener('click', function(){ clearAll(); });
     // Export CSV (issue #61 / TX-01): exporta la VISTA ACTUAL (filtros/búsqueda aplicados) con las
-    // columnas visibles. Las NOTAS jamás viajan en el export. Separador ';' (Excel es-CL usa coma
-    // decimal) + BOM UTF-8 para que Excel abra tildes correcto. Sin dependencias: Blob + download.
+    // columnas visibles. Las NOTAS jamás viajan en el export. La regla de celda y el armado viven
+    // en las puras vtCsvCell/vtCsv/vtCsvName (una sola fuente, testeada, compartida con el CSV de
+    // delivery): acá solo el envoltorio — BOM UTF-8 + Blob + download. Sin dependencias.
     var expBtn = sec.querySelector('.vt-export');
     if(expBtn) expBtn.addEventListener('click', function(){
       var rc = renderCols();
       var view = vtApply(rows, state);
-      var cell = function(v){ var s = (v==null?'':String(v)); return /[";\\n\\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
-      var lines = [rc.map(function(c){ return cell(c.label||c.field); }).join(';')];
-      view.forEach(function(r){ lines.push(rc.map(function(c){ return cell(r[c.field]); }).join(';')); });
-      var blob = new Blob(['\\ufeff'+lines.join('\\r\\n')], {type:'text/csv;charset=utf-8'});
+      // «Filtrado» = el CONJUNTO de filas se redujo (búsqueda global, faceta o búsqueda por
+      // columna). El orden y la agrupación no cuentan: no cambian qué filas viajan.
+      var filtered = !!state.globalSearch;
+      for(var ff in state.facets){ if((state.facets[ff]||[]).length) filtered=true; }
+      for(var cf in state.colSearch){ if(state.colSearch[cf]) filtered=true; }
+      var blob = new Blob(['\\ufeff'+vtCsv(rc, view)], {type:'text/csv;charset=utf-8'});
       var a = document.createElement('a');
       a.href = window.URL.createObjectURL(blob);
-      var base = (document.title||'tabla').trim().replace(/[^\\wÀ-ÿ -]+/g,'').replace(/\\s+/g,'-').toLowerCase() || 'tabla';
-      a.download = base + '-' + new Date().toISOString().slice(0,10) + '.csv';
+      a.download = vtCsvName(document.title, kitLabel, new Date().toISOString().slice(0,10), filtered);
       document.body.appendChild(a); a.click();
       setTimeout(function(){ window.URL.revokeObjectURL(a.href); a.remove(); }, 500);
     });
