@@ -18,6 +18,7 @@ import {
 } from './pi-authz'
 import { durationToSeconds, validateOferta } from './freshness'
 import type { RunRecord, RunStatus } from './ingestion-observability'
+import type { ClaveAccion } from './intake-revert'
 import {
   canTransition,
   isMirandaState,
@@ -249,6 +250,33 @@ export interface IntakeUploadStore {
   markIntakeBackfillDone(slotId: string, files: number, errores: number): Promise<void>
 }
 
+/**
+ * Una REVERSIÓN ejecutada (issue #63). Es un hecho de Vergis —quién revirtió qué, cuándo y con qué
+ * resultado por clave—, no del convertidor: el mapeo carga→claves sigue viviendo en `_processed/`.
+ * Es la fuente consultable que el timeline muestra; el audit log sigue siendo la evidencia.
+ */
+export interface IntakeRevertRow {
+  id: number
+  slotId: string
+  /** Ancla a `intake_upload.id` (#62). Ausente si la carga no está en el registro (pre-#62). */
+  uploadId?: number
+  filename: string
+  byUser: string
+  /** ISO-8601. */
+  at: string
+  /** El plan EJECUTADO, con lo reportado-sin-tocar incluido (pisada / no-compensable / sin-clave). */
+  resumen: ClaveAccion[]
+  landingRetirado: boolean
+}
+
+/** Registro consultable de las reversiones de un slot (issue #63). */
+export interface IntakeRevertStore {
+  /** Registra una reversión COMPLETADA. Devuelve el id asignado. */
+  recordRevert(row: Omit<IntakeRevertRow, 'id'>): Promise<number>
+  /** Reversiones del slot, recientes primero. */
+  listReverts(slotId: string, limit: number): Promise<IntakeRevertRow[]>
+}
+
 /** Retención de la proyección de corridas (filas por proceso). Poda el propio store al escribir. */
 export const INGESTION_RUN_RETENTION = 60
 
@@ -292,7 +320,7 @@ export interface IngestionRunStore {
   listRunSnapshots(opts?: { runsPerProcess?: number }): Promise<IngestionRunSnapshot[]>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore, IngestionRunStore {
+export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore, IntakeRevertStore, IngestionRunStore {
   close(): Promise<void>
 }
 
@@ -427,6 +455,19 @@ const INTAKE_UPLOAD_DDL = `CREATE TABLE IF NOT EXISTS intake_upload (
 );`
 const INTAKE_UPLOAD_IDX_SHA = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sha ON intake_upload (slot_id, sha256);`
 const INTAKE_UPLOAD_IDX_TS = `CREATE INDEX IF NOT EXISTS idx_intake_upload_slot_ts ON intake_upload (slot_id, uploaded_at DESC);`
+// #63 · el registro de REVERSIONES. `by_user` (y no `by`) porque BY es palabra reservada del SQL.
+// `resumen` guarda el plan ejecutado como JSON: lo que se compensó Y lo que se reportó sin tocar.
+const INTAKE_REVERT_DDL = `CREATE TABLE IF NOT EXISTS intake_revert (
+  id INTEGER PRIMARY KEY,
+  slot_id TEXT NOT NULL,
+  upload_id INTEGER,
+  filename TEXT NOT NULL,
+  by_user TEXT NOT NULL,
+  at TEXT NOT NULL,
+  resumen TEXT NOT NULL,
+  landing_retirado INTEGER NOT NULL DEFAULT 0
+);`
+const INTAKE_REVERT_IDX = `CREATE INDEX IF NOT EXISTS idx_intake_revert_slot ON intake_revert (slot_id, at DESC);`
 const INTAKE_BACKFILL_DDL = `CREATE TABLE IF NOT EXISTS intake_backfill (
   slot_id TEXT PRIMARY KEY, done_at TEXT NOT NULL, files INTEGER NOT NULL, errores INTEGER NOT NULL
 );`
@@ -490,6 +531,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INTAKE_UPLOAD_DDL)
     db.run(INTAKE_UPLOAD_IDX_SHA)
     db.run(INTAKE_UPLOAD_IDX_TS)
+    db.run(INTAKE_REVERT_DDL)
+    db.run(INTAKE_REVERT_IDX)
     db.run(INTAKE_BACKFILL_DDL)
     db.run(INGESTION_RUN_DDL)
     db.run(INGESTION_PROCESS_STATE_DDL)
@@ -1156,6 +1199,57 @@ export class SqliteGovernanceStore implements GovernanceStore {
       [slotId.trim(), now(), Math.max(0, Math.trunc(files)), Math.max(0, Math.trunc(errores))],
     )
     this.persist()
+  }
+
+  // ── IntakeRevertStore (registro de reversiones, issue #63) ──
+  async recordRevert(row: Omit<IntakeRevertRow, 'id'>): Promise<number> {
+    this.db.run(
+      `INSERT INTO intake_revert (slot_id, upload_id, filename, by_user, at, resumen, landing_retirado)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        row.slotId.trim(),
+        row.uploadId ?? null,
+        row.filename,
+        row.byUser,
+        row.at || now(),
+        JSON.stringify(row.resumen ?? []),
+        row.landingRetirado ? 1 : 0,
+      ],
+    )
+    const stmt = this.db.prepare(`SELECT MAX(id) AS n FROM intake_revert`)
+    stmt.step()
+    const id = Number((stmt.getAsObject() as { n: number }).n)
+    stmt.free()
+    this.persist()
+    return id
+  }
+
+  async listReverts(slotId: string, limit: number): Promise<IntakeRevertRow[]> {
+    const stmt = this.db.prepare(
+      `SELECT id, slot_id, upload_id, filename, by_user, at, resumen, landing_retirado FROM intake_revert
+       WHERE slot_id = ? ORDER BY at DESC, id DESC LIMIT ?`,
+    )
+    stmt.bind([slotId.trim(), Math.max(0, Math.trunc(limit))])
+    const out: IntakeRevertRow[] = []
+    while (stmt.step()) {
+      const r = stmt.getAsObject()
+      // Un `resumen` ilegible no puede tumbar la consulta: la fila vale igual por su quién/cuándo.
+      let resumen: ClaveAccion[] = []
+      try { resumen = JSON.parse(String(r['resumen'])) as ClaveAccion[] } catch { resumen = [] }
+      const row: IntakeRevertRow = {
+        id: Number(r['id']),
+        slotId: String(r['slot_id']),
+        filename: String(r['filename']),
+        byUser: String(r['by_user']),
+        at: String(r['at']),
+        resumen: Array.isArray(resumen) ? resumen : [],
+        landingRetirado: Number(r['landing_retirado']) !== 0,
+      }
+      if (r['upload_id'] != null) row.uploadId = Number(r['upload_id'])
+      out.push(row)
+    }
+    stmt.free()
+    return out
   }
 
   // ── IngestionRunStore (proyección de corridas + schedule observado, issue #105) ──

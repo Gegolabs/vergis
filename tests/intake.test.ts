@@ -55,6 +55,16 @@ describe('intake · contrato declarativo', () => {
     expect(slotRunLogsDir(parseIntakeConfig({ slots: [{ ...base, log: false }] })[0])).toBeNull()
   })
 
+  // Issue #63: la instancia DECLARA que su convertidor ejecuta el DELETE del manifiesto de reversión.
+  it('revert_delete: true lo declara · ausente = sin declaración · no-booleano rechaza nombrando el slot', () => {
+    const base = { id: 'saldos', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }
+    expect(parseIntakeConfig({ slots: [{ ...base, revert_delete: true }] })[0].revertDelete).toBe(true)
+    expect(parseIntakeConfig({ slots: [base] })[0].revertDelete).toBeUndefined()
+    expect(parseIntakeConfig({ slots: [{ ...base, revert_delete: false }] })[0].revertDelete).toBeUndefined()
+    expect(() => parseIntakeConfig({ slots: [{ ...base, revert_delete: 'si' }] })).toThrow(/'saldos'\.revert_delete debe ser booleano/)
+    expect(() => parseIntakeConfig({ slots: [{ ...base, revert_delete: 1 }] })).toThrow(/revert_delete/)
+  })
+
   it('rechaza target incompleto, path fuera de Files/, id dup, trigger sin processRef', () => {
     expect(() => parseIntakeConfig({ slots: [{ id: 's', label: 'S', target: { workspaceId: 'w' } }] })).toThrow(/target requiere/)
     expect(() => parseIntakeConfig({ slots: [{ id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Tables/x' } }] })).toThrow(/Files\//)
