@@ -6,9 +6,9 @@
  * aterriza en `Files/...` (landing zone / staging) — NUNCA en `Tables/`; el pipeline existente lee de
  * ahí y produce Bronze→Silver (Mira intermedia, no reemplaza el transform).
  *
- * El run-now dispara el pipeline por Fabric REST. Ambos usan bearer del SP vía `TokenProvider`.
+ * El run-now dispara el pipeline por Fabric REST. Ambos usan bearer del SP vía `TokenSource`.
  */
-import { SCOPE_ONELAKE, SCOPE_FABRIC, type TokenProvider } from './aad-token'
+import { SCOPE_ONELAKE, SCOPE_FABRIC, type TokenSource } from './aad-token'
 import { sidecarName, type IntakeTarget, type IntakeTrigger } from './intake'
 import type { RunRecord, RunStatus } from './ingestion-observability'
 
@@ -36,11 +36,11 @@ export interface OneLakeIntake {
 const encodedRelPath = (target: IntakeTarget, filename: string): string =>
   [...target.path.replace(/^\/+|\/+$/g, '').split('/'), filename].map(encodeURIComponent).join('/')
 
-export function createOneLakeIntake(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): OneLakeIntake {
+export function createOneLakeIntake(tokens: TokenSource, opts: { fetch?: FetchLike } = {}): OneLakeIntake {
   const doFetch = opts.fetch ?? fetch
 
   async function auth(): Promise<Record<string, string>> {
-    const token = await tokens.getToken(SCOPE_ONELAKE)
+    const { token } = await tokens.getToken(SCOPE_ONELAKE)
     return { authorization: `Bearer ${token}` }
   }
 
@@ -108,9 +108,9 @@ export interface OneLakeReader {
   remove(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string): Promise<void>
 }
 
-export function createOneLakeReader(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): OneLakeReader {
+export function createOneLakeReader(tokens: TokenSource, opts: { fetch?: FetchLike } = {}): OneLakeReader {
   const doFetch = opts.fetch ?? fetch
-  const auth = async (): Promise<Record<string, string>> => ({ authorization: `Bearer ${await tokens.getToken(SCOPE_ONELAKE)}` })
+  const auth = async (): Promise<Record<string, string>> => ({ authorization: `Bearer ${(await tokens.getToken(SCOPE_ONELAKE)).token}` })
   const enc = (p: string): string => p.replace(/^\/+|\/+$/g, '').split('/').map(encodeURIComponent).join('/')
   const base = (t: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>): string =>
     `${ONELAKE_HOST}/${encodeURIComponent(t.workspaceId)}/${encodeURIComponent(t.lakehouseId)}`
@@ -182,14 +182,14 @@ export interface FabricJobs {
   runNow(trigger: IntakeTrigger, target?: IntakeTarget): Promise<void>
 }
 
-export function createFabricJobs(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): FabricJobs {
+export function createFabricJobs(tokens: TokenSource, opts: { fetch?: FetchLike } = {}): FabricJobs {
   const doFetch = opts.fetch ?? fetch
   return {
     async runNow(trigger, target): Promise<void> {
       const ws = trigger.workspaceId ?? target?.workspaceId
       if (!ws) throw new Error('fabric-jobs: run-now sin workspaceId (ni en trigger ni en target).')
       const jobType = trigger.jobType ?? 'Pipeline'
-      const token = await tokens.getToken(SCOPE_FABRIC)
+      const { token } = await tokens.getToken(SCOPE_FABRIC)
       const url = `${FABRIC_API}/workspaces/${encodeURIComponent(ws)}/items/${encodeURIComponent(trigger.processRef)}/jobs/instances?jobType=${encodeURIComponent(jobType)}`
       const res = await doFetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
       // 202 Accepted es el éxito esperado (job encolado).
@@ -224,11 +224,11 @@ const RUN_STATUSES: ReadonlySet<string> = new Set<RunStatus>([
 ])
 const toRunStatus = (s: string | undefined): RunStatus => (s && RUN_STATUSES.has(s) ? (s as RunStatus) : 'NotStarted')
 
-export function createFabricJobStatus(tokens: TokenProvider, opts: { fetch?: FetchLike } = {}): FabricJobStatus {
+export function createFabricJobStatus(tokens: TokenSource, opts: { fetch?: FetchLike } = {}): FabricJobStatus {
   const doFetch = opts.fetch ?? fetch
   return {
     async listInstances(workspaceId, itemId, top = 5): Promise<RunRecord[]> {
-      const token = await tokens.getToken(SCOPE_FABRIC)
+      const { token } = await tokens.getToken(SCOPE_FABRIC)
       const url = `${FABRIC_API}/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}/jobs/instances`
       const res = await doFetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
       if (!res.ok) {

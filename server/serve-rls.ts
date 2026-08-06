@@ -52,7 +52,7 @@ import {
   parseDomainsConfig,
   manageableDomains,
   parseIntakeConfig,
-  createTokenProvider,
+  credentialProviderFor,
   createOneLakeIntake,
   createOneLakeReader,
   slotLogPath,
@@ -190,6 +190,11 @@ function parseConnections(): Record<string, SqlConnectionProfile> | null {
   const text = CONNECTIONS_FILE ? readFileSync(CONNECTIONS_FILE, 'utf8') : CONNECTIONS_RAW
   const parsed = JSON.parse(text) as Record<string, SqlConnectionProfile>
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('VERGIS_CONNECTIONS debe ser un objeto { database_ref: perfil }.')
+  // Fail-closed EAGER (issue #66): un perfil cuya credencial no resuelve (modo desconocido, campo
+  // faltante) revienta acá — en el arranque en frío aborta el proceso con el ref y el campo por
+  // nombre; en hot-reload cae en el try/catch del watcher y el swap no ocurre (la config vigente
+  // sigue viva). No hace red ni disco: solo valida la forma de la credencial.
+  for (const [ref, p] of Object.entries(parsed)) credentialProviderFor(p, { label: `database_ref '${ref}'` })
   return parsed
 }
 // Referencia VIVA (mismo patrón que el policy store): el hot-reload muta este objeto IN-PLACE y todos
@@ -810,7 +815,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         if (intakeSlots.length) console.error('[vergis-rls] ingesta/frescura deshabilitadas: define VERGIS_INTAKE_SP (hay varias conexiones).')
         return {}
       }
-      const tokens = createTokenProvider({ tenantId: sp.tenantId, clientId: sp.clientId, clientSecret: sp.clientSecret })
+      const tokens = credentialProviderFor(sp, { label: `database_ref '${ref}'` })
       const jobStatus = createFabricJobStatus(tokens)
       // Engine client (frente B · frescura): resuelve processRef → engine_ref con el registro de procesos.
       const engine = createFabricEngineClient(tokens, async (processRef) => (await govStore.listProcesses()).find((p) => p.id === processRef)?.engine)

@@ -2,7 +2,7 @@
  * Implementación Fabric de la COSTURA `IngestionEngineClient` (ver `ingestion-observability.ts`): leer
  * el run-history de un proceso y empujar/leer su schedule. Es "la conexión" que cierra el frente B.
  *
- * Dos lados, mismo Service Principal (`TokenProvider` / `SCOPE_FABRIC`, el del intake):
+ * Dos lados, mismo Service Principal (`TokenSource` / `SCOPE_FABRIC`, el del intake):
  *  · LECTURA de corridas  → reusa `createFabricJobStatus.listInstances` (endpoint `jobs/instances`).
  *  · SCHEDULE (get/set)   → API de Job Scheduler de Fabric (`jobs/{jobType}/schedules`).
  *
@@ -10,7 +10,7 @@
  * (workspace+item+jobType) es lo que conecta el proceso de gobierno con su item Fabric. Un proceso sin
  * `EngineRef` no es observable: `listRunHistory` → [], `getScheduleSeconds` → null, `set` → lanza.
  */
-import { SCOPE_FABRIC, type TokenProvider } from './aad-token'
+import { SCOPE_FABRIC, type TokenSource } from './aad-token'
 import { createFabricJobStatus } from './intake-onelake'
 import type { EngineRef } from './governance-store'
 import type { IngestionEngineClient, RunRecord } from './ingestion-observability'
@@ -52,7 +52,7 @@ export interface FabricScheduler {
   setScheduleSeconds(engine: EngineRef, seconds: number): Promise<void>
 }
 
-export function createFabricScheduler(tokens: TokenProvider, opts: { fetch?: FetchLike; now?: Clock } = {}): FabricScheduler {
+export function createFabricScheduler(tokens: TokenSource, opts: { fetch?: FetchLike; now?: Clock } = {}): FabricScheduler {
   const doFetch = opts.fetch ?? fetch
   const now = opts.now ?? Date.now
 
@@ -60,7 +60,7 @@ export function createFabricScheduler(tokens: TokenProvider, opts: { fetch?: Fet
     `${FABRIC_API}/workspaces/${encodeURIComponent(e.workspaceId)}/items/${encodeURIComponent(e.itemId)}/jobs/${encodeURIComponent(e.jobType)}/schedules`
 
   async function listSchedules(e: EngineRef): Promise<FabricSchedule[]> {
-    const token = await tokens.getToken(SCOPE_FABRIC)
+    const { token } = await tokens.getToken(SCOPE_FABRIC)
     const res = await doFetch(schedulesUrl(e), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -95,7 +95,7 @@ export function createFabricScheduler(tokens: TokenProvider, opts: { fetch?: Fet
     },
 
     async setScheduleSeconds(engine, seconds): Promise<void> {
-      const token = await tokens.getToken(SCOPE_FABRIC)
+      const { token } = await tokens.getToken(SCOPE_FABRIC)
       const existing = await listSchedules(engine)
       const target = existing.find((s) => s.enabled) ?? existing[0]
       const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
@@ -121,7 +121,7 @@ export type EngineResolver = (processRef: string) => Promise<EngineRef | undefin
  * Un proceso sin `EngineRef` no es observable (devuelve vacío/null; `set` lanza con mensaje claro).
  */
 export function createFabricEngineClient(
-  tokens: TokenProvider,
+  tokens: TokenSource,
   resolveEngine: EngineResolver,
   opts: { fetch?: FetchLike; now?: Clock } = {},
 ): IngestionEngineClient {
