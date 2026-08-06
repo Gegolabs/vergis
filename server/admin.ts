@@ -77,7 +77,19 @@ export interface IntakeRunner {
   runNow?(trigger: IntakeTrigger, target?: IntakeTarget): Promise<void>
 }
 
-/** Fila de Frescura por entidad enriquecida con el estado en vivo del motor (run-history + schedule + salud). */
+/** Estado de la proyección de corridas (#105) de la fila. Presente cuando engine=true y hay proyección. */
+export interface FreshnessProjectionMeta {
+  /** Última observación exitosa del motor (ISO). null = proyección fría. */
+  observedAt: string | null
+  /** Lo mostrado supera 3× el poll del lazo, o el lazo está apagado. */
+  stale: boolean
+  /** El intento de refresco más reciente falló (se muestra lo último conocido). */
+  lastError: string | null
+  /** El lazo está apagado en esta instancia (poll = 0). */
+  off: boolean
+}
+
+/** Fila de Frescura por entidad enriquecida con lo último OBSERVADO del motor (corridas + schedule + salud). */
 export interface DomainEntityFreshness extends EntityFreshnessRow {
   /** ¿El proceso productor tiene engine_ref (es observable en el motor)? Si no, no hay corridas ni schedule. */
   engine: boolean
@@ -85,12 +97,14 @@ export interface DomainEntityFreshness extends EntityFreshnessRow {
   engineJobType?: string
   /** Item id del motor (para casar la entidad con su slot de ingesta: slot.trigger.processRef === este). */
   engineItemId?: string
-  /** Últimas corridas del proceso (más reciente primero), o 'error' si el motor no respondió. */
-  runs?: RunRecord[] | 'error'
+  /** Últimas corridas conocidas del proceso (más reciente primero), según la proyección local. */
+  runs?: RunRecord[]
   /** Salud derivada (fallida / faltante) a partir de las corridas y la cadencia requerida. */
   health?: ProcessHealth
-  /** Schedule real del proceso en el motor (segundos); null si no tiene o no se pudo leer. */
+  /** Schedule observado del proceso en el motor (segundos); null si no tiene o aún no se observó. */
   actualScheduleSeconds?: number | null
+  /** Edad y salud del refresco que alimenta esta fila (#105): lo mostrado es lo último conocido. */
+  projection?: FreshnessProjectionMeta
 }
 
 /** Ubicación resuelta del almacén de logs por corrida (OneLake: filesystem workspace + lakehouse). */
@@ -904,20 +918,35 @@ function engineKind(jobType?: string): { label: string; isNotebook: boolean } {
   return { label: jobType || 'motor', isNotebook: false }
 }
 
+/** Estado del refresco que alimenta la fila (#105): lo que se muestra es lo último OBSERVADO, y su edad
+ * es parte del dato. Vacío en el caso sano (proyección fresca, sin error): cero ruido cuando todo anda. */
+function projectionNote(p: FreshnessProjectionMeta | undefined): string {
+  if (!p) return ''
+  if (p.off) return p.observedAt ? `refresco apagado — datos de ${fmtWhen(p.observedAt)}` : 'refresco apagado — sin datos'
+  if (!p.observedAt) return p.lastError ? 'el motor no respondió al refresco — sin datos aún (se reintenta solo)' : 'esperando el primer refresco del motor'
+  if (p.lastError) return `⚠ el último refresco falló — datos de ${fmtWhen(p.observedAt)}`
+  if (p.stale) return `⚠ datos de ${fmtWhen(p.observedAt)} — el refresco no está corriendo`
+  return ''
+}
+
 /** Celda de salud de una entidad: tipo de motor (Notebook/Spark Job) + última corrida + bandera de salud.
  * Si el proceso corre como Notebook, explicita la alerta de migración a Spark Job. */
 function freshnessHealthCell(r: DomainEntityFreshness, runHref?: (r: DomainEntityFreshness) => string | null): string {
   if (!r.engine) return '<span class="sub">sin motor</span>'
   const k = engineKind(r.engineJobType)
   const kind = `<span class="sub">[${escapeHtml(k.label)}]</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
-  if (r.runs === 'error') return `${kind}<br><span class="sub">motor no respondió</span>`
+  const nota = projectionNote(r.projection)
+  const notaLine = nota ? `<div class="sub">${escapeHtml(nota)}</div>` : ''
+  // Proyección fría: no se afirma «sin corridas» (sería afirmar algo no observado) — se dice que aún
+  // no hubo refresco.
+  if (r.projection && !r.projection.observedAt) return `${kind}<br><span class="sub">${escapeHtml(nota)}</span>`
   const runs = r.runs ?? []
-  if (!runs.length) return `${kind}<br><span class="sub">sin corridas</span>`
+  if (!runs.length) return `${kind}<br><span class="sub">sin corridas</span>${notaLine}`
   const flag = r.health?.failed ? ' · ✕ fallida' : r.health?.missed ? ' · ⚠️ atrasada' : ' · ✓'
   // #99 · el log de esta corrida, también cuando terminó bien: `Completed` no garantiza el dato.
   const href = runHref?.(r) ?? null
   const verLog = href ? ` · <a class="sub" href="${escapeHtml(href)}">Ver log</a>` : ''
-  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>${verLog}${runErrorLine(runs[0])}`
+  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>${verLog}${runErrorLine(runs[0])}${notaLine}`
 }
 
 /** Controles de la metadata requerida del slot (issue #76). Vacío si el slot no declara `meta`. */
@@ -1187,7 +1216,7 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   }
   // #99 · destino del «Ver log» de la última corrida de la entidad. Sin `runLogs` cableado no hay enlace.
   const runLogHrefOfEntity = (r: DomainEntityFreshness): string | null => {
-    if (!deps.runLogs || !r.processId || r.runs === 'error') return null
+    if (!deps.runLogs || !r.processId) return null
     const last = (r.runs ?? [])[0]
     return last ? `/admin/dominio/${domain.id}/corrida?proc=${encodeURIComponent(r.processId)}&started=${encodeURIComponent(last.startedAt)}` : null
   }
@@ -1203,12 +1232,18 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
       const demanda = r.tightestDemand ? escapeHtml(r.tightestDemand) : '<span class="sub">sin demanda</span>'
       const oferta = r.oferta ? escapeHtml(r.oferta) : '<span class="sub">—</span>'
       const req = r.requiredCadence ? `<b>${escapeHtml(r.requiredCadence)}</b>${r.unsatisfiable ? ' ⚠️' : ''}` : '<span class="sub">—</span>'
+      // Sin observación del motor no se afirma nada de su schedule: `—` (no «sin schedule», que
+      // afirmaría haber mirado). Y sin schedule observado no hay drift que declarar → no se ofrece
+      // «Aplicar»: el botón nacería de una comparación contra un dato que no existe.
+      const observado = !r.projection || r.projection.observedAt != null
       const sched = !r.engine
         ? '<span class="sub">sin motor</span>'
-        : r.actualScheduleSeconds != null
-          ? escapeHtml(secondsToDuration(r.actualScheduleSeconds))
-          : '<span class="sub">sin schedule</span>'
-      const drift = r.engine && r.requiredCadenceSeconds != null && r.actualScheduleSeconds !== r.requiredCadenceSeconds
+        : !observado
+          ? '<span class="sub">—</span>'
+          : r.actualScheduleSeconds != null
+            ? escapeHtml(secondsToDuration(r.actualScheduleSeconds))
+            : '<span class="sub">sin schedule</span>'
+      const drift = r.engine && observado && r.requiredCadenceSeconds != null && r.actualScheduleSeconds !== r.requiredCadenceSeconds
       const aplicar = drift && deps.applyCadence && r.processId
         ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
         : ''
