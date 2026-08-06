@@ -36,6 +36,110 @@ Se nutre de **dos fuentes**: **semilla declarativa** en config de instancia (env
 > **Persistencia:** `VERGIS_OUT` debe apuntar a un **volumen persistente**; si no, el estado vivo
 > (admins agregados, ACLs, auditoría) vuelve a la semilla al reiniciar el contenedor.
 
+### ¿Qué vive en el store?
+
+El inventario completo, por familia (DDL e interfaces en
+`packages/capabilities/src/governance-store.ts`; apertura y siembra en `SqliteGovernanceStore.open`):
+
+| Familia | Tablas | Qué es |
+|---|---|---|
+| Admins de plataforma | `admin` | Rol admin (§5): semilla `VERGIS_ADMIN_SEED` + gestión in-app. |
+| Grupos de Mira | `mira_group` · `mira_group_member` · `mira_group_seed_removed` | Grupos para compartir PIs (§4) — NO grupos AAD. El tombstone da precedencia al runtime sobre la semilla. |
+| Gobierno de PI | `pi_governance` · `pi_grant` · `pi_demanda` | Visibilidad, ACL (owner/collaborator/viewer) y demanda de frescura, por código de PI (§4). |
+| Settings de plataforma | `platform_setting` | Clave→valor editable in-app + memoria durable de los lazos (abajo). |
+| Registro de fuentes | `source` · `table_source` · `ingestion_process` · `process_output` · `source_registry_removed` | Fuentes (oferta + dominio), mapeos tabla→fuente, procesos de ingestión (con `engine_ref` al item del motor y su `logs:`), salidas por proceso. Gestionable in-app con precedencia runtime-sobre-semilla (abajo). |
+| Registro de cargas | `intake_upload` · `intake_backfill` | Las cargas del intake (issue #62): quién subió qué, cuándo, con qué resultado — y el dedup por contenido (abajo). |
+| Registro de reversiones | `intake_revert` | Las reversiones ejecutadas (issue #63): quién revirtió qué carga y con qué resultado por clave (abajo). |
+| Proyección de ingestión | `ingestion_run` · `ingestion_process_state` | Lo último conocido del motor por proceso (issue #105): corridas, schedule, errores de observación (abajo). |
+| Miranda | `miranda_session` · `miranda_message` · `miranda_artifact` · `miranda_seq` | Sesiones del agente que autora specs (cluster 077): conversación, artefactos versionados append-only y la secuencia de códigos PI (semilla 101). |
+
+### `platform_setting` — settings de plataforma
+
+Clave→valor con autoría (`updated_by`/`updated_at`). Dos naturalezas conviven:
+
+- **Settings editables in-app** (sección Plataforma de Administración, solo admin, auditados):
+  - `index_title` — **el título del catálogo, editable**: el caso de uso canónico. Lo escribe el
+    formulario de Plataforma (`server/admin.ts`, evento de audit `platform-setting`) y lo lee el
+    render del índice (`renderIndexPage` en `server/serve-rls.ts`) con fallback al env
+    `VERGIS_INDEX_TITLE`. La instancia cambia su branding sin tocar el despliegue.
+  - `notas_retencion_impresiones` (default `P12M`) · `notas_max_schedules_usuario` (default `10`) ·
+    `notas_anti_cementerio` (default `on`) — retención y límites de la capa de notas
+    (`server/notas-settings.ts`; los defaults viven en código, el setting solo el override).
+- **Memoria durable de los lazos** (escrita por el producto, no por humanos):
+  - `freshness.alert_state` — el estado de alertas del lazo de frescura (dedup por transición,
+    issue #104/P-31): **sobrevive al reinicio** — sin él, cada restart re-alertaría todo lo ya
+    alertado (`server/freshness-loop.ts`).
+  - `report.last_sent` — el registro de último envío del reporte periódico (issue #102): el catch-up
+    tras un restart no re-envía lo ya enviado (`server/report.ts`).
+
+### Precedencia runtime-sobre-semilla — gestión in-app del registro (issue #107)
+
+El registro de fuentes/procesos se **siembra** de `VERGIS_SOURCES` (declarativo, re-sembrado en cada
+arranque) y además se **gestiona in-app** (sección Fuentes, por rol). Las dos fuentes conviven con
+una regla: **el runtime gana**. El mecanismo (en `SqliteGovernanceStore.open` y
+`upsertSource`/`upsertProcess`):
+
+- Una escritura in-app **sella `managed_at`** en la fila (`source.managed_at`,
+  `ingestion_process.managed_at`); el re-sembrado de arranque **no pisa** las filas selladas
+  (`ON CONFLICT … WHERE managed_at IS NULL`) y jamás toca `managed_at`.
+- Una **baja** in-app deja **tombstone** en `source_registry_removed` (`kind` + `id`): el
+  re-sembrado **no resucita** el id. Un **alta** in-app posterior del mismo id limpia el tombstone
+  (readmitir = revocar el tombstone). Los grupos de Mira usan el mismo patrón con su tabla propia
+  (`mira_group_seed_removed`) — dos registros, dos ciclos de vida.
+- Para una instancia que solo gestiona por yaml, la conducta es la declarativa pura.
+
+La **pausa de un proceso** (`ingestion_process.paused_at`/`paused_by`, `setProcessPaused`) también es
+estado de gobierno: pausado, el lazo no alerta ni reconcilia. El orden importa y está en el wiring
+(`pauseProcess` en `server/serve-rls.ts`): **pausar deshabilita el schedule en el motor PRIMERO** —
+si el motor no acepta, nada se registra (jamás un «pausado» en el producto con el motor corriendo);
+reanudar limpia el flag primero y el lazo converge. «Aplicar cadencia» a un proceso pausado **se
+rehúsa** (lo re-habilitaría).
+
+### Registro de cargas del intake — `intake_upload` · `intake_backfill` (issue #62)
+
+Cada carga (o su **rechazo**: `ok=0` con `error` — el timeline la muestra igual) es una fila:
+`slot_id`, `filename`, `sha256`, `bytes`, `uploaded_by`, `uploaded_at`, `triggered`, `origen`,
+`dup_of`. La **identidad del contenido es el `sha256`** de los bytes — el nombre NO participa (las
+copias llegan «… (1) (1).xlsx»). Sobre eso se montan:
+
+- **Dedup por contenido**: antes de aceptar, el admin consulta `findUploadBySha` (la carga original =
+  la fila más antigua con `ok=1` y ese sha en el slot); un contenido idéntico queda marcado
+  (`dup_of` → el id de la original) y la consola lo advierte («re-procesarlo no cambia el dato»).
+- **`id` como ancla**: es la referencia estable que «Revertir esta carga» (#63) usa.
+- **Indexado retroactivo** (`intake_backfill`, una vez por slot, lazy y en background): lo ya
+  procesado en `_processed/` antes de existir el registro se indexa como `origen='retro'` —
+  participa del dedup, no de la Actividad. Además, una migración one-shot importa los eventos
+  `type:'intake'` del audit log (condición: tabla vacía → idempotente entre reinicios).
+
+El reparto de responsabilidades no cambia: el **audit log** hash-encadenado sigue siendo la
+**evidencia**; el registro es el **índice consultable** (y el dedup) — por eso vive acá, indexado
+por `(slot_id, sha256)` y `(slot_id, uploaded_at)`.
+
+### Registro de reversiones — `intake_revert` (issue #63)
+
+Una reversión ejecutada es un **hecho de Vergis** — quién revirtió qué, cuándo y con qué resultado
+por clave —, no del convertidor: el mapeo carga→claves sigue viviendo en `_processed/` (el layout ES
+el ledger; el plan de compensación se **deriva** de él, sellado por hash, en
+`packages/capabilities/src/intake-revert.ts`). La fila guarda `slot_id`, `upload_id` (ancla a
+`intake_upload.id`; ausente si la carga es pre-#62), `filename`, `by_user`, `at`, `resumen` (el plan
+**ejecutado** como JSON, incluido lo reportado-sin-tocar: pisada / no-compensable / sin-clave) y
+`landing_retirado`. Se registra **al completar**: una ejecución caída a medias converge en la
+re-entrada y recién ahí queda escrita (el audit ya recibió el intento). Guard de carrera: con una
+conversión en curso, revertir se rehúsa.
+
+### Proyección de ingestión — `ingestion_run` · `ingestion_process_state` (issue #105)
+
+**La memoria del producto sobre el motor.** El lazo de frescura observa el motor cada tick y escribe
+la observación por lote (`recordObservations`): corridas (`ingestion_run`, PK `(process_id,
+started_at)` — el motor no entrega id de instancia — con poda a `INGESTION_RUN_RETENTION = 60` filas
+por proceso) + estado por proceso (`ingestion_process_state`: `schedule_seconds`, `observed_at`,
+`last_error`/`last_error_at`). Una observación **fallida registra solo el error** — lo último
+conocido queda intacto, y las vistas lo sirven marcado con su edad.
+
+La regla que esto compra: **el request path jamás pega al motor**. Frescura, la vista de Fuentes y el
+reporte periódico leen SOLO la proyección (`listRunSnapshots`); con el motor caído siguen sirviendo
+lo último conocido. `observed_at = null` es proyección fría (nunca se observó) y no se afirma nada.
+
 ## 3 · Dos capas de autorización, ortogonales
 
 El sistema exige **AND** de dos autorizaciones independientes:
@@ -177,6 +281,11 @@ una tabla devolvería todas sus filas → fuga. "Sin artefacto" = bug, no "públ
 | Gate de artefacto en el server (flag `VERGIS_PI_ACL`, bootstrap lazy) | ✅ (lógica unit-tested) |
 | UI Administración (data maestra, roles, grupos) + config por-PI | ✅ |
 | Aplicación de RLS allow-all (secpol + apply-*-rls) | ✅ patrón vivo |
+| `platform_setting` (título editable, settings de notas, estado de lazos) | ✅ |
+| Registro de cargas + dedup por contenido + indexado retroactivo (#62) | ✅ |
+| Registro de reversiones + «Revertir esta carga» (#63) | ✅ |
+| Proyección de ingestión (corridas + schedule, lazo de frescura) (#105) | ✅ |
+| Gestión in-app del registro de fuentes (`managed_at`, tombstones, pausa) (#107) | ✅ |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/038`. Diseño detallado allí; esta es
 > la spec canónica genérica.
