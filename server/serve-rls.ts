@@ -25,6 +25,20 @@
  *  - PORT
  *  - HOST                interfaz de escucha (opcional). Sin él, TODAS las interfaces (lo que el
  *                        contenedor necesita); con `HOST=127.0.0.1`, localhost-only (arnés de dev).
+ *
+ * Lazo de frescura (issue #105) — observa el motor, proyecta lo observado en el store de gobierno,
+ * alerta y reconcilia el schedule. La vista de Frescura lee SOLO la proyección:
+ *  - VERGIS_FRESHNESS_POLL_MS       cadencia del lazo (default 300000 = 5 min; `0` lo apaga). Solo
+ *                                   arranca si hay motor cableado.
+ *  - VERGIS_RECONCILE_AUTO          `off` apaga la corrección automática del schedule (default on).
+ *  - VERGIS_RECONCILE_DEBOUNCE_MS   ventana de re-push del mismo desired (default 21600000 = 6 h).
+ *
+ * Avisos salientes (issue #100) — el destino es declarativo, el producto no conoce el canal:
+ *  - VERGIS_NOTIFY      ruta al YAML de destinos (`slack-webhook` | `webhook`, N simultáneos). Sin
+ *                       él, avisos apagados: observación y reconcile corren igual (la proyección es
+ *                       la memoria del producto).
+ *  - VERGIS_PUBLIC_URL  URL pública de la instancia, base de los enlaces profundos del aviso.
+ *                       REQUERIDA si hay destinos declarados (si no, el arranque LANZA).
  */
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -75,10 +89,6 @@ import {
   deriveEntityFreshness,
   classifyProcess,
   reconcilePlan,
-  freshnessAlerts,
-  diffAlertState,
-  parseAlertState,
-  FRESHNESS_ALERT_STATE_KEY,
   createAsOfProvider,
   type PiAsOf,
   type GroupSeed,
@@ -97,6 +107,8 @@ import {
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
+import { createFreshnessLoop } from './freshness-loop'
+import { createSinks, fanout, type Notification } from './notify'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
@@ -1107,58 +1119,35 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       const mapInput = { sources: sources.map((s) => ({ id: s.id, oferta: s.oferta })), processes: procs, processOutputs: outputs, piTables, piDemandas }
       return { sources, procs, outputs, mapInput }
     }
-    // Monitor de frescura (alerta autónoma): cada `VERGIS_FRESHNESS_POLL_MS` lee el run-history de los
-    // procesos observables, detecta fallidas/faltantes y empuja a Slack SOLO en transiciones (dedup por
-    // estado). Config-gated: off salvo que se definan webhook + intervalo. No mantiene vivo el proceso.
-    const freshnessSlack = process.env['VERGIS_FRESHNESS_SLACK_WEBHOOK'] ?? ''
-    const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 0)
-    if (fabricWiring.engine && freshnessSlack && freshnessPollMs > 0) {
-      const engine = fabricWiring.engine
-      const postSlack = async (text: string): Promise<void> => {
-        try {
-          await fetch(freshnessSlack, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
-        } catch (e) {
-          console.error('[vergis-rls] freshness slack:', e instanceof Error ? e.message : e)
-        }
-      }
-      // El estado de alertas SOBREVIVE al reinicio (P-31): vive en el store de gobierno, no en RAM.
-      // Sin esto, cada restart re-notifica todo lo que siga fallando — y una alerta que grita lo ya
-      // sabido entrena a ignorarla. Se hidrata en el primer tick (no en el arranque: el monitor no
-      // debe demorar el boot ni romperlo si el store todavía no responde).
-      let alertState: Record<string, 'failed' | 'missed'> = {}
-      let hydrated = false
-      const tick = async (): Promise<void> => {
-        try {
-          if (!hydrated) {
-            alertState = parseAlertState(await govStore.getSetting(FRESHNESS_ALERT_STATE_KEY))
-            hydrated = true
-          }
-          const f = await freshnessInputs()
-          const reqOf = new Map(deriveIngestionMap(f.mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
-          const procs = await Promise.all(
-            f.procs
-              .filter((p) => p.engine)
-              .map(async (p) => ({
-                processId: p.id,
-                runs: await engine.listRunHistory(p.id).catch(() => [] as RunRecord[]),
-                requiredCadenceSeconds: reqOf.get(p.id) ?? Number.POSITIVE_INFINITY,
-              })),
-          )
-          const { notify, recovered, next } = diffAlertState(alertState, freshnessAlerts(procs, Date.now()))
-          const cambio = JSON.stringify(next) !== JSON.stringify(alertState)
-          alertState = next
-          // Se escribe SOLO en transición: el tick corre cada pocos minutos y el estado casi nunca
-          // cambia; persistir en cada vuelta sería escritura pura sin información.
-          if (cambio) await govStore.setSetting(FRESHNESS_ALERT_STATE_KEY, JSON.stringify(next), 'freshness-monitor')
-          for (const a of notify) await postSlack(`:warning: *Frescura* — proceso \`${a.processId}\` ${a.reason === 'failed' ? 'falló' : 'atrasada (no corre a tiempo)'}${a.lastError ? ` — ${a.lastError}` : ''}`)
-          for (const pid of recovered) await postSlack(`:white_check_mark: *Frescura* — proceso \`${pid}\` recuperado`)
-        } catch (e) {
-          console.error('[vergis-rls] freshness monitor:', e instanceof Error ? e.message : e)
-        }
-      }
-      const timer = setInterval(() => void tick(), freshnessPollMs)
-      timer.unref?.()
-      console.log(`[vergis-rls] monitor de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s → Slack)`)
+    // Lazo de frescura (#105): observa el motor → proyección local; alerta (dedup por transición);
+    // reconcilia el schedule con debounce. La vista lee SOLO la proyección — el motor nunca en el
+    // request path. Nace encendido cuando hay motor: la memoria del producto no puede depender de que
+    // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
+    // proceso.
+    const notifySinks = createSinks(INSTANCE_CFG.notify)
+    const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 300_000)
+    const reconcileAuto = (process.env['VERGIS_RECONCILE_AUTO'] ?? 'on').toLowerCase() !== 'off'
+    const reconcileDebounceMs = Number(process.env['VERGIS_RECONCILE_DEBOUNCE_MS'] ?? 21_600_000)
+    if (fabricWiring.engine && freshnessPollMs > 0) {
+      const loop = createFreshnessLoop(
+        {
+          engine: fabricWiring.engine,
+          store: govStore,
+          inputs: freshnessInputs,
+          // Fan-out a los destinos declarados: un destino caído se loguea y no tumba el tick.
+          ...(notifySinks.length ? { notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)) } : {}),
+          domains: domainsCfg,
+          audit: (e) => auditLog.append(e),
+          log: (l) => console.log(`[vergis-rls] ${l}`),
+        },
+        { reconcile: reconcileAuto, reconcileDebounceMs, publicUrl: INSTANCE_CFG.publicUrl },
+      )
+      setInterval(() => void loop.tick(), freshnessPollMs).unref?.()
+      setTimeout(() => void loop.tick(), 10_000).unref?.() // primer tick tras el bootstrap (patrón de la purga)
+      console.log(
+        `[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
+          `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
+      )
     }
     admin = createAdmin({
       entities,
@@ -1196,9 +1185,40 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         const [sources, processes, outputs] = await Promise.all([govStore.listSources(), govStore.listProcesses(), govStore.listProcessOutputs()])
         return { sources, processes, outputs }
       },
+      // Estado por proceso para la vista de Fuentes (#101): lo último conocido de la proyección (#105) +
+      // salud con la MISMA clasificación de Frescura. Una lectura de proyección por GET; el motor, jamás.
+      // Sin motor no se cablea: la vista queda como el registro puro (no se fabrican columnas de estado
+      // donde no hay quien observe).
+      processStates: fabricWiring.engine
+        ? async () => {
+            const f = await freshnessInputs()
+            const reqOf = new Map(deriveIngestionMap(f.mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
+            const snaps = new Map((await govStore.listRunSnapshots()).map((s) => [s.processId, s]))
+            const ahora = Date.now()
+            const off = freshnessPollMs <= 0
+            return f.procs
+              .filter((p) => p.engine)
+              .map((p) => {
+                const s = snaps.get(p.id)
+                const observedAt = s?.observedAt ?? null
+                const runs = observedAt ? (s?.runs ?? []) : []
+                const req = reqOf.get(p.id)
+                const health = observedAt && req != null ? classifyProcess(runs, req, ahora) : undefined
+                const stale = off || (observedAt != null && ahora - Date.parse(observedAt) > 3 * freshnessPollMs)
+                return {
+                  processId: p.id,
+                  runs,
+                  scheduleSeconds: observedAt ? (s?.scheduleSeconds ?? null) : null,
+                  health,
+                  projection: { observedAt, stale, lastError: s?.lastError ?? null, off },
+                }
+              })
+          }
+        : undefined,
       // Frescura por entidad de un dominio (vista de dominio): proyección por entidad enriquecida con
-      // run-history + schedule + salud (vía engine client). Scope por dominio = dominio de la fuente del
-      // proceso productor. Tolerante a fallos del motor (no se cae la página).
+      // LO ÚLTIMO OBSERVADO del motor (#105) — corridas, schedule y salud salen de la proyección local
+      // del store, no de una llamada al motor: el request path jamás pega a Fabric. Con el motor caído
+      // la vista sigue sirviendo lo último conocido, marcado con su edad (`projection`).
       domainFreshness: async (domainId: string) => {
         const f = await freshnessInputs()
         const rows = deriveEntityFreshness(f.mapInput)
@@ -1208,30 +1228,29 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           const proc = r.processId ? procById.get(r.processId) : undefined
           return proc != null && domainOfSource.get(proc.sourceId) === domainId
         })
-        const engine = fabricWiring.engine
-        const cache = new Map<string, { runs: RunRecord[] | 'error'; schedule: number | null }>()
-        const enrich = async (processId: string): Promise<{ runs: RunRecord[] | 'error'; schedule: number | null }> => {
-          const hit = cache.get(processId)
-          if (hit) return hit
-          let runs: RunRecord[] | 'error' = []
-          let schedule: number | null = null
-          if (engine) {
-            try { runs = await engine.listRunHistory(processId) } catch { runs = 'error' }
-            try { schedule = await engine.getScheduleSeconds(processId) } catch { schedule = null }
+        const snaps = new Map((await govStore.listRunSnapshots()).map((s) => [s.processId, s]))
+        const ahora = Date.now()
+        const off = freshnessPollMs <= 0
+        return inDomain.map((r) => {
+          const proc = r.processId ? procById.get(r.processId) : undefined
+          if (!r.processId || !fabricWiring.engine || !proc?.engine) return { ...r, engine: false }
+          const s = snaps.get(r.processId)
+          const observedAt = s?.observedAt ?? null
+          // Sin observación exitosa no se afirma NADA del motor: ni corridas, ni schedule.
+          const runs = observedAt ? (s?.runs ?? []) : []
+          const health = observedAt && r.requiredCadenceSeconds != null ? classifyProcess(runs, r.requiredCadenceSeconds, ahora) : undefined
+          const stale = off || (observedAt != null && ahora - Date.parse(observedAt) > 3 * freshnessPollMs)
+          return {
+            ...r,
+            engine: true,
+            engineJobType: proc.engine.jobType,
+            engineItemId: proc.engine.itemId,
+            runs,
+            health,
+            actualScheduleSeconds: observedAt ? (s?.scheduleSeconds ?? null) : null,
+            projection: { observedAt, stale, lastError: s?.lastError ?? null, off },
           }
-          const v = { runs, schedule }
-          cache.set(processId, v)
-          return v
-        }
-        return Promise.all(
-          inDomain.map(async (r) => {
-            const proc = r.processId ? procById.get(r.processId) : undefined
-            if (!r.processId || !engine || !proc?.engine) return { ...r, engine: false }
-            const { runs, schedule } = await enrich(r.processId)
-            const health = runs !== 'error' && r.requiredCadenceSeconds != null ? classifyProcess(runs, r.requiredCadenceSeconds, Date.now()) : undefined
-            return { ...r, engine: true, engineJobType: proc.engine.jobType, engineItemId: proc.engine.itemId, runs, health, actualScheduleSeconds: schedule }
-          }),
-        )
+        })
       },
       // Driver del reconciliador («aplicar cadencia»): empuja la cadencia derivada del proceso al schedule
       // del motor (one-way, idempotente). Devuelve el plan (set/noop) para feedback.
@@ -1243,7 +1262,14 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         if (!row) throw new Error(`Proceso desconocido: ${processId}`)
         const actual = await engine.getScheduleSeconds(processId)
         const plan = reconcilePlan(row.requiredCadenceSeconds, actual)
-        if (plan.action === 'set') await engine.setScheduleSeconds(processId, row.requiredCadenceSeconds)
+        if (plan.action === 'set') {
+          await engine.setScheduleSeconds(processId, row.requiredCadenceSeconds)
+          // Se RE-OBSERVA y se registra lo leído, nunca lo prometido (#105): el motor redondea el
+          // schedule a minutos, y anotar el deseado fabricaría un dato falso que además taparía el
+          // drift. Así la página refleja el schedule real apenas se recarga.
+          const re = await engine.getScheduleSeconds(processId).catch(() => undefined)
+          if (re !== undefined) await govStore.recordObservations([{ processId, observedAt: new Date().toISOString(), scheduleSeconds: re, runs: [] }])
+        }
         auditLog.append({ type: 'frescura-aplicar-cadencia', process: processId, by, desiredSeconds: row.requiredCadenceSeconds, action: plan.action })
         return plan
       },

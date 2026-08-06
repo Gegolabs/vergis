@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, type IntakeUploadRow } from '@vergis/capabilities'
+import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, type IntakeUploadRow } from '@vergis/capabilities'
 
 describe('GovernanceStore · admins (consolidado)', () => {
   it('implementa AdminStore: semilla, alta, anti-lockout', async () => {
@@ -191,5 +191,112 @@ describe('GovernanceStore · logs por corrida del proceso (#99)', () => {
     })
     expect((await g.listProcesses())[0]?.logs).toEqual({ lakehouseId: 'LH' })
     await g.close()
+  })
+})
+
+// ─── Proyección de ingestión: corridas + schedule observados (issue #105) ────
+describe('GovernanceStore · proyección de corridas (#105)', () => {
+  const snapOf = async (g: SqliteGovernanceStore, pid: string, runsPerProcess?: number) =>
+    (await g.listRunSnapshots(runsPerProcess != null ? { runsPerProcess } : undefined)).find((s) => s.processId === pid)
+
+  it('un lote exitoso puebla el snapshot: corridas recientes primero, schedule, observedAt y sin error', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordObservations([
+      {
+        processId: 'p_finanzas',
+        observedAt: '2026-08-06T10:00:00.000Z',
+        scheduleSeconds: 3600,
+        runs: [
+          { startedAt: '2026-08-06T09:00:00Z', endedAt: '2026-08-06T09:04:00Z', status: 'Completed' },
+          { startedAt: '2026-08-06T08:00:00Z', status: 'Failed', error: 'timeout' },
+        ],
+      },
+    ])
+    const s = await snapOf(g, 'p_finanzas')
+    expect(s?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z', '2026-08-06T08:00:00Z'])
+    expect(s?.runs[1]).toMatchObject({ status: 'Failed', error: 'timeout' })
+    expect(s).toMatchObject({ scheduleSeconds: 3600, observedAt: '2026-08-06T10:00:00.000Z', lastError: null, lastErrorAt: null })
+    await g.close()
+  })
+
+  it('una corrida InProgress re-observada Completed actualiza LA MISMA fila (no duplica)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:00:00Z', scheduleSeconds: 3600, runs: [{ startedAt: '2026-08-06T09:00:00Z', status: 'InProgress' }] }])
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:05:00Z', scheduleSeconds: 3600, runs: [{ startedAt: '2026-08-06T09:00:00Z', endedAt: '2026-08-06T09:07:00Z', status: 'Completed' }] }])
+    const s = await snapOf(g, 'p')
+    expect(s?.runs).toHaveLength(1)
+    expect(s?.runs[0]).toMatchObject({ startedAt: '2026-08-06T09:00:00Z', status: 'Completed', endedAt: '2026-08-06T09:07:00Z' })
+    await g.close()
+  })
+
+  it('las corridas con startedAt vacío se ignoran (no hay clave posible)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:00:00Z', scheduleSeconds: null, runs: [{ startedAt: '', status: 'Completed' }, { startedAt: '2026-08-06T09:00:00Z', status: 'Completed' }] }])
+    const s = await snapOf(g, 'p')
+    expect(s?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z'])
+    expect(s?.scheduleSeconds).toBeNull()
+    await g.close()
+  })
+
+  it(`poda a ${INGESTION_RUN_RETENTION} corridas por proceso: se conservan las MÁS NUEVAS`, async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const at = (i: number): string => `2026-08-06T00:00:00.${String(i).padStart(3, '0')}Z`
+    const runs = Array.from({ length: 70 }, (_, i) => ({ startedAt: at(i), status: 'Completed' as const }))
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-09-01T00:00:00Z', scheduleSeconds: 60, runs }])
+    const s = await snapOf(g, 'p', 200)
+    expect(s?.runs).toHaveLength(INGESTION_RUN_RETENTION)
+    expect(s?.runs[0]?.startedAt).toBe(at(69)) // la más nueva
+    expect(s?.runs.at(-1)?.startedAt).toBe(at(10)) // las 10 más viejas se podaron
+    await g.close()
+  })
+
+  it('una observación con error conserva lo último conocido y marca lastError; la siguiente exitosa lo limpia', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:00:00Z', scheduleSeconds: 3600, runs: [{ startedAt: '2026-08-06T09:00:00Z', status: 'Completed' }] }])
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:05:00Z', error: 'motor no respondió' }])
+    const caido = await snapOf(g, 'p')
+    expect(caido).toMatchObject({ scheduleSeconds: 3600, observedAt: '2026-08-06T10:00:00Z', lastError: 'motor no respondió', lastErrorAt: '2026-08-06T10:05:00Z' })
+    expect(caido?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z'])
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:10:00Z', scheduleSeconds: 3600, runs: [{ startedAt: '2026-08-06T10:00:00Z', status: 'Completed' }] }])
+    const sano = await snapOf(g, 'p')
+    expect(sano).toMatchObject({ observedAt: '2026-08-06T10:10:00Z', lastError: null, lastErrorAt: null })
+    expect(sano?.runs).toHaveLength(2)
+    await g.close()
+  })
+
+  it('un lote exitoso con runs: [] actualiza schedule/observedAt sin tocar las corridas (re-observación del botón)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:00:00Z', scheduleSeconds: 90, runs: [{ startedAt: '2026-08-06T09:00:00Z', status: 'Completed' }] }])
+    await g.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:01:00Z', scheduleSeconds: 60, runs: [] }])
+    const s = await snapOf(g, 'p')
+    expect(s).toMatchObject({ scheduleSeconds: 60, observedAt: '2026-08-06T10:01:00Z' })
+    expect(s?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z'])
+    await g.close()
+  })
+
+  it('runsPerProcess acota las corridas devueltas y un proceso nunca observado no aparece (proyección fría)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordObservations([
+      { processId: 'p', observedAt: '2026-08-06T10:00:00Z', scheduleSeconds: 60, runs: [
+        { startedAt: '2026-08-06T09:00:00Z', status: 'Completed' },
+        { startedAt: '2026-08-06T08:00:00Z', status: 'Completed' },
+        { startedAt: '2026-08-06T07:00:00Z', status: 'Completed' },
+      ] },
+    ])
+    expect((await snapOf(g, 'p', 2))?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z', '2026-08-06T08:00:00Z'])
+    expect(await snapOf(g, 'jamas_observado')).toBeUndefined()
+    await g.close()
+  })
+
+  it('la proyección sobrevive al reinicio (persistencia en archivo)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-proj-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, {})
+    await g1.recordObservations([{ processId: 'p', observedAt: '2026-08-06T10:00:00Z', scheduleSeconds: 3600, runs: [{ startedAt: '2026-08-06T09:00:00Z', status: 'Completed' }] }])
+    await g1.close()
+    const g2 = await SqliteGovernanceStore.open(file, {})
+    const s = (await g2.listRunSnapshots())[0]
+    expect(s).toMatchObject({ processId: 'p', scheduleSeconds: 3600, observedAt: '2026-08-06T10:00:00Z', lastError: null })
+    expect(s?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z'])
+    await g2.close()
   })
 })
