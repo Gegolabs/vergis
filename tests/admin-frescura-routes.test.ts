@@ -335,3 +335,73 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(applied).toEqual([{ processId: 'p_sap', by: STEWARD }])
   })
 })
+
+// Issue #105: la vista sirve LO ÚLTIMO OBSERVADO por el lazo, y la edad de ese dato es parte de lo
+// que se muestra. Nunca se afirma algo no observado (ni «sin schedule», ni «sin corridas»).
+describe('admin · Frescura muestra la salud de su propia proyección (#105)', () => {
+  const conFilas = async (rows: DomainEntityFreshness[]): Promise<string> => {
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => rows,
+      applyCadence: async () => ({ action: 'set', desiredSeconds: 7200 }),
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.statusCode).toBe(200)
+    return res.body
+  }
+  const conProyeccion = (p: DomainEntityFreshness['projection'], over: Partial<DomainEntityFreshness> = {}): DomainEntityFreshness[] => [
+    { ...FRESHNESS[0], projection: p, ...over },
+  ]
+
+  it('proyección fresca: la celda es la de siempre, sin una sola línea de más', async () => {
+    const body = await conFilas(conProyeccion({ observedAt: '2026-06-24T09:02:00Z', stale: false, lastError: null, off: false }))
+    expect(body).not.toContain('datos de')
+    expect(body).not.toContain('el refresco no está corriendo')
+    expect(body).not.toContain('el último refresco falló')
+    expect(body).toContain('<button class="add">Aplicar</button>') // el drift observado sigue accionable
+  })
+
+  it('proyección rancia: dice de cuándo son los datos y que el refresco no está corriendo', async () => {
+    const body = await conFilas(conProyeccion({ observedAt: '2026-06-24T09:02:00Z', stale: true, lastError: null, off: false }))
+    expect(body).toContain('datos de')
+    expect(body).toContain('el refresco no está corriendo')
+  })
+
+  it('el último refresco falló: se muestra lo último conocido, diciendo que falló', async () => {
+    const body = await conFilas(conProyeccion({ observedAt: '2026-06-24T09:02:00Z', stale: false, lastError: 'motor no respondió', off: false }))
+    expect(body).toContain('el último refresco falló')
+    expect(body).toContain('datos de')
+    expect(body).toContain('✓ Listo') // lo último conocido sigue a la vista
+  })
+
+  it('proyección fría: lo dice con sus palabras, el schedule es «—» y NO se ofrece «Aplicar»', async () => {
+    const body = await conFilas(
+      conProyeccion({ observedAt: null, stale: false, lastError: null, off: false }, { runs: [], health: undefined, actualScheduleSeconds: null }),
+    )
+    expect(body).toContain('esperando el primer refresco del motor')
+    expect(body).not.toContain('sin corridas')
+    expect(body).not.toContain('sin schedule') // no se afirma haber mirado el motor
+    expect(body).toContain('<span class="sub">—</span>')
+    expect(body).not.toContain('<button class="add">Aplicar</button>') // sin schedule observado no hay drift que declarar
+  })
+
+  it('proyección fría con el motor sin responder: se declara el reintento en curso', async () => {
+    const body = await conFilas(
+      conProyeccion({ observedAt: null, stale: true, lastError: 'ETIMEDOUT', off: false }, { runs: [], health: undefined, actualScheduleSeconds: null }),
+    )
+    expect(body).toContain('el motor no respondió al refresco — sin datos aún (se reintenta solo)')
+  })
+
+  it('lazo apagado en la instancia: se dice, con la fecha de los datos que se están mostrando', async () => {
+    const body = await conFilas(conProyeccion({ observedAt: '2026-06-24T09:02:00Z', stale: true, lastError: null, off: true }))
+    expect(body).toContain('refresco apagado — datos de')
+    expect(body).not.toContain('el refresco no está corriendo') // apagado no es «se rompió»
+  })
+})

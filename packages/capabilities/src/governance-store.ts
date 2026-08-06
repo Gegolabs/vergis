@@ -17,6 +17,7 @@ import {
   type PrincipalType,
 } from './pi-authz'
 import { durationToSeconds, validateOferta } from './freshness'
+import type { RunRecord, RunStatus } from './ingestion-observability'
 import {
   canTransition,
   isMirandaState,
@@ -248,7 +249,50 @@ export interface IntakeUploadStore {
   markIntakeBackfillDone(slotId: string, files: number, errores: number): Promise<void>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore {
+/** Retención de la proyección de corridas (filas por proceso). Poda el propio store al escribir. */
+export const INGESTION_RUN_RETENTION = 60
+
+/** Observación de UN proceso en una vuelta del lazo (#105). Atómica: o trae runs+schedule, o trae error. */
+export interface ProcessObservation {
+  processId: string
+  /** ISO del instante de la observación. */
+  observedAt: string
+  /** Corridas leídas del motor (con `startedAt` no vacío; las vacías se ignoran al escribir). */
+  runs?: RunRecord[]
+  /** Schedule leído (segundos; null = el item no tiene). Presente si la observación fue exitosa. */
+  scheduleSeconds?: number | null
+  /** La observación falló: se registra el error y NO se tocan runs/schedule proyectados. */
+  error?: string
+}
+
+/** Lo último conocido de un proceso (#105) — el contrato de lectura de Frescura y de la vista transversal. */
+export interface IngestionRunSnapshot {
+  processId: string
+  /** Corridas conocidas, más reciente primero (hasta `runsPerProcess`). */
+  runs: RunRecord[]
+  /** Schedule observado (null = sin schedule). Solo significativo con observedAt != null. */
+  scheduleSeconds: number | null
+  /** Última observación exitosa (ISO). null = proyección fría (nunca se observó). */
+  observedAt: string | null
+  /** Error del intento MÁS RECIENTE si falló; null si el último intento fue exitoso. */
+  lastError: string | null
+  lastErrorAt: string | null
+}
+
+/**
+ * Proyección local del historial de corridas + schedule por proceso (issue #105). Es la MEMORIA del
+ * producto sobre el motor: el render de Frescura lee de acá y jamás pega al motor en el request path.
+ */
+export interface IngestionRunStore {
+  /** Escritura POR LOTE (un persist). Éxito: upsert de runs por (process_id, started_at) + poda a
+   *  INGESTION_RUN_RETENTION + estado (schedule, observed_at, last_error=null). Error: solo
+   *  last_error/last_error_at (lo último conocido queda intacto). */
+  recordObservations(obs: ProcessObservation[]): Promise<void>
+  /** Snapshots de TODOS los procesos con estado o corridas proyectadas. runsPerProcess default 10. */
+  listRunSnapshots(opts?: { runsPerProcess?: number }): Promise<IngestionRunSnapshot[]>
+}
+
+export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore, IngestionRunStore {
   close(): Promise<void>
 }
 
@@ -386,6 +430,25 @@ const INTAKE_UPLOAD_IDX_TS = `CREATE INDEX IF NOT EXISTS idx_intake_upload_slot_
 const INTAKE_BACKFILL_DDL = `CREATE TABLE IF NOT EXISTS intake_backfill (
   slot_id TEXT PRIMARY KEY, done_at TEXT NOT NULL, files INTEGER NOT NULL, errores INTEGER NOT NULL
 );`
+// ── Proyección de ingestión (issue #105): lo último conocido del motor, servible sin tocarlo ──
+// La identidad de una corrida es (process_id, started_at): el motor no entrega id de instancia, y
+// `started_at` se guarda TAL CUAL lo entrega (misma cadena ISO que usa el enlace al log de #99).
+// Su PK compuesta ES el índice de la consulta canónica (igualdad por proceso + orden por started_at).
+const INGESTION_RUN_DDL = `CREATE TABLE IF NOT EXISTS ingestion_run (
+  process_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  PRIMARY KEY (process_id, started_at)
+);`
+const INGESTION_PROCESS_STATE_DDL = `CREATE TABLE IF NOT EXISTS ingestion_process_state (
+  process_id TEXT PRIMARY KEY,
+  schedule_seconds INTEGER,
+  observed_at TEXT,
+  last_error TEXT,
+  last_error_at TEXT
+);`
 
 export interface GovernanceSeed {
   admins?: string[]
@@ -428,6 +491,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INTAKE_UPLOAD_IDX_SHA)
     db.run(INTAKE_UPLOAD_IDX_TS)
     db.run(INTAKE_BACKFILL_DDL)
+    db.run(INGESTION_RUN_DDL)
+    db.run(INGESTION_PROCESS_STATE_DDL)
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
     db.run(`INSERT OR IGNORE INTO miranda_seq (id, next_code) VALUES (1, ?)`, [MIRANDA_SEQ_SEED])
     for (const g of seed.groups ?? []) {
@@ -1091,6 +1156,104 @@ export class SqliteGovernanceStore implements GovernanceStore {
       [slotId.trim(), now(), Math.max(0, Math.trunc(files)), Math.max(0, Math.trunc(errores))],
     )
     this.persist()
+  }
+
+  // ── IngestionRunStore (proyección de corridas + schedule observado, issue #105) ──
+  /** Poda las corridas del proceso a las `INGESTION_RUN_RETENTION` más nuevas. `started_at` es único
+   *  por proceso (es parte de la PK), así que el corte por el N-ésimo no puede llevarse empates. */
+  private pruneRuns(processId: string): void {
+    const stmt = this.db.prepare(
+      `SELECT started_at FROM ingestion_run WHERE process_id = ? ORDER BY started_at DESC LIMIT 1 OFFSET ?`,
+    )
+    stmt.bind([processId, INGESTION_RUN_RETENTION - 1])
+    const cutoff = stmt.step() ? String((stmt.getAsObject() as { started_at: string }).started_at) : null
+    stmt.free()
+    if (cutoff != null) this.db.run(`DELETE FROM ingestion_run WHERE process_id = ? AND started_at < ?`, [processId, cutoff])
+  }
+
+  async recordObservations(obs: ProcessObservation[]): Promise<void> {
+    if (!obs.length) return
+    for (const o of obs) {
+      const pid = o.processId.trim()
+      if (!pid) continue
+      if (o.error != null) {
+        // Falló: SOLO se marca el error. Runs y schedule proyectados quedan intactos — la proyección
+        // sirve lo último conocido, nunca fabrica un vacío por un motor que no respondió.
+        this.db.run(
+          `INSERT INTO ingestion_process_state (process_id, schedule_seconds, observed_at, last_error, last_error_at)
+           VALUES (?, NULL, NULL, ?, ?)
+           ON CONFLICT(process_id) DO UPDATE SET last_error=excluded.last_error, last_error_at=excluded.last_error_at`,
+          [pid, o.error, o.observedAt],
+        )
+        continue
+      }
+      let escritas = 0
+      for (const r of o.runs ?? []) {
+        if (!r.startedAt) continue // sin clave posible: el motor no siempre entrega startTimeUtc
+        this.db.run(
+          `INSERT INTO ingestion_run (process_id, started_at, ended_at, status, error) VALUES (?,?,?,?,?)
+           ON CONFLICT(process_id, started_at) DO UPDATE SET ended_at=excluded.ended_at, status=excluded.status, error=excluded.error`,
+          [pid, r.startedAt, r.endedAt ?? null, r.status, r.error ?? null],
+        )
+        escritas++
+      }
+      if (escritas) this.pruneRuns(pid)
+      this.db.run(
+        `INSERT INTO ingestion_process_state (process_id, schedule_seconds, observed_at, last_error, last_error_at)
+         VALUES (?,?,?,NULL,NULL)
+         ON CONFLICT(process_id) DO UPDATE SET schedule_seconds=excluded.schedule_seconds,
+           observed_at=excluded.observed_at, last_error=NULL, last_error_at=NULL`,
+        [pid, o.scheduleSeconds ?? null, o.observedAt],
+      )
+    }
+    // UN persist por lote: el store vuelca el ARCHIVO COMPLETO en cada persist (sqlite.ts) — persistir
+    // por proceso multiplicaría el costo de la vuelta del lazo por la cantidad de procesos.
+    this.persist()
+  }
+
+  async listRunSnapshots(opts?: { runsPerProcess?: number }): Promise<IngestionRunSnapshot[]> {
+    const top = Math.max(0, Math.trunc(opts?.runsPerProcess ?? 10))
+    const state = new Map<string, { scheduleSeconds: number | null; observedAt: string | null; lastError: string | null; lastErrorAt: string | null }>()
+    for (const r of selectAll(this.db, `SELECT process_id, schedule_seconds, observed_at, last_error, last_error_at FROM ingestion_process_state`)) {
+      state.set(String(r['process_id']), {
+        scheduleSeconds: r['schedule_seconds'] == null ? null : Number(r['schedule_seconds']),
+        observedAt: r['observed_at'] == null ? null : String(r['observed_at']),
+        lastError: r['last_error'] == null ? null : String(r['last_error']),
+        lastErrorAt: r['last_error_at'] == null ? null : String(r['last_error_at']),
+      })
+    }
+    // Fail-safe: un proceso con corridas pero sin fila de estado no debería existir; si existe, sale
+    // como proyección fría en vez de desaparecer del listado.
+    const ids = new Set(state.keys())
+    for (const r of selectAll(this.db, `SELECT DISTINCT process_id FROM ingestion_run`)) ids.add(String(r['process_id']))
+    const out: IngestionRunSnapshot[] = []
+    for (const pid of [...ids].sort()) {
+      const runs: RunRecord[] = []
+      if (top > 0) {
+        const stmt = this.db.prepare(
+          `SELECT started_at, ended_at, status, error FROM ingestion_run WHERE process_id = ? ORDER BY started_at DESC LIMIT ?`,
+        )
+        stmt.bind([pid, top])
+        while (stmt.step()) {
+          const r = stmt.getAsObject() as { started_at: string; ended_at?: string | null; status: string; error?: string | null }
+          const run: RunRecord = { startedAt: String(r.started_at), status: String(r.status) as RunStatus }
+          if (r.ended_at != null) run.endedAt = String(r.ended_at)
+          if (r.error != null) run.error = String(r.error)
+          runs.push(run)
+        }
+        stmt.free()
+      }
+      const s = state.get(pid)
+      out.push({
+        processId: pid,
+        runs,
+        scheduleSeconds: s?.scheduleSeconds ?? null,
+        observedAt: s?.observedAt ?? null,
+        lastError: s?.lastError ?? null,
+        lastErrorAt: s?.lastErrorAt ?? null,
+      })
+    }
+    return out
   }
 
   /** Próximo entero de una secuencia MAX+1 con parámetro (helper de appendMirandaMessage). */
