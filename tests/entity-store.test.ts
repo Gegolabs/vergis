@@ -116,6 +116,32 @@ describe('Store entidad-canónico · fail-closed', () => {
   })
 })
 
+describe('Policy store · clave raíz ausente vs «declara cero» (#117)', () => {
+  it('doc sin ninguna clave raíz → root-missing', () => {
+    for (const doc of [{}, null, undefined, { otra: 1 }] as never[]) {
+      expect(() => parsePolicyStore(doc)).toThrow(/no declara ninguna clave raíz/)
+    }
+    try {
+      parsePolicyStore({})
+      expect.unreachable('debió lanzar')
+    } catch (e) {
+      expect(e).toBeInstanceOf(VergisError)
+      expect((e as VergisError & { detail?: { code?: string } }).message).toMatch(/policies/)
+    }
+  })
+
+  it('policies: [] → mapa vacío deliberado (legítimo)', () => {
+    expect(parsePolicyStore({ policies: [] }).size).toBe(0)
+    expect(parsePolicyStore({ entities: [], datasets: [] }).size).toBe(0)
+  })
+
+  it('clave raíz presente pero nula → error de tipo nombrando la clave', () => {
+    expect(() => parsePolicyStore({ policies: null } as never)).toThrow(/'policies' debe ser una lista/)
+    expect(() => parsePolicyStore({ entities: null, datasets: [] } as never)).toThrow(/'entities' debe ser una lista/)
+    expect(() => parsePolicyStore({ datasets: 'x' } as never)).toThrow(/'datasets' debe ser una lista/)
+  })
+})
+
 describe('Store entidad-canónico · end-to-end (entidad → resolve → compila → enforce)', () => {
   type Row = Record<string, unknown>
   const ROWS_CH: Row[] = [{ area: 'Finanzas' }, { area: 'Producción' }]
