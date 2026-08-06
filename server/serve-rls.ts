@@ -56,6 +56,7 @@ import {
   createOneLakeIntake,
   createOneLakeReader,
   slotLogPath,
+  isSidecarName,
   createFabricJobs,
   createFabricJobStatus,
   createFabricEngineClient,
@@ -90,7 +91,7 @@ import {
   type NotasRenderContext,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
-import { createAdmin, type AdminHandler, type IntakeRunner } from './admin'
+import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner } from './admin'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
@@ -806,7 +807,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; engine?: IngestionEngineClient } => {
+    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; backfill?: (slot: IntakeSlot) => void; engine?: IngestionEngineClient } => {
       if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
@@ -824,8 +825,82 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       const onelake = createOneLakeIntake(tokens)
       const jobs = createFabricJobs(tokens)
       const reader = createOneLakeReader(tokens)
+      const parentDir = (p: string): string => (p.includes('/') ? p.replace(/\/[^/]*$/, '') : p)
+
+      // ── Registro de cargas (issue #62): migración one-shot + indexado retroactivo ──
+      // La fuente del historial pasa del audit log JSONL al GovernanceStore. Para que el timeline no
+      // pierda la historia ya vivida, los eventos `type:'intake'` del log se importan UNA vez: la
+      // condición es que la tabla esté vacía (idempotente entre reinicios). El `dupOf` viejo era un
+      // string de aviso, no una referencia: no se re-resuelve a id.
+      let migracion: Promise<void> | null = null
+      const migrarCargasDesdeAuditLog = (): Promise<void> => {
+        migracion ??= (async () => {
+          const yaHay = await Promise.all(intakeSlots.map((s) => govStore.listUploads(s.id, 1)))
+          if (yaHay.some((r) => r.length)) return
+          let text: string
+          try { text = readFileSync(`${OUT}/admin-audit.log`, 'utf8') } catch { return }
+          const conocidos = new Set(intakeSlots.map((s) => s.id))
+          for (const l of text.split('\n')) {
+            const linea = l.trim()
+            if (!linea) continue
+            try {
+              const e = JSON.parse(linea) as { type?: string; slot?: string; filename?: string; bytes?: number; by?: string; ok?: boolean; triggered?: boolean; ts?: string; sha256?: string }
+              if (e.type !== 'intake' || !e.slot || !conocidos.has(e.slot) || !e.sha256) continue
+              await govStore.recordUpload({
+                slotId: e.slot, filename: e.filename ?? '', sha256: e.sha256, bytes: e.bytes ?? 0,
+                uploadedBy: e.by ?? '', uploadedAt: e.ts ?? '', ok: e.ok !== false, triggered: e.triggered === true, origen: 'upload',
+              })
+            } catch { /* línea no-JSON del log, o store que rechazó la fila: se ignora */ }
+          }
+        })().catch(() => {}) // la migración jamás rompe una página: sin ella el historial arranca vacío
+        return migracion
+      }
+
+      // Indexado retroactivo de `_processed/` (D3): lazy, UNA vez por slot, en background. Todo lo
+      // procesado antes de que existiera el registro es invisible al dedup — esto lo hace visible sin
+      // que nadie tenga que acordarse de correr un comando. Un archivo ilegible se cuenta y no aborta
+      // el resto; si la pasada entera revienta NO se marca, y el próximo disparo la reintenta.
+      const backfillEnCurso = new Set<string>()
+      const backfill = (slot: IntakeSlot): void => {
+        if (backfillEnCurso.has(slot.id)) return
+        backfillEnCurso.add(slot.id)
+        void (async () => {
+          try {
+            await migrarCargasDesdeAuditLog()
+            if (await govStore.intakeBackfillDone(slot.id)) return
+            const entries = await reader.list(slot.target, `${parentDir(slot.target.path)}/_processed`, { recursive: true })
+            let files = 0
+            let errores = 0
+            for (const e of entries) {
+              if (e.isDirectory || isSidecarName(e.path)) continue
+              const filename = e.path.split('/').pop() ?? e.path
+              try {
+                const bytes = await reader.readBytes(slot.target, e.path)
+                if (!bytes) { errores += 1; continue }
+                const sha256 = createHash('sha256').update(bytes).digest('hex')
+                // Idempotencia frente a re-lanzamientos y a la migración: mismo contenido + mismo nombre ya indexado.
+                const ya = (await govStore.listUploads(slot.id, 1000)).some((r) => r.sha256 === sha256 && r.filename === filename)
+                if (ya) continue
+                await govStore.recordUpload({
+                  slotId: slot.id, filename, sha256, bytes: bytes.byteLength,
+                  uploadedBy: '(retro: _processed)', uploadedAt: e.lastModified, ok: true, triggered: false, origen: 'retro',
+                })
+                files += 1
+              } catch { errores += 1 }
+            }
+            await govStore.markIntakeBackfillDone(slot.id, files, errores)
+            auditLog.append({ type: 'intake-hash-backfill', slot: slot.id, files, errores })
+          } catch (err) {
+            console.error(`[vergis-rls] indexado retroactivo de _processed/ falló en el slot '${slot.id}': ${err instanceof Error ? err.message : String(err)}`)
+          } finally {
+            backfillEnCurso.delete(slot.id)
+          }
+        })()
+      }
+
       return {
         runner: { put: (t, f, b, sc) => onelake.put(t, f, b, sc), runNow: (tr, t) => jobs.runNow(tr, t) },
+        backfill,
         status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
         // Log de la última conversión del slot (issue #55): lo escribe el proceso en el landing;
         // Frescura lo expone para reconfirmar una carga sin acceso a Fabric. null = sin log.
@@ -836,22 +911,25 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // Consola de cargas (issue #58). El padre del dir del slot ancla las convenciones del ciclo:
         // `<padre>/_processed` (lo archivado por el pipeline) y `<padre>/_retirado` (retiros manuales).
         cargas: (() => {
-          const parentDir = (p: string): string => (p.includes('/') ? p.replace(/\/[^/]*$/, '') : p)
           return {
+            // El historial se lee del REGISTRO de cargas (issue #62), no del audit log: aquel es
+            // evidencia encadenada, no índice consultable. La migración one-shot de más abajo
+            // importa lo ya escrito para que el timeline no pierda historia al cambiar de fuente.
+            // Las filas `origen:'retro'` (indexado de `_processed/`) NO son eventos de carga vividos:
+            // participan del dedup, no de la Actividad.
             history: async (slot, limit) => {
-              let text = ''
-              try { text = readFileSync(`${OUT}/admin-audit.log`, 'utf8') } catch { return [] }
-              const lines = text.split('\n')
+              await migrarCargasDesdeAuditLog()
+              const rows = await govStore.listUploads(slot.id, Math.max(limit * 2, limit))
               const out: IntakeUploadEvent[] = []
-              for (let i = lines.length - 1; i >= 0 && out.length < limit; i -= 1) {
-                const l = lines[i].trim()
-                if (!l) continue
-                try {
-                  const e = JSON.parse(l) as { type?: string; slot?: string; filename?: string; bytes?: number; by?: string; ok?: boolean; triggered?: boolean; ts?: string; sha256?: string; dupOf?: string }
-                  if (e.type === 'intake' && e.slot === slot.id) {
-                    out.push({ ts: e.ts ?? '', filename: e.filename ?? '', bytes: e.bytes ?? 0, by: e.by ?? '', ok: e.ok !== false, triggered: e.triggered === true, sha256: e.sha256, dupOf: e.dupOf })
-                  }
-                } catch { /* línea no-JSON del log: se ignora */ }
+              for (const r of rows.filter((x) => x.origen === 'upload').slice(0, limit)) {
+                const ev: IntakeUploadEvent = { ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
+                // `dup_of` apunta por construcción a la carga original del contenido, que es
+                // exactamente la que `findUploadBySha` resuelve (la más antigua ok=1 con ese sha).
+                if (r.dupOfId != null) {
+                  const orig = await govStore.findUploadBySha(slot.id, r.sha256)
+                  if (orig) ev.dupOf = dupLabel(orig)
+                }
+                out.push(ev)
               }
               return out
             },
@@ -1001,6 +1079,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       intakeStatus: fabricWiring.status,
       intakeLog: fabricWiring.logOf,
       cargas: fabricWiring.cargas,
+      // Registro de cargas (issue #62): dedup por contenido, pre-check y el indexado retroactivo.
+      intakeUploads: govStore,
+      intakeBackfill: fabricWiring.backfill,
       signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
       groupStore: govStore,

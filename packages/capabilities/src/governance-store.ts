@@ -202,7 +202,44 @@ export interface MirandaStore {
   nextMirandaPiCode(): Promise<number>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore {
+/**
+ * Una CARGA registrada del intake (issue #62). El registro de cargas es estado de gobierno
+ * («quién / cuándo / qué entró»), no evidencia encadenada: el audit log sigue recibiendo su evento,
+ * pero la consulta —y el dedup por contenido— viven acá, indexados.
+ */
+export interface IntakeUploadRow {
+  id: number
+  slotId: string
+  filename: string
+  /** SHA-256 hex (64, minúsculas) de los bytes: identidad del contenido. El NOMBRE no participa. */
+  sha256: string
+  bytes: number
+  uploadedBy?: string
+  uploadedAt: string
+  /** false = subida rechazada (validación/metadata): el timeline la muestra igual. */
+  ok: boolean
+  error?: string
+  triggered: boolean
+  /** `retro` = fila derivada del indexado retroactivo de `_processed/` (no es un evento vivido). */
+  origen: 'upload' | 'retro'
+  /** Id de la carga ORIGINAL cuando el contenido es idéntico a una previa del slot. */
+  dupOfId?: number
+}
+
+/** Registro consultable de las cargas del intake + la marca del indexado retroactivo por slot. */
+export interface IntakeUploadStore {
+  /** Registra una carga (o su rechazo). Devuelve el id asignado. */
+  recordUpload(row: Omit<IntakeUploadRow, 'id'>): Promise<number>
+  /** La carga ORIGINAL (ok=1) con ese contenido en el slot: la fila más antigua con ese sha. */
+  findUploadBySha(slotId: string, sha256: string): Promise<IntakeUploadRow | null>
+  /** Cargas del slot, recientes primero. */
+  listUploads(slotId: string, limit: number): Promise<IntakeUploadRow[]>
+  /** ¿El indexado retroactivo de `_processed/` del slot ya corrió? */
+  intakeBackfillDone(slotId: string): Promise<boolean>
+  markIntakeBackfillDone(slotId: string, files: number, errores: number): Promise<void>
+}
+
+export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore {
   close(): Promise<void>
 }
 
@@ -309,6 +346,28 @@ const MIRANDA_SEQ_DDL = `CREATE TABLE IF NOT EXISTS miranda_seq (
   next_code INTEGER NOT NULL
 );`
 const MIRANDA_SEQ_SEED = 101
+// ── Intake (issue #62): el registro de cargas como tabla de primera clase ──
+// `sha256` es la identidad del contenido (el nombre NO participa: las copias llegan «… (1) (1).xlsx»).
+// `id` es el ancla estable que el ledger carga→claves de #63 referenciará.
+const INTAKE_UPLOAD_DDL = `CREATE TABLE IF NOT EXISTS intake_upload (
+  id INTEGER PRIMARY KEY,
+  slot_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  uploaded_by TEXT,
+  uploaded_at TEXT NOT NULL,
+  ok INTEGER NOT NULL DEFAULT 1,
+  error TEXT,
+  triggered INTEGER NOT NULL DEFAULT 0,
+  origen TEXT NOT NULL DEFAULT 'upload',
+  dup_of INTEGER
+);`
+const INTAKE_UPLOAD_IDX_SHA = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sha ON intake_upload (slot_id, sha256);`
+const INTAKE_UPLOAD_IDX_TS = `CREATE INDEX IF NOT EXISTS idx_intake_upload_slot_ts ON intake_upload (slot_id, uploaded_at DESC);`
+const INTAKE_BACKFILL_DDL = `CREATE TABLE IF NOT EXISTS intake_backfill (
+  slot_id TEXT PRIMARY KEY, done_at TEXT NOT NULL, files INTEGER NOT NULL, errores INTEGER NOT NULL
+);`
 
 export interface GovernanceSeed {
   admins?: string[]
@@ -346,6 +405,10 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(MIRANDA_MESSAGE_DDL)
     db.run(MIRANDA_ARTIFACT_DDL)
     db.run(MIRANDA_SEQ_DDL)
+    db.run(INTAKE_UPLOAD_DDL)
+    db.run(INTAKE_UPLOAD_IDX_SHA)
+    db.run(INTAKE_UPLOAD_IDX_TS)
+    db.run(INTAKE_BACKFILL_DDL)
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
     db.run(`INSERT OR IGNORE INTO miranda_seq (id, next_code) VALUES (1, ?)`, [MIRANDA_SEQ_SEED])
     for (const g of seed.groups ?? []) {
@@ -904,6 +967,98 @@ export class SqliteGovernanceStore implements GovernanceStore {
     this.db.run(`UPDATE miranda_seq SET next_code = next_code + 1 WHERE id = 1`)
     this.persist()
     return assigned
+  }
+
+  // ── IntakeUploadStore (registro de cargas + dedup por contenido, issue #62) ──
+  private intakeUploadRow(r: Record<string, unknown>): IntakeUploadRow {
+    const row: IntakeUploadRow = {
+      id: Number(r['id']),
+      slotId: String(r['slot_id']),
+      filename: String(r['filename']),
+      sha256: String(r['sha256']),
+      bytes: Number(r['bytes']),
+      uploadedAt: String(r['uploaded_at']),
+      ok: Number(r['ok']) !== 0,
+      triggered: Number(r['triggered']) !== 0,
+      origen: String(r['origen']) === 'retro' ? 'retro' : 'upload',
+    }
+    if (r['uploaded_by'] != null) row.uploadedBy = String(r['uploaded_by'])
+    if (r['error'] != null) row.error = String(r['error'])
+    if (r['dup_of'] != null) row.dupOfId = Number(r['dup_of'])
+    return row
+  }
+
+  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of`
+
+  async recordUpload(row: Omit<IntakeUploadRow, 'id'>): Promise<number> {
+    this.db.run(
+      `INSERT INTO intake_upload (slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        row.slotId.trim(),
+        row.filename,
+        row.sha256.trim().toLowerCase(),
+        Math.max(0, Math.trunc(row.bytes)),
+        row.uploadedBy ?? null,
+        row.uploadedAt || now(),
+        row.ok ? 1 : 0,
+        row.error ?? null,
+        row.triggered ? 1 : 0,
+        row.origen === 'retro' ? 'retro' : 'upload',
+        row.dupOfId ?? null,
+      ],
+    )
+    const stmt = this.db.prepare(`SELECT MAX(id) AS n FROM intake_upload`)
+    stmt.step()
+    const id = Number((stmt.getAsObject() as { n: number }).n)
+    stmt.free()
+    this.persist()
+    return id
+  }
+
+  async findUploadBySha(slotId: string, sha256: string): Promise<IntakeUploadRow | null> {
+    // La ORIGINAL = la más antigua ok=1 con ese contenido: es la que el aviso cita («idéntico a X»).
+    const stmt = this.db.prepare(
+      `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
+       WHERE slot_id = ? AND sha256 = ? AND ok = 1 ORDER BY uploaded_at ASC, id ASC LIMIT 1`,
+    )
+    stmt.bind([slotId.trim(), sha256.trim().toLowerCase()])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const r = stmt.getAsObject()
+    stmt.free()
+    return this.intakeUploadRow(r)
+  }
+
+  async listUploads(slotId: string, limit: number): Promise<IntakeUploadRow[]> {
+    const stmt = this.db.prepare(
+      `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
+       WHERE slot_id = ? ORDER BY uploaded_at DESC, id DESC LIMIT ?`,
+    )
+    stmt.bind([slotId.trim(), Math.max(0, Math.trunc(limit))])
+    const out: IntakeUploadRow[] = []
+    while (stmt.step()) out.push(this.intakeUploadRow(stmt.getAsObject()))
+    stmt.free()
+    return out
+  }
+
+  async intakeBackfillDone(slotId: string): Promise<boolean> {
+    const stmt = this.db.prepare(`SELECT 1 FROM intake_backfill WHERE slot_id = ?`)
+    stmt.bind([slotId.trim()])
+    const found = stmt.step()
+    stmt.free()
+    return found
+  }
+
+  async markIntakeBackfillDone(slotId: string, files: number, errores: number): Promise<void> {
+    this.db.run(
+      `INSERT INTO intake_backfill (slot_id, done_at, files, errores) VALUES (?,?,?,?)
+       ON CONFLICT(slot_id) DO UPDATE SET done_at=excluded.done_at, files=excluded.files, errores=excluded.errores`,
+      [slotId.trim(), now(), Math.max(0, Math.trunc(files)), Math.max(0, Math.trunc(errores))],
+    )
+    this.persist()
   }
 
   /** Próximo entero de una secuencia MAX+1 con parámetro (helper de appendMirandaMessage). */
