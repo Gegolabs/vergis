@@ -21,9 +21,14 @@ function salud(lastSuccessAt: string | null, ageSeconds: number | null): Process
 }
 
 describe('notify · config declarativa (VERGIS_NOTIFY)', () => {
-  it('doc vacío ⇒ sin destinos; un destino válido toma el id por defecto ⟨type⟩-⟨i+1⟩', () => {
-    expect(parseNotifyConfig({})).toEqual({ destinations: [] })
-    expect(parseNotifyConfig(null)).toEqual({ destinations: [] })
+  it('clave raíz ausente LANZA (#117: archivo declarado sin `destinations` = roto); `destinations: []` es el cero legítimo', () => {
+    expect(() => parseNotifyConfig({})).toThrow(/falta la clave raíz 'destinations'/)
+    expect(() => parseNotifyConfig(null)).toThrow(/falta la clave raíz 'destinations'/)
+    expect(() => parseNotifyConfig({ destinations: null })).toThrow(/`destinations` debe ser una lista/)
+    expect(parseNotifyConfig({ destinations: [] })).toEqual({ destinations: [] })
+  })
+
+  it('un destino válido toma el id por defecto ⟨type⟩-⟨i+1⟩', () => {
     expect(parseNotifyConfig({ destinations: [{ type: 'slack-webhook', url: 'https://hooks.slack.com/x' }] })).toEqual({
       destinations: [{ id: 'slack-webhook-1', type: 'slack-webhook', url: 'https://hooks.slack.com/x' }],
     })

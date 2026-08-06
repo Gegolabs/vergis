@@ -10,7 +10,7 @@
  * (el dedup por transición del lazo de frescura hace el anti-ruido; un aviso perdido no se re-emite).
  * El reporte periódico (#102) REUSA este puerto componiendo sus propios `Notification`.
  */
-import type { ProcessHealth } from '@vergis/capabilities'
+import { requireRootKey, type ProcessHealth } from '@vergis/capabilities'
 
 export type NotificationSeverity = 'warning' | 'ok' | 'info'
 export interface NotificationLink {
@@ -50,12 +50,13 @@ const TIPOS: NotifyDestinationType[] = ['slack-webhook', 'webhook']
 /**
  * Valida `{ destinations: [...] }`. LANZA ante forma inválida (boot fail-closed, patrón `domains`):
  * un destino mal declarado rompe el arranque con mensaje claro, nunca se ignora en silencio.
+ * La clave raíz sigue el contrato de #117 (`requireRootKey`): un notify.yaml declarado que perdió
+ * `destinations:` es un archivo roto y NO arranca — el sistema que avisa fallos no puede
+ * desactivarse por evaporación silenciosa; «cero destinos» se declara con `destinations: []`.
  */
 export function parseNotifyConfig(doc: unknown): NotifyConfig {
-  const root = (doc ?? {}) as Record<string, unknown>
-  const raw = root['destinations']
-  if (raw == null) return { destinations: [] }
-  if (!Array.isArray(raw)) throw new Error('notify: `destinations` debe ser una lista.')
+  const raw = requireRootKey(doc, 'notify', 'destinations')
+  if (!Array.isArray(raw)) throw new Error('notify: `destinations` debe ser una lista — para declarar «no hay», usa `destinations: []`.')
   const seen = new Set<string>()
   const destinations = raw.map((d, i): NotifyDestination => {
     const o = (d ?? {}) as Record<string, unknown>
