@@ -93,6 +93,46 @@ Cada **slot** = {`id`, `label`, `domain`, `accept` (glob de nombre), `maxBytes`,
 (workspace+lakehouse+ruta `Files/...`), `trigger` opcional}. El usuario **elige el slot** y **nunca ve
 la ruta**. El `target.path` **debe** empezar en `Files/` (el contrato lo exige; `Tables/` se rechaza).
 
+### Metadata declarada (por slot)
+Algunos archivos **no se pueden convertir sin un dato que no viene en su contenido** y que por política
+jamás se infiere: a qué empresa se imputa un extracto, qué versión trae un presupuesto. El slot lo
+declara en `meta` (`id`, `label`, `type` = `string|number|enum|rut`, `required`) y el valor viaja con el
+archivo como **sidecar** `<archivo>.meta.json`, que el pipeline lee. Hay **dos formas** de escribirlo:
+
+- **Formulario** — la UI de carga lo pide y sin él no deja subir (default).
+- **Nombre del archivo** (`from_filename`) — cuando la instancia declaró una convención de nombre para
+  ese slot. La metadata sigue siendo declarada; cambia dónde la escribe el usuario.
+
+```yaml
+meta:
+  - id: empresa_rut
+    label: "Empresa receptora (RUT)"
+    type: rut
+    required: true
+    from_filename:
+      patterns:                            # el primero que calza gana; `{codigo}` captura el token
+        - "Listado EasyDoc {codigo}.xlsx"
+        - "Listado SAP {codigo}.xlsx"
+      catalog: { VH: "96835510-4", … }     # token → valor; sin catálogo, el token ES el valor
+      verify_against: RUTRECEPTOR          # columna del extracto que debe coincidir (opcional)
+```
+
+Comportamiento: nombre que calza y token en el catálogo ⇒ resuelto sin preguntar · **nombre fuera de la
+convención o token fuera del catálogo ⇒ la carga falla explícita**, nombrando qué se esperaba (nunca se
+ingiere a medias ni se imputa un default) · la resolución es **por archivo**, así que un lote puede
+traer dos empresas y cada archivo lleva su propio sidecar · un slot sin `from_filename` se comporta
+exactamente como antes.
+
+`verify_against` es la única compuerta donde el **contenido** puede desmentir la etiqueta del nombre.
+La hace cumplir el **convertidor** —el único actor que lee el archivo; Mira no parsea planillas
+(ADR-001)—: Vergis la declara y la propaga en el sidecar bajo la llave `verify` (`{campo: columna}`), y
+el pipeline rechaza la carga si donde la columna viene informada contradice lo derivado. Así la
+convención se declara **una sola vez, en el slot**, en vez de cablearse dentro de cada pipeline.
+
+> **Riesgo declarado.** Si el nombre está equivocado y la fuente no trae con qué verificar, la
+> imputación es incorrecta sin señal. Antes de anclar una **RLS** en un campo derivado del nombre, esa
+> decisión debe tomarse mirando esto.
+
 ### Disparo (por slot)
 - **land-only** — Mira deja el crudo; el pipeline lo toma en su próxima corrida.
 - **land-and-trigger** — tras subir, Mira hace **run-now** del pipeline (inmediatez).
