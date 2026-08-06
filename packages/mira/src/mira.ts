@@ -32,6 +32,33 @@ export interface MiraOptions {
 /** Default del tope de materialización client-side (ver MiraOptions.interactiveMaxRows). */
 export const DEFAULT_INTERACTIVE_MAX_ROWS = 5000
 
+/** Corte as-of derivado de la INGESTA que la plataforma inyecta por params (issue #108). */
+export interface PiAsOfParam {
+  cutoff: string | null
+  detail: { domainId: string | null; label: string; lastSuccessAt: string }[]
+}
+
+/** El corte as-of que el header muestra, ya resuelto (mismo shape que `DashboardMeta.asOf`). */
+export interface PiAsOfMeta {
+  cutoff: string | null
+  source: 'watermark' | 'ingesta' | 'none'
+  detail?: { domainId: string | null; label: string; lastSuccessAt: string }[]
+}
+
+/**
+ * PRECEDENCIA DEL CORTE AS-OF (issue #108 · D1), regla de plataforma y no knob del spec:
+ *
+ *  1. la **marca de agua del dato** si el spec la declara y resuelve — es el as-of más fiel (la fecha
+ *     del CONTENIDO, no la de la corrida) y es la misma fecha que ya nombra el banner de staleness;
+ *  2. la **ingesta** que derivó la plataforma — corte garantizado, sin cooperación del spec;
+ *  3. nada: `none`, que el header pinta como «corte no disponible» (fail-visible, jamás la hora del render).
+ */
+export function asOfFor(freshness: FreshnessVerdict, param?: PiAsOfParam): PiAsOfMeta {
+  if (freshness.watermarkRaw != null) return { cutoff: freshness.watermarkRaw, source: 'watermark' }
+  if (param?.cutoff != null) return { cutoff: param.cutoff, source: 'ingesta', detail: param.detail }
+  return { cutoff: null, source: 'none' }
+}
+
 export interface MiraOutput {
   id: string
   html: string
@@ -152,6 +179,11 @@ export class MiraBotlet implements Botlet {
     // recibe el conteo de lo comentado sobre las filas que ya se van a servir — para el marcador.
     // Corre DESPUÉS de componer y no toca el camino del dato (D7: el motor no lee notas).
     const notasCtx = ctx.params?.['notas'] as { render?: unknown; resolver?: ResolverComentarios } | undefined
+
+    // CORTE AS-OF por INGESTA (issue #108 · D6): lo deriva la PLATAFORMA (el server sabe qué procesos
+    // producen las tablas del PI y cuándo corrieron por última vez) y viaja como param, igual que las
+    // notas. Mira no lo consulta ni lo calcula: solo resuelve la precedencia contra su watermark.
+    const asOfParam = ctx.params?.['asOf'] as PiAsOfParam | undefined
     if (notasCtx?.resolver) await applyNotas(resolved, notasCtx.resolver)
 
     // 5a · Interacción declarada acotada (doc 2 §10): si hay filtro, se materializan
@@ -199,7 +231,7 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasCtx?.render)
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasCtx?.render, asOfParam)
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -421,6 +453,7 @@ export class MiraBotlet implements Botlet {
     host: BotletHost,
     identity: IdentityContext,
     notasRender?: unknown,
+    asOfParam?: PiAsOfParam,
   ): Promise<string> {
     // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
     const { theme, palette } = resolveTheme(resolved, themeOverride)
@@ -432,8 +465,7 @@ export class MiraBotlet implements Botlet {
         theme,
         palette,
         meta: {
-          date: freshness.watermark,
-          generatedAt: new Date(),
+          asOf: asOfFor(freshness, asOfParam),
           org: spec.identity['org'] as string | undefined,
           classification: spec.identity.classification,
           code: spec.identity.code,

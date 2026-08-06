@@ -1,4 +1,5 @@
 import { escapeHtml } from '../markdown'
+import { asOfBlock } from './as-of'
 import type { Theme } from './index'
 
 /** Theme claro por defecto (el look base de v0.1). */
@@ -10,9 +11,11 @@ export const defaultTheme: Theme = {
     chartAxis: '#e2e8f0',
     chartSeries: ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#9333ea', '#0891b2', '#ea580c', '#65a30d'],
   },
-  wrap({ title, body, controls }) {
+  wrap({ title, body, meta, controls }) {
     // El theme default es claro y sin paletas conmutables; `palette` no aplica.
-    const header = controls ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">${controls}</div>` : ''
+    // El corte as-of es convención de PLATAFORMA (#108): el bloque va en el header de TODO theme, y
+    // por eso el header existe siempre (antes solo aparecía cuando había `controls`).
+    const header = `<div class="app-header">${controls ?? ''}${asOfBlock(meta?.asOf)}</div>`
     return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -25,6 +28,10 @@ export const defaultTheme: Theme = {
   body:has(.tray-toggle:checked) { padding-right: 324px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   h3 { font-size: 14px; color: #475569; margin: 0 0 8px; font-weight: 600; }
+  .app-header { display: flex; align-items: flex-start; gap: 12px; justify-content: flex-end; margin-bottom: 12px; }
+  .app-header .meta { text-align: right; line-height: 1.3; }
+  .app-header .meta .date { color: #1f2937; font-size: 14px; font-weight: 600; }
+  .app-header .meta .gen { color: #94a3b8; font-size: 11px; }
   .layout-rows { display: flex; flex-direction: column; gap: 16px; }
   .layout-grid { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 12px; }
   .layout-flow > * + * { margin-top: 12px; }

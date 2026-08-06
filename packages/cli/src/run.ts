@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Botler, type Capability, type IdentityContext, type LogEntry } from '@vergis/botler'
-import { starterCapabilities, createExecuteSqlDwh, type SqlConnectionProfile } from '@vergis/capabilities'
+import { starterCapabilities, createExecuteSqlDwh, type SqlConnectionProfile, type PiAsOf } from '@vergis/capabilities'
 import { MiraBotlet, parseSpec, type MiraSpec, type ResolvedNode, type ResolverComentarios } from '@vergis/mira'
 
 // Caché module-level del camino de serving (work/052 F3): sin ella cada request re-lee+re-parsea el
@@ -86,6 +86,10 @@ export interface RunOptions {
   /** Tope de filas materializables por `interactions.filters` (ver MiraOptions.interactiveMaxRows).
    *  Mira no lee env: el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS y lo inyecta acá. */
   interactiveMaxRows?: number
+  /** Corte as-of derivado de la INGESTA (issue #108). Lo sabe la plataforma, no el spec: el server lo
+   *  deriva (`createAsOfProvider`) y lo inyecta acá; sin él, el header dirá «corte no disponible»
+   *  salvo que el spec declare marca de agua. */
+  asOf?: PiAsOf
 }
 
 export interface RunOutcome {
@@ -162,6 +166,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
       page: options.page,
       ctx: options.ctx,
       flt: options.flt,
+      asOf: options.asOf,
     },
   })
   botler.stop()

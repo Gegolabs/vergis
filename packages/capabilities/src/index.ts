@@ -133,8 +133,8 @@ export {
   validateOferta,
 } from './freshness'
 export type { SourceInfo, ProcessInfo, IngestionMapRow, EntityFreshnessRow, DeriveMapInput } from './freshness'
-export { classifyProcess, alertReason, reconcilePlan, freshnessAlerts, diffAlertState, parseAlertState, FRESHNESS_ALERT_STATE_KEY } from './ingestion-observability'
-export type { RunStatus, RunRecord, ProcessHealth, ReconcilePlan, ProcessAlert, IngestionEngineClient } from './ingestion-observability'
+export { classifyProcess, alertReason, reconcilePlan, freshnessAlerts, diffAlertState, parseAlertState, FRESHNESS_ALERT_STATE_KEY, deriveAsOfIngesta, createAsOfProvider, SIN_DOMINIO_LABEL } from './ingestion-observability'
+export type { RunStatus, RunRecord, ProcessHealth, ReconcilePlan, ProcessAlert, IngestionEngineClient, AsOfDetail, PiAsOf } from './ingestion-observability'
 export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'

@@ -139,6 +139,163 @@ export function parseAlertState(raw: string | null): Record<string, 'failed' | '
   }
 }
 
+// ─── Corte as-of de un PI (issue #108): la fecha hasta la que el dato servido está GARANTIZADO ───────
+
+/** Detalle del corte por dominio (lo que el tooltip del header despliega). */
+export interface AsOfDetail {
+  /** Dominio de la fuente; null si la fuente no declara dominio. */
+  domainId: string | null
+  /** Label legible del dominio (de la config de dominios); el id si no está declarado. */
+  label: string
+  /** Última ingesta exitosa del dominio = la MÁS ANTIGUA de sus procesos involucrados (ISO). */
+  lastSuccessAt: string
+}
+
+/** Corte as-of derivado de la ingesta: el mínimo garantizado + su detalle por dominio. */
+export interface PiAsOf {
+  /** ISO del corte garantizado; null si no se puede afirmar (algún insumo de fecha desconocida). */
+  cutoff: string | null
+  detail: AsOfDetail[]
+}
+
+/** Etiqueta del grupo cuando la fuente no declara dominio. */
+export const SIN_DOMINIO_LABEL = '(sin dominio)'
+
+/**
+ * Corte as-of de un PI a partir de la INGESTA (fallback de plataforma de #108 · D1.2): la fecha de la
+ * última ingesta exitosa MÁS ANTIGUA entre los procesos que producen las tablas del PI.
+ *
+ * Racional del mínimo: cada tabla está al día de SU ingesta; el conjunto solo puede **garantizar** el
+ * mínimo — cifras posteriores al proceso más atrasado pueden faltar.
+ *
+ * Regla dura: si ALGÚN proceso involucrado no tiene última corrida exitosa conocida, `cutoff` es
+ * `null` (un corte garantizado no se puede afirmar con un insumo ciego — el mínimo de lo conocido
+ * sería una mentira). El `detail` sí trae lo que sí se conoce.
+ *
+ * PURA: sin motor, sin store, sin reloj.
+ */
+export function deriveAsOfIngesta(input: {
+  /** Tablas que lee el PI (derivadas del SQL del spec). */
+  tables: string[]
+  processOutputs: { processId: string; tableRef: string }[]
+  processes: { id: string; sourceId: string }[]
+  sources: { id: string; domain?: string }[]
+  /** dominio id → label legible. */
+  domainLabels: Record<string, string>
+  /** proceso → ISO de su última corrida exitosa; null/ausente = desconocida. */
+  lastSuccessByProcess: Record<string, string | null>
+}): PiAsOf {
+  const wanted = new Set(input.tables)
+  const involved = new Set<string>()
+  for (const po of input.processOutputs) if (wanted.has(po.tableRef)) involved.add(po.processId)
+  if (involved.size === 0) return { cutoff: null, detail: [] }
+
+  const sourceOf = new Map(input.processes.map((p) => [p.id, p.sourceId]))
+  const domainOf = new Map(input.sources.map((s) => [s.id, s.domain]))
+
+  // Agrupación por dominio: por dominio se muestra el MÍNIMO de sus procesos conocidos.
+  const byDomain = new Map<string, { domainId: string | null; label: string; lastSuccessAt: string }>()
+  let anyUnknown = false
+  let min: string | null = null
+  for (const processId of [...involved].sort()) {
+    const iso = input.lastSuccessByProcess[processId] ?? null
+    if (iso == null) {
+      anyUnknown = true
+      continue
+    }
+    if (min == null || Date.parse(iso) < Date.parse(min)) min = iso
+    const sourceId = sourceOf.get(processId)
+    const domainId = (sourceId != null ? domainOf.get(sourceId) : undefined) ?? null
+    const key = domainId ?? ''
+    const label = domainId == null ? SIN_DOMINIO_LABEL : (input.domainLabels[domainId] ?? domainId)
+    const prev = byDomain.get(key)
+    if (!prev || Date.parse(iso) < Date.parse(prev.lastSuccessAt)) byDomain.set(key, { domainId, label, lastSuccessAt: iso })
+  }
+  // Orden estable y legible: dominios declarados por label, y el residuo «(sin dominio)» al final.
+  const detail = [...byDomain.values()].sort((a, b) =>
+    a.domainId == null || b.domainId == null
+      ? (a.domainId == null ? 1 : 0) - (b.domainId == null ? 1 : 0)
+      : a.label.localeCompare(b.label, 'es'),
+  )
+  return { cutoff: anyUnknown ? null : min, detail }
+}
+
+/**
+ * Proveedor del corte as-of por PI, con caché TTL sobre el run-history del motor.
+ *
+ * El serving consulta esto POR REQUEST: la caché (por proceso, TTL corto) evita que cada render
+ * dispare N llamadas REST al motor. Un fallo/timeout del motor deja ese proceso en `null` — que por
+ * la regla de `deriveAsOfIngesta` se traduce en «corte no disponible» (fail-visible, #108 · D5), y se
+ * cachea el `null` por el mismo TTL para no martillar una API caída.
+ *
+ * Sin `engine` (modo clickhouse, administración deshabilitada, CLI suelto) devuelve el corte vacío sin
+ * llamar a nada.
+ */
+export function createAsOfProvider(deps: {
+  engine: IngestionEngineClient | undefined
+  loadTopology: () => Promise<{
+    processOutputs: { processId: string; tableRef: string }[]
+    processes: { id: string; sourceId: string }[]
+    sources: { id: string; domain?: string }[]
+    domainLabels: Record<string, string>
+  }>
+  now?: () => number
+  /** Vida de la entrada de caché por proceso. Default 60 s. */
+  ttlMs?: number
+  /** Tope de espera por llamada al motor. Default 3 s. */
+  timeoutMs?: number
+}): (tables: string[]) => Promise<PiAsOf> {
+  const now = deps.now ?? (() => Date.now())
+  const ttlMs = deps.ttlMs ?? 60_000
+  const timeoutMs = deps.timeoutMs ?? 3_000
+  const cache = new Map<string, { at: number; value: string | null }>()
+
+  const lastSuccessOf = async (processId: string, engine: IngestionEngineClient): Promise<string | null> => {
+    const hit = cache.get(processId)
+    if (hit && now() - hit.at < ttlMs) return hit.value
+    let value: string | null = null
+    try {
+      const runs = await withTimeout(engine.listRunHistory(processId), timeoutMs)
+      // La cadencia no importa acá: solo interesa la última exitosa (Infinity la vuelve irrelevante).
+      value = classifyProcess(runs, Number.POSITIVE_INFINITY, now()).lastSuccessAt
+    } catch {
+      value = null // motor caído/lento → insumo ciego → corte no disponible (D5)
+    }
+    cache.set(processId, { at: now(), value })
+    return value
+  }
+
+  return async (tables: string[]): Promise<PiAsOf> => {
+    const engine = deps.engine
+    if (!engine) return { cutoff: null, detail: [] }
+    let topo: Awaited<ReturnType<typeof deps.loadTopology>>
+    try {
+      topo = await deps.loadTopology()
+    } catch {
+      return { cutoff: null, detail: [] }
+    }
+    const wanted = new Set(tables)
+    const involved = [...new Set(topo.processOutputs.filter((po) => wanted.has(po.tableRef)).map((po) => po.processId))]
+    if (involved.length === 0) return { cutoff: null, detail: [] }
+    const values = await Promise.all(involved.map((pid) => lastSuccessOf(pid, engine)))
+    const lastSuccessByProcess: Record<string, string | null> = {}
+    involved.forEach((pid, i) => { lastSuccessByProcess[pid] = values[i] ?? null })
+    return deriveAsOfIngesta({ tables, ...topo, lastSuccessByProcess })
+  }
+}
+
+/** Race con un temporizador: una llamada colgada del motor no puede colgar un render. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms)
+    if (typeof (t as unknown as { unref?: () => void }).unref === 'function') (t as unknown as { unref: () => void }).unref()
+    p.then(
+      (v) => { clearTimeout(t); resolve(v) },
+      (e) => { clearTimeout(t); reject(e instanceof Error ? e : new Error(String(e))) },
+    )
+  })
+}
+
 /** Costura con el motor de ejecución (Fabric u otro). La impl. concreta se inyecta. */
 export interface IngestionEngineClient {
   /** Historial de corridas de un proceso (Fabric: *item job instances*). */

@@ -6,6 +6,12 @@ export interface FreshnessVerdict {
   checked: boolean
   stale: boolean
   watermark?: Date
+  /**
+   * El STRING ORIGINAL del watermark (`YYYY-MM-DD` o ISO completo). Preserva el GRANO, que el `Date`
+   * pierde: «2026-08-04» y «2026-08-04T00:00:00Z» son el mismo instante pero no el mismo corte —
+   * uno es un día, el otro una medianoche. El header lo usa para elegir formato (issue #108 · D2).
+   */
+  watermarkRaw?: string
   ageMs?: number
   maxAgeMs?: number
   ageHuman?: string
@@ -56,6 +62,7 @@ export function checkFreshness(
     checked: true,
     stale: stale.length > 0,
     watermark: worst.watermark,
+    watermarkRaw: worst.watermarkRaw,
     ageMs: worst.ageMs,
     maxAgeMs: worst.maxAgeMs,
     ageHuman: worst.ageHuman,
@@ -110,6 +117,8 @@ function checkOne(
   const watermarkValue = maxWatermark(resolvePath(decl.watermarkPath, results, spec))
   const watermark = toDate(watermarkValue)
   if (!watermark) return { checked: true, stale: false }
+  // El grano lo trae el DATO: si el valor original era string, ese string es el corte tal cual.
+  const watermarkRaw = typeof watermarkValue === 'string' ? watermarkValue : watermark.toISOString()
 
   const maxAgeMs = parseIsoDuration(decl.maxAgeRaw)
 
@@ -124,6 +133,7 @@ function checkOne(
       checked: true,
       stale: ageDays > maxAgeDays,
       watermark,
+      watermarkRaw,
       ageMs: ageDays * 86400000,
       maxAgeMs,
       ageHuman: ageDays <= 0 ? 'hoy' : `${ageDays} día${ageDays > 1 ? 's' : ''}`,
@@ -137,6 +147,7 @@ function checkOne(
     checked: true,
     stale: ageMs > maxAgeMs,
     watermark,
+    watermarkRaw,
     ageMs,
     maxAgeMs,
     ageHuman: humanizeMs(ageMs),
