@@ -106,6 +106,24 @@ describe('checkDeploymentConfig', () => {
     expect(checkDeploymentConfig({ VERGIS_INTAKE: good })).toEqual([])
   })
 
+  // Issue #109: la ref a un catálogo inexistente lanza en el parser — y ese `throw` es toda la
+  // invariante: aquí lo acusa el arranque (ERROR ruidoso, strict aborta) y en caliente lo captura el
+  // catch del hot-reload, que conserva los slots vigentes. Sin una línea nueva en ninguno de los dos.
+  it('#109 · VERGIS_INTAKE con options_ref a un catálogo inexistente → error ruidoso al arranque', () => {
+    const bad = join(dir, 'slots-ref-rota.yaml')
+    writeFileSync(bad, 'catalogs:\n  - id: empresas_gh\n    options: ["96835510-4"]\nslots:\n  - id: facturas\n    label: Facturas\n    target: { workspaceId: w, lakehouseId: l, path: Files/f }\n    meta:\n      - { id: empresa, label: Empresa, type: enum, options_ref: empresas_xx }\n')
+    const f = checkDeploymentConfig({ VERGIS_INTAKE: bad })
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatchObject({ level: 'error', env: 'VERGIS_INTAKE' })
+    expect(f[0].message).toMatch(/catálogo desconocido 'empresas_xx'/)
+  })
+
+  it('#109 · VERGIS_INTAKE con catálogo bien declarado y referenciado → sin hallazgos', () => {
+    const good = join(dir, 'slots-catalogo-ok.yaml')
+    writeFileSync(good, 'catalogs:\n  - id: empresas_gh\n    label: Empresas\n    options:\n      - { value: "96835510-4", label: "Hijuelas S.A." }\nslots:\n  - id: facturas\n    label: Facturas\n    target: { workspaceId: w, lakehouseId: l, path: Files/f }\n    meta:\n      - { id: empresa, label: Empresa, type: enum, required: true, options_ref: empresas_gh }\n')
+    expect(checkDeploymentConfig({ VERGIS_INTAKE: good })).toEqual([])
+  })
+
   it('reproduce el incidente del avatar: master-data sin montar + admin seed + OUT efímero', () => {
     const f = checkDeploymentConfig({
       VERGIS_MASTER_DATA: '/master-data/entidades.yaml', // no montado

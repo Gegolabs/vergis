@@ -95,7 +95,7 @@ export function checkDeploymentConfig(env: NodeJS.ProcessEnv = process.env): Con
 
   // 1·quater) VERGIS_INTAKE: el schema de slots —incluido el bloque `meta` (issue #76)— se valida aquí,
   //    al arranque. El parse real vive DENTRO del try/catch de la app de administración: un slot mal
-  //    declarado (p.ej. `meta` con type inválido u `options_ref`) degradaría en SILENCIO (la admin
+  //    declarado (p.ej. `meta` con type inválido o un `options_ref` que no resuelve) degradaría en SILENCIO (la admin
   //    desaparece sin rastro). Este chequeo corre ANTES y lo acusa como ERROR ruidoso (strict aborta).
   const intakeRaw = (env['VERGIS_INTAKE'] ?? '').trim()
   if (intakeRaw && existsSync(resolve(intakeRaw))) {

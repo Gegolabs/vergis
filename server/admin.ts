@@ -965,7 +965,12 @@ function metaFieldsHtml(slot: IntakeSlot): string {
     const mark = f.required ? ' <span style="color:var(--err)">*</span>' : ''
     let control: string
     if (f.type === 'enum') {
-      const opts = (f.options ?? []).map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')
+      // #109 · lo que viaja en el POST es el `value`; el texto visible antepone la etiqueta cuando la hay
+      // («Hijuelas S.A. · 96835510-4»: se elige por nombre y se verifica el dato a la vista). Un enum
+      // inline sin etiquetas (label = value) renderiza idéntico a antes.
+      const opts = (f.options ?? [])
+        .map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label === o.value ? o.value : `${o.label} · ${o.value}`)}</option>`)
+        .join('')
       control = `<select name="${name}"${req}><option value="">— elegir —</option>${opts}</select>`
     } else if (f.type === 'number') {
       control = `<input type="number" step="any" name="${name}"${req}>`

@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { escapeHtml } from '../markdown'
 import { chartVarDeclarations } from './index'
+import { asOfBlock } from './as-of'
 import type { DashboardMeta, Theme, ThemeTokens } from './index'
 
 // Logo del proyecto A.R.B.O.L. embebido como data URI (autocontenido, offline).
@@ -15,13 +16,6 @@ const LOGO_DATA_URI = (() => {
   }
 })()
 
-function formatDate(date?: string | Date): string {
-  if (!date) return ''
-  const d = date instanceof Date ? date : new Date(date)
-  if (Number.isNaN(d.getTime())) return String(date)
-  return new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(d)
-}
-
 const CLASSIFICATION_LABELS: Record<string, string> = {
   public: 'Público',
   internal: 'Uso interno',
@@ -30,20 +24,6 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
 }
 function classificationLabel(c?: string): string {
   return c ? (CLASSIFICATION_LABELS[c] ?? c) : ''
-}
-
-function formatDateTime(date?: string | Date): string {
-  if (!date) return ''
-  const d = date instanceof Date ? date : new Date(date)
-  if (Number.isNaN(d.getTime())) return String(date)
-  return new Intl.DateTimeFormat('es-CL', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'America/Santiago',
-  }).format(d)
 }
 
 /** Tokens de chart de la paleta Gruvbox DARK (el juego base del theme). */
@@ -96,15 +76,10 @@ export const arbolTheme: Theme = {
     { id: 'blanco', label: 'Blanco' },
   ],
   wrap({ title, body, meta, controls, palette }: { title: string; body: string; meta?: DashboardMeta; controls?: string; palette?: string }) {
-    const dateLabel = formatDate(meta?.date)
-    const genLabel = formatDateTime(meta?.generatedAt)
     const initialPalette = palette && ['gruvbox', 'claro', 'blanco'].includes(palette) ? palette : 'gruvbox'
     const logo = LOGO_DATA_URI ? `<img class="logo" src="${LOGO_DATA_URI}" alt="A.R.B.O.L.">` : ''
-    const metaBlock =
-      `<div class="meta">` +
-      (dateLabel ? `<div class="date">Datos al ${escapeHtml(dateLabel)}</div>` : '') +
-      (genLabel ? `<div class="gen">Generado ${escapeHtml(genLabel)}</div>` : '') +
-      `</div>`
+    // Convención de plataforma (#108): el corte as-of, mismo bloque en todos los themes.
+    const metaBlock = asOfBlock(meta?.asOf)
     return `<!DOCTYPE html>
 <html lang="es" data-palette="${initialPalette}">
 <head>

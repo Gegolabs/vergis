@@ -4,6 +4,8 @@
  * y los tokens de color para los charts. Cambiar de theme = otro look, mismo contenido.
  */
 
+import type { AsOfMeta } from './as-of'
+
 export interface ThemeTokens {
   /** Color de las barras de los charts (Vega). */
   chartBar: string
@@ -17,10 +19,8 @@ export interface ThemeTokens {
 }
 
 export interface DashboardMeta {
-  /** Fecha/timestamp del dato (watermark) — se muestra como "Datos al ...". */
-  date?: string | Date
-  /** Momento de generación del artefacto — se muestra como "Generado ...". */
-  generatedAt?: string | Date
+  /** Corte as-of del dato (issue #108): la convención de plataforma del header. Ver `./as-of`. */
+  asOf?: AsOfMeta
   /** Organización dueña del dato — se muestra en el footer. */
   org?: string
   /** Clasificación de sensibilidad (public · internal · confidential · regulated). */
@@ -122,3 +122,5 @@ export function chartVarDeclarations(tokens: ThemeTokens): string {
 
 export { defaultTheme } from './default'
 export { arbolTheme } from './arbol'
+export { asOfBlock, asOfTooltip, formatCutoff, formatDate, formatDateTime } from './as-of'
+export type { AsOfMeta } from './as-of'

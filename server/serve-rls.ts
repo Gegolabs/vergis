@@ -84,6 +84,8 @@ import {
   deriveEntityFreshness,
   classifyProcess,
   reconcilePlan,
+  createAsOfProvider,
+  type PiAsOf,
   type GroupSeed,
   type DomainDecl,
   type IntakeSlot,
@@ -409,6 +411,10 @@ let governance: SqliteGovernanceStore | null = null
 // Gobierno de dominio con referencia VIVA (issue #50): el admin y el catálogo leen ESTOS arreglos a
 // request-time; el hot-reload los re-puebla in-place (splice) — un dominio o slot nuevo entra sin restart.
 const domainsCfg: DomainDecl[] = [] // dominios declarados (también gatea «Gestión» en el avatar del catálogo)
+// CORTE AS-OF (issue #108): el proveedor lo instala el bloque de administración (necesita el store de
+// gobierno y el cliente del motor); hasta entonces —y en despliegues SIN administración— queda en null
+// y el header dice «corte no disponible». Fail-visible: el serving nunca espera ni inventa una fecha.
+let asOfFor: ((tables: string[]) => Promise<PiAsOf>) | null = null
 const intakeSlotsCfg: IntakeSlot[] = [] // slots de ingesta declarados
 const parseDomainsFile = (): DomainDecl[] =>
   process.env['VERGIS_DOMAINS'] ? parseDomainsConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_DOMAINS']), 'utf8'))) : []
@@ -447,6 +453,9 @@ async function runPi(
   notas?: { render?: NotasRenderContext; resolver?: ResolverComentarios },
 ): Promise<Awaited<ReturnType<typeof runSpec>>> {
   const identity = identityFor(headers)
+  // Corte as-of por INGESTA: lo derivan la topología de procesos + el run-history del motor, con caché
+  // (ver createAsOfProvider). Nunca tumba un render: a fallo devuelve el corte vacío.
+  const asOf = asOfFor ? await asOfFor(report.tables).catch(() => undefined) : undefined
   const out = await runSpec({
     specPath: report.specPath,
     identity,
@@ -460,6 +469,7 @@ async function runPi(
     ctx: nav.ctx,
     flt: nav.flt,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
+    asOf,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out
@@ -1041,6 +1051,21 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         engine,
       }
     })()
+    // Proveedor del CORTE AS-OF del header (issue #108): una sola instancia (su caché por proceso vive
+    // con ella) que `runPi` consulta por request. Sin `engine` —modo clickhouse, sin VERGIS_INTAKE_SP—
+    // se instala igual y responde «no disponible»: la línea del header existe siempre.
+    asOfFor = createAsOfProvider({
+      engine: fabricWiring.engine,
+      loadTopology: async () => {
+        const [processes, processOutputs, sources] = await Promise.all([govStore.listProcesses(), govStore.listProcessOutputs(), govStore.listSources()])
+        return {
+          processOutputs,
+          processes: processes.map((p) => ({ id: p.id, sourceId: p.sourceId })),
+          sources: sources.map((s) => ({ id: s.id, domain: s.domain })),
+          domainLabels: Object.fromEntries(domainsCfg.map((d) => [d.id, d.label])),
+        }
+      },
+    })
     // Insumos compartidos del cálculo de frescura (registro de fuentes + specs + demandas). Reusado por
     // el mapa por proceso (reconciliador), la proyección por entidad (vista) y el «aplicar cadencia».
     const freshnessInputs = async () => {
