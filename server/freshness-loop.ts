@@ -6,6 +6,8 @@
  *  2 ALERTAR   — detección de fallidas/faltantes con dedup por transición: hidrata el estado en el
  *                primer tick, persiste SOLO en transición, `parseAlertState` fail-safe. Clasifica
  *                sobre lo observado o, si la lectura falló, sobre lo último conocido (no sobre []).
+ *                El aviso se COMPONE (`notify.ts`, issue #100) con dominio, hora esperada y enlaces
+ *                profundos, y sale por el puerto de notificación: el lazo no conoce el canal.
  *  3 RECONCILIAR — reconcilePlan(desired, actual) con DEBOUNCE: no re-empujar el mismo desired al
  *                mismo proceso dentro de la ventana (el motor redondea el schedule a minutos y un
  *                desired que no es múltiplo de 60 no converge JAMÁS — fabric-engine.ts); un desired
@@ -15,6 +17,7 @@
  */
 import type { LogEventInput } from '@vergis/botler'
 import {
+  classifyProcess,
   deriveIngestionMap,
   freshnessAlerts,
   diffAlertState,
@@ -24,26 +27,35 @@ import {
   type IngestionEngineClient,
   type RunRecord,
   type ProcessRow,
+  type SourceRow,
   type DeriveMapInput,
   type IngestionRunStore,
   type ProcessObservation,
   type PlatformSettingStore,
 } from '@vergis/capabilities'
+import { composeFreshnessAlert, composeFreshnessRecovery, type Notification } from './notify'
 
 export interface FreshnessLoopConfig {
   /** Fase 3 encendida (VERGIS_RECONCILE_AUTO). */
   reconcile: boolean
   /** Ventana de debounce del re-push (VERGIS_RECONCILE_DEBOUNCE_MS). */
   reconcileDebounceMs: number
+  /** URL pública de la instancia, ya normalizada sin slash final: base de los enlaces del aviso. */
+  publicUrl: string
 }
 
 export interface FreshnessLoopDeps {
   engine: IngestionEngineClient
   store: IngestionRunStore & PlatformSettingStore
-  /** El MISMO freshnessInputs del wiring (procs + insumo del mapa). */
-  inputs: () => Promise<{ procs: ProcessRow[]; mapInput: DeriveMapInput }>
-  /** Push de alerta (Slack). undefined = fase 2 apagada (sin webhook): ni computa ni persiste estado. */
-  postAlert?: (text: string) => Promise<void>
+  /** El MISMO freshnessInputs del wiring (procs + fuentes + insumo del mapa). */
+  inputs: () => Promise<{ procs: ProcessRow[]; sources: SourceRow[]; mapInput: DeriveMapInput }>
+  /**
+   * Envío del aviso compuesto (issue #100) — el canal lo decide la config de instancia, no el lazo.
+   * undefined = fase 2 apagada (sin destinos declarados): ni computa ni persiste estado.
+   */
+  notify?: (n: Notification) => Promise<void>
+  /** Dominios DECLARADOS: solo ellos tienen página, y por tanto solo ellos aportan label y enlace. */
+  domains: { id: string; label: string }[]
   audit: (e: LogEventInput) => void
   log: (line: string) => void
   now?: () => number
@@ -76,7 +88,7 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
     try {
       const nowMs = now()
       const nowIso = new Date(nowMs).toISOString()
-      const { procs, mapInput } = await deps.inputs()
+      const { procs, sources, mapInput } = await deps.inputs()
       const observables = procs.filter((p) => p.engine)
       const reqOf = new Map(deriveIngestionMap(mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
 
@@ -99,7 +111,7 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
 
       // ── Fase 2 · alertar ─────────────────────────────────────────────────────────────────────
       let notificadas = 0
-      if (deps.postAlert) {
+      if (deps.notify) {
         if (!hydrated) {
           alertState = parseAlertState(await deps.store.getSetting(FRESHNESS_ALERT_STATE_KEY))
           hydrated = true
@@ -121,8 +133,45 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
         // Se escribe SOLO en transición: el tick corre cada pocos minutos y el estado casi nunca
         // cambia; persistir en cada vuelta sería escritura pura sin información.
         if (cambio) await deps.store.setSetting(FRESHNESS_ALERT_STATE_KEY, JSON.stringify(next), 'freshness-monitor')
-        for (const a of notify) await deps.postAlert(`:warning: *Frescura* — proceso \`${a.processId}\` ${a.reason === 'failed' ? 'falló' : 'atrasada (no corre a tiempo)'}${a.lastError ? ` — ${a.lastError}` : ''}`)
-        for (const pid of recovered) await deps.postAlert(`:white_check_mark: *Frescura* — proceso \`${pid}\` recuperado`)
+        // El aviso lleva el CONTEXTO que el operador necesita para actuar (issue #100): labels humanos,
+        // dominio, hora esperada y enlaces profundos. Todo sale de lo que el lazo ya tiene a mano — la
+        // clasificación se re-computa solo para los pocos procesos notificados, no para todos.
+        const runsDe = new Map(clasificables.map((c) => [c.processId, c.runs]))
+        const contextoDe = (
+          processId: string,
+        ): { processId: string; processLabel: string; domainId?: string; domainLabel?: string; baseUrl: string } => {
+          const proc = procs.find((p) => p.id === processId)
+          const source = proc ? sources.find((s) => s.id === proc.sourceId) : undefined
+          // Enlace SOLO con dominio declarado: un dominio tageado que no está en `domains.yaml` no
+          // tiene página, y un enlace a una ruta inexistente sería peor que no traer enlace.
+          const decl = source?.domain ? deps.domains.find((d) => d.id === source.domain) : undefined
+          const ctx: { processId: string; processLabel: string; domainId?: string; domainLabel?: string; baseUrl: string } = {
+            processId,
+            processLabel: proc?.label ?? processId,
+            baseUrl: cfg.publicUrl,
+          }
+          if (decl) {
+            ctx.domainId = decl.id
+            ctx.domainLabel = decl.label
+          }
+          return ctx
+        }
+        for (const a of notify) {
+          const runs = runsDe.get(a.processId) ?? []
+          const req = reqOf.get(a.processId) ?? Number.POSITIVE_INFINITY
+          const ultima = [...runs].sort((x, y) => Date.parse(y.startedAt) - Date.parse(x.startedAt))[0]
+          await deps.notify(
+            composeFreshnessAlert({
+              ...contextoDe(a.processId),
+              reason: a.reason,
+              ...(a.lastError != null ? { lastError: a.lastError } : {}),
+              health: classifyProcess(runs, req, nowMs),
+              requiredCadenceSeconds: req,
+              ...(ultima ? { lastRunStartedAt: ultima.startedAt } : {}),
+            }),
+          )
+        }
+        for (const pid of recovered) await deps.notify(composeFreshnessRecovery(contextoDe(pid)))
         notificadas = notify.length + recovered.length
       }
 

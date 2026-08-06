@@ -30,10 +30,15 @@
  * alerta y reconcilia el schedule. La vista de Frescura lee SOLO la proyección:
  *  - VERGIS_FRESHNESS_POLL_MS       cadencia del lazo (default 300000 = 5 min; `0` lo apaga). Solo
  *                                   arranca si hay motor cableado.
- *  - VERGIS_FRESHNESS_SLACK_WEBHOOK gatea SOLO las alertas: sin webhook, observación y reconcile
- *                                   corren igual (la proyección es la memoria del producto).
  *  - VERGIS_RECONCILE_AUTO          `off` apaga la corrección automática del schedule (default on).
  *  - VERGIS_RECONCILE_DEBOUNCE_MS   ventana de re-push del mismo desired (default 21600000 = 6 h).
+ *
+ * Avisos salientes (issue #100) — el destino es declarativo, el producto no conoce el canal:
+ *  - VERGIS_NOTIFY      ruta al YAML de destinos (`slack-webhook` | `webhook`, N simultáneos). Sin
+ *                       él, avisos apagados: observación y reconcile corren igual (la proyección es
+ *                       la memoria del producto).
+ *  - VERGIS_PUBLIC_URL  URL pública de la instancia, base de los enlaces profundos del aviso.
+ *                       REQUERIDA si hay destinos declarados (si no, el arranque LANZA).
  */
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -103,6 +108,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
+import { createSinks, fanout, type Notification } from './notify'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
@@ -1086,35 +1092,32 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Lazo de frescura (#105): observa el motor → proyección local; alerta (dedup por transición);
     // reconcilia el schedule con debounce. La vista lee SOLO la proyección — el motor nunca en el
     // request path. Nace encendido cuando hay motor: la memoria del producto no puede depender de que
-    // alguien configure Slack (el webhook gatea SOLO las alertas). No mantiene vivo el proceso.
-    const freshnessSlack = process.env['VERGIS_FRESHNESS_SLACK_WEBHOOK'] ?? ''
+    // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
+    // proceso.
+    const notifySinks = createSinks(INSTANCE_CFG.notify)
     const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 300_000)
     const reconcileAuto = (process.env['VERGIS_RECONCILE_AUTO'] ?? 'on').toLowerCase() !== 'off'
     const reconcileDebounceMs = Number(process.env['VERGIS_RECONCILE_DEBOUNCE_MS'] ?? 21_600_000)
     if (fabricWiring.engine && freshnessPollMs > 0) {
-      const postSlack = freshnessSlack
-        ? async (text: string): Promise<void> => {
-            try {
-              await fetch(freshnessSlack, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
-            } catch (e) {
-              console.error('[vergis-rls] freshness slack:', e instanceof Error ? e.message : e)
-            }
-          }
-        : undefined
       const loop = createFreshnessLoop(
         {
           engine: fabricWiring.engine,
           store: govStore,
           inputs: freshnessInputs,
-          postAlert: postSlack,
+          // Fan-out a los destinos declarados: un destino caído se loguea y no tumba el tick.
+          ...(notifySinks.length ? { notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)) } : {}),
+          domains: domainsCfg,
           audit: (e) => auditLog.append(e),
           log: (l) => console.log(`[vergis-rls] ${l}`),
         },
-        { reconcile: reconcileAuto, reconcileDebounceMs },
+        { reconcile: reconcileAuto, reconcileDebounceMs, publicUrl: INSTANCE_CFG.publicUrl },
       )
       setInterval(() => void loop.tick(), freshnessPollMs).unref?.()
       setTimeout(() => void loop.tick(), 10_000).unref?.() // primer tick tras el bootstrap (patrón de la purga)
-      console.log(`[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · alertas ${freshnessSlack ? 'Slack' : 'off'})`)
+      console.log(
+        `[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
+          `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
+      )
     }
     admin = createAdmin({
       entities,
