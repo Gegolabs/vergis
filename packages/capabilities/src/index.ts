@@ -115,6 +115,9 @@ export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } 
 export type { SourceRow, ProcessRow, EngineRef, ProcessLogsRef, SourceRegistryStore } from './governance-store'
 export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } from './governance-store'
 export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
+export { parseGroupsConfig, parsePiOwnersConfig, parseSourcesConfig } from './governance-config'
+export type { SourcesConfig } from './governance-config'
+export { requireRootKey } from './config-root'
 export { canTransition, isMirandaState, MIRANDA_STATES } from './miranda-session'
 export type { MirandaSessionState, MirandaMessageRole, MirandaArtifactKind } from './miranda-session'
 export {

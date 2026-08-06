@@ -35,6 +35,15 @@ describe('master-data · contrato', () => {
     expect(e.columns).toHaveLength(3)
   })
 
+  it('clave raíz ausente → lanza; entities: [] es «declara cero» legítimo (#117)', () => {
+    for (const doc of [{}, null, undefined, { otra: 1 }]) {
+      expect(() => parseMasterDataConfig(doc)).toThrow(/falta la clave raíz 'entities'/)
+    }
+    expect(() => parseMasterDataConfig({})).toThrow(/usa 'entities: \[\]'/)
+    expect(parseMasterDataConfig({ entities: [] })).toEqual([])
+    expect(() => parseMasterDataConfig({ entities: null })).toThrow(/debe ser una lista/)
+  })
+
   it('rechaza id inválido, columnas vacías y conteo de PK ≠ 1', () => {
     expect(() => parseMasterDataConfig({ entities: [{ id: 'Mal-Id', columns: [{ name: 'x', pk: true }] }] })).toThrow(/id inválido/)
     expect(() => parseMasterDataConfig({ entities: [{ id: 'ok', columns: [] }] })).toThrow(/sin columnas/)

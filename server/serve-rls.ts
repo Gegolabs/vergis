@@ -29,7 +29,8 @@
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { watchPaths, swapRecordInPlace } from './hot-reload'
+import { watchPaths, swapRecordInPlace, reloadLiveList } from './hot-reload'
+import { loadInstanceConfig } from './instance-config'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join, dirname } from 'node:path'
@@ -48,7 +49,7 @@ import {
   renderHtmlPiece,
   renderCsvPiece,
   publicarArtefacto,
-  parseMasterDataConfig,
+  requireRootKey,
   parseDomainsConfig,
   manageableDomains,
   parseIntakeConfig,
@@ -220,10 +221,19 @@ if (ENGINE === 'clickhouse') {
   const CONSUMER_USER = process.env['VERGIS_CH_CONSUMER_USER'] ?? 'botler'
   const TARGET_ROLE = process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role'
 
-  const DATASETS: DatasetCfg[] = process.env['VERGIS_DATASETS']
-    ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_DATASETS']), 'utf8')) as { datasets?: DatasetCfg[] }).datasets ?? [])
-    : []
-  if (DATASETS.length === 0) throw new Error('engine=clickhouse: falta VERGIS_DATASETS (datasets del nodo).')
+  // Clave raíz ausente vs «declara cero» (issue #117): un `datasets.yaml` decapitado y uno con
+  // `datasets: []` son estados distintos y ambos son error acá — un nodo clickhouse sin datasets no
+  // tiene sentido —, pero el mensaje dice cuál de los dos es para no mandar a buscar el error donde no está.
+  const DATASETS: DatasetCfg[] = ((): DatasetCfg[] => {
+    const declared = process.env['VERGIS_DATASETS']
+    if (!declared) throw new Error('engine=clickhouse: falta VERGIS_DATASETS (datasets del nodo).')
+    const path = resolve(declared)
+    const ctx = `engine=clickhouse: VERGIS_DATASETS (${path})`
+    const raw = requireRootKey(parseYaml(readFileSync(path, 'utf8')) as unknown, ctx, 'datasets')
+    if (!Array.isArray(raw)) throw new Error(`${ctx}: 'datasets' debe ser una lista.`)
+    if (raw.length === 0) throw new Error(`${ctx}: 'datasets' está vacío — un nodo clickhouse necesita al menos un dataset.`)
+    return raw as DatasetCfg[]
+  })()
 
   // BOUND es mutable: se RECOMPUTA desde el store en cada bootstrap (ver A11 abajo). Al arranque se
   // computa una vez para derivar las inyecciones del canal de serving (su alta necesita restart).
@@ -756,33 +766,27 @@ const GOVERNANCE_DB = process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.
   }
 }
 
+// --- Config declarativa de instancia: FATAL y fuera del try de infra (issue #117) --------------
+// Se valida TODA config declarada por env, incondicionalmente y ANTES del bloque de administración:
+// un throw acá es top-level y tumba el proceso nombrando ENV + ruta + clave raíz. Dentro del try de
+// abajo moriría como «administración deshabilitada» — un archivo roto degradando en silencio.
+const INSTANCE_CFG = loadInstanceConfig(process.env)
+if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTANCE_CFG.summary}`)
+
 if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
   try {
-    const entities = process.env['VERGIS_MASTER_DATA']
-      ? parseMasterDataConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_MASTER_DATA']), 'utf8')))
-      : []
-    const groupSeeds: GroupSeed[] = process.env['VERGIS_GROUPS']
-      ? ((parseYaml(readFileSync(resolve(process.env['VERGIS_GROUPS']), 'utf8')) as { groups?: GroupSeed[] }).groups ?? [])
-      : []
+    const entities = INSTANCE_CFG.entities
+    const groupSeeds: GroupSeed[] = INSTANCE_CFG.groupSeeds
     // Gestión de DOMINIO: dominios declarados (etiqueta + stewards) y slots de ingesta de la instancia.
     // Se cargan EN los arreglos vivos module-level (el hot-reload los re-puebla in-place, issue #50).
-    domainsCfg.splice(0, domainsCfg.length, ...parseDomainsFile())
+    domainsCfg.splice(0, domainsCfg.length, ...INSTANCE_CFG.domains)
     const domains = domainsCfg
-    intakeSlotsCfg.splice(0, intakeSlotsCfg.length, ...parseIntakeFile())
+    intakeSlotsCfg.splice(0, intakeSlotsCfg.length, ...INSTANCE_CFG.intakeSlots)
     const intakeSlots = intakeSlotsCfg
     // Registro de fuentes de la instancia (frente B · frescura): fuentes (oferta + dominio), mapeos
     // tabla→fuente, procesos (con engine_ref al item del motor) y proceso→salidas. Declarativo: se
     // re-siembra en cada arranque (idempotente). Sin el archivo, el registro queda vacío (no hay frescura).
-    const sourceReg = process.env['VERGIS_SOURCES']
-      ? (parseYaml(readFileSync(resolve(process.env['VERGIS_SOURCES']), 'utf8')) as {
-          sources?: { id: string; label: string; oferta: string; domain?: string; connectedBy?: string }[]
-          tableSources?: { tableRef: string; sourceId: string }[]
-          // `logs` (issue #99): dónde deja el proceso sus logs POR CORRIDA. Sin él, el proceso no
-          // ofrece logs por corrida (workspace default = el del engine; dir default `Files/code/_logs`).
-          processes?: { id: string; label: string; sourceId: string; engine?: { workspaceId: string; itemId: string; jobType: string }; logs?: { lakehouseId: string; workspaceId?: string; dir?: string } }[]
-          processOutputs?: { processId: string; tableRef: string }[]
-        })
-      : {}
+    const sourceReg = INSTANCE_CFG.sourceReg
     const govStore = await SqliteGovernanceStore.open(GOVERNANCE_DB, {
       admins: ADMIN_SEED,
       groups: groupSeeds,
@@ -798,9 +802,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     defaultCollabGroups = (process.env['VERGIS_DEFAULT_COLLABORATOR_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     const defaultStewardGroups = (process.env['VERGIS_DEFAULT_STEWARD_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     stewardGroups = defaultStewardGroups // idem: el avatar del catálogo decide si mostrar «Gestión»
-    piOwners = process.env['VERGIS_PI_OWNERS']
-      ? (parseYaml(readFileSync(resolve(process.env['VERGIS_PI_OWNERS']), 'utf8')) as { owners?: Record<string, string> }).owners ?? {}
-      : {}
+    piOwners = INSTANCE_CFG.piOwners
     const useFabricStore = ENGINE === 'fabric' && connections
     const mdStore = useFabricStore
       ? createDwhMasterDataStore(connections)
@@ -1413,24 +1415,10 @@ function reloadDomainGovernance(reason: string): void {
       console.error(`[hot-reload] recarga de conexiones falló (${reason}); perfiles vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
-  try {
-    const next = parseDomainsFile()
-    if (next.length !== domainsCfg.length || JSON.stringify(next) !== JSON.stringify(domainsCfg)) {
-      domainsCfg.splice(0, domainsCfg.length, ...next)
-      console.log(`[hot-reload] dominios (${reason}): ${domainsCfg.length} declarado(s)`)
-    }
-  } catch (e) {
-    console.error(`[hot-reload] recarga de dominios falló (${reason}); dominios vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
-  }
-  try {
-    const next = parseIntakeFile()
-    if (next.length !== intakeSlotsCfg.length || JSON.stringify(next) !== JSON.stringify(intakeSlotsCfg)) {
-      intakeSlotsCfg.splice(0, intakeSlotsCfg.length, ...next)
-      console.log(`[hot-reload] slots de ingesta (${reason}): ${intakeSlotsCfg.length} declarado(s)`)
-    }
-  } catch (e) {
-    console.error(`[hot-reload] recarga de slots de ingesta falló (${reason}); slots vigentes conservados: ${e instanceof Error ? e.message : String(e)}`)
-  }
+  // Validate-before-swap (issue #50) endurecido por #117: con la clave raíz ausente el parser ahora
+  // LANZA, así que el swap no ocurre y los dominios/slots vigentes sobreviven al archivo decapitado.
+  reloadLiveList(domainsCfg, parseDomainsFile, 'dominios', reason)
+  reloadLiveList(intakeSlotsCfg, parseIntakeFile, 'slots de ingesta', reason, console.log, console.error, 'slots')
 }
 
 function reloadGovernance(reason: string): void {

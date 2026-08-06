@@ -16,6 +16,15 @@ const SLOT = {
 }
 
 describe('intake · contrato declarativo', () => {
+  it('clave raíz ausente → lanza; slots: [] es «declara cero» legítimo (#117)', () => {
+    for (const doc of [{}, null, undefined, { otra: 1 }]) {
+      expect(() => parseIntakeConfig(doc)).toThrow(/falta la clave raíz 'slots'/)
+    }
+    expect(() => parseIntakeConfig({})).toThrow(/usa 'slots: \[\]'/)
+    expect(parseIntakeConfig({ slots: [] })).toEqual([])
+    expect(() => parseIntakeConfig({ slots: null })).toThrow(/debe ser una lista/)
+  })
+
   it('parsea un slot completo y normaliza el path', () => {
     const slots = parseIntakeConfig(SLOT)
     expect(slots).toHaveLength(1)

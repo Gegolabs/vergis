@@ -11,6 +11,8 @@
  * de instancia aporta solo lo que no se infiere: etiqueta legible + STEWARDS (quién lo gestiona).
  */
 
+import { requireRootKey } from './config-root'
+
 export interface DomainDecl {
   /** Slug estable, usado en rutas (`/admin/dominio/<id>`) y como tag en los artefactos. */
   id: string
@@ -29,9 +31,7 @@ const SLUG_RE = /^[a-z][a-z0-9_-]*$/
 
 /** Valida y normaliza la config declarativa de dominios (`{ domains: [...] }`). */
 export function parseDomainsConfig(doc: unknown): DomainDecl[] {
-  const root = (doc ?? {}) as { domains?: unknown }
-  const raw = root.domains
-  if (raw === undefined) return []
+  const raw = requireRootKey(doc, 'domains', 'domains')
   if (!Array.isArray(raw)) throw new Error('domains: `domains` debe ser una lista.')
   const seen = new Set<string>()
   return raw.map((d, i) => {

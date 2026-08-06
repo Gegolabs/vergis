@@ -14,9 +14,19 @@ describe('domain · contrato y autorización', () => {
     expect(ds[1].stewards).toBeUndefined()
   })
 
-  it('lista vacía / ausente → []', () => {
-    expect(parseDomainsConfig({})).toEqual([])
-    expect(parseDomainsConfig(undefined)).toEqual([])
+  it('«declara cero» es legítimo: domains: [] → []', () => {
+    expect(parseDomainsConfig({ domains: [] })).toEqual([])
+  })
+
+  it('clave raíz ausente → lanza nombrando la clave (#117)', () => {
+    for (const doc of [{}, null, undefined, { otra: 1 }, 'chatarra', []]) {
+      expect(() => parseDomainsConfig(doc)).toThrow(/falta la clave raíz 'domains'/)
+    }
+    expect(() => parseDomainsConfig({})).toThrow(/usa 'domains: \[\]'/)
+  })
+
+  it('domains: nulo sigue siendo error de tipo', () => {
+    expect(() => parseDomainsConfig({ domains: null })).toThrow(/debe ser una lista/)
   })
 
   it('rechaza id inválido y duplicado', () => {

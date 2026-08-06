@@ -12,6 +12,8 @@
  * etc.) las declara la INSTANCIA en un YAML.
  */
 
+import { requireRootKey } from './config-root'
+
 export type MasterDataColumnType = 'string' | 'int' | 'bool'
 
 export interface MasterDataColumn {
@@ -53,9 +55,7 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /** Valida y normaliza la config declarativa (YAML de instancia) a entidades tipadas. */
 export function parseMasterDataConfig(doc: unknown): MasterDataEntity[] {
-  const root = (doc ?? {}) as { entities?: unknown }
-  const raw = root.entities
-  if (raw === undefined) return []
+  const raw = requireRootKey(doc, 'master-data', 'entities')
   if (!Array.isArray(raw)) throw new Error('master-data: `entities` debe ser una lista.')
   const seen = new Set<string>()
   return raw.map((e, i) => parseEntity(e, i, seen))
