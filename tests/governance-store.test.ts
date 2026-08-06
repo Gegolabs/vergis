@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, type IntakeUploadRow } from '@vergis/capabilities'
+import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, type IntakeUploadRow, type IntakeRevertRow, type ClaveAccion } from '@vergis/capabilities'
 
 describe('GovernanceStore · admins (consolidado)', () => {
   it('implementa AdminStore: semilla, alta, anti-lockout', async () => {
@@ -155,6 +155,63 @@ describe('GovernanceStore · registro de cargas del intake (issue #62)', () => {
   })
 })
 
+// ─── Registro de reversiones (issue #63) ────────────────────────────────────
+const RESUMEN: ClaveAccion[] = [
+  { clave: 'W28', accion: 'rematerializar', revertido: 'Files/intake/_processed/W28/saldos.xlsx', previa: 'Files/intake/_processed/W28/v1.xlsx' },
+  { clave: 'W29', accion: 'pisada', revertido: 'Files/intake/_processed/W29/saldos.xlsx', vigente: 'Files/intake/_processed/W29/otra.xlsx', vigenteAt: '2026-07-20T09:00:00Z' },
+]
+const revert = (over: Partial<Omit<IntakeRevertRow, 'id'>> = {}): Omit<IntakeRevertRow, 'id'> => ({
+  slotId: 'saldos',
+  uploadId: 7,
+  filename: 'saldos VH WK28.xlsx',
+  byUser: 'steward@gh.cl',
+  at: '2026-08-06T18:00:00Z',
+  resumen: RESUMEN,
+  landingRetirado: true,
+  ...over,
+})
+
+describe('GovernanceStore · registro de reversiones del intake (issue #63)', () => {
+  it('recordRevert devuelve id; listReverts da recientes primero, acotado, sin filas de otro slot', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const id1 = await g.recordRevert(revert({ at: '2026-08-01T10:00:00Z' }))
+    const id2 = await g.recordRevert(revert({ at: '2026-08-06T18:00:00Z', filename: 'nueva.xlsx' }))
+    await g.recordRevert(revert({ slotId: 'otro', filename: 'ajena.xlsx' }))
+    expect(id2).toBeGreaterThan(id1)
+    const rows = await g.listReverts('saldos', 10)
+    expect(rows.map((r) => r.filename)).toEqual(['nueva.xlsx', 'saldos VH WK28.xlsx'])
+    expect(await g.listReverts('saldos', 1)).toHaveLength(1)
+    expect((await g.listReverts('otro', 10)).map((r) => r.filename)).toEqual(['ajena.xlsx'])
+    expect(await g.listReverts('sin-reversiones', 10)).toEqual([])
+    await g.close()
+  })
+
+  it('el resumen por clave hace roundtrip como JSON, y una carga sin ancla queda sin uploadId', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordRevert(revert())
+    const sinAncla = await g.recordRevert(revert({ at: '2026-08-07T09:00:00Z', uploadId: undefined, landingRetirado: false }))
+    const rows = await g.listReverts('saldos', 10)
+    expect(rows[0]).toMatchObject({ id: sinAncla, landingRetirado: false })
+    expect(rows[0].uploadId).toBeUndefined()
+    expect(rows[1]).toMatchObject({ uploadId: 7, byUser: 'steward@gh.cl', landingRetirado: true })
+    expect(rows[1].resumen).toEqual(RESUMEN)
+    await g.close()
+  })
+
+  it('las reversiones sobreviven al reinicio (persistencia en archivo)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-revert-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, {})
+    const id = await g1.recordRevert(revert())
+    await g1.close()
+    const g2 = await SqliteGovernanceStore.open(file, {})
+    const rows = await g2.listReverts('saldos', 10)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id, uploadId: 7, filename: 'saldos VH WK28.xlsx' })
+    expect(rows[0].resumen).toEqual(RESUMEN)
+    await g2.close()
+  })
+})
+
 // Issue #99: el proceso declara dónde deja sus logs por corrida.
 describe('GovernanceStore · logs por corrida del proceso (#99)', () => {
   it('upsert con logs → listProcesses lo devuelve sin inventar defaults', async () => {
@@ -298,5 +355,97 @@ describe('GovernanceStore · proyección de corridas (#105)', () => {
     expect(s).toMatchObject({ processId: 'p', scheduleSeconds: 3600, observedAt: '2026-08-06T10:00:00Z', lastError: null })
     expect(s?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T09:00:00Z'])
     await g2.close()
+  })
+})
+
+// ─── Registro de fuentes gestionable in-app (#107) ───────────────────────────
+// La precedencia declarada: lo editado in-app gana a la semilla; lo dado de baja no resucita; un alta
+// posterior del mismo id revoca el tombstone. El test juzga la CONDUCTA, no la forma SQL del upsert.
+describe('GovernanceStore · registro gestionable in-app y precedencia sobre la semilla (#107)', () => {
+  const SEMILLA = {
+    sources: [{ id: 'sap', label: 'SAP (yaml)', oferta: 'PT1H', domain: 'cartera' }],
+    processes: [{ id: 'p_sap', label: 'Ingesta SAP (yaml)', sourceId: 'sap' }],
+  }
+
+  it('una fila SOLO-semilla se re-siembra en cada arranque (conducta de siempre, intacta)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-seed-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, SEMILLA)
+    await g1.close()
+    const g2 = await SqliteGovernanceStore.open(file, {
+      sources: [{ id: 'sap', label: 'SAP renombrada', oferta: 'PT2H', domain: 'cartera' }],
+      processes: [{ id: 'p_sap', label: 'Ingesta renombrada', sourceId: 'sap' }],
+    })
+    expect((await g2.listSources())[0]).toMatchObject({ label: 'SAP renombrada', oferta: 'PT2H', managed: false })
+    expect((await g2.listProcesses())[0]).toMatchObject({ label: 'Ingesta renombrada' })
+    await g2.close()
+  })
+
+  it('lo editado in-app NO lo pisa la re-siembra; la fila queda marcada como gestionada', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-managed-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, SEMILLA)
+    await g1.upsertSource('sap', 'SAP B1 (in-app)', 'PT30M', { domain: 'cartera', connectedBy: 'Cesar@ultrabase.com', managed: true })
+    await g1.upsertProcess('p_sap', 'Ingesta SAP (in-app)', 'sap', undefined, undefined, { managed: true })
+    expect((await g1.listSources())[0]).toMatchObject({ label: 'SAP B1 (in-app)', oferta: 'PT30M', connectedBy: 'cesar@ultrabase.com', managed: true })
+    await g1.close()
+
+    const g2 = await SqliteGovernanceStore.open(file, SEMILLA) // el yaml vuelve a traer sus valores
+    expect((await g2.listSources())[0]).toMatchObject({ label: 'SAP B1 (in-app)', oferta: 'PT30M', managed: true })
+    expect((await g2.listProcesses())[0]).toMatchObject({ label: 'Ingesta SAP (in-app)', managed: true })
+    await g2.close()
+  })
+
+  it('una baja in-app deja tombstone: la re-siembra NO resucita ni la fuente ni el proceso', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-tomb-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, SEMILLA)
+    await g1.deleteProcess('p_sap')
+    await g1.deleteSource('sap')
+    await g1.close()
+
+    const g2 = await SqliteGovernanceStore.open(file, SEMILLA)
+    expect(await g2.listSources()).toEqual([])
+    expect(await g2.listProcesses()).toEqual([])
+    // Un alta in-app del mismo id revoca el tombstone: la fila vive y sobrevive al reinicio.
+    await g2.upsertSource('sap', 'SAP recontratada', 'PT1H', { managed: true })
+    await g2.close()
+    const g3 = await SqliteGovernanceStore.open(file, SEMILLA)
+    expect((await g3.listSources())[0]).toMatchObject({ id: 'sap', label: 'SAP recontratada', managed: true })
+    await g3.close()
+  })
+
+  it('pausa: roundtrip con el correo normalizado, persistente por archivo, y la edición no la borra', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-pausa-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, SEMILLA)
+    await g1.setProcessPaused('p_sap', true, 'Steward@GH.cl')
+    expect((await g1.listProcesses())[0]).toMatchObject({ pausedBy: 'steward@gh.cl' })
+    expect((await g1.listProcesses())[0].pausedAt).toBeTruthy()
+    await g1.close()
+
+    const g2 = await SqliteGovernanceStore.open(file, SEMILLA)
+    expect((await g2.listProcesses())[0].pausedAt).toBeTruthy() // sobrevive al reinicio
+    // Editar un proceso pausado NO lo des-pausa.
+    await g2.upsertProcess('p_sap', 'Ingesta SAP editada', 'sap', undefined, undefined, { managed: true })
+    expect((await g2.listProcesses())[0]).toMatchObject({ label: 'Ingesta SAP editada', pausedBy: 'steward@gh.cl' })
+    await g2.setProcessPaused('p_sap', false)
+    expect((await g2.listProcesses())[0].pausedAt).toBeUndefined()
+    expect((await g2.listProcesses())[0].pausedBy).toBeUndefined()
+    await g2.close()
+  })
+
+  it('pausar un proceso inexistente lanza (no se inventa la fila)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await expect(g.setProcessPaused('fantasma', true, 'x@y.cl')).rejects.toThrow(/desconocido/i)
+    await g.close()
+  })
+
+  it('deleteTableSource borra SOLO su mapeo; deleteProcess sigue cascadeando las salidas', async () => {
+    const g = await SqliteGovernanceStore.open(null, SEMILLA)
+    await g.setTableSource('dw.fct_saldos', 'sap')
+    await g.setTableSource('dw.fct_otra', 'sap')
+    await g.setProcessOutput('p_sap', 'dw.fct_saldos')
+    await g.deleteTableSource('dw.fct_saldos')
+    expect((await g.listTableSources()).map((m) => m.tableRef)).toEqual(['dw.fct_otra'])
+    await g.deleteProcess('p_sap')
+    expect(await g.listProcessOutputs()).toEqual([])
+    await g.close()
   })
 })

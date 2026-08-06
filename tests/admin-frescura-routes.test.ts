@@ -336,6 +336,92 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
   })
 })
 
+// Issue #107: pausar/reanudar un proceso es gestión de DOMINIO (steward), junto a «Aplicar cadencia».
+// La verdad de la pausa vive en Vergis; el motor la refleja. El lazo automático la respeta (#105/D6).
+describe('admin · pausar y reanudar un proceso desde Frescura (#107)', () => {
+  const conPausa = async (rows: DomainEntityFreshness[], sink: { calls: { processId: string; paused: boolean; by: string }[]; fail?: string }) =>
+    createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => rows,
+      applyCadence: async () => ({ action: 'set', desiredSeconds: 7200 }),
+      pauseProcess: async (processId, paused, by) => {
+        if (sink.fail) throw new Error(sink.fail)
+        sink.calls.push({ processId, paused, by })
+      },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+  const run = async (a: AdminHandler, req: IncomingMessage): Promise<MockRes> => {
+    const res = mockRes()
+    await a.tryHandle(req, res as unknown as ServerResponse)
+    return res
+  }
+  const csrf = (html: string): string => html.match(/name="_csrf" value="([0-9a-f]+)"/)![1]
+
+  it('POST accion=pausar y accion=reanudar invocan pauseProcess y redirigen con su mensaje', async () => {
+    const sink = { calls: [] as { processId: string; paused: boolean; by: string }[] }
+    const a = await conPausa(FRESHNESS, sink)
+    const t = csrf((await run(a, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const post = (accion: string) => run(a, mockReq('POST', '/admin/dominio/cartera/frescura', STEWARD, `_csrf=${t}&process=p_sap&accion=${accion}`, 'application/x-www-form-urlencoded'))
+
+    const p = await post('pausar')
+    expect(p.statusCode).toBe(303)
+    expect(decodeURIComponent(p.headers['location'])).toContain('Proceso pausado.')
+    const r = await post('reanudar')
+    expect(decodeURIComponent(r.headers['location'])).toContain('Proceso reanudado.')
+    expect(sink.calls).toEqual([
+      { processId: 'p_sap', paused: true, by: STEWARD },
+      { processId: 'p_sap', paused: false, by: STEWARD },
+    ])
+  })
+
+  it('si el motor rechaza la pausa, la página lo dice y NADA se afirma como pausado', async () => {
+    const sink = { calls: [] as { processId: string; paused: boolean; by: string }[], fail: 'fabric-scheduler: deshabilitar falló (403)' }
+    const a = await conPausa(FRESHNESS, sink)
+    const t = csrf((await run(a, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const res = await run(a, mockReq('POST', '/admin/dominio/cartera/frescura', STEWARD, `_csrf=${t}&process=p_sap&accion=pausar`, 'application/x-www-form-urlencoded'))
+    expect(decodeURIComponent(res.headers['location'])).toContain('Error: fabric-scheduler: deshabilitar falló (403)')
+    expect(sink.calls).toEqual([])
+  })
+
+  it('fila activa con schedule observado: ofrece Pausar; fila pausada: lo dice y ofrece Reanudar, no Aplicar', async () => {
+    const sink = { calls: [] as { processId: string; paused: boolean; by: string }[] }
+    const activa = await conPausa(FRESHNESS, sink)
+    const bodyActiva = (await run(activa, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body
+    expect(bodyActiva).toContain('value="pausar"')
+    expect(bodyActiva).not.toContain('value="reanudar"')
+    expect(bodyActiva).toContain('<button class="add">Aplicar</button>')
+
+    const pausada = await conPausa([{ ...FRESHNESS[0], paused: { at: '2026-08-06T10:00:00Z', by: STEWARD } }], sink)
+    const bodyPausada = (await run(pausada, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body
+    expect(bodyPausada).toContain('⏸ pausado por steward@gh.cl')
+    expect(bodyPausada).toContain('value="reanudar"')
+    expect(bodyPausada).not.toContain('value="pausar"')
+    expect(bodyPausada).not.toContain('<button class="add">Aplicar</button>') // aplicar re-habilitaría el schedule
+  })
+
+  it('sin pauseProcess cableado no se ofrece ni Pausar ni Reanudar (regresión cero)', async () => {
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => FRESHNESS,
+      applyCadence: async () => ({ action: 'set', desiredSeconds: 7200 }),
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const body = (await run(a, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body
+    expect(body).not.toContain('name="accion"')
+    expect(body).toContain('<button class="add">Aplicar</button>')
+  })
+})
+
 // Issue #105: la vista sirve LO ÚLTIMO OBSERVADO por el lazo, y la edad de ese dato es parte de lo
 // que se muestra. Nunca se afirma algo no observado (ni «sin schedule», ni «sin corridas»).
 describe('admin · Frescura muestra la salud de su propia proyección (#105)', () => {

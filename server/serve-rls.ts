@@ -95,6 +95,9 @@ import {
   classifyProcess,
   reconcilePlan,
   createAsOfProvider,
+  deriveRevertPlan,
+  executeRevertPlan,
+  type RevertRef,
   type PiAsOf,
   type GroupSeed,
   type DomainDecl,
@@ -983,6 +986,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // Consola de cargas (issue #58). El padre del dir del slot ancla las convenciones del ciclo:
         // `<padre>/_processed` (lo archivado por el pipeline) y `<padre>/_retirado` (retiros manuales).
         cargas: (() => {
+          // #63 · el motor de reversión consume el reader (leer/copiar/borrar), el write-path (SOLO
+          // para el manifiesto que el convertidor ejecuta), los jobs y el registro de cargas.
+          const revertDeps = { reader, intake: onelake, jobs, uploads: govStore }
+          const refDeRevert = (ref: { uploadId?: number; archivedPath?: string }): RevertRef =>
+            ref.uploadId != null ? { uploadId: ref.uploadId } : { archivedPath: ref.archivedPath ?? '' }
           return {
             // El historial se lee del REGISTRO de cargas (issue #62), no del audit log: aquel es
             // evidencia encadenada, no índice consultable. La migración one-shot de más abajo
@@ -994,7 +1002,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               const rows = await govStore.listUploads(slot.id, Math.max(limit * 2, limit))
               const out: IntakeUploadEvent[] = []
               for (const r of rows.filter((x) => x.origen === 'upload').slice(0, limit)) {
-                const ev: IntakeUploadEvent = { ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
+                // El `id` es el ancla de «Revertir esta carga» (#63): sin él la fila no ofrece el botón.
+                const ev: IntakeUploadEvent = { id: r.id, ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
                 // `dup_of` apunta por construcción a la carga original del contenido, que es
                 // exactamente la que `findUploadBySha` resuelve (la más antigua ok=1 con ese sha).
                 if (r.dupOfId != null) {
@@ -1038,32 +1047,36 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               const base = archivedPath.split('/').pop() ?? archivedPath
               await reader.copy(slot.target, archivedPath, `${slot.target.path}/${base}`)
             },
-            // «Revertir esta carga» (issue #63): el layout `_processed/<clave>/` ES el ledger
-            // carga→clave del contrato de ingesta — la compensación se deriva de él.
-            revert: async (slot, archivedPath) => {
-              const parent = parentDir(slot.target.path)
-              const base = archivedPath.split('/').pop() ?? archivedPath
-              const rel = archivedPath.replace(/^.*_processed\//, '')
-              const clave = rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : ''
-              // 1 · el archivo revertido sale del histórico → _retirado/ con tag «revertido»
-              await reader.copy(slot.target, archivedPath, `${parent}/_retirado/${Date.now()}-revertido-${base}`)
-              await reader.remove(slot.target, archivedPath)
-              // 2 · versión previa de la clave = el archivo más reciente que QUEDA en _processed/<clave>/
-              let reactivado: string | undefined
-              if (clave) {
-                const restantes = (await reader.list(slot.target, `${parent}/_processed/${clave}`).catch(() => [] as import('@vergis/capabilities').OneLakeEntry[]))
-                  .filter((e) => !e.isDirectory)
-                  .sort((a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified))
-                if (restantes.length) {
-                  const prev = restantes[0]
-                  const prevBase = prev.path.split('/').pop() ?? prev.path
-                  await reader.copy(slot.target, prev.path, `${slot.target.path}/${prevBase}`)
-                  reactivado = prevBase
-                }
+            // ── «Revertir esta carga» (issue #63) ──
+            // El layout `_processed/<clave>/` ES el ledger carga→clave del contrato de ingesta: la
+            // compensación se DERIVA de él (motor `intake-revert`), en dos fases selladas por hash.
+            // El registro de reversiones sí es de Vergis: quién revirtió qué, y con qué resultado.
+            reverts: (slot, limit) => govStore.listReverts(slot.id, limit),
+            revertPlan: (slot, ref) => deriveRevertPlan(revertDeps, slot, refDeRevert(ref)),
+            revertExec: async (slot, planHash, ref, by) => {
+              // Guard de carrera: compensar mientras el convertidor procesa el landing pelearía con él.
+              // Tolerante a propósito — si el motor no responde, «no pude medir» no bloquea la operación.
+              if (slot.trigger) {
+                const enCurso = await jobStatus
+                  .listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, 1)
+                  .then((rs) => rs[0] && (rs[0].status === 'InProgress' || rs[0].status === 'NotStarted'))
+                  .catch(() => false)
+                if (enCurso) throw new Error('Hay una conversión en curso — esperá a que termine antes de revertir.')
               }
-              // 3 · re-materializar (last-wins restaura el estado anterior de la clave)
-              if (slot.trigger && reactivado) await jobs.runNow(slot.trigger, slot.target)
-              return { clave, compensada: !!reactivado, reactivado }
+              const out = await executeRevertPlan(revertDeps, slot, planHash, refDeRevert(ref), by)
+              if (!out.ok) return out
+              // Se registra al COMPLETAR: una ejecución caída a medias converge en la re-entrada y
+              // recién ahí queda escrita. El audit, en cambio, ya recibió el intento en admin.ts.
+              await govStore.recordRevert({
+                slotId: slot.id,
+                ...(out.result.uploadId != null ? { uploadId: out.result.uploadId } : {}),
+                filename: out.result.filename,
+                byUser: by,
+                at: new Date().toISOString(),
+                resumen: out.result.resumen,
+                landingRetirado: out.result.landingRetirado,
+              })
+              return out
             },
           } satisfies CargasOps
         })(),
@@ -1223,6 +1236,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         const [sources, processes, outputs] = await Promise.all([govStore.listSources(), govStore.listProcesses(), govStore.listProcessOutputs()])
         return { sources, processes, outputs }
       },
+      // Gestión in-app del registro (#107): el registro deja de ser propiedad exclusiva del yaml. Lo
+      // editado acá sobrevive a la re-siembra de `VERGIS_SOURCES` y lo dado de baja no resucita.
+      sourcesAdmin: govStore,
       // Estado por proceso para la vista de Fuentes (#101): lo último conocido de la proyección (#105) +
       // salud con la MISMA clasificación de Frescura. Una lectura de proyección por GET; el motor, jamás.
       // Sin motor no se cablea: la vista queda como el registro puro (no se fabrican columnas de estado
@@ -1287,17 +1303,44 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             health,
             actualScheduleSeconds: observedAt ? (s?.scheduleSeconds ?? null) : null,
             projection: { observedAt, stale, lastError: s?.lastError ?? null, off },
+            ...(proc.pausedAt ? { paused: { at: proc.pausedAt, by: proc.pausedBy } } : {}),
           }
         })
+      },
+      // Pausa/reanudación de un proceso (#107). PAUSAR: el motor primero — si no acepta deshabilitar el
+      // schedule, NADA se registra (jamás un «pausado» en el producto con el motor corriendo).
+      // REANUDAR: se limpia el flag primero y se empuja la cadencia derivada; si el empuje falla, el lazo
+      // converge en el tick siguiente (el proceso ya no está pausado) y la página muestra el estado real.
+      pauseProcess: async (processId: string, paused: boolean, by: string) => {
+        const engine = fabricWiring.engine
+        if (!engine) throw new Error('Sin conexión al motor: no se puede pausar ni reanudar.')
+        if (paused) {
+          await engine.setScheduleEnabled(processId, false)
+          await govStore.setProcessPaused(processId, true, by)
+          auditLog.append({ type: 'frescura-pausa', process: processId, paused: true, by })
+          return
+        }
+        await govStore.setProcessPaused(processId, false, by)
+        auditLog.append({ type: 'frescura-pausa', process: processId, paused: false, by })
+        const row = deriveIngestionMap((await freshnessInputs()).mapInput).find((m) => m.processId === processId)
+        if (!row) return
+        try {
+          await engine.setScheduleSeconds(processId, row.requiredCadenceSeconds)
+        } catch (e) {
+          console.error('[vergis-rls] reanudar: no se pudo re-habilitar el schedule (el lazo converge):', e instanceof Error ? e.message : e)
+        }
       },
       // Driver del reconciliador («aplicar cadencia»): empuja la cadencia derivada del proceso al schedule
       // del motor (one-way, idempotente). Devuelve el plan (set/noop) para feedback.
       applyCadence: async (processId: string, by: string) => {
         const engine = fabricWiring.engine
         if (!engine) throw new Error('Sin conexión al motor: no se puede aplicar la cadencia.')
-        const map = deriveIngestionMap((await freshnessInputs()).mapInput)
+        const f = await freshnessInputs()
+        const map = deriveIngestionMap(f.mapInput)
         const row = map.find((m) => m.processId === processId)
         if (!row) throw new Error(`Proceso desconocido: ${processId}`)
+        // #107 · aplicar cadencia a un pausado lo re-habilitaría (setScheduleSeconds escribe enabled:true).
+        if (f.procs.find((p) => p.id === processId)?.pausedAt != null) throw new Error('El proceso está pausado — reanúdalo antes de aplicar cadencia.')
         const actual = await engine.getScheduleSeconds(processId)
         const plan = reconcilePlan(row.requiredCadenceSeconds, actual)
         if (plan.action === 'set') {

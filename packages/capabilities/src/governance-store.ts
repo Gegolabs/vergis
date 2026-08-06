@@ -18,6 +18,7 @@ import {
 } from './pi-authz'
 import { durationToSeconds, validateOferta } from './freshness'
 import type { RunRecord, RunStatus } from './ingestion-observability'
+import type { ClaveAccion } from './intake-revert'
 import {
   canTransition,
   isMirandaState,
@@ -108,6 +109,8 @@ export interface SourceRow {
   /** Dominio al que pertenece la fuente (tag) — define el dominio de las entidades que produce. */
   domain?: string
   connectedBy?: string
+  /** true = fila gestionada in-app (la semilla `VERGIS_SOURCES` no la pisa). */
+  managed?: boolean
 }
 /** Referencia al item del motor que ejecuta un proceso — habilita leer run-history y empujar schedule. */
 export interface EngineRef {
@@ -134,20 +137,38 @@ export interface ProcessRow {
   engine?: EngineRef
   /** Ubicación de sus logs por corrida. Ausente = el proceso no declara logs (issue #99). */
   logs?: ProcessLogsRef
+  /** true = fila gestionada in-app (la semilla `VERGIS_SOURCES` no la pisa). */
+  managed?: boolean
+  /** Pausa explícita (#107): el lazo no alerta ni reconcilia; el schedule del motor está deshabilitado. */
+  pausedAt?: string
+  pausedBy?: string
 }
 
-/** Registro de fuentes y procesos de ingestión (frente B): oferta + mapeos tabla↔fuente, proceso↔tablas. */
+/**
+ * Registro de fuentes y procesos de ingestión (frente B): oferta + mapeos tabla↔fuente, proceso↔tablas.
+ *
+ * PRECEDENCIA runtime-sobre-semilla (#107, mismo patrón que los grupos de Mira): una escritura in-app
+ * (`managed: true`) marca la fila y el re-sembrado de arranque NO la pisa; una baja deja tombstone y el
+ * re-sembrado no resucita el id; un alta in-app posterior del mismo id limpia el tombstone.
+ */
 export interface SourceRegistryStore {
-  upsertSource(id: string, label: string, oferta: string, opts?: { domain?: string; connectedBy?: string }): Promise<void>
+  /** `managed: true` = escritura in-app: marca `managed_at` y limpia el tombstone. La semilla no lo pasa. */
+  upsertSource(id: string, label: string, oferta: string, opts?: { domain?: string; connectedBy?: string; managed?: boolean }): Promise<void>
   listSources(): Promise<SourceRow[]>
+  /** Deja tombstone: el re-sembrado no resucita el id. */
   deleteSource(id: string): Promise<void>
   setTableSource(tableRef: string, sourceId: string): Promise<void>
+  /** Borra el mapeo tabla→fuente (in-app). */
+  deleteTableSource(tableRef: string): Promise<void>
   listTableSources(): Promise<{ tableRef: string; sourceId: string }[]>
   /** Ofertas de las fuentes que producen estas tablas (para el techo de demanda de un PI). */
   ofertasForTables(tableRefs: string[]): Promise<string[]>
-  upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef, logs?: ProcessLogsRef): Promise<void>
+  upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef, logs?: ProcessLogsRef, opts?: { managed?: boolean }): Promise<void>
   listProcesses(): Promise<ProcessRow[]>
+  /** Cascadea sus salidas y deja tombstone. */
   deleteProcess(id: string): Promise<void>
+  /** Marca/limpia la pausa de un proceso (#107). Sobre un id inexistente: lanza. */
+  setProcessPaused(processId: string, paused: boolean, by?: string): Promise<void>
   setProcessOutput(processId: string, tableRef: string): Promise<void>
   removeProcessOutput(processId: string, tableRef: string): Promise<void>
   listProcessOutputs(): Promise<{ processId: string; tableRef: string }[]>
@@ -249,6 +270,33 @@ export interface IntakeUploadStore {
   markIntakeBackfillDone(slotId: string, files: number, errores: number): Promise<void>
 }
 
+/**
+ * Una REVERSIÓN ejecutada (issue #63). Es un hecho de Vergis —quién revirtió qué, cuándo y con qué
+ * resultado por clave—, no del convertidor: el mapeo carga→claves sigue viviendo en `_processed/`.
+ * Es la fuente consultable que el timeline muestra; el audit log sigue siendo la evidencia.
+ */
+export interface IntakeRevertRow {
+  id: number
+  slotId: string
+  /** Ancla a `intake_upload.id` (#62). Ausente si la carga no está en el registro (pre-#62). */
+  uploadId?: number
+  filename: string
+  byUser: string
+  /** ISO-8601. */
+  at: string
+  /** El plan EJECUTADO, con lo reportado-sin-tocar incluido (pisada / no-compensable / sin-clave). */
+  resumen: ClaveAccion[]
+  landingRetirado: boolean
+}
+
+/** Registro consultable de las reversiones de un slot (issue #63). */
+export interface IntakeRevertStore {
+  /** Registra una reversión COMPLETADA. Devuelve el id asignado. */
+  recordRevert(row: Omit<IntakeRevertRow, 'id'>): Promise<number>
+  /** Reversiones del slot, recientes primero. */
+  listReverts(slotId: string, limit: number): Promise<IntakeRevertRow[]>
+}
+
 /** Retención de la proyección de corridas (filas por proceso). Poda el propio store al escribir. */
 export const INGESTION_RUN_RETENTION = 60
 
@@ -292,7 +340,7 @@ export interface IngestionRunStore {
   listRunSnapshots(opts?: { runsPerProcess?: number }): Promise<IngestionRunSnapshot[]>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore, IngestionRunStore {
+export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore, IntakeRevertStore, IngestionRunStore {
   close(): Promise<void>
 }
 
@@ -348,6 +396,14 @@ const SOURCE_DDL = `CREATE TABLE IF NOT EXISTS source (
 );`
 const TABLE_SOURCE_DDL = `CREATE TABLE IF NOT EXISTS table_source (
   table_ref TEXT PRIMARY KEY, source_id TEXT NOT NULL
+);`
+// Tombstone del registro de fuentes/procesos (#107). Precedencia runtime-sobre-semilla: una baja in-app
+// deja la marca y el re-sembrado de `open()` NO resucita el id; un alta in-app posterior la limpia.
+// Tabla PROPIA (no se generaliza la de grupos): dos registros distintos, dos ciclos de vida distintos.
+const SOURCE_REMOVED_DDL = `CREATE TABLE IF NOT EXISTS source_registry_removed (
+  kind TEXT NOT NULL,
+  id TEXT NOT NULL,
+  PRIMARY KEY (kind, id)
 );`
 const PROCESS_DDL = `CREATE TABLE IF NOT EXISTS ingestion_process (
   process_id TEXT PRIMARY KEY, label TEXT NOT NULL, source_id TEXT NOT NULL,
@@ -427,6 +483,19 @@ const INTAKE_UPLOAD_DDL = `CREATE TABLE IF NOT EXISTS intake_upload (
 );`
 const INTAKE_UPLOAD_IDX_SHA = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sha ON intake_upload (slot_id, sha256);`
 const INTAKE_UPLOAD_IDX_TS = `CREATE INDEX IF NOT EXISTS idx_intake_upload_slot_ts ON intake_upload (slot_id, uploaded_at DESC);`
+// #63 · el registro de REVERSIONES. `by_user` (y no `by`) porque BY es palabra reservada del SQL.
+// `resumen` guarda el plan ejecutado como JSON: lo que se compensó Y lo que se reportó sin tocar.
+const INTAKE_REVERT_DDL = `CREATE TABLE IF NOT EXISTS intake_revert (
+  id INTEGER PRIMARY KEY,
+  slot_id TEXT NOT NULL,
+  upload_id INTEGER,
+  filename TEXT NOT NULL,
+  by_user TEXT NOT NULL,
+  at TEXT NOT NULL,
+  resumen TEXT NOT NULL,
+  landing_retirado INTEGER NOT NULL DEFAULT 0
+);`
+const INTAKE_REVERT_IDX = `CREATE INDEX IF NOT EXISTS idx_intake_revert_slot ON intake_revert (slot_id, at DESC);`
 const INTAKE_BACKFILL_DDL = `CREATE TABLE IF NOT EXISTS intake_backfill (
   slot_id TEXT PRIMARY KEY, done_at TEXT NOT NULL, files INTEGER NOT NULL, errores INTEGER NOT NULL
 );`
@@ -478,10 +547,13 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(SETTING_DDL)
     db.run(SOURCE_DDL)
     ensureColumns(db, 'source', ['domain TEXT'])
+    ensureColumns(db, 'source', ['managed_at TEXT'])
     db.run(TABLE_SOURCE_DDL)
+    db.run(SOURCE_REMOVED_DDL)
     db.run(PROCESS_DDL)
     ensureColumns(db, 'ingestion_process', ['engine_workspace TEXT', 'engine_item TEXT', 'engine_job_type TEXT'])
     ensureColumns(db, 'ingestion_process', ['logs_workspace TEXT', 'logs_lakehouse TEXT', 'logs_dir TEXT'])
+    ensureColumns(db, 'ingestion_process', ['managed_at TEXT', 'paused_at TEXT', 'paused_by TEXT'])
     db.run(PROCESS_OUTPUT_DDL)
     db.run(MIRANDA_SESSION_DDL)
     db.run(MIRANDA_MESSAGE_DDL)
@@ -490,6 +562,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INTAKE_UPLOAD_DDL)
     db.run(INTAKE_UPLOAD_IDX_SHA)
     db.run(INTAKE_UPLOAD_IDX_TS)
+    db.run(INTAKE_REVERT_DDL)
+    db.run(INTAKE_REVERT_IDX)
     db.run(INTAKE_BACKFILL_DDL)
     db.run(INGESTION_RUN_DDL)
     db.run(INGESTION_PROCESS_STATE_DDL)
@@ -511,29 +585,35 @@ export class SqliteGovernanceStore implements GovernanceStore {
         )
       }
     }
-    // Semilla del registro de fuentes (instancia)
+    // Semilla del registro de fuentes (instancia). PRECEDENCIA (#107): el re-sembrado SALTA los ids que
+    // una baja in-app dejó tombstoneados y NO pisa las filas gestionadas in-app (`managed_at IS NOT NULL`);
+    // jamás toca `managed_at`. Para una instancia que solo gestiona por yaml, la conducta es la de siempre.
     for (const s of seed.sources ?? []) {
       validateOferta(s.oferta) // valida (duración ISO o `evento`)
       db.run(
-        `INSERT INTO source (source_id, label, oferta, domain, connected_by) VALUES (?,?,?,?,?)
+        `INSERT INTO source (source_id, label, oferta, domain, connected_by)
+         SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM source_registry_removed WHERE kind = 'source' AND id = ?)
          ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
-           domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by`,
-        [s.id.trim().toLowerCase(), s.label, s.oferta.trim().toUpperCase(), s.domain?.trim().toLowerCase() ?? null, s.connectedBy ?? 'config:VERGIS_SOURCES'],
+           domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by
+         WHERE source.managed_at IS NULL`,
+        [s.id.trim().toLowerCase(), s.label, s.oferta.trim().toUpperCase(), s.domain?.trim().toLowerCase() ?? null, s.connectedBy ?? 'config:VERGIS_SOURCES', s.id.trim().toLowerCase()],
       )
     }
     for (const ts of seed.tableSources ?? [])
       db.run(`INSERT INTO table_source (table_ref, source_id) VALUES (?,?) ON CONFLICT(table_ref) DO UPDATE SET source_id=excluded.source_id`, [ts.tableRef.trim(), ts.sourceId.trim().toLowerCase()])
     for (const p of seed.processes ?? [])
       db.run(
-        `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir) VALUES (?,?,?,?,?,?,?,?,?)
+        `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir)
+         SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM source_registry_removed WHERE kind = 'process' AND id = ?)
          ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
            engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
            engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
            engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type),
            logs_workspace=COALESCE(excluded.logs_workspace, ingestion_process.logs_workspace),
            logs_lakehouse=COALESCE(excluded.logs_lakehouse, ingestion_process.logs_lakehouse),
-           logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)`,
-        [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null, ...logsCols(p.logs, p.id)],
+           logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)
+         WHERE ingestion_process.managed_at IS NULL`,
+        [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null, ...logsCols(p.logs, p.id), p.id.trim().toLowerCase()],
       )
     for (const po of seed.processOutputs ?? [])
       db.run(`INSERT INTO process_output (process_id, table_ref) VALUES (?,?) ON CONFLICT(process_id, table_ref) DO NOTHING`, [po.processId.trim().toLowerCase(), po.tableRef.trim()])
@@ -781,30 +861,38 @@ export class SqliteGovernanceStore implements GovernanceStore {
   }
 
   // ── SourceRegistryStore (oferta + mapeos, frente B) ──
-  async upsertSource(id: string, label: string, oferta: string, opts: { domain?: string; connectedBy?: string } = {}): Promise<void> {
+  async upsertSource(id: string, label: string, oferta: string, opts: { domain?: string; connectedBy?: string; managed?: boolean } = {}): Promise<void> {
     const sid = id.trim().toLowerCase()
     if (!SLUG_RE.test(sid)) throw new Error(`Id de fuente inválido '${id}'.`)
     validateOferta(oferta) // valida la oferta (duración ISO o `evento` para fuentes event-driven)
     // COALESCE en domain: un upsert sin domain no borra el tag ya registrado.
+    // `managed_at`: se sella en la escritura in-app y NUNCA se limpia acá (la semilla no llama con managed).
     this.db.run(
-      `INSERT INTO source (source_id, label, oferta, domain, connected_by) VALUES (?,?,?,?,?)
+      `INSERT INTO source (source_id, label, oferta, domain, connected_by, managed_at) VALUES (?,?,?,?,?,?)
        ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
-         domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by`,
-      [sid, label.trim() || sid, oferta.trim().toUpperCase(), opts.domain?.trim().toLowerCase() || null, normEmail(opts.connectedBy) || null],
+         domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by,
+         managed_at=COALESCE(excluded.managed_at, source.managed_at)`,
+      [sid, label.trim() || sid, oferta.trim().toUpperCase(), opts.domain?.trim().toLowerCase() || null, normEmail(opts.connectedBy) || null, opts.managed ? now() : null],
     )
+    // Alta in-app de un id tombstoneado: revoca el tombstone (la fila vuelve a ser semillable/gestionable).
+    if (opts.managed) this.db.run(`DELETE FROM source_registry_removed WHERE kind = 'source' AND id = ?`, [sid])
     this.persist()
   }
   async listSources(): Promise<SourceRow[]> {
-    return selectAll(this.db, `SELECT source_id, label, oferta, domain, connected_by FROM source ORDER BY source_id ASC`).map((r) => ({
+    return selectAll(this.db, `SELECT source_id, label, oferta, domain, connected_by, managed_at FROM source ORDER BY source_id ASC`).map((r) => ({
       id: String(r['source_id']),
       label: String(r['label']),
       oferta: String(r['oferta']),
       domain: r['domain'] == null ? undefined : String(r['domain']),
       connectedBy: r['connected_by'] == null ? undefined : String(r['connected_by']),
+      managed: r['managed_at'] != null,
     }))
   }
   async deleteSource(id: string): Promise<void> {
-    this.db.run(`DELETE FROM source WHERE source_id = ?`, [id.trim().toLowerCase()])
+    const sid = id.trim().toLowerCase()
+    this.db.run(`DELETE FROM source WHERE source_id = ?`, [sid])
+    // Tombstone: el re-sembrado de `open()` NO resucita una fuente que un admin dio de baja in-app.
+    this.db.run(`INSERT OR IGNORE INTO source_registry_removed (kind, id) VALUES ('source', ?)`, [sid])
     this.persist()
   }
   async setTableSource(tableRef: string, sourceId: string): Promise<void> {
@@ -812,6 +900,10 @@ export class SqliteGovernanceStore implements GovernanceStore {
       `INSERT INTO table_source (table_ref, source_id) VALUES (?,?) ON CONFLICT(table_ref) DO UPDATE SET source_id=excluded.source_id`,
       [tableRef.trim(), sourceId.trim().toLowerCase()],
     )
+    this.persist()
+  }
+  async deleteTableSource(tableRef: string): Promise<void> {
+    this.db.run(`DELETE FROM table_source WHERE table_ref = ?`, [tableRef.trim()])
     this.persist()
   }
   async listTableSources(): Promise<{ tableRef: string; sourceId: string }[]> {
@@ -830,28 +922,31 @@ export class SqliteGovernanceStore implements GovernanceStore {
     }
     return out
   }
-  async upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef, logs?: ProcessLogsRef): Promise<void> {
+  async upsertProcess(id: string, label: string, sourceId: string, engine?: EngineRef, logs?: ProcessLogsRef, opts: { managed?: boolean } = {}): Promise<void> {
     const pid = id.trim().toLowerCase()
     if (!SLUG_RE.test(pid)) throw new Error(`Id de proceso inválido '${id}'.`)
     if (engine && (!engine.workspaceId?.trim() || !engine.itemId?.trim())) {
       throw new Error(`engine_ref del proceso '${id}' requiere workspaceId e itemId.`)
     }
-    // COALESCE: un upsert sin engine (o sin logs) NO borra el ref ya registrado.
+    // COALESCE: un upsert sin engine (o sin logs) NO borra el ref ya registrado. `paused_at`/`paused_by`
+    // NO participan del upsert: editar un proceso pausado no lo des-pausa.
     this.db.run(
-      `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir) VALUES (?,?,?,?,?,?,?,?,?)
+      `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir, managed_at) VALUES (?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
+         managed_at=COALESCE(excluded.managed_at, ingestion_process.managed_at),
          engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
          engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
          engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type),
          logs_workspace=COALESCE(excluded.logs_workspace, ingestion_process.logs_workspace),
          logs_lakehouse=COALESCE(excluded.logs_lakehouse, ingestion_process.logs_lakehouse),
          logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)`,
-      [pid, label.trim() || pid, sourceId.trim().toLowerCase(), engine?.workspaceId?.trim() ?? null, engine?.itemId?.trim() ?? null, engine?.jobType?.trim() || (engine ? 'Pipeline' : null), ...logsCols(logs, id)],
+      [pid, label.trim() || pid, sourceId.trim().toLowerCase(), engine?.workspaceId?.trim() ?? null, engine?.itemId?.trim() ?? null, engine?.jobType?.trim() || (engine ? 'Pipeline' : null), ...logsCols(logs, id), opts.managed ? now() : null],
     )
+    if (opts.managed) this.db.run(`DELETE FROM source_registry_removed WHERE kind = 'process' AND id = ?`, [pid])
     this.persist()
   }
   async listProcesses(): Promise<ProcessRow[]> {
-    return selectAll(this.db, `SELECT process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir FROM ingestion_process ORDER BY process_id ASC`).map((r) => {
+    return selectAll(this.db, `SELECT process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir, managed_at, paused_at, paused_by FROM ingestion_process ORDER BY process_id ASC`).map((r) => {
       const row: ProcessRow = { id: String(r['process_id']), label: String(r['label']), sourceId: String(r['source_id']) }
       if (r['engine_workspace'] != null && r['engine_item'] != null) {
         row.engine = {
@@ -867,6 +962,11 @@ export class SqliteGovernanceStore implements GovernanceStore {
         if (r['logs_dir'] != null) logsRef.dir = String(r['logs_dir'])
         row.logs = logsRef
       }
+      if (r['managed_at'] != null) row.managed = true
+      if (r['paused_at'] != null) {
+        row.pausedAt = String(r['paused_at'])
+        if (r['paused_by'] != null) row.pausedBy = String(r['paused_by'])
+      }
       return row
     })
   }
@@ -874,6 +974,22 @@ export class SqliteGovernanceStore implements GovernanceStore {
     const pid = id.trim().toLowerCase()
     this.db.run(`DELETE FROM process_output WHERE process_id = ?`, [pid])
     this.db.run(`DELETE FROM ingestion_process WHERE process_id = ?`, [pid])
+    this.db.run(`INSERT OR IGNORE INTO source_registry_removed (kind, id) VALUES ('process', ?)`, [pid])
+    this.persist()
+  }
+  /** Pausa/reanuda un proceso (#107). La VERDAD de la pausa vive acá; el motor la refleja (D5). */
+  async setProcessPaused(processId: string, paused: boolean, by?: string): Promise<void> {
+    const pid = processId.trim().toLowerCase()
+    const stmt = this.db.prepare(`SELECT 1 FROM ingestion_process WHERE process_id = ?`)
+    stmt.bind([pid])
+    const existe = stmt.step()
+    stmt.free()
+    if (!existe) throw new Error(`Proceso desconocido: '${processId}'.`)
+    this.db.run(`UPDATE ingestion_process SET paused_at = ?, paused_by = ? WHERE process_id = ?`, [
+      paused ? now() : null,
+      paused ? normEmail(by) || null : null,
+      pid,
+    ])
     this.persist()
   }
   async setProcessOutput(processId: string, tableRef: string): Promise<void> {
@@ -1156,6 +1272,57 @@ export class SqliteGovernanceStore implements GovernanceStore {
       [slotId.trim(), now(), Math.max(0, Math.trunc(files)), Math.max(0, Math.trunc(errores))],
     )
     this.persist()
+  }
+
+  // ── IntakeRevertStore (registro de reversiones, issue #63) ──
+  async recordRevert(row: Omit<IntakeRevertRow, 'id'>): Promise<number> {
+    this.db.run(
+      `INSERT INTO intake_revert (slot_id, upload_id, filename, by_user, at, resumen, landing_retirado)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        row.slotId.trim(),
+        row.uploadId ?? null,
+        row.filename,
+        row.byUser,
+        row.at || now(),
+        JSON.stringify(row.resumen ?? []),
+        row.landingRetirado ? 1 : 0,
+      ],
+    )
+    const stmt = this.db.prepare(`SELECT MAX(id) AS n FROM intake_revert`)
+    stmt.step()
+    const id = Number((stmt.getAsObject() as { n: number }).n)
+    stmt.free()
+    this.persist()
+    return id
+  }
+
+  async listReverts(slotId: string, limit: number): Promise<IntakeRevertRow[]> {
+    const stmt = this.db.prepare(
+      `SELECT id, slot_id, upload_id, filename, by_user, at, resumen, landing_retirado FROM intake_revert
+       WHERE slot_id = ? ORDER BY at DESC, id DESC LIMIT ?`,
+    )
+    stmt.bind([slotId.trim(), Math.max(0, Math.trunc(limit))])
+    const out: IntakeRevertRow[] = []
+    while (stmt.step()) {
+      const r = stmt.getAsObject()
+      // Un `resumen` ilegible no puede tumbar la consulta: la fila vale igual por su quién/cuándo.
+      let resumen: ClaveAccion[] = []
+      try { resumen = JSON.parse(String(r['resumen'])) as ClaveAccion[] } catch { resumen = [] }
+      const row: IntakeRevertRow = {
+        id: Number(r['id']),
+        slotId: String(r['slot_id']),
+        filename: String(r['filename']),
+        byUser: String(r['by_user']),
+        at: String(r['at']),
+        resumen: Array.isArray(resumen) ? resumen : [],
+        landingRetirado: Number(r['landing_retirado']) !== 0,
+      }
+      if (r['upload_id'] != null) row.uploadId = Number(r['upload_id'])
+      out.push(row)
+    }
+    stmt.free()
+    return out
   }
 
   // ── IngestionRunStore (proyección de corridas + schedule observado, issue #105) ──

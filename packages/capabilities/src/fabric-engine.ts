@@ -50,6 +50,8 @@ function scheduleToSeconds(s: FabricSchedule): number | null {
 export interface FabricScheduler {
   getScheduleSeconds(engine: EngineRef): Promise<number | null>
   setScheduleSeconds(engine: EngineRef, seconds: number): Promise<void>
+  /** Habilita/deshabilita el schedule sin alterar su configuración (pausa/reanudación, #107). */
+  setScheduleEnabled(engine: EngineRef, enabled: boolean): Promise<void>
 }
 
 export function createFabricScheduler(tokens: TokenSource, opts: { fetch?: FetchLike; now?: Clock } = {}): FabricScheduler {
@@ -109,6 +111,29 @@ export function createFabricScheduler(tokens: TokenSource, opts: { fetch?: Fetch
         throw new Error(`fabric-scheduler: set falló (${res.status}) para item '${engine.itemId}': ${text.slice(0, 300)}`)
       }
     },
+
+    // PAUSA (#107): PATCH del schedule con `enabled` y ECO de su configuración — la cadencia no se toca,
+    // solo se apaga/enciende. Sin schedule que apagar, apagar es un no-op (nada que deshabilitar);
+    // encender exige una cadencia que este método no conoce → `setScheduleSeconds`.
+    async setScheduleEnabled(engine, enabled): Promise<void> {
+      const existing = await listSchedules(engine)
+      const target = existing.find((s) => s.enabled) ?? existing[0]
+      if (!target) {
+        if (!enabled) return
+        throw new Error(`fabric-scheduler: el item '${engine.itemId}' no tiene schedule que habilitar; usar setScheduleSeconds.`)
+      }
+      const { token } = await tokens.getToken(SCOPE_FABRIC)
+      const res = await doFetch(`${schedulesUrl(engine)}/${encodeURIComponent(target.id)}`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled, configuration: target.configuration }),
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!res.ok && res.status !== 201 && res.status !== 202) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`fabric-scheduler: ${enabled ? 'habilitar' : 'deshabilitar'} falló (${res.status}) para item '${engine.itemId}': ${text.slice(0, 300)}`)
+      }
+    },
   }
 }
 
@@ -142,6 +167,15 @@ export function createFabricEngineClient(
       const e = await resolveEngine(processRef)
       if (!e) throw new Error(`fabric-engine: el proceso '${processRef}' no tiene engine_ref; no se puede fijar schedule.`)
       await scheduler.setScheduleSeconds(e, seconds)
+    },
+    async setScheduleEnabled(processRef, enabled): Promise<void> {
+      const e = await resolveEngine(processRef)
+      if (!e) {
+        // Sin engine_ref no hay schedule que apagar: apagar es no-op; encender no tiene dónde.
+        if (!enabled) return
+        throw new Error(`fabric-engine: el proceso '${processRef}' no tiene engine_ref; no se puede habilitar su schedule.`)
+      }
+      await scheduler.setScheduleEnabled(e, enabled)
     },
   }
 }
