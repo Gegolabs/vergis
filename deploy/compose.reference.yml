@@ -23,6 +23,22 @@ services:
     # archivo con permisos restrictivos no queda legible en /proc ni `docker inspect`, y tiene
     # hot-reload — dar de alta el warehouse de un dominio nuevo no exige restart (junto con
     # VERGIS_DOMAINS y VERGIS_INTAKE, que también recargan en caliente).
+    #
+    # CREDENCIAL POR PERFIL (issue #66): cada perfil de VERGIS_CONNECTIONS declara cómo obtiene su
+    # token con el campo opcional `auth`. La config existente NO requiere migración: `auth` ausente
+    # equivale a `secret`, el modo de siempre. Los tres modos y sus campos obligatorios:
+    #
+    #   "auth": "secret"     (DEFAULT si se omite)  → tenantId + clientId + clientSecret
+    #   "auth": "federated"  (workload identity)    → tenantId + clientId + federatedTokenFile
+    #                                                 (o la env AZURE_FEDERATED_TOKEN_FILE); el archivo
+    #                                                 se re-lee en cada adquisición porque rota
+    #   "auth": "imds"       (managed identity VM)  → nada obligatorio; clientId solo para user-assigned MI
+    #
+    # Ejemplo: {"dwh": {"server": "...", "database": "...", "auth": "imds"}}
+    # Fail-closed: un perfil cuya credencial no resuelve ABORTA el arranque nombrando el database_ref
+    # y el campo faltante; en hot-reload el error se loguea y la config vigente sigue viva. No hay
+    # fallback silencioso entre modos. Activar `imds`/`federated` exige verificar antes que Fabric
+    # acepte ese principal (ver runbook de despliegue).
     env_file: [vergis.env]
     environment:
       VERGIS_ENGINE: fabric                       # motor C: push-down a Fabric (la RLS vive en la fuente)

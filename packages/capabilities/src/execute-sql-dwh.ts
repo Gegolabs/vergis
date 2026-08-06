@@ -1,18 +1,17 @@
 import sql from 'mssql'
 import type { Capability, IdentityContext } from '@vergis/botler'
 import { sessionContextPrelude } from '@vergis/policy'
+import { credentialProviderFor, type CredentialSource } from './aad-token'
 
 /**
  * Perfil de conexión a un DWH/SQL endpoint. El spec del Botlet solo referencia
  * `database_ref`; las credenciales viven aquí (el saber/acceso vive en la Capability,
- * no en el Botlet — canon). Para Fabric: autenticación por Service Principal.
+ * no en el Botlet — canon). La credencial se declara con los campos de `CredentialSource`
+ * (`auth: secret|federated|imds`; ausente ⇒ `secret` con tenantId/clientId/clientSecret).
  */
-export interface SqlConnectionProfile {
+export interface SqlConnectionProfile extends CredentialSource {
   server: string
   database: string
-  tenantId: string
-  clientId: string
-  clientSecret: string
   port?: number
 }
 
@@ -68,18 +67,13 @@ export function createExecuteSqlDwh(
     if (!profile) {
       throw new Error(`${name}: database_ref '${ref}' no está configurado en los perfiles de conexión.`)
     }
+    // Fail-closed: un perfil sin credencial resoluble lanza ACÁ, antes de tocar la red.
+    const provider = credentialProviderFor(profile, { label: `database_ref '${ref}'` })
     const cfg: sql.config = {
       server: profile.server,
       database: profile.database,
       port: profile.port ?? 1433,
-      authentication: {
-        type: 'azure-active-directory-service-principal-secret',
-        options: {
-          tenantId: profile.tenantId,
-          clientId: profile.clientId,
-          clientSecret: profile.clientSecret,
-        },
-      },
+      authentication: provider.sqlAuth(),
       options: { encrypt: true, trustServerCertificate: false },
       connectionTimeout: 30000,
       requestTimeout: 60000,
