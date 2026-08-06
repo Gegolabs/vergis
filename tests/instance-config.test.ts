@@ -132,7 +132,8 @@ describe('instance-config · destinos de aviso y URL pública (#100)', () => {
   it('con URL pública: se normaliza sin slash final y los destinos cuentan en el summary', () => {
     const cfg = loadInstanceConfig({ VERGIS_NOTIFY: 'n.yaml', VERGIS_PUBLIC_URL: ' https://mira.gh.example.com// ' }, fs({ 'n.yaml': notifyYaml }))
     expect(cfg.publicUrl).toBe('https://mira.gh.example.com')
-    expect(cfg.notify.destinations).toEqual([{ id: 'ops-slack', type: 'slack-webhook', url: 'https://hooks.slack.com/x' }])
+    // `events` ausente ⇒ ['alerts'] (issue #102): la suscripción por defecto no cambia a quién le llega qué.
+    expect(cfg.notify.destinations).toEqual([{ id: 'ops-slack', type: 'slack-webhook', url: 'https://hooks.slack.com/x', events: ['alerts'] }])
     expect(cfg.summary).toBe('notify 1')
   })
 
