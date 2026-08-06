@@ -472,7 +472,7 @@ describe('freshness-loop · la pausa de un proceso (#107)', () => {
     a.engine.runs.set('vivo', vieja)
     await a.loop.tick()
     expect(a.alerts).toHaveLength(1)
-    expect(a.alerts[0]).toContain('`vivo`')
+    expect(a.alerts[0]!.title).toContain('vivo')
     await a.store.close()
   })
 
@@ -495,8 +495,8 @@ describe('freshness-loop · la pausa de un proceso (#107)', () => {
     const clock = { ms: T0 }
     let pausedAt: string | undefined = PAUSADO
     const loop = createFreshnessLoop(
-      { engine, store, inputs: async () => inputsOf([{ id: 'p', oferta: 'PT1H', pausedAt }])(), audit: () => {}, log: () => {}, now: () => clock.ms },
-      { reconcile: true, reconcileDebounceMs: 1 },
+      { engine, store, inputs: async () => inputsOf([{ id: 'p', oferta: 'PT1H', pausedAt }])(), domains: [], audit: () => {}, log: () => {}, now: () => clock.ms },
+      { reconcile: true, reconcileDebounceMs: 1, publicUrl: PUBLIC_URL },
     )
     await loop.tick()
     expect(engine.sets).toEqual([])
@@ -511,12 +511,12 @@ describe('freshness-loop · la pausa de un proceso (#107)', () => {
     const store = await SqliteGovernanceStore.open(null, {})
     const engine = new FakeEngine()
     engine.runs.set('p', [{ startedAt: '2026-08-05T00:00:00Z', status: 'Failed' }])
-    const alerts: string[] = []
+    const alerts: Notification[] = []
     const clock = { ms: T0 }
     let pausedAt: string | undefined
     const loop = createFreshnessLoop(
-      { engine, store, inputs: async () => inputsOf([{ id: 'p', oferta: 'PT1H', pausedAt }])(), postAlert: async (t) => void alerts.push(t), audit: () => {}, log: () => {}, now: () => clock.ms },
-      { reconcile: false, reconcileDebounceMs: 1 },
+      { engine, store, inputs: async () => inputsOf([{ id: 'p', oferta: 'PT1H', pausedAt }])(), domains: [], notify: async (n) => void alerts.push(n), audit: () => {}, log: () => {}, now: () => clock.ms },
+      { reconcile: false, reconcileDebounceMs: 1, publicUrl: PUBLIC_URL },
     )
     await loop.tick()
     expect(alerts).toHaveLength(1) // falló
