@@ -13,6 +13,11 @@ export function renderInteractiveScript(it: Interactive): string {
   var DATA = ${data}, FILTERS = ${filters};
   var tray = document.getElementById('vergis-filters');
   var countEl = document.getElementById('vergis-count');
+  // Franja ÚNICA de estado de filtros (#114): la misma \`.vfltbar\` de #82 hospeda los chips VIVOS de
+  // las facetas client-side. La franja aparece con el primer chip y desaparece con el último.
+  var fltbar = document.getElementById('vergis-fltbar');
+  var liveEl = document.getElementById('vergis-flt-live');
+  var livePrintEl = document.getElementById('vergis-flt-live-print');
   var boxes = tray ? Array.prototype.slice.call(tray.querySelectorAll('input[type=checkbox]')) : [];
   function fmt(v, f){
     if (f === 'percent_1') return (v*100).toFixed(1) + '%';
@@ -63,8 +68,29 @@ export function renderInteractiveScript(it: Interactive): string {
       });
     });
   }
+  // Chips vivos: uno por VALOR marcado de cada faceta, en la franja de estado del cuerpo.
+  function paintChips(){
+    if (!fltbar || !liveEl) return;
+    var html = [], parts = [];
+    FILTERS.forEach(function(f){
+      var picked = selectedFor(f.field);
+      if (!picked.length) return;
+      var label = f.label || f.field;
+      parts.push(label + ': ' + picked.join(', '));
+      picked.forEach(function(v){
+        html.push('<span class="vflt-chip vflt-screen vflt-live" data-field="' + esc(f.field) + '" data-val="' + esc(v) + '">' +
+          '<b>' + esc(label) + ':</b> ' + esc(v) +
+          '<span class="vflt-x" role="button" tabindex="0" title="Quitar este filtro" aria-label="Quitar ' + esc(label) + ': ' + esc(v) + '">✕</span></span>');
+      });
+    });
+    liveEl.innerHTML = html.join('');
+    if (livePrintEl) livePrintEl.textContent = parts.length ? 'Filtros — ' + parts.join(' · ') : '';
+    // Nunca se oculta si hay chips server: esos también son \`.vflt-chip\` y viven siempre en el DOM.
+    fltbar.hidden = !fltbar.querySelector('.vflt-chip');
+  }
   function update(){
     if (countEl){ var n = totalSelected(); countEl.textContent = n ? String(n) : ''; }
+    paintChips();
     document.querySelectorAll('[data-agg]').forEach(function(el){
       var a = JSON.parse(el.getAttribute('data-agg'));
       el.querySelector('.kpi-value').textContent = fmt(agg(filteredRowsFor(a.dataset), a), el.getAttribute('data-format'));
@@ -83,6 +109,17 @@ export function renderInteractiveScript(it: Interactive): string {
     });
   }
   boxes.forEach(function(b){ b.addEventListener('change', update); });
+  // El ✕ de un chip vivo desmarca SU checkbox de la bandeja: una sola fuente de verdad (el DOM de
+  // los checkboxes). Delegado, una sola vez, sobre el slot vivo.
+  if (liveEl) liveEl.addEventListener('click', function(ev){
+    var x = ev.target && ev.target.closest ? ev.target.closest('.vflt-x') : null;
+    if (!x) return;
+    var chip = x.closest('.vflt-chip');
+    if (!chip) return;
+    var field = chip.getAttribute('data-field'), val = chip.getAttribute('data-val');
+    boxes.forEach(function(b){ if (b.getAttribute('data-field')===field && b.value===val) b.checked = false; });
+    update();
+  });
   Array.prototype.slice.call(document.querySelectorAll('.faceta-clear')).forEach(function(btn){
     btn.addEventListener('click', function(){
       var field = btn.getAttribute('data-field');
