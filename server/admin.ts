@@ -448,13 +448,19 @@ async function handleIntake(
   // Metadata requerida del slot (issue #76): la subida DEBE traer los campos declarados — la validación
   // aquí es la que manda (la del browser es cortesía). Un campo requerido sin valor, o un valor que no
   // calza el tipo, rechaza el LOTE completo (misma atomicidad). Los campos llegan como `meta_<id>`.
+  // Un campo con `from_filename` (#95) se resuelve POR ARCHIVO desde su nombre: un lote puede traer
+  // `Listado EasyDoc VH.xlsx` y `Listado SAP COVH.xlsx` y cada uno lleva su propio sidecar.
   const submittedMeta: Record<string, string> = {}
   for (const [k, v] of Object.entries(fields)) if (k.startsWith('meta_')) submittedMeta[k.slice('meta_'.length)] = v
-  const metaCheck = validateMeta(slot, submittedMeta)
-  if (!metaCheck.ok) {
-    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: uploads.map((u) => u.filename).join(', '), bytes: 0, by, ok: false, error: metaCheck.error })
-    redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + metaCheck.error)}`)
-    return
+  const metaPorArchivo: { values: Record<string, string>; verify?: Record<string, string> }[] = []
+  for (const u of uploads) {
+    const metaCheck = validateMeta(slot, submittedMeta, u.filename)
+    if (!metaCheck.ok) {
+      deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: metaCheck.error })
+      redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + metaCheck.error)}`)
+      return
+    }
+    metaPorArchivo.push({ values: metaCheck.values, ...(metaCheck.verify ? { verify: metaCheck.verify } : {}) })
   }
   // Dedup por CONTENIDO (issue #62): SHA-256 de los bytes vs cargas previas del slot — el NOMBRE no
   // participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
@@ -472,11 +478,12 @@ async function handleIntake(
   const uploadedAt = new Date().toISOString()
   // Aterriza cada crudo en la landing zone OneLake (staging). El pipeline/SJD lee de ahí y transforma.
   const duplicados: string[] = []
-  for (const u of uploads) {
+  for (const [i, u] of uploads.entries()) {
     const sha256 = createHash('sha256').update(u.bytes).digest('hex')
     const dupOf = dupDe(sha256)
     if (dupOf) duplicados.push(`«${u.filename}» es idéntico a ${dupOf}`)
-    const sidecar = hasMeta ? buildSidecar(slot.id, metaCheck.values, by, uploadedAt) : undefined
+    const m = metaPorArchivo[i]!
+    const sidecar = hasMeta ? buildSidecar(slot.id, m.values, by, uploadedAt, m.verify) : undefined
     await deps.intake.put(slot.target, u.filename, u.bytes, sidecar)
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}) })
   }
@@ -803,6 +810,13 @@ function metaFieldsHtml(slot: IntakeSlot): string {
   if (!slot.meta?.length) return ''
   return slot.meta.map((f) => {
     const name = `meta_${escapeHtml(f.id)}`
+    // #95 · el campo lo declara el NOMBRE del archivo: no se pide, se explica la convención. Si el
+    // nombre no la cumple, la subida falla con el mismo texto — el usuario ve antes lo que se espera.
+    if (f.fromFilename) {
+      const pats = f.fromFilename.patterns.map((p) => `<code>${escapeHtml(p)}</code>`).join(' o ')
+      const cods = f.fromFilename.catalog ? ` · códigos: ${Object.keys(f.fromFilename.catalog).map((c) => `<code>${escapeHtml(c)}</code>`).join(', ')}` : ''
+      return `<div class="sub" style="flex-basis:100%">${escapeHtml(f.label)} se toma del nombre del archivo: ${pats}${cods}</div>`
+    }
     const req = f.required ? ' required' : ''
     const mark = f.required ? ' <span style="color:var(--err)">*</span>' : ''
     let control: string

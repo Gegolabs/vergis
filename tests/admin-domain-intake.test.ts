@@ -41,6 +41,20 @@ const SLOTS = parseIntakeConfig({
         { id: 'version', label: 'Versión', type: 'enum', options: ['V0', 'V1'], required: true },
       ],
     },
+    // Issue #95: la metadata la declara el NOMBRE del archivo (convención + catálogo de la instancia).
+    {
+      id: 'documentos', label: 'Documentos', domain: 'cartera', maxBytes: 4096,
+      target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/documentos' },
+      trigger: { processRef: 'PIPE3' },
+      meta: [{
+        id: 'empresa_rut', label: 'Empresa (receptor)', type: 'rut', required: true,
+        from_filename: {
+          patterns: ['Listado EasyDoc {codigo}.xlsx', 'Listado SAP {codigo}.xlsx'],
+          catalog: { VH: '96835510-4', TSV: '77130310-2' },
+          verify_against: 'RUTRECEPTOR',
+        },
+      }],
+    },
   ],
 })
 // Fila de frescura cuya entidad casa con el slot por el item del motor (engineItemId === slot.trigger.processRef).
@@ -317,6 +331,59 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(res.body).toContain('name="meta_empresa_rut"')
     expect(res.body).toContain('name="meta_version"')
     expect(res.body).toContain('<option value="V0">V0</option>')
+  })
+
+  // ── Issue #95: metadata derivada del nombre del archivo ─────────────────────
+  it('#95 · lote con dos empresas distintas: cada archivo lleva SU sidecar derivado + un solo run-now', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipartFiles({ _csrf: token }, [
+      { filename: 'Listado EasyDoc VH.xlsx', bytes: Buffer.from('easydoc') },
+      { filename: 'Listado SAP TSV.xlsx', bytes: Buffer.from('sap') },
+    ])
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/documentos', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(puts).toHaveLength(2)
+    expect(JSON.parse(puts[0].sidecar!)).toEqual({ slot: 'documentos', empresa_rut: '96835510-4', verify: { empresa_rut: 'RUTRECEPTOR' }, uploadedBy: STEWARD, uploadedAt: expect.any(String) })
+    expect(JSON.parse(puts[1].sidecar!).empresa_rut).toBe('77130310-2')
+    expect(runs).toEqual(['PIPE3'])
+  })
+
+  it('#95 · nombre fuera de convención → 400 con el patrón esperado, sin put ni trigger', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token }, { filename: 'Factura_VH.xlsx', bytes: Buffer.from('datos') })
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/documentos', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(decodeURIComponent(res.headers['location'] as string)).toContain('Listado EasyDoc {codigo}.xlsx')
+    expect(puts).toHaveLength(0)
+    expect(runs).toHaveLength(0)
+    expect(audit.find((e) => e.type === 'intake')?.ok).toBe(false)
+  })
+
+  it('#95 · código fuera del catálogo → 400 nombrando los códigos válidos, sin put', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token }, { filename: 'Listado EasyDoc ZZZ.xlsx', bytes: Buffer.from('datos') })
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/documentos', STEWARD, mp.body, mp.ct))
+    expect(decodeURIComponent(res.headers['location'] as string)).toMatch(/catálogo.*VH, TSV/)
+    expect(puts).toHaveLength(0)
+  })
+
+  it('#95 · lote atómico: un nombre malo entre válidos → NINGÚN put', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipartFiles({ _csrf: token }, [
+      { filename: 'Listado EasyDoc VH.xlsx', bytes: Buffer.from('ok') },
+      { filename: 'Listado SAP ZZZ.xlsx', bytes: Buffer.from('mal') },
+    ])
+    await go(mockReq('POST', '/admin/dominio/cartera/intake/documentos', STEWARD, mp.body, mp.ct))
+    expect(puts).toHaveLength(0)
+    expect(runs).toHaveLength(0)
+  })
+
+  it('#95 · el formulario NO pide el campo derivado: explica la convención', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    expect(res.body).toContain('se toma del nombre del archivo')
+    expect(res.body).toContain('Listado EasyDoc {codigo}.xlsx')
+    // El único `meta_empresa_rut` de la página es el del slot #76 (formulario); el derivado no agrega input.
+    expect(res.body.match(/name="meta_empresa_rut"/g)).toHaveLength(1)
   })
 
   it('steward de cartera NO puede ingestar a un dominio que no gestiona', async () => {
