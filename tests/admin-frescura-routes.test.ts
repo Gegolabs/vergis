@@ -278,6 +278,53 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(res.body).toContain('No se pudo consultar el estado de la conversión')
   })
 
+  // Issue #99: desde la última corrida de cada entidad (y de cada slot huérfano) se llega a su log.
+  it('#99 · con runLogs cableado, la entidad enlaza «Ver log» de su última corrida', async () => {
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => FRESHNESS,
+      runLogs: { refOf: async () => null, list: async () => [], read: async () => null, runsOf: async () => [] },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('corrida?proc=p_sap&amp;started=2026-06-24T09%3A00%3A00Z')
+    expect(res.body).toContain('Ver log')
+  })
+
+  it('#99 · el slot huérfano también enlaza el log de su última corrida', async () => {
+    const SLOTS = parseIntakeConfig({
+      slots: [{ id: 'saldos', label: 'Saldos', domain: 'cartera', maxBytes: 1024, target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' }, trigger: { processRef: 'P1' } }],
+    })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      domainFreshness: async () => [],
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      intakeStatus: async () => [{ startedAt: '2026-07-09T09:00:00Z', status: 'Failed' } as RunRecord],
+      runLogs: { refOf: async () => null, list: async () => [], read: async () => null, runsOf: async () => [] },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = mockRes()
+    await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
+    expect(res.body).toContain('corrida?slot=saldos&amp;started=2026-07-09T09%3A00%3A00Z')
+  })
+
+  it('#99 · SIN runLogs, Frescura no contiene ningún enlace a /corrida (regresión cero)', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    expect(res.body).not.toContain('/corrida?')
+  })
+
   it('Aplicar cadencia: POST con CSRF llama al reconciliador y redirige con mensaje', async () => {
     const page = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
     const token = tokenFrom(page.body)

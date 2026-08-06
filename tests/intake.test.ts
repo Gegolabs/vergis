@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseIntakeConfig, matchSlot, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada } from '@vergis/capabilities'
+import { parseIntakeConfig, matchSlot, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada, slotRunLogsDir } from '@vergis/capabilities'
 
 const SLOT = {
   slots: [
@@ -36,6 +36,14 @@ describe('intake · contrato declarativo', () => {
     expect(slotLogPath(parseIntakeConfig({ slots: [{ ...base, log: 'Files/logs/conv.txt' }] })[0])).toBe('Files/logs/conv.txt')
     expect(slotLogPath(parseIntakeConfig({ slots: [{ ...base, log: false }] })[0])).toBeNull()
     expect(() => parseIntakeConfig({ slots: [{ ...base, log: '/etc/passwd' }] })).toThrow(/Files\//)
+  })
+
+  // Issue #99: el directorio de logs POR CORRIDA se deriva del log ya declarado.
+  it('slotRunLogsDir: hermano `_logs/` del log declarado · log:false → null', () => {
+    const base = { id: 's', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' } }
+    expect(slotRunLogsDir(parseIntakeConfig({ slots: [base] })[0])).toBe('Files/code/_logs')
+    expect(slotRunLogsDir(parseIntakeConfig({ slots: [{ ...base, log: 'Files/x/mi.log' }] })[0])).toBe('Files/x/_logs')
+    expect(slotRunLogsDir(parseIntakeConfig({ slots: [{ ...base, log: false }] })[0])).toBeNull()
   })
 
   it('rechaza target incompleto, path fuera de Files/, id dup, trigger sin processRef', () => {

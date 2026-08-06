@@ -56,6 +56,8 @@ import {
   createOneLakeIntake,
   createOneLakeReader,
   slotLogPath,
+  slotRunLogsDir,
+  RUN_LOG_DIR_DEFAULT,
   isSidecarName,
   createFabricJobs,
   createFabricJobStatus,
@@ -91,7 +93,7 @@ import {
   type NotasRenderContext,
   type SqlConnectionProfile,
 } from '@vergis/capabilities'
-import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner } from './admin'
+import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
@@ -775,7 +777,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       ? (parseYaml(readFileSync(resolve(process.env['VERGIS_SOURCES']), 'utf8')) as {
           sources?: { id: string; label: string; oferta: string; domain?: string; connectedBy?: string }[]
           tableSources?: { tableRef: string; sourceId: string }[]
-          processes?: { id: string; label: string; sourceId: string; engine?: { workspaceId: string; itemId: string; jobType: string } }[]
+          // `logs` (issue #99): dónde deja el proceso sus logs POR CORRIDA. Sin él, el proceso no
+          // ofrece logs por corrida (workspace default = el del engine; dir default `Files/code/_logs`).
+          processes?: { id: string; label: string; sourceId: string; engine?: { workspaceId: string; itemId: string; jobType: string }; logs?: { lakehouseId: string; workspaceId?: string; dir?: string } }[]
           processOutputs?: { processId: string; tableRef: string }[]
         })
       : {}
@@ -807,7 +811,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; backfill?: (slot: IntakeSlot) => void; engine?: IngestionEngineClient } => {
+    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; backfill?: (slot: IntakeSlot) => void; engine?: IngestionEngineClient; runLogs?: RunLogsOps } => {
       if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
@@ -995,6 +999,37 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             },
           } satisfies CargasOps
         })(),
+        // Logs POR CORRIDA (issue #99): SOLO LECTURA sobre el directorio `_logs/` del contrato. La
+        // pertenencia al dominio se valida acá (fail-closed): sin ella, un steward del dominio A leería
+        // los logs del dominio B fabricando la URL.
+        runLogs: {
+          refOf: async ({ domainId, slotId, processId }) => {
+            if (slotId) {
+              const slot = intakeSlots.find((s) => s.id === slotId && (s.domain ?? '') === domainId)
+              const dir = slot ? slotRunLogsDir(slot) : null
+              return slot && dir ? { workspaceId: slot.target.workspaceId, lakehouseId: slot.target.lakehouseId, dir } : null
+            }
+            if (processId) {
+              const [procs, sources] = await Promise.all([govStore.listProcesses(), govStore.listSources()])
+              const p = procs.find((x) => x.id === processId)
+              if (!p?.logs || sources.find((s) => s.id === p.sourceId)?.domain !== domainId) return null
+              const workspaceId = p.logs.workspaceId ?? p.engine?.workspaceId
+              return workspaceId ? { workspaceId, lakehouseId: p.logs.lakehouseId, dir: p.logs.dir ?? RUN_LOG_DIR_DEFAULT } : null
+            }
+            return null
+          },
+          list: (ref) => reader.list({ workspaceId: ref.workspaceId, lakehouseId: ref.lakehouseId }, ref.dir),
+          read: (ref, path) => reader.read({ workspaceId: ref.workspaceId, lakehouseId: ref.lakehouseId }, path),
+          runsOf: async ({ domainId, slotId, processId }) => {
+            if (slotId) {
+              const slot = intakeSlots.find((s) => s.id === slotId && (s.domain ?? '') === domainId)
+              return slot?.trigger
+                ? jobStatus.listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, 20)
+                : []
+            }
+            return processId ? engine.listRunHistory(processId) : []
+          },
+        },
         engine,
       }
     })()
@@ -1082,6 +1117,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // Registro de cargas (issue #62): dedup por contenido, pre-check y el indexado retroactivo.
       intakeUploads: govStore,
       intakeBackfill: fabricWiring.backfill,
+      // Acceso al log de una corrida (issue #99): la página `/corrida` y sus enlaces «Ver log».
+      runLogs: fabricWiring.runLogs,
       signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
       groupStore: govStore,

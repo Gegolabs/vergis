@@ -598,4 +598,32 @@ describe('admin-cargas · revertir esta carga (issue #63)', () => {
     const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
     expect(res.body).toContain('>Revertir</button>')
   })
+
+  // Issue #99: desde CADA corrida listada (no solo la última) se llega a su log.
+  it('#99 · con runLogs cableado, cada conversión del timeline y la «Última conversión» enlazan «Ver log»', async () => {
+    const admin = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOMAINS,
+      intakeSlots: SLOTS,
+      intake: { put: async () => {} },
+      cargas: ops(),
+      runLogs: { refOf: async () => null, list: async () => [], read: async () => null, runsOf: async () => [] },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    // Las DOS corridas del historial, cada una con su propio arranque en el enlace.
+    expect(res.body).toContain('/admin/dominio/cartera/corrida?slot=saldos&amp;started=2026-07-13T16%3A17%3A47Z')
+    expect(res.body).toContain('/admin/dominio/cartera/corrida?slot=saldos&amp;started=2026-07-10T13%3A30%3A17Z')
+    // La última conversión también (el enlace vive junto al estado, no solo en la tabla).
+    expect(res.body.split('Última conversión')[1]).toContain('Ver log')
+  })
+
+  it('#99 · SIN runLogs, la consola no contiene ningún enlace a /corrida (regresión cero)', async () => {
+    const res = await go(await mkAdmin(ops()), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    expect(res.body).not.toContain('/corrida?')
+  })
 })

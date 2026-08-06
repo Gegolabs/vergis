@@ -151,8 +151,11 @@ export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
  *
  * `sinCambios` (issue #62) es la señal de «delta neto cero» de la última corrida — misma disciplina
  * que el diagnóstico: el log pertenece a la ÚLTIMA conversión, así que solo `runs[0]` puede llevarla.
+ *
+ * `runLogHrefOf` (issue #99) da el destino del «Ver log» de CADA corrida (no solo la última). Ausente
+ * (o devolviendo null) ⇒ ninguna fila enlaza: la instancia sin logs por corrida no cambia en nada.
  */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   if (history !== 'error') {
     for (const h of history) {
@@ -171,9 +174,11 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
       const motivo = diag
         ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${generico ? `<div class="sub">${generico}</div>` : ''}`
         : generico ? `<div class="sub" style="color:var(--err)">${generico}</div>` : ''
+      const href = runLogHrefOf?.(r) ?? null
+      const verLog = href ? ` <a class="sub" href="${escapeHtml(href)}">Ver log</a>` : ''
       items.push({
         ts: r.startedAt,
-        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${motivo}</td><td></td>`,
+        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${verLog}${motivo}</td><td></td>`,
       })
     }
   }
@@ -185,7 +190,7 @@ const postForm = (action: string, token: string, fields: Record<string, string>,
   `<form method="post" action="${escapeHtml(action)}" style="display:inline"${confirmMsg ? ` onsubmit="return confirm('${escapeHtml(confirmMsg)}')"` : ''}>${csrf(token)}${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('')}<button class="add">${escapeHtml(label)}</button></form>`
 
 /** El cuerpo HTML de la consola (se envuelve con adminPage en admin.ts). */
-export function cargasBody(domainId: string, domainLabel: string, slots: SlotCargas[], token: string, uploadFormOf: (slot: IntakeSlot) => string): string {
+export function cargasBody(domainId: string, domainLabel: string, slots: SlotCargas[], token: string, uploadFormOf: (slot: IntakeSlot) => string, runLogHrefOf?: (slot: IntakeSlot, r: RunRecord) => string | null): string {
   const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domainId)}">← ${escapeHtml(domainLabel)}</a></p>`
   if (!slots.length) {
     return `${back}<p class="sub">Este dominio no tiene slots de ingesta declarados (instancia: <code>intake/slots.yaml</code>).</p>`
@@ -225,8 +230,11 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     const motivoLast = titular
       ? `<div style="color:var(--err)">${escapeHtml(titular)}</div>${last?.error ? `<div class="sub">${escapeHtml(last.error.slice(0, 300))}</div>` : ''}`
       : last?.error ? `<div class="sub" style="color:var(--err)">${escapeHtml(last.error.slice(0, 300))}</div>` : ''
+    // #99 · el log de ESTA corrida (éxito o falla), a un clic de donde se ve su estado.
+    const hrefDeRun = runLogHrefOf ? (r: RunRecord): string | null => runLogHrefOf(s, r) : undefined
+    const verLogLast = last && hrefDeRun?.(last) ? ` <a class="sub" href="${escapeHtml(hrefDeRun(last)!)}">Ver log</a>` : ''
     const estado = last
-      ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${motivoLast}`
+      ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${verLogLast}${motivoLast}`
       : sc.runs === 'error' ? '<span class="sub">motor no respondió</span>' : '<span class="sub">sin corridas</span>'
 
     const rerun = s.trigger ? postForm(action, token, { slot: s.id, accion: 'rerun' }, 'Correr conversión de nuevo', 'La conversión re-procesará TODOS los archivos del landing. ¿Continuar?') : ''
@@ -257,7 +265,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th><th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
