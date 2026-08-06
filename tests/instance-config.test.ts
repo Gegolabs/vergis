@@ -110,3 +110,35 @@ describe('instance-config · «declara cero» y el resumen de conteos', () => {
     expect(cfg.summary).toBe('sources 0 (tablas 0 · procesos 0 · salidas 0)')
   })
 })
+
+describe('instance-config · destinos de aviso y URL pública (#100)', () => {
+  const notifyYaml = 'destinations:\n  - id: ops-slack\n    type: slack-webhook\n    url: https://hooks.slack.com/x\n'
+
+  it('sin VERGIS_NOTIFY: cero destinos, URL pública opcional y ninguna mención en el summary', () => {
+    const cfg = loadInstanceConfig({}, fs({}))
+    expect(cfg.notify).toEqual({ destinations: [] })
+    expect(cfg.publicUrl).toBe('')
+    expect(cfg.summary).toBe('')
+  })
+
+  it('con destinos declarados y SIN VERGIS_PUBLIC_URL el arranque LANZA (el aviso quedaría sin dónde mirar)', () => {
+    expect(() => loadInstanceConfig({ VERGIS_NOTIFY: 'n.yaml' }, fs({ 'n.yaml': notifyYaml }))).toThrow(
+      /VERGIS_NOTIFY declara destinos pero falta VERGIS_PUBLIC_URL/,
+    )
+    // Cero destinos declarados no exige la URL: no hay enlace que emitir.
+    expect(loadInstanceConfig({ VERGIS_NOTIFY: 'n.yaml' }, fs({ 'n.yaml': 'destinations: []\n' })).summary).toBe('notify 0')
+  })
+
+  it('con URL pública: se normaliza sin slash final y los destinos cuentan en el summary', () => {
+    const cfg = loadInstanceConfig({ VERGIS_NOTIFY: 'n.yaml', VERGIS_PUBLIC_URL: ' https://mira.gh.example.com// ' }, fs({ 'n.yaml': notifyYaml }))
+    expect(cfg.publicUrl).toBe('https://mira.gh.example.com')
+    expect(cfg.notify.destinations).toEqual([{ id: 'ops-slack', type: 'slack-webhook', url: 'https://hooks.slack.com/x' }])
+    expect(cfg.summary).toBe('notify 1')
+  })
+
+  it('un destino mal declarado sale envuelto con ENV y ruta, como cualquier otra config', () => {
+    expect(() => loadInstanceConfig({ VERGIS_NOTIFY: 'n.yaml' }, fs({ 'n.yaml': 'destinations:\n  - type: teams\n    url: https://x\n' }))).toThrow(
+      /VERGIS_NOTIFY \(\/.*n\.yaml\): notify: destino #0 con type inválido 'teams'/,
+    )
+  })
+})

@@ -2,7 +2,7 @@
  * Fase de carga de la CONFIG DECLARATIVA DE INSTANCIA — fail-closed y FATAL (issue #117).
  *
  * Los YAML que declaran qué gobierna esta instancia (dominios, slots de ingesta, data maestra,
- * grupos semilla, dueños de PI, registro de fuentes) se cargan aquí, en un solo lugar, ANTES del
+ * grupos semilla, dueños de PI, registro de fuentes, destinos de aviso) se cargan aquí, en un solo lugar, ANTES del
  * bloque de administración y FUERA de su `try/catch` de infra. Motivo: ese catch existe para fallas
  * de infraestructura («administración deshabilitada», no-fatal), y al envolver también la carga de
  * config convertía un archivo roto en una degradación silenciosa. Un archivo declarado que no
@@ -31,6 +31,7 @@ import {
   type MasterDataEntity,
   type SourcesConfig,
 } from '@vergis/capabilities'
+import { parseNotifyConfig, type NotifyConfig } from './notify'
 
 /** Lo que declaró la instancia, ya validado. Las configs sin env definido quedan vacías. */
 export interface InstanceConfig {
@@ -40,6 +41,10 @@ export interface InstanceConfig {
   intakeSlots: IntakeSlot[]
   sourceReg: SourcesConfig | Record<string, never>
   piOwners: Record<string, string>
+  /** Destinos de aviso saliente (issue #100). Sin `VERGIS_NOTIFY`, cero destinos = avisos apagados. */
+  notify: NotifyConfig
+  /** URL pública de la instancia, normalizada sin slash final. Exigida si hay destinos de aviso. */
+  publicUrl: string
   /** Línea de conteos para el log de arranque; SOLO las configs con env definido. */
   summary: string
 }
@@ -76,6 +81,14 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const intakeSlots = loadOne(env, 'VERGIS_INTAKE', parseIntakeConfig, readFile)
   const sourceReg = loadOne(env, 'VERGIS_SOURCES', parseSourcesConfig, readFile)
   const piOwners = loadOne(env, 'VERGIS_PI_OWNERS', parsePiOwnersConfig, readFile)
+  const notify = loadOne(env, 'VERGIS_NOTIFY', parseNotifyConfig, readFile)
+
+  // Los avisos llevan enlaces ABSOLUTOS a la vista de detalle (issue #100): sin URL pública, un
+  // destino declarado produciría avisos sin dónde mirar. Se rompe el arranque —donde el operador está
+  // mirando— en vez de callarlo hasta la primera alerta de las siete de la mañana.
+  const publicUrl = (env['VERGIS_PUBLIC_URL'] ?? '').trim().replace(/\/+$/, '')
+  if ((notify?.destinations.length ?? 0) > 0 && !publicUrl)
+    throw new Error('VERGIS_NOTIFY declara destinos pero falta VERGIS_PUBLIC_URL (los avisos llevan enlaces absolutos a la vista de detalle).')
 
   const partes: string[] = []
   if (groupSeeds) partes.push(`groups ${groupSeeds.length}`)
@@ -89,6 +102,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   }
   if (intakeSlots) partes.push(`intake-slots ${intakeSlots.length}`)
   if (entities) partes.push(`master-data ${entities.length}`)
+  if (notify) partes.push(`notify ${notify.destinations.length}`)
 
   return {
     entities: entities ?? [],
@@ -97,6 +111,8 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
     intakeSlots: intakeSlots ?? [],
     sourceReg: sourceReg ?? {},
     piOwners: piOwners ?? {},
+    notify: notify ?? { destinations: [] },
+    publicUrl,
     summary: partes.join(' · '),
   }
 }
