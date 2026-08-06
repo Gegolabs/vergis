@@ -1152,6 +1152,36 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         const [sources, processes, outputs] = await Promise.all([govStore.listSources(), govStore.listProcesses(), govStore.listProcessOutputs()])
         return { sources, processes, outputs }
       },
+      // Estado por proceso para la vista de Fuentes (#101): lo último conocido de la proyección (#105) +
+      // salud con la MISMA clasificación de Frescura. Una lectura de proyección por GET; el motor, jamás.
+      // Sin motor no se cablea: la vista queda como el registro puro (no se fabrican columnas de estado
+      // donde no hay quien observe).
+      processStates: fabricWiring.engine
+        ? async () => {
+            const f = await freshnessInputs()
+            const reqOf = new Map(deriveIngestionMap(f.mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
+            const snaps = new Map((await govStore.listRunSnapshots()).map((s) => [s.processId, s]))
+            const ahora = Date.now()
+            const off = freshnessPollMs <= 0
+            return f.procs
+              .filter((p) => p.engine)
+              .map((p) => {
+                const s = snaps.get(p.id)
+                const observedAt = s?.observedAt ?? null
+                const runs = observedAt ? (s?.runs ?? []) : []
+                const req = reqOf.get(p.id)
+                const health = observedAt && req != null ? classifyProcess(runs, req, ahora) : undefined
+                const stale = off || (observedAt != null && ahora - Date.parse(observedAt) > 3 * freshnessPollMs)
+                return {
+                  processId: p.id,
+                  runs,
+                  scheduleSeconds: observedAt ? (s?.scheduleSeconds ?? null) : null,
+                  health,
+                  projection: { observedAt, stale, lastError: s?.lastError ?? null, off },
+                }
+              })
+          }
+        : undefined,
       // Frescura por entidad de un dominio (vista de dominio): proyección por entidad enriquecida con
       // LO ÚLTIMO OBSERVADO del motor (#105) — corridas, schedule y salud salen de la proyección local
       // del store, no de una llamada al motor: el request path jamás pega a Fabric. Con el motor caído
