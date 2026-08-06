@@ -71,6 +71,30 @@ export interface IntakeFromFilename {
 }
 
 /**
+ * Opción de un `enum` de metadata, ya NORMALIZADA (issue #109): las opciones inline del slot y las que
+ * vienen de un catálogo de la instancia (`options_ref`) convergen en esta única forma. `value` es el dato
+ * que viaja (sidecar/SJD); `label` es puro display y JAMÁS viaja.
+ */
+export interface IntakeMetaOption {
+  value: string
+  label: string
+}
+
+/**
+ * Catálogo de opciones declarado por la INSTANCIA en el bloque raíz `catalogs:` del mismo YAML de intake
+ * (issue #109). Un campo `enum` lo referencia por id con `options_ref` y hereda sus opciones resueltas en
+ * parse-time: el `IntakeSlot` resultante es autocontenido (nada más transporta catálogos).
+ */
+export interface IntakeCatalog {
+  /** Slug estable, único entre catálogos; es lo que un campo nombra en `options_ref`. */
+  id: string
+  /** Nombre legible (documentación/UI); default = id. */
+  label: string
+  /** Lista NO vacía de opciones, con `value` único dentro del catálogo. */
+  options: IntakeMetaOption[]
+}
+
+/**
  * Campo de metadata requerida por un slot (issue #76). El archivo de algunos slots NO se puede convertir
  * sin un dato que no viene en su contenido y que por política JAMÁS se infiere (identidad explícita,
  * fail-closed): a qué empresa se imputa un extracto, qué versión trae un presupuesto. La UI lo solicita
@@ -84,11 +108,12 @@ export interface IntakeMetaField {
   type: IntakeMetaType
   /** Sin valor bloquea la subida (validación server-side; la del browser es cortesía). */
   required?: boolean
-  /** Opciones inline para type `enum`. */
-  options?: string[]
-  /** Catálogo externo para type `enum` — declarado en el contrato pero NO soportado aún (no hay
-   *  mecanismo de catálogos en la capa admin): un slot que lo use NO arranca (fail-closed). */
-  options_ref?: string
+  /** Opciones RESUELTAS de un type `enum`: inline o copiadas del catálogo de `options_ref` en parse-time
+   *  (issue #109). Sin etiqueta declarada, `label = value`. */
+  options?: IntakeMetaOption[]
+  /** Id del catálogo del que salieron las `options` (issue #109). Solo para mensajes/UI: el valor ya
+   *  viene resuelto en `options`; nadie vuelve a mirar el bloque `catalogs` después del parse. */
+  optionsRef?: string
   /** Convención de nombre que resuelve este campo sin preguntárselo al usuario (issue #95). Presente =
    *  el formulario NO lo pide y el valor sale del nombre; ausente = comportamiento de #76 (formulario). */
   fromFilename?: IntakeFromFilename
@@ -119,15 +144,59 @@ export interface IntakeSlot {
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 
-/** Valida y normaliza la config declarativa de intake (`{ slots: [...] }`). */
+/**
+ * Valida y normaliza la config declarativa de intake (`{ catalogs?: [...], slots: [...] }`).
+ *
+ * `catalogs` (issue #109) es OPCIONAL —ausente = cero catálogos, legítimo— y se valida ANTES que los
+ * slots: un campo con `options_ref` resuelve contra él en parse-time. Cualquier duda (ref rota, catálogo
+ * vacío, value duplicado) **lanza**, y ese `throw` es toda la invariante: el chequeo de arranque lo acusa
+ * como ERROR ruidoso y el hot-reload rechaza el swap conservando los slots vigentes.
+ */
 export function parseIntakeConfig(doc: unknown): IntakeSlot[] {
   const raw = requireRootKey(doc, 'intake', 'slots')
   if (!Array.isArray(raw)) throw new Error('intake: `slots` debe ser una lista.')
+  const catalogs = parseCatalogs((doc as Record<string, unknown>)['catalogs'])
   const seen = new Set<string>()
-  return raw.map((s, i) => parseSlot(s, i, seen))
+  return raw.map((s, i) => parseSlot(s, i, seen, catalogs))
 }
 
-function parseSlot(s: unknown, i: number, seen: Set<string>): IntakeSlot {
+/** Valida el bloque raíz `catalogs` (issue #109) y lo indexa por id. Ausente = mapa vacío. */
+function parseCatalogs(raw: unknown): Map<string, IntakeCatalog> {
+  const out = new Map<string, IntakeCatalog>()
+  if (raw == null) return out
+  if (!Array.isArray(raw)) throw new Error('intake: `catalogs` debe ser una lista.')
+  raw.forEach((c, i) => {
+    const o = (c ?? {}) as Record<string, unknown>
+    const id = String(o['id'] ?? '')
+    if (!SLUG_RE.test(id)) throw new Error(`intake: catálogo #${i} con id inválido '${id}' (esperado [a-z][a-z0-9_]*).`)
+    if (out.has(id)) throw new Error(`intake: id de catálogo duplicado '${id}'.`)
+    const opts = o['options']
+    if (!Array.isArray(opts) || opts.length === 0) throw new Error(`intake: catálogo '${id}' requiere 'options' (lista no vacía).`)
+    out.set(id, { id, label: String(o['label'] ?? id), options: parseOptions(opts, `intake: catálogo '${id}'`) })
+  })
+  return out
+}
+
+/**
+ * Normaliza una lista de opciones de `enum` a `IntakeMetaOption[]` (issue #109). Una entrada puede ser un
+ * string (`'OTRO'` ≡ `{ value: 'OTRO', label: 'OTRO' }`) o un mapa `{ value, label? }`. `value` vacío o
+ * duplicado dentro de la lista = error: una opción ambigua no se resuelve al subir, se rechaza al parsear.
+ */
+function parseOptions(raw: unknown[], where: string): IntakeMetaOption[] {
+  const seen = new Set<string>()
+  return raw.map((entry, i) => {
+    const esMapa = entry != null && typeof entry === 'object' && !Array.isArray(entry)
+    const o = esMapa ? (entry as Record<string, unknown>) : null
+    const value = String((o ? o['value'] : entry) ?? '').trim()
+    if (!value) throw new Error(`${where}: opción #${i} sin 'value'.`)
+    if (seen.has(value)) throw new Error(`${where}: value duplicado '${value}'.`)
+    seen.add(value)
+    const label = o && o['label'] != null ? String(o['label']).trim() : value
+    return { value, label: label || value }
+  })
+}
+
+function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<string, IntakeCatalog>): IntakeSlot {
   const o = (s ?? {}) as Record<string, unknown>
   const id = String(o['id'] ?? '')
   if (!SLUG_RE.test(id)) throw new Error(`intake: slot #${i} con id inválido '${id}' (esperado [a-z][a-z0-9_]*).`)
@@ -159,7 +228,7 @@ function parseSlot(s: unknown, i: number, seen: Set<string>): IntakeSlot {
     out.log = p
   }
   if (o['meta'] != null) {
-    const meta = parseMeta(o['meta'], id)
+    const meta = parseMeta(o['meta'], id, catalogs)
     if (meta.length) out.meta = meta
   }
   return out
@@ -172,7 +241,7 @@ const META_TYPES = new Set<IntakeMetaType>(['string', 'number', 'enum', 'rut'])
 const META_ID_RESERVADOS = new Set(['slot', 'uploadedby', 'uploadedat', 'verify'])
 
 /** Valida y normaliza el bloque `meta` de un slot (issue #76). Mal formado = fallo ruidoso. */
-function parseMeta(raw: unknown, slotId: string): IntakeMetaField[] {
+function parseMeta(raw: unknown, slotId: string, catalogs: Map<string, IntakeCatalog>): IntakeMetaField[] {
   if (!Array.isArray(raw)) throw new Error(`intake: '${slotId}'.meta debe ser una lista.`)
   const seen = new Set<string>()
   return raw.map((m, i) => {
@@ -191,17 +260,31 @@ function parseMeta(raw: unknown, slotId: string): IntakeMetaField[] {
       if (typeof o['required'] !== 'boolean') throw new Error(`intake: '${slotId}'.meta '${id}'.required debe ser booleano.`)
       field.required = o['required']
     }
-    // `options_ref`: en el contrato pero NO soportado aún (no hay mecanismo de catálogos en la capa
-    // admin). Fail-closed: un slot que lo declare NO arranca — se exige `options` inline por ahora.
-    if (o['options_ref'] != null) {
-      throw new Error(`intake: '${slotId}'.meta '${id}'.options_ref no soportado aún — usa 'options' inline (lista de valores).`)
-    }
+    // #109 · las opciones de un enum vienen inline o de un catálogo de la instancia (`options_ref`), y
+    // exactamente de una de las dos: declarar ambas o ninguna es ambigüedad, no un default silencioso.
+    const where = `intake: '${slotId}'.meta '${id}'`
+    const ref = o['options_ref'] != null ? String(o['options_ref']).trim() : null
     if (type === 'enum') {
       const opts = o['options']
-      if (!Array.isArray(opts) || opts.length === 0) throw new Error(`intake: '${slotId}'.meta '${id}' (enum) requiere 'options' (lista no vacía).`)
-      field.options = opts.map((v) => String(v))
-    } else if (o['options'] != null) {
-      throw new Error(`intake: '${slotId}'.meta '${id}': 'options' solo aplica a type enum.`)
+      if (opts != null && ref) throw new Error(`${where}: declara 'options' u 'options_ref', no ambos.`)
+      if (opts == null && !ref) throw new Error(`${where} (enum) requiere 'options' (lista no vacía) u 'options_ref' (id de catálogo).`)
+      if (ref) {
+        const cat = catalogs.get(ref)
+        if (!cat) {
+          const declarados = catalogs.size ? `(declarados: ${[...catalogs.keys()].join(', ')})` : '(no hay catálogos declarados — bloque `catalogs:`)'
+          throw new Error(`${where}.options_ref: catálogo desconocido '${ref}' ${declarados}.`)
+        }
+        // La copia hace autocontenido al slot: `validateMeta`, el render y el diff del hot-reload leen
+        // `field.options` sin conocer el bloque `catalogs`.
+        field.options = cat.options
+        field.optionsRef = cat.id
+      } else {
+        if (!Array.isArray(opts) || opts.length === 0) throw new Error(`${where} (enum) requiere 'options' (lista no vacía).`)
+        field.options = parseOptions(opts, where)
+      }
+    } else {
+      if (o['options'] != null) throw new Error(`${where}: 'options' solo aplica a type enum.`)
+      if (ref) throw new Error(`${where}: 'options_ref' solo aplica a type enum.`)
     }
     if (o['from_filename'] != null) field.fromFilename = parseFromFilename(o['from_filename'], slotId, id)
     return field
@@ -433,10 +516,22 @@ export function validateMeta(slot: IntakeSlot, submitted: Record<string, string>
       case 'number':
         if (!Number.isFinite(Number(raw))) return { ok: false, error: `«${f.label}» debe ser un número (recibido: '${raw}').` }
         break
-      case 'enum':
-        // `options` siempre está presente (el parse rechaza enum sin options y options_ref).
-        if (!(f.options ?? []).includes(raw)) return { ok: false, error: `«${f.label}»: '${raw}' no es una opción válida.` }
+      case 'enum': {
+        // `options` siempre está presente y resuelta (el parse rechaza un enum sin `options` ni
+        // `options_ref`, y una `options_ref` que no apunte a un catálogo declarado). La pertenencia se
+        // mide por `value`: el `label` es display y nunca viaja. Esta ES la compuerta del POST — el
+        // `<select>` del browser es cortesía y manipular el HTML no la salta (issue #109).
+        if (!(f.options ?? []).some((o) => o.value === raw)) {
+          if (!f.optionsRef) return { ok: false, error: `«${f.label}»: '${raw}' no es una opción válida.` }
+          return {
+            ok: false,
+            error: f.fromFilename
+              ? `El valor '${raw}' derivado del nombre '${filename}' no está en el catálogo «${f.optionsRef}» de «${f.label}».`
+              : `«${f.label}»: '${raw}' no está en el catálogo «${f.optionsRef}».`,
+          }
+        }
         break
+      }
       case 'rut':
         if (!validateRut(raw)) return { ok: false, error: `«${f.label}»: RUT inválido (dígito verificador no cuadra): '${raw}'.` }
         break

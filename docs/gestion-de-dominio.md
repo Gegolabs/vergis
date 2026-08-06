@@ -129,6 +129,40 @@ La hace cumplir el **convertidor** —el único actor que lee el archivo; Mira n
 el pipeline rechaza la carga si donde la columna viene informada contradice lo derivado. Así la
 convención se declara **una sola vez, en el slot**, en vez de cablearse dentro de cada pipeline.
 
+### Catálogo de la instancia como fuente de opciones (`options_ref`)
+Un campo `enum` puede tomar sus opciones de un **catálogo de la instancia** en vez de listarlas inline.
+El campo pasa a ser un **dropdown** y el error de tipeo deja de ser posible en vez de ser detectado. El
+catálogo se declara en el bloque raíz `catalogs:` del **mismo** archivo de slots (`VERGIS_INTAKE`): mismo
+dueño, misma revisión, mismo hot-reload.
+
+```yaml
+catalogs:                                    # opcional; ausente = cero catálogos
+  - id: empresas_gh
+    label: "Empresas del grupo"
+    options:                                 # lista no vacía; `value` único dentro del catálogo
+      - { value: "96835510-4", label: "Hijuelas S.A." }
+      - { value: "77130310-2", label: "Agrícola El Tranque" }
+      - "OTRO"                               # string ≡ { value: "OTRO", label: "OTRO" }
+
+slots:
+  - id: facturas
+    # …
+    meta:
+      - id: empresa_rut
+        label: "Empresa (receptor)"
+        type: enum
+        required: true
+        options_ref: empresas_gh             # en vez de `options`: uno u otro, nunca ambos
+```
+
+Comportamiento: el `<select>` muestra `etiqueta · valor` (se elige por nombre y se verifica el dato a la
+vista) y **lo que viaja es el `value`** — el `label` es display y jamás llega al sidecar ni al SJD · la
+pertenencia se verifica **en el servidor** al subir, así que manipular el HTML no la salta · una
+referencia a un catálogo inexistente, un catálogo sin opciones o un `value` duplicado **no arrancan**
+(error ruidoso al desplegar; en caliente el hot-reload rechaza el cambio y conserva lo vigente) · un
+campo puede combinar `from_filename` con `options_ref`: el valor derivado del nombre también debe estar
+en el catálogo, o la carga falla nombrando archivo y catálogo.
+
 > **Riesgo declarado.** Si el nombre está equivocado y la fuente no trae con qué verificar, la
 > imputación es incorrecta sin señal. Antes de anclar una **RLS** en un campo derivado del nombre, esa
 > decisión debe tomarse mirando esto.

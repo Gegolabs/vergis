@@ -24,6 +24,11 @@ const ENTITIES = parseMasterDataConfig({
 })
 const DOMAINS = parseDomainsConfig({ domains: [{ id: 'cartera', label: 'Cartera / Finanzas', stewards: [STEWARD] }] })
 const SLOTS = parseIntakeConfig({
+  // Issue #109: catálogo de la instancia — la fuente de opciones de un campo enum.
+  catalogs: [{
+    id: 'empresas_gh', label: 'Empresas del grupo',
+    options: [{ value: '96835510-4', label: 'Hijuelas S.A.' }, { value: '77130310-2', label: 'Agrícola El Tranque' }],
+  }],
   slots: [
     {
       id: 'saldos_cartera', label: 'Antigüedad de saldos', domain: 'cartera',
@@ -54,6 +59,12 @@ const SLOTS = parseIntakeConfig({
           verify_against: 'RUTRECEPTOR',
         },
       }],
+    },
+    // Issue #109: el campo toma sus opciones del catálogo de la instancia (dropdown, no texto libre).
+    {
+      id: 'cargos', label: 'Cargos', domain: 'cartera', maxBytes: 4096,
+      target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/cargos' },
+      meta: [{ id: 'empresa', label: 'Empresa (receptor)', type: 'enum', required: true, options_ref: 'empresas_gh' }],
     },
   ],
 })
@@ -331,6 +342,34 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(res.body).toContain('name="meta_empresa_rut"')
     expect(res.body).toContain('name="meta_version"')
     expect(res.body).toContain('<option value="V0">V0</option>')
+  })
+
+  // ── Issue #109: el catálogo de la instancia es la fuente de opciones del campo ──
+  it('#109 · uploadForm del slot con options_ref: dropdown con «etiqueta · value» y placeholder', async () => {
+    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('<option value="">— elegir —</option>')
+    expect(res.body).toContain('<option value="96835510-4">Hijuelas S.A. · 96835510-4</option>')
+    expect(res.body).toContain('<option value="77130310-2">Agrícola El Tranque · 77130310-2</option>')
+  })
+
+  it('#109 · el POST manda, no el <select>: un value fuera del catálogo → sin put', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token, meta_empresa: '12345678-5' }, { filename: 'cargos.xlsx', bytes: Buffer.from('datos') })
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/cargos', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(decodeURIComponent(res.headers['location'] as string)).toContain('no está en el catálogo «empresas_gh»')
+    expect(puts).toHaveLength(0)
+  })
+
+  it('#109 · value del catálogo → sube y el sidecar lleva el value (el label jamás viaja)', async () => {
+    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const mp = multipart({ _csrf: token, meta_empresa: '96835510-4' }, { filename: 'cargos.xlsx', bytes: Buffer.from('datos') })
+    const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/cargos', STEWARD, mp.body, mp.ct))
+    expect(res.statusCode).toBe(303)
+    expect(puts).toHaveLength(1)
+    expect(JSON.parse(puts[0].sidecar!)).toEqual({ slot: 'cargos', empresa: '96835510-4', uploadedBy: STEWARD, uploadedAt: expect.any(String) })
+    expect(puts[0].sidecar).not.toContain('Hijuelas')
   })
 
   // ── Issue #95: metadata derivada del nombre del archivo ─────────────────────
