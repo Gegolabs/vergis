@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, type IntakeUploadRow } from '@vergis/capabilities'
+import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, type IntakeUploadRow, type IntakeRevertRow, type ClaveAccion } from '@vergis/capabilities'
 
 describe('GovernanceStore · admins (consolidado)', () => {
   it('implementa AdminStore: semilla, alta, anti-lockout', async () => {
@@ -151,6 +151,63 @@ describe('GovernanceStore · registro de cargas del intake (issue #62)', () => {
     expect(rows[0]).toMatchObject({ id, origen: 'retro', triggered: false, uploadedBy: '(retro: _processed)' })
     expect((await g2.findUploadBySha('saldos', SHA_A))?.id).toBe(id)
     expect(await g2.intakeBackfillDone('saldos')).toBe(true)
+    await g2.close()
+  })
+})
+
+// ─── Registro de reversiones (issue #63) ────────────────────────────────────
+const RESUMEN: ClaveAccion[] = [
+  { clave: 'W28', accion: 'rematerializar', revertido: 'Files/intake/_processed/W28/saldos.xlsx', previa: 'Files/intake/_processed/W28/v1.xlsx' },
+  { clave: 'W29', accion: 'pisada', revertido: 'Files/intake/_processed/W29/saldos.xlsx', vigente: 'Files/intake/_processed/W29/otra.xlsx', vigenteAt: '2026-07-20T09:00:00Z' },
+]
+const revert = (over: Partial<Omit<IntakeRevertRow, 'id'>> = {}): Omit<IntakeRevertRow, 'id'> => ({
+  slotId: 'saldos',
+  uploadId: 7,
+  filename: 'saldos VH WK28.xlsx',
+  byUser: 'steward@gh.cl',
+  at: '2026-08-06T18:00:00Z',
+  resumen: RESUMEN,
+  landingRetirado: true,
+  ...over,
+})
+
+describe('GovernanceStore · registro de reversiones del intake (issue #63)', () => {
+  it('recordRevert devuelve id; listReverts da recientes primero, acotado, sin filas de otro slot', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const id1 = await g.recordRevert(revert({ at: '2026-08-01T10:00:00Z' }))
+    const id2 = await g.recordRevert(revert({ at: '2026-08-06T18:00:00Z', filename: 'nueva.xlsx' }))
+    await g.recordRevert(revert({ slotId: 'otro', filename: 'ajena.xlsx' }))
+    expect(id2).toBeGreaterThan(id1)
+    const rows = await g.listReverts('saldos', 10)
+    expect(rows.map((r) => r.filename)).toEqual(['nueva.xlsx', 'saldos VH WK28.xlsx'])
+    expect(await g.listReverts('saldos', 1)).toHaveLength(1)
+    expect((await g.listReverts('otro', 10)).map((r) => r.filename)).toEqual(['ajena.xlsx'])
+    expect(await g.listReverts('sin-reversiones', 10)).toEqual([])
+    await g.close()
+  })
+
+  it('el resumen por clave hace roundtrip como JSON, y una carga sin ancla queda sin uploadId', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordRevert(revert())
+    const sinAncla = await g.recordRevert(revert({ at: '2026-08-07T09:00:00Z', uploadId: undefined, landingRetirado: false }))
+    const rows = await g.listReverts('saldos', 10)
+    expect(rows[0]).toMatchObject({ id: sinAncla, landingRetirado: false })
+    expect(rows[0].uploadId).toBeUndefined()
+    expect(rows[1]).toMatchObject({ uploadId: 7, byUser: 'steward@gh.cl', landingRetirado: true })
+    expect(rows[1].resumen).toEqual(RESUMEN)
+    await g.close()
+  })
+
+  it('las reversiones sobreviven al reinicio (persistencia en archivo)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-revert-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, {})
+    const id = await g1.recordRevert(revert())
+    await g1.close()
+    const g2 = await SqliteGovernanceStore.open(file, {})
+    const rows = await g2.listReverts('saldos', 10)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id, uploadId: 7, filename: 'saldos VH WK28.xlsx' })
+    expect(rows[0].resumen).toEqual(RESUMEN)
     await g2.close()
   })
 })

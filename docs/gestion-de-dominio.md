@@ -171,6 +171,33 @@ en el catálogo, o la carga falla nombrando archivo y catálogo.
 - **land-only** — Mira deja el crudo; el pipeline lo toma en su próxima corrida.
 - **land-and-trigger** — tras subir, Mira hace **run-now** del pipeline (inmediatez).
 
+### Revertir una carga (`revert_delete`)
+
+«Revertir esta carga» deshace, clave por clave, lo que una carga materializó. El **ledger carga→claves
+es el layout `_processed/<clave>/<archivo>`** que el convertidor mantiene: Mira lo lee, deriva un plan,
+lo muestra para confirmar y recién entonces compensa —reactivando la versión anterior de la clave y
+re-corriendo la conversión (last-wins restaura)—. Una clave pisada por una carga posterior **no se
+toca**: solo la carga vigente de una clave es reversible en esa clave.
+
+El caso sin versión previa (la carga **introdujo** la clave) exige un DELETE, y el warehouse lo escribe
+solo el convertidor. Mira deja en el landing un **manifiesto de reversión** y el convertidor lo ejecuta:
+
+```yaml
+- id: saldos_cartera
+  revert_delete: true        # la instancia DECLARA que su convertidor cumple el contrato de abajo
+```
+
+```json
+{ "revert": { "clave": "W28" }, "slot": "saldos_cartera",
+  "filename": "saldos VH WK28.xlsx", "by": "steward@gh.cl", "at": "2026-08-06T18:00:00Z" }
+```
+
+**Obligación del convertidor**, al inicio de cada corrida, por cada `_revert_<clave>.meta.json` del
+landing: DELETE de esa clave en sus tablas, línea de log `[revert] ✔ clave <clave> eliminada: <N> filas`
+(familia de `[delta]`/`✔`) y **eliminación del manifiesto**. Sin la declaración `revert_delete`, Mira no
+escribe manifiestos y esa clave se reporta como no-compensable **sin tocar nada** (fail-closed: mover el
+archivo dejando el dato materializado sería decir «revertida» sobre un warehouse que no cambió).
+
 ### Gobierno
 Gateada por **rol de dominio** (steward/admin), **validada** (patrón de nombre + tamaño), **auditada**
 (quién subió qué archivo, a qué slot, cuándo, si disparó). Es un write-path **de archivos**, análogo al

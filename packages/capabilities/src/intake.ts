@@ -139,6 +139,14 @@ export interface IntakeSlot {
   log?: string | false
   /** Metadata requerida en la subida (issue #76). Ausente = sin cambio (regresión cero). */
   meta?: IntakeMetaField[]
+  /**
+   * La instancia DECLARA que el convertidor de este slot cumple el contrato de reversión (issue #63):
+   * al inicio de la corrida ejecuta el DELETE de la clave de cada manifiesto `_revert_<clave>.meta.json`
+   * del landing y lo elimina. Solo con esta declaración Vergis escribe manifiestos; sin ella, la clave
+   * que la carga INTRODUJO se reporta como no-compensable y no se toca (fail-closed: mover el archivo
+   * dejando el dato materializado sería mentir).
+   */
+  revertDelete?: boolean
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
@@ -226,6 +234,13 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
     const p = String(o['log'])
     if (!/^Files\//.test(p)) throw new Error(`intake: '${id}'.log debe empezar en 'Files/' (vive en el mismo Lakehouse del target).`)
     out.log = p
+  }
+  // #63 · capacidad declarada de reversión. Booleano ESTRICTO: un `'si'` o un `1` que se leyeran como
+  // verdaderos harían que Vergis escriba manifiestos que nadie ejecuta — el fallo se acusa al parsear.
+  if (o['revert_delete'] != null) {
+    const v = o['revert_delete']
+    if (typeof v !== 'boolean') throw new Error(`intake: '${id}'.revert_delete debe ser booleano (true | false).`)
+    if (v) out.revertDelete = true
   }
   if (o['meta'] != null) {
     const meta = parseMeta(o['meta'], id, catalogs)

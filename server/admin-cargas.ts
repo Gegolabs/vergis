@@ -15,7 +15,7 @@
  * Este módulo es PURO (datos → HTML): el fetch de datos y los POST (CSRF + steward + audit) viven en
  * admin.ts / serve-rls. Helpers de render locales a propósito (evita ciclo de imports con admin.ts).
  */
-import { escapeHtml, slotLogPath, isSidecarName, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry } from '@vergis/capabilities'
+import { escapeHtml, slotLogPath, isSidecarName, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult } from '@vergis/capabilities'
 
 /** Evento de carga del audit log (type=intake). */
 export interface IntakeUploadEvent {
@@ -25,6 +25,8 @@ export interface IntakeUploadEvent {
   by: string
   ok: boolean
   triggered: boolean
+  /** Id de la carga en el registro (#62): el ancla de «Revertir esta carga» (#63). Sin él, no hay botón. */
+  id?: number
   /** SHA-256 del contenido (issue #62): identidad de la carga, independiente del nombre. */
   sha256?: string
   /** Si el contenido es idéntico a una carga previa del slot: `<filename> · <ts>` de aquella. */
@@ -53,10 +55,14 @@ export interface CargasOps {
   rerun(slot: IntakeSlot, by: string): Promise<void>
   retire(slot: IntakeSlot, filename: string, by: string): Promise<void>
   restore(slot: IntakeSlot, archivedPath: string, by: string): Promise<void>
-  /** «Revertir esta carga» (issue #63): saca el archivo de `_processed/<clave>/` a `_retirado/`; si la
-   *  clave tiene versión previa archivada, la reactiva al landing y re-corre la conversión (last-wins
-   *  restaura el estado anterior). `compensada=false` = clave sin versión previa (dato queda sin origen). */
-  revert?(slot: IntakeSlot, archivedPath: string, by: string): Promise<{ clave: string; compensada: boolean; reactivado?: string }>
+  // ── «Revertir esta carga» (issue #63): dos fases, plan sellado por hash ──
+  /** Reversiones ya registradas del slot, recientes primero (alimentan la fila ↩️ del timeline). */
+  reverts?(slot: IntakeSlot, limit: number): Promise<IntakeRevertRow[]>
+  /** Deriva el plan de compensación SIN mutar nada: qué le pasa a cada clave de la carga. */
+  revertPlan?(slot: IntakeSlot, ref: { uploadId?: number; archivedPath?: string }): Promise<RevertPlan>
+  /** Ejecuta el plan CONFIRMADO. `ok:false` = el estado del slot cambió: devuelve el plan fresco. */
+  revertExec?(slot: IntakeSlot, planHash: string, ref: { uploadId?: number; archivedPath?: string }, by: string):
+    Promise<{ ok: true; result: RevertResult } | { ok: false; plan: RevertPlan }>
 }
 
 /** Todo lo que la página necesita de UN slot, ya fetcheado (tolerante: 'error' no rompe la página). */
@@ -67,6 +73,8 @@ export interface SlotCargas {
   log: CargaLog | null
   landing: OneLakeEntry[] | 'error'
   archived: OneLakeEntry[] | 'error'
+  /** #63: reversiones registradas del slot (filas ↩️ del timeline). Ausente = la instancia no las tiene. */
+  reverts?: IntakeRevertRow[]
   /** #56: ¿el processRef del trigger está registrado como proceso (con engine_ref)? */
   procesoRegistrado: boolean
 }
@@ -155,15 +163,26 @@ export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
  * `runLogHrefOf` (issue #99) da el destino del «Ver log» de CADA corrida (no solo la última). Ausente
  * (o devolviendo null) ⇒ ninguna fila enlaza: la instancia sin logs por corrida no cambia en nada.
  */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   if (history !== 'error') {
     for (const h of history) {
+      // #63 · «Revertir esta carga» vive en la fila de la carga: es su unidad, no el archivo suelto.
+      const accion = revertFormOf?.(h) ?? ''
       items.push({
         ts: h.ts,
-        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td><td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}</td>`,
+        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td><td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}${accion ? ` ${accion}` : ''}</td>`,
       })
     }
+  }
+  // #63 · la reversión es un evento de primera clase del ciclo: se ve donde se vive la carga. (La
+  // conversión compensatoria aparece sola como fila ⚙️: es una corrida real del job.)
+  for (const r of reverts ?? []) {
+    const detalle = r.resumen.map((c) => `<div class="sub">${escapeHtml(textoDeClave(c))}</div>`).join('')
+    items.push({
+      ts: r.at,
+      html: `<td>${when(r.at)}</td><td>↩️ Reversión</td><td>${escapeHtml(r.filename)} revertida <span class="sub">· ${escapeHtml(r.byUser)}</span>${detalle}${r.landingRetirado ? `<div class="sub">${escapeHtml(TEXTO_LANDING)}</div>` : ''}</td><td></td>`,
+    })
   }
   if (runs !== 'error') {
     for (const [i, r] of runs.entries()) {
@@ -185,6 +204,51 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
   return items.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, limit)
 }
 
+// ─── «Revertir esta carga» (issue #63): los textos del plan, sellados ───────
+// Una acción destructiva sobre el dato se confirma leyendo lo que va a pasar CLAVE POR CLAVE — incluido
+// lo que NO va a pasar y por qué. El mismo texto sirve al plan y al registro en el timeline.
+export const TEXTO_LANDING = 'la copia en el landing se retira (no se re-procesará)'
+
+export function textoDeClave(c: ClaveAccion): string {
+  switch (c.accion) {
+    case 'rematerializar':
+      return `la clave «${c.clave}» vuelve a su versión anterior: se re-materializa «${baseName(c.previa)}»`
+    case 'vaciar':
+      return `la clave «${c.clave}» queda VACÍA — esta carga la introdujo (DELETE sin INSERT; lo ejecuta el convertidor)`
+    case 'no-compensable':
+      return `la clave «${c.clave}» NO se puede vaciar desde acá: el convertidor de esta instancia no declara soporte de reversión (revert_delete) — la clave no se toca`
+    case 'pisada':
+      return `sin efecto: la clave «${c.clave}» fue pisada por una carga posterior («${baseName(c.vigente)}», ${when(c.vigenteAt)}) — para deshacerla, revertí esa carga primero`
+    case 'sin-clave':
+      return `«${c.revertido}» está archivado sin clave: no se puede derivar compensación — no se toca`
+  }
+}
+
+/**
+ * La página de CONFIRMACIÓN del plan (fase 1 de dos). Es lo que el `confirm()` estático no podía ser:
+ * el detalle derivado de qué pasa con cada clave. Sin acciones con efecto no hay form — solo la
+ * explicación y la vuelta.
+ */
+export function revertPlanBody(domainId: string, domainLabel: string, slot: IntakeSlot, plan: RevertPlan, token: string, aviso?: string): string {
+  const action = `/admin/dominio/${escapeHtml(domainId)}/cargas`
+  const back = `<p class="sub"><a href="${action}">← ${escapeHtml(domainLabel)} · Cargas</a></p>`
+  const avisoHtml = aviso ? `<p class="msg err">${escapeHtml(aviso)}</p>` : ''
+  const filas = plan.claves.length
+    ? plan.claves.map((c) => `<li>${escapeHtml(textoDeClave(c))}</li>`).join('')
+    : '<li>esta carga no tiene ninguna copia en el histórico procesado.</li>'
+  const landing = plan.landing.length ? `<li>${escapeHtml(TEXTO_LANDING)}</li>` : ''
+  const ref: Record<string, string> = plan.uploadId != null ? { upload: String(plan.uploadId) } : { archivo: plan.claves[0]?.revertido ?? '' }
+  const form = plan.ejecutable
+    ? postForm(action, token, { slot: slot.id, accion: 'revert-exec', hash: plan.hash, ...ref }, 'Revertir esta carga',
+        'Esta acción modifica el dato del warehouse según el plan de arriba. ¿Confirmar?')
+    : `<p class="sub">Nada que revertir: ninguna acción de este plan tiene efecto sobre el dato.</p>`
+  return `${back}${avisoHtml}<h2>Revertir «${escapeHtml(plan.filename)}»</h2>
+    <p class="sub">Slot <code>${escapeHtml(slot.id)}</code> · contenido <code>${escapeHtml(plan.sha256.slice(0, 12))}…</code>${plan.uploadId != null ? ` · carga #${plan.uploadId}` : ''}</p>
+    <p><b>Qué va a pasar:</b></p>
+    <ul>${filas}${landing}</ul>
+    ${form}`
+}
+
 const csrf = (token: string): string => `<input type="hidden" name="_csrf" value="${token}">`
 const postForm = (action: string, token: string, fields: Record<string, string>, label: string, confirmMsg?: string): string =>
   `<form method="post" action="${escapeHtml(action)}" style="display:inline"${confirmMsg ? ` onsubmit="return confirm('${escapeHtml(confirmMsg)}')"` : ''}>${csrf(token)}${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('')}<button class="add">${escapeHtml(label)}</button></form>`
@@ -196,6 +260,10 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     return `${back}<p class="sub">Este dominio no tiene slots de ingesta declarados (instancia: <code>intake/slots.yaml</code>).</p>`
   }
   const action = `/admin/dominio/${escapeHtml(domainId)}/cargas`
+  // #63 · el botón por CARGA. Solo con id + sha + carga aceptada: sin identidad verificable no se
+  // ofrece revertir (fail-closed) — para esas queda el camino por archivo desde Procesados.
+  const revertFormOf = (s: IntakeSlot) => (h: IntakeUploadEvent): string =>
+    h.id != null && h.sha256 && h.ok ? postForm(action, token, { slot: s.id, accion: 'revert-plan', upload: String(h.id) }, 'Revertir esta carga') : ''
   const secciones = slots.map((sc) => {
     const s = sc.slot
     const lastDone = lastCompletedStart(sc.runs)
@@ -254,7 +322,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     const archivedRows = sc.archived === 'error'
       ? `<tr><td colspan="4" class="sub">No se pudo listar el archivo de procesados.</td></tr>`
       : sc.archived.filter((e) => !e.isDirectory && !isSidecarName(e.path)).slice(0, 60).map((e) =>
-          `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert', archivo: e.path }, 'Revertir', `Revertir la carga «${baseName(e.path)}»: sale del histórico a _retirado/ y, si su clave tiene versión previa, se re-materializa el estado anterior. ¿Continuar?`)}</td></tr>`,
+          `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert-plan', archivo: e.path }, 'Revertir')}</td></tr>`,
         ).join('') || `<tr><td colspan="4" class="sub">Sin procesados archivados todavía.</td></tr>`
 
     return `<h2>${escapeHtml(s.label)} <span class="sub c">${escapeHtml(s.id)}</span></h2>
@@ -265,7 +333,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th><th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s)).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
@@ -274,6 +342,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
 
   const guia = `<details class="guia"><summary>¿Cómo funciona el ciclo de una carga? (y cómo revertirla)</summary>
     <p class="sub">Subís archivos → aterrizan en el <b>landing</b> → la conversión corre (automática al subir, o con «Correr conversión de nuevo») → el resultado queda en «Actividad» con su log. Los pipelines procesan por clave (semana, OC): <b>retirar</b> un archivo del landing y re-correr revierte lo que ese archivo aportó; <b>reactivar</b> uno del histórico lo vuelve a materializar. Un archivo marcado <b style="color:var(--err)">⚠ residuo</b> quedó de una corrida anterior y se re-procesará — retiralo si no corresponde.</p>
+    <p class="sub"><b>«Revertir esta carga»</b> (en cada carga de «Actividad», y por archivo en el histórico) deshace lo que esa carga materializó, clave por clave: primero muestra el <b>plan derivado</b> —qué clave vuelve a su versión anterior, cuál queda vacía, cuál no se toca porque una carga posterior la pisó— y recién con tu confirmación lo ejecuta. Nunca toca claves ajenas a la carga.</p>
   </details>`
   return `${back}<p class="sub">Operación de cargas del dominio: historial, estado y log de cada conversión, y el ciclo completo del landing (retirar / reactivar / re-correr).</p>${guia}${secciones}`
 }
