@@ -55,6 +55,8 @@ export interface ServerConfig {
   csrfSecret: { value: string; ephemeral: boolean }
   /** Miranda — el agente conversacional de especificación de PIs (cluster 077). Todo detrás del flag. */
   miranda: MirandaConfig
+  /** «Descargar PDF» server-side (issue #65). Ver `PdfConfig`. */
+  pdf: PdfConfig
   /**
    * Identidad de DESARROLLO inyectable (`VERGIS_DEV_IDENTITY`). `null` salvo en un despliegue de dev
    * SIN gate real. Es fail-safe por construcción: `decideDevIdentity` solo la deja activa cuando el env
@@ -76,6 +78,19 @@ export interface ServerConfig {
     sources: string | undefined
     piOwners: string | undefined
   }
+}
+
+/**
+ * «Descargar PDF» server-side (issue #65). FAIL-CLOSED por construcción: `serviceUrl` vacío ⇒ la
+ * feature no existe — ni el endpoint `/<slug>/pdf` (la URL vuelve a caer en el 404 de siempre) ni el
+ * botón de la bandeja. No hay flag adicional: el binario es UNO, así que un botón que apunte a un
+ * endpoint inexistente es estructuralmente imposible.
+ */
+export interface PdfConfig {
+  /** URL interna del sidecar HTML→PDF (p.ej. `http://vergis-pdf:9090`). Vacío = feature apagada. */
+  serviceUrl: string
+  /** Tope de espera de la conversión; agotado, el endpoint responde 503 con mensaje claro. */
+  timeoutMs: number
 }
 
 /**
@@ -251,6 +266,10 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
   return {
     engine,
     miranda: mirandaConfig(env),
+    pdf: {
+      serviceUrl: (env['VERGIS_PDF_SERVICE_URL'] ?? '').trim(),
+      timeoutMs: num(env, 'VERGIS_PDF_TIMEOUT_MS', 30_000),
+    },
     devIdentity: devDecision.mode === 'active' ? devDecision.identity : null,
     port: num(env, 'PORT', 8080),
     host: (env['HOST'] ?? '').trim() || undefined,
