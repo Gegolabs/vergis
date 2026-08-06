@@ -27,12 +27,21 @@ es acceso (roles/grupos), **la conexión técnica de fuentes** y settings.
 
 Son **dos cosas distintas** y por eso viven en clases de gestión distintas:
 
-- **Fuentes** = *conectar* una fuente y declarar su **oferta** (cada cuánto se actualiza). Es un acto
-  **técnico** (credenciales, endpoint, item del motor que la ingesta) → **Gestión de Plataforma**. Cada
-  fuente lleva su `domain` (tag), pero el **registro/conexión** se administra de forma central.
+- **Fuentes** = *conectar* una fuente y declarar su **oferta** (cada cuánto se actualiza), **dar de alta
+  procesos** que apuntan a un item **ya publicado** en el motor, y declarar sus salidas y mapeos. Es un
+  acto **técnico** (credenciales, endpoint, item del motor que la ingesta) → **Gestión de Plataforma**,
+  y se hace **in-app**, sin editar el yaml de la VM ni reiniciar. Cada fuente lleva su `domain` (tag),
+  pero el **registro/conexión** se administra de forma central.
 - **Frescura** = ¿la **entidad** que mi dominio sirve cumple lo que sus PIs demandan? Es el **contrato**
   del dominio con sus consumidores → **Gestión de Dominio**, por dominio. Ancla en la **entidad** (tabla
-  de salida silver), no en la conexión.
+  de salida silver), no en la conexión. Acá el steward **aplica la cadencia** y **pausa/reanuda** el
+  proceso: pausar deshabilita su schedule en el motor y el lazo automático respeta esa pausa (no alerta
+  ni le corrige el schedule), sin dejar de observarlo.
+
+**Semilla y runtime.** `sources.yaml` (`VERGIS_SOURCES`) sigue siendo el bootstrap declarativo del
+registro, pero **lo gestionado in-app gana**: una fila editada desde la plataforma no la pisa la
+re-siembra de arranque, y una fila dada de baja no resucita. Una instancia que solo gestiona por yaml
+no cambia en nada.
 
 La "frescura de insumos" (bronze) **no es un concepto aparte**: es la **oferta de la fuente**, que ya
 vive en Fuentes. La Frescura del dominio lee esa oferta y la confronta con la demanda. Las corridas de
@@ -242,6 +251,8 @@ El área de dominio muestra las facetas vivas y un roadmap visible («Próximame
 | Parser multipart (subida de archivo) | ✅ (`server/multipart.ts`) |
 | Frescura por entidad + salud en vivo (run-history) + schedule + «aplicar cadencia» | ✅ (`admin.ts` · faceta Frescura del dominio; `fabric-engine.ts`) |
 | Fuentes (registro técnico) en Gestión de Plataforma | ✅ (`admin.ts` · `/admin/sources`) |
+| Registro editable in-app (fuentes, procesos, salidas, mapeos) con precedencia sobre la semilla | ✅ (`admin.ts` · `governance-store.ts`) |
+| Pausar/reanudar un proceso desde Frescura (steward) | ✅ (`admin.ts` · `serve-rls.ts` · `fabric-engine.ts`) |
 | Facetas 🔭 (catálogo, linaje, calidad, RLS de dominio, identidad, PIs) | previstas (roadmap visible) |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/041`. GH es **contra qué se prueba**,

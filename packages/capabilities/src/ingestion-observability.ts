@@ -304,4 +304,8 @@ export interface IngestionEngineClient {
   getScheduleSeconds(processRef: string): Promise<number | null>
   /** Fija/actualiza el schedule del proceso (one-way Mira→motor; idempotente). */
   setScheduleSeconds(processRef: string, seconds: number): Promise<void>
+  /** Habilita/deshabilita el schedule del proceso SIN tocar su configuración (pausa/reanudación, #107).
+   *  `enabled=false` sin schedule: no-op. `enabled=true` sin schedule: lanza (para habilitar con una
+   *  cadencia se usa `setScheduleSeconds`, que la escribe con `enabled: true`). */
+  setScheduleEnabled(processRef: string, enabled: boolean): Promise<void>
 }

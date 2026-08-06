@@ -40,6 +40,11 @@ class FakeEngine implements IngestionEngineClient {
     this.sets.push({ processId: id, seconds })
     this.schedules.set(id, this.redondeaAMinutos ? Math.max(1, Math.floor(seconds / 60)) * 60 : seconds)
   }
+  async setScheduleEnabled(id: string, enabled: boolean): Promise<void> {
+    this.guard(id)
+    this.enables.push({ processId: id, enabled })
+  }
+  enables: { processId: string; enabled: boolean }[] = []
 }
 
 const T0 = Date.parse('2026-08-06T12:00:00.000Z')
@@ -53,6 +58,7 @@ interface ProcSpec {
   oferta: string
   label?: string
   domain?: string
+  pausedAt?: string
 }
 
 /** Insumos del lazo: un proceso observable por fuente, sin PIs (la cadencia requerida = la oferta). */
@@ -62,6 +68,7 @@ function inputsOf(procs: ProcSpec[]): () => Promise<{ procs: ProcessRow[]; sourc
     label: p.label ?? p.id,
     sourceId: `src_${p.id}`,
     engine: { workspaceId: 'WS', itemId: `item_${p.id}`, jobType: 'sparkjob' },
+    ...(p.pausedAt ? { pausedAt: p.pausedAt, pausedBy: 'steward@gh.cl' } : {}),
   }))
   const sources: SourceRow[] = procs.map((p) => ({
     id: `src_${p.id}`,
@@ -436,5 +443,87 @@ describe('freshness-loop · fase 3: reconcile con debounce', () => {
     expect(a.engine.sets).toEqual([])
     expect((await a.snap('p'))?.scheduleSeconds).toBe(60) // se OBSERVA el drift, no se corrige
     await a.store.close()
+  })
+})
+
+// Issue #107: la pausa apaga la ALERTA y el RECONCILE, nunca la OBSERVACIÓN. Lo que se pone en riesgo
+// acá es exactamente eso: si el filtro estuviera de más, el lazo revivería lo que un steward apagó; si
+// estuviera de menos, la pausa apagaría también la memoria del producto sobre ese proceso.
+describe('freshness-loop · la pausa de un proceso (#107)', () => {
+  const PAUSADO = '2026-08-06T09:00:00Z'
+
+  it('proceso pausado con drift: CERO empujes de schedule en varias vueltas', async () => {
+    const a = await armar({ procs: [{ id: 'p', oferta: 'PT1H', pausedAt: PAUSADO }], reconcile: true, debounceMs: 1 })
+    a.engine.schedules.set('p', 60) // drift enorme contra la cadencia requerida (3600s)
+    await a.loop.tick()
+    a.clock.ms = T0 + 600_000
+    await a.loop.tick()
+    a.clock.ms = T0 + 1_200_000
+    await a.loop.tick()
+    expect(a.engine.sets).toEqual([])
+    expect(a.audits.filter((e) => e.type === 'frescura-reconcile')).toEqual([])
+    await a.store.close()
+  })
+
+  it('proceso pausado vencido de cadencia: CERO alertas — y uno NO pausado del mismo tick sí alerta', async () => {
+    const a = await armar({ procs: [{ id: 'quieto', oferta: 'PT1H', pausedAt: PAUSADO }, { id: 'vivo', oferta: 'PT1H' }] })
+    const vieja: RunRecord[] = [{ startedAt: '2026-08-05T00:00:00Z', endedAt: '2026-08-05T00:05:00Z', status: 'Completed' }]
+    a.engine.runs.set('quieto', vieja)
+    a.engine.runs.set('vivo', vieja)
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+    expect(a.alerts[0]!.title).toContain('vivo')
+    await a.store.close()
+  })
+
+  it('proceso pausado: su OBSERVACIÓN se registra igual (corridas y schedule frescos)', async () => {
+    const a = await armar({ procs: [{ id: 'p', oferta: 'PT1H', pausedAt: PAUSADO }], reconcile: true })
+    a.engine.schedules.set('p', 3600)
+    a.engine.runs.set('p', [{ startedAt: '2026-08-06T11:50:00Z', endedAt: '2026-08-06T11:52:00Z', status: 'Completed' }])
+    await a.loop.tick()
+    const s = await a.snap('p')
+    expect(s?.observedAt).toBe(new Date(T0).toISOString())
+    expect(s?.runs.map((r) => r.startedAt)).toEqual(['2026-08-06T11:50:00Z'])
+    expect(s?.scheduleSeconds).toBe(3600)
+    await a.store.close()
+  })
+
+  it('despausar: el tick siguiente vuelve a reconciliar (la pausa era el único freno)', async () => {
+    const store = await SqliteGovernanceStore.open(null, {})
+    const engine = new FakeEngine()
+    engine.schedules.set('p', 60)
+    const clock = { ms: T0 }
+    let pausedAt: string | undefined = PAUSADO
+    const loop = createFreshnessLoop(
+      { engine, store, inputs: async () => inputsOf([{ id: 'p', oferta: 'PT1H', pausedAt }])(), domains: [], audit: () => {}, log: () => {}, now: () => clock.ms },
+      { reconcile: true, reconcileDebounceMs: 1, publicUrl: PUBLIC_URL },
+    )
+    await loop.tick()
+    expect(engine.sets).toEqual([])
+    pausedAt = undefined // el steward reanudó
+    clock.ms = T0 + 300_000
+    await loop.tick()
+    expect(engine.sets).toEqual([{ processId: 'p', seconds: 3600 }])
+    await store.close()
+  })
+
+  it('pausar un proceso que estaba alertando no anuncia «recuperado» (nadie observó tal recuperación)', async () => {
+    const store = await SqliteGovernanceStore.open(null, {})
+    const engine = new FakeEngine()
+    engine.runs.set('p', [{ startedAt: '2026-08-05T00:00:00Z', status: 'Failed' }])
+    const alerts: Notification[] = []
+    const clock = { ms: T0 }
+    let pausedAt: string | undefined
+    const loop = createFreshnessLoop(
+      { engine, store, inputs: async () => inputsOf([{ id: 'p', oferta: 'PT1H', pausedAt }])(), domains: [], notify: async (n) => void alerts.push(n), audit: () => {}, log: () => {}, now: () => clock.ms },
+      { reconcile: false, reconcileDebounceMs: 1, publicUrl: PUBLIC_URL },
+    )
+    await loop.tick()
+    expect(alerts).toHaveLength(1) // falló
+    pausedAt = PAUSADO
+    clock.ms = T0 + 300_000
+    await loop.tick()
+    expect(alerts).toHaveLength(1) // ni re-alerta ni «recuperado»
+    await store.close()
   })
 })
