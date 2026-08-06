@@ -30,10 +30,15 @@
  * alerta y reconcilia el schedule. La vista de Frescura lee SOLO la proyección:
  *  - VERGIS_FRESHNESS_POLL_MS       cadencia del lazo (default 300000 = 5 min; `0` lo apaga). Solo
  *                                   arranca si hay motor cableado.
- *  - VERGIS_FRESHNESS_SLACK_WEBHOOK gatea SOLO las alertas: sin webhook, observación y reconcile
- *                                   corren igual (la proyección es la memoria del producto).
  *  - VERGIS_RECONCILE_AUTO          `off` apaga la corrección automática del schedule (default on).
  *  - VERGIS_RECONCILE_DEBOUNCE_MS   ventana de re-push del mismo desired (default 21600000 = 6 h).
+ *
+ * Avisos salientes (issue #100) — el destino es declarativo, el producto no conoce el canal:
+ *  - VERGIS_NOTIFY      ruta al YAML de destinos (`slack-webhook` | `webhook`, N simultáneos). Sin
+ *                       él, avisos apagados: observación y reconcile corren igual (la proyección es
+ *                       la memoria del producto).
+ *  - VERGIS_PUBLIC_URL  URL pública de la instancia, base de los enlaces profundos del aviso.
+ *                       REQUERIDA si hay destinos declarados (si no, el arranque LANZA).
  */
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -85,6 +90,9 @@ import {
   classifyProcess,
   reconcilePlan,
   createAsOfProvider,
+  deriveRevertPlan,
+  executeRevertPlan,
+  type RevertRef,
   type PiAsOf,
   type GroupSeed,
   type DomainDecl,
@@ -103,11 +111,13 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
+import { createSinks, fanout, type Notification } from './notify'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
 import { fail } from './http-util'
 import { createRequestHandler } from './routes'
+import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
 import { configFromEnv, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
@@ -451,6 +461,7 @@ async function runPi(
   headers: GateHeaders,
   nav: NavQuery = {},
   notas?: { render?: NotasRenderContext; resolver?: ResolverComentarios },
+  opts?: { print?: boolean },
 ): Promise<Awaited<ReturnType<typeof runSpec>>> {
   const identity = identityFor(headers)
   // Corte as-of por INGESTA: lo derivan la topología de procesos + el run-history del motor, con caché
@@ -470,6 +481,11 @@ async function runPi(
     flt: nav.flt,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
     asOf,
+    // PAPEL (#65 · D4): el PDF es este MISMO render en modo print — misma identidad, misma RLS.
+    print: opts?.print,
+    // …y su contracara (#65 · D9): la URL de descarga que la bandeja ofrece. Sale del MISMO valor de
+    // config que inyecta `renderPdf` en el router: sin sidecar no hay endpoint NI botón.
+    pdfUrl: config.pdf.serviceUrl && !opts?.print ? `/${report.slug}/pdf` : undefined,
   })
   if (!out.ok) throw new Error(out.fallback?.reason ?? 'render falló')
   return out
@@ -479,6 +495,28 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
   const out = await runPi(report, headers, nav, notasWiring(report, headers, nav))
   return out.html ?? ''
 }
+
+/**
+ * «Descargar PDF» server-side (#65) — o `undefined` cuando la instancia no monta el sidecar. Ese
+ * `undefined` ES el fail-closed: sin él el router no intercepta `/<slug>/pdf` y la URL responde el 404
+ * de siempre. El mismo `config.pdf.serviceUrl` puebla el `pdfUrl` del render, así que botón y endpoint
+ * no pueden desalinearse.
+ *
+ * El PDF va SIN capa de notas (D13): las notas tienen su propio artefacto congelado (`/impresiones`),
+ * con otras garantías; marcadores vivos en un papel prometerían una interacción que no existe.
+ */
+const renderPdf = config.pdf.serviceUrl
+  ? async (report: Report, headers: GateHeaders, nav: NavQuery): Promise<{ pdf: Uint8Array; filename: string }> => {
+      const out = await runPi(report, headers, nav, undefined, { print: true })
+      const convert = createPdfClient({ serviceUrl: config.pdf.serviceUrl, timeoutMs: config.pdf.timeoutMs })
+      const filtered = !!nav.flt && Object.keys(nav.flt).length > 0
+      return {
+        pdf: await convert(out.html ?? ''),
+        filename: pdfFilename(report.name, nav.page, new Date().toISOString().slice(0, 10), filtered),
+      }
+    }
+  : undefined
+if (config.pdf.serviceUrl) console.log(`[vergis-rls] PDF server-side activo → ${config.pdf.serviceUrl}`)
 
 /**
  * Contexto de notas de un render: los endpoints + CSRF que la bandeja necesita, y el resolver de
@@ -626,6 +664,7 @@ const server = createServer(
     discover,
     identityFor,
     renderReport,
+    renderPdf,
     indexReports,
     renderIndexPage,
     canOpenPi,
@@ -933,6 +972,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // Consola de cargas (issue #58). El padre del dir del slot ancla las convenciones del ciclo:
         // `<padre>/_processed` (lo archivado por el pipeline) y `<padre>/_retirado` (retiros manuales).
         cargas: (() => {
+          // #63 · el motor de reversión consume el reader (leer/copiar/borrar), el write-path (SOLO
+          // para el manifiesto que el convertidor ejecuta), los jobs y el registro de cargas.
+          const revertDeps = { reader, intake: onelake, jobs, uploads: govStore }
+          const refDeRevert = (ref: { uploadId?: number; archivedPath?: string }): RevertRef =>
+            ref.uploadId != null ? { uploadId: ref.uploadId } : { archivedPath: ref.archivedPath ?? '' }
           return {
             // El historial se lee del REGISTRO de cargas (issue #62), no del audit log: aquel es
             // evidencia encadenada, no índice consultable. La migración one-shot de más abajo
@@ -944,7 +988,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               const rows = await govStore.listUploads(slot.id, Math.max(limit * 2, limit))
               const out: IntakeUploadEvent[] = []
               for (const r of rows.filter((x) => x.origen === 'upload').slice(0, limit)) {
-                const ev: IntakeUploadEvent = { ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
+                // El `id` es el ancla de «Revertir esta carga» (#63): sin él la fila no ofrece el botón.
+                const ev: IntakeUploadEvent = { id: r.id, ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
                 // `dup_of` apunta por construcción a la carga original del contenido, que es
                 // exactamente la que `findUploadBySha` resuelve (la más antigua ok=1 con ese sha).
                 if (r.dupOfId != null) {
@@ -988,32 +1033,36 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               const base = archivedPath.split('/').pop() ?? archivedPath
               await reader.copy(slot.target, archivedPath, `${slot.target.path}/${base}`)
             },
-            // «Revertir esta carga» (issue #63): el layout `_processed/<clave>/` ES el ledger
-            // carga→clave del contrato de ingesta — la compensación se deriva de él.
-            revert: async (slot, archivedPath) => {
-              const parent = parentDir(slot.target.path)
-              const base = archivedPath.split('/').pop() ?? archivedPath
-              const rel = archivedPath.replace(/^.*_processed\//, '')
-              const clave = rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : ''
-              // 1 · el archivo revertido sale del histórico → _retirado/ con tag «revertido»
-              await reader.copy(slot.target, archivedPath, `${parent}/_retirado/${Date.now()}-revertido-${base}`)
-              await reader.remove(slot.target, archivedPath)
-              // 2 · versión previa de la clave = el archivo más reciente que QUEDA en _processed/<clave>/
-              let reactivado: string | undefined
-              if (clave) {
-                const restantes = (await reader.list(slot.target, `${parent}/_processed/${clave}`).catch(() => [] as import('@vergis/capabilities').OneLakeEntry[]))
-                  .filter((e) => !e.isDirectory)
-                  .sort((a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified))
-                if (restantes.length) {
-                  const prev = restantes[0]
-                  const prevBase = prev.path.split('/').pop() ?? prev.path
-                  await reader.copy(slot.target, prev.path, `${slot.target.path}/${prevBase}`)
-                  reactivado = prevBase
-                }
+            // ── «Revertir esta carga» (issue #63) ──
+            // El layout `_processed/<clave>/` ES el ledger carga→clave del contrato de ingesta: la
+            // compensación se DERIVA de él (motor `intake-revert`), en dos fases selladas por hash.
+            // El registro de reversiones sí es de Vergis: quién revirtió qué, y con qué resultado.
+            reverts: (slot, limit) => govStore.listReverts(slot.id, limit),
+            revertPlan: (slot, ref) => deriveRevertPlan(revertDeps, slot, refDeRevert(ref)),
+            revertExec: async (slot, planHash, ref, by) => {
+              // Guard de carrera: compensar mientras el convertidor procesa el landing pelearía con él.
+              // Tolerante a propósito — si el motor no responde, «no pude medir» no bloquea la operación.
+              if (slot.trigger) {
+                const enCurso = await jobStatus
+                  .listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, 1)
+                  .then((rs) => rs[0] && (rs[0].status === 'InProgress' || rs[0].status === 'NotStarted'))
+                  .catch(() => false)
+                if (enCurso) throw new Error('Hay una conversión en curso — esperá a que termine antes de revertir.')
               }
-              // 3 · re-materializar (last-wins restaura el estado anterior de la clave)
-              if (slot.trigger && reactivado) await jobs.runNow(slot.trigger, slot.target)
-              return { clave, compensada: !!reactivado, reactivado }
+              const out = await executeRevertPlan(revertDeps, slot, planHash, refDeRevert(ref), by)
+              if (!out.ok) return out
+              // Se registra al COMPLETAR: una ejecución caída a medias converge en la re-entrada y
+              // recién ahí queda escrita. El audit, en cambio, ya recibió el intento en admin.ts.
+              await govStore.recordRevert({
+                slotId: slot.id,
+                ...(out.result.uploadId != null ? { uploadId: out.result.uploadId } : {}),
+                filename: out.result.filename,
+                byUser: by,
+                at: new Date().toISOString(),
+                resumen: out.result.resumen,
+                landingRetirado: out.result.landingRetirado,
+              })
+              return out
             },
           } satisfies CargasOps
         })(),
@@ -1086,35 +1135,32 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Lazo de frescura (#105): observa el motor → proyección local; alerta (dedup por transición);
     // reconcilia el schedule con debounce. La vista lee SOLO la proyección — el motor nunca en el
     // request path. Nace encendido cuando hay motor: la memoria del producto no puede depender de que
-    // alguien configure Slack (el webhook gatea SOLO las alertas). No mantiene vivo el proceso.
-    const freshnessSlack = process.env['VERGIS_FRESHNESS_SLACK_WEBHOOK'] ?? ''
+    // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
+    // proceso.
+    const notifySinks = createSinks(INSTANCE_CFG.notify)
     const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 300_000)
     const reconcileAuto = (process.env['VERGIS_RECONCILE_AUTO'] ?? 'on').toLowerCase() !== 'off'
     const reconcileDebounceMs = Number(process.env['VERGIS_RECONCILE_DEBOUNCE_MS'] ?? 21_600_000)
     if (fabricWiring.engine && freshnessPollMs > 0) {
-      const postSlack = freshnessSlack
-        ? async (text: string): Promise<void> => {
-            try {
-              await fetch(freshnessSlack, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
-            } catch (e) {
-              console.error('[vergis-rls] freshness slack:', e instanceof Error ? e.message : e)
-            }
-          }
-        : undefined
       const loop = createFreshnessLoop(
         {
           engine: fabricWiring.engine,
           store: govStore,
           inputs: freshnessInputs,
-          postAlert: postSlack,
+          // Fan-out a los destinos declarados: un destino caído se loguea y no tumba el tick.
+          ...(notifySinks.length ? { notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)) } : {}),
+          domains: domainsCfg,
           audit: (e) => auditLog.append(e),
           log: (l) => console.log(`[vergis-rls] ${l}`),
         },
-        { reconcile: reconcileAuto, reconcileDebounceMs },
+        { reconcile: reconcileAuto, reconcileDebounceMs, publicUrl: INSTANCE_CFG.publicUrl },
       )
       setInterval(() => void loop.tick(), freshnessPollMs).unref?.()
       setTimeout(() => void loop.tick(), 10_000).unref?.() // primer tick tras el bootstrap (patrón de la purga)
-      console.log(`[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · alertas ${freshnessSlack ? 'Slack' : 'off'})`)
+      console.log(
+        `[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
+          `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
+      )
     }
     admin = createAdmin({
       entities,

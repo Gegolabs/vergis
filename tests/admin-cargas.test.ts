@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAdmin, type AdminHandler } from '../server/admin'
 import { timeline, esResiduo, lastCompletedStart, diagnosticoDeFalla, LOG_ANEJO_TITULAR, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
-import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, SqliteGovernanceStore, type RunRecord, type OneLakeEntry, type IntakeUploadStore } from '@vergis/capabilities'
+import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, SqliteGovernanceStore, type RunRecord, type OneLakeEntry, type IntakeUploadStore, type RevertPlan } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
 const SECRET = 'test-secret'
@@ -555,48 +555,144 @@ describe('admin-cargas · delta neto cero (issue #62)', () => {
   })
 })
 
-// ─── «Revertir esta carga» (issue #63) ──────────────────────────────────────
-describe('admin-cargas · revertir esta carga (issue #63)', () => {
-  const RUTA = 'Files/intake/_processed/W28/saldos VH WK28.xlsx'
+// ─── «Revertir esta carga» (issue #63): plan sellado + compensación por clave ──
+const RUTA = 'Files/intake/_processed/W28/saldos VH WK28.xlsx'
+const PLAN: RevertPlan = {
+  slotId: 'saldos', uploadId: 7, filename: 'saldos VH WK28.xlsx', sha256: 'f'.repeat(64),
+  claves: [
+    { clave: 'W28', accion: 'rematerializar', revertido: RUTA, previa: 'Files/intake/_processed/W28/v1.xlsx' },
+    { clave: 'W29', accion: 'pisada', revertido: 'Files/intake/_processed/W29/saldos VH WK28.xlsx', vigente: 'Files/intake/_processed/W29/otra.xlsx', vigenteAt: '2026-07-20T09:00:00Z' },
+    { clave: 'W30', accion: 'vaciar', revertido: 'Files/intake/_processed/W30/saldos VH WK28.xlsx' },
+    { clave: 'W31', accion: 'no-compensable', revertido: 'Files/intake/_processed/W31/saldos VH WK28.xlsx' },
+  ],
+  landing: ['Files/intake/saldos/saldos VH WK28.xlsx'],
+  ejecutable: true,
+  hash: 'a1b2c3',
+}
+const opsRevert = (over: Partial<CargasOps> = {}): CargasOps => ops({
+  history: async () => [{ ...HISTORY[0], id: 7, sha256: 'f'.repeat(64) }],
+  revertPlan: vi.fn(async () => PLAN),
+  revertExec: vi.fn(async () => ({
+    ok: true as const,
+    result: { resumen: PLAN.claves, landingRetirado: true, convirtiendo: true, filename: PLAN.filename, uploadId: 7 },
+  })),
+  ...over,
+})
+const postCargas = async (admin: AdminHandler, token: string, body: string) =>
+  go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&${body}`, 'application/x-www-form-urlencoded'))
 
-  it('revert compensada: ejecuta ops.revert, audita intake-revert y anuncia la re-materialización', async () => {
+describe('admin-cargas · revertir esta carga (issue #63)', () => {
+  it('(a) la fila 📤 con id y sha ofrece «Revertir esta carga»; sin id o sin sha, no', async () => {
+    const conAncla = await go(await mkAdmin(opsRevert()), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    expect(conAncla.body).toContain('>Revertir esta carga<')
+    expect(conAncla.body).toContain('name="upload" value="7"')
+    // Sin sha (carga migrada) o sin id: la identidad no es verificable ⇒ no se ofrece revertir.
+    const sinSha = await go(await mkAdmin(opsRevert({ history: async () => [{ ...HISTORY[0], id: 7 }] })), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    expect(sinSha.body).not.toContain('>Revertir esta carga<')
+    const sinId = await go(await mkAdmin(opsRevert({ history: async () => [{ ...HISTORY[0], sha256: 'f'.repeat(64) }] })), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+    expect(sinId.body).not.toContain('>Revertir esta carga<')
+  })
+
+  it('(b) revert-plan responde 200 con el plan (no redirect), con el texto sellado de cada clave', async () => {
+    const o = opsRevert()
+    const admin = await mkAdmin(o)
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await postCargas(admin, token, 'accion=revert-plan&upload=7')
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['location']).toBeUndefined()
+    expect(o.revertPlan).toHaveBeenCalledWith(SLOTS[0], { uploadId: 7 })
+    expect(res.body).toContain('la clave «W28» vuelve a su versión anterior: se re-materializa «v1.xlsx»')
+    expect(res.body).toContain('la clave «W30» queda VACÍA — esta carga la introdujo')
+    expect(res.body).toContain('la clave «W31» NO se puede vaciar desde acá')
+    expect(res.body).toContain('sin efecto: la clave «W29» fue pisada por una carga posterior («otra.xlsx»')
+    expect(res.body).toContain('la copia en el landing se retira')
+    // El form de ejecución va sellado por el hash del plan que el operador acaba de leer.
+    expect(res.body).toContain('name="hash" value="a1b2c3"')
+    expect(res.body).toContain('name="accion" value="revert-exec"')
+  })
+
+  it('(b·bis) un plan sin acciones con efecto no ofrece ejecutar nada', async () => {
+    const inerte: RevertPlan = { ...PLAN, claves: [PLAN.claves[1]], landing: [], ejecutable: false }
+    const admin = await mkAdmin(opsRevert({ revertPlan: async () => inerte }))
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await postCargas(admin, token, 'accion=revert-plan&upload=7')
+    expect(res.statusCode).toBe(200)
+    expect(res.body).not.toContain('revert-exec')
+    expect(res.body).toContain('Nada que revertir')
+  })
+
+  it('(c) revert-exec ok → 303 con «Reversión ejecutada» y audit intake-revert con las claves', async () => {
     const audit: LogEventInput[] = []
-    const o = ops({ revert: vi.fn(async () => ({ clave: 'W28', compensada: true, reactivado: 'saldos-v1.xlsx' })) })
+    const o = opsRevert()
     const admin = await mkAdmin(o, audit)
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
-    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=revert&archivo=${encodeURIComponent(RUTA)}`, 'application/x-www-form-urlencoded'))
+    const res = await postCargas(admin, token, 'accion=revert-exec&upload=7&hash=a1b2c3')
+    expect(res.statusCode).toBe(303)
     const msg = decodeURIComponent(res.headers['location'] ?? '')
-    expect(msg).toContain('Carga revertida')
-    expect(msg).toContain('estado anterior')
-    expect(o.revert).toHaveBeenCalledWith(SLOTS[0], RUTA, STEWARD)
-    const ev = audit.find((e) => (e as { type?: string }).type === 'intake-revert') as { clave?: string; compensada?: boolean }
-    expect(ev.clave).toBe('W28')
-    expect(ev.compensada).toBe(true)
+    expect(msg).toContain('Reversión ejecutada')
+    expect(msg).toContain('«W28» vuelve a su versión anterior')
+    expect(msg).toContain('«W30» queda vacía')
+    expect(o.revertExec).toHaveBeenCalledWith(SLOTS[0], 'a1b2c3', { uploadId: 7 }, STEWARD)
+    const ev = audit.find((e) => (e as { type?: string }).type === 'intake-revert') as { claves?: string; uploadId?: number; landingRetirado?: boolean }
+    expect(ev.claves).toBe('W28:rematerializar,W29:pisada,W30:vaciar,W31:no-compensable')
+    expect(ev.uploadId).toBe(7)
+    expect(ev.landingRetirado).toBe(true)
   })
 
-  it('revert sin versión previa → aviso honesto de dato sin origen', async () => {
-    const o = ops({ revert: vi.fn(async () => ({ clave: 'W28', compensada: false })) })
+  it('(d) revert-exec con el estado cambiado → 200 con el plan fresco y el aviso, sin ejecutar', async () => {
+    const admin = await mkAdmin(opsRevert({ revertExec: async () => ({ ok: false as const, plan: { ...PLAN, hash: 'nuevo' } }) }))
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await postCargas(admin, token, 'accion=revert-exec&upload=7&hash=a1b2c3')
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('El estado del slot cambió')
+    expect(res.body).toContain('name="hash" value="nuevo"')
+  })
+
+  it('(e) traversal o ruta fuera de _processed/ → rechazado sin llegar a ops', async () => {
+    const o = opsRevert()
     const admin = await mkAdmin(o)
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
-    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=revert&archivo=${encodeURIComponent(RUTA)}`, 'application/x-www-form-urlencoded'))
-    const msg = decodeURIComponent(res.headers['location'] ?? '')
-    expect(msg).toContain('sin origen')
-    expect(msg).toContain('compensación del pipeline')
+    for (const ruta of ['Files/otra/cosa.xlsx', 'Files/intake/_processed/../../etc/x.xlsx']) {
+      const res = await postCargas(admin, token, `accion=revert-plan&archivo=${encodeURIComponent(ruta)}`)
+      expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Error')
+    }
+    expect(o.revertPlan).not.toHaveBeenCalled()
   })
 
-  it('revert con traversal o fuera de _processed/ → rechazado sin llegar a ops', async () => {
-    const o = ops({ revert: vi.fn(async () => ({ clave: '', compensada: false })) })
+  it('(f) un no-steward no puede revertir', async () => {
+    const o = opsRevert()
     const admin = await mkAdmin(o)
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
-    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=revert&archivo=${encodeURIComponent('Files/otra/cosa.xlsx')}`, 'application/x-www-form-urlencoded'))
-    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Error')
-    expect(o.revert).not.toHaveBeenCalled()
+    const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', 'intruso@x.cl', `_csrf=${token}&slot=saldos&accion=revert-plan&upload=7`, 'application/x-www-form-urlencoded'))
+    expect(res.statusCode).toBe(403)
+    expect(o.revertPlan).not.toHaveBeenCalled()
   })
 
-  it('la consola ofrece el botón Revertir en el histórico de procesados', async () => {
-    const admin = await mkAdmin(ops({ revert: async () => ({ clave: '', compensada: false }) }))
-    const res = await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
+  it('(g) el timeline muestra la fila ↩️ Reversión con su filename y el resumen por clave', () => {
+    const filas = timeline([], 'error', 30, null, false, undefined, [{
+      id: 1, slotId: 'saldos', uploadId: 7, filename: 'saldos VH WK28.xlsx', byUser: STEWARD,
+      at: '2026-08-06T18:00:00Z', resumen: PLAN.claves, landingRetirado: true,
+    }])
+    expect(filas).toHaveLength(1)
+    expect(filas[0].html).toContain('↩️ Reversión')
+    expect(filas[0].html).toContain('saldos VH WK28.xlsx')
+    expect(filas[0].html).toContain(STEWARD)
+    expect(filas[0].html).toContain('la clave «W28» vuelve a su versión anterior')
+    expect(filas[0].html).toContain('la copia en el landing se retira')
+  })
+
+  it('(h) el botón del histórico de procesados postea revert-plan con la ruta archivada', async () => {
+    const res = await go(await mkAdmin(opsRevert()), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
     expect(res.body).toContain('>Revertir</button>')
+    expect(res.body).toContain('value="revert-plan"')
+    expect(res.body).toContain('name="archivo" value="Files/intake/_processed/W28/saldos VH WK28.xlsx"')
+  })
+
+  it('sin la operación cableada, revertir se declara no disponible (no rompe la página)', async () => {
+    const admin = await mkAdmin(ops())
+    const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
+    const res = await postCargas(admin, token, 'accion=revert-plan&upload=7')
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('no está disponible en esta instancia')
   })
 
   // Issue #99: desde CADA corrida listada (no solo la última) se llega a su log.

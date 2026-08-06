@@ -4,10 +4,12 @@ import {
   FRESHNESS_ALERT_STATE_KEY,
   type IngestionEngineClient,
   type ProcessRow,
+  type SourceRow,
   type RunRecord,
   type DeriveMapInput,
 } from '@vergis/capabilities'
 import { createFreshnessLoop, type FreshnessLoopDeps } from '../server/freshness-loop'
+import type { Notification } from '../server/notify'
 
 /**
  * Motor FAKE (issue #105): corridas y schedules programables, «caído» por proceso, y —clave— el
@@ -46,15 +48,33 @@ class FakeEngine implements IngestionEngineClient {
 }
 
 const T0 = Date.parse('2026-08-06T12:00:00.000Z')
+const PUBLIC_URL = 'https://mira.example.com'
+/** Dominio declarado del arnés: solo los declarados aportan label y enlace al aviso (#100). */
+const DOMINIOS = [{ id: 'cartera', label: 'Cartera / Finanzas' }]
+
+/** Un proceso del arnés: su oferta y, opcionalmente, el dominio que tagea su fuente y su label humano. */
+interface ProcSpec {
+  id: string
+  oferta: string
+  label?: string
+  domain?: string
+  pausedAt?: string
+}
 
 /** Insumos del lazo: un proceso observable por fuente, sin PIs (la cadencia requerida = la oferta). */
-function inputsOf(procs: { id: string; oferta: string; pausedAt?: string }[]): () => Promise<{ procs: ProcessRow[]; mapInput: DeriveMapInput }> {
+function inputsOf(procs: ProcSpec[]): () => Promise<{ procs: ProcessRow[]; sources: SourceRow[]; mapInput: DeriveMapInput }> {
   const rows: ProcessRow[] = procs.map((p) => ({
     id: p.id,
-    label: p.id,
+    label: p.label ?? p.id,
     sourceId: `src_${p.id}`,
     engine: { workspaceId: 'WS', itemId: `item_${p.id}`, jobType: 'sparkjob' },
     ...(p.pausedAt ? { pausedAt: p.pausedAt, pausedBy: 'steward@gh.cl' } : {}),
+  }))
+  const sources: SourceRow[] = procs.map((p) => ({
+    id: `src_${p.id}`,
+    label: `Fuente de ${p.id}`,
+    oferta: p.oferta,
+    ...(p.domain ? { domain: p.domain } : {}),
   }))
   const mapInput: DeriveMapInput = {
     sources: procs.map((p) => ({ id: `src_${p.id}`, oferta: p.oferta })),
@@ -63,13 +83,13 @@ function inputsOf(procs: { id: string; oferta: string; pausedAt?: string }[]): (
     piTables: [],
     piDemandas: [],
   }
-  return async () => ({ procs: rows, mapInput })
+  return async () => ({ procs: rows, sources, mapInput })
 }
 
 interface Arnes {
   store: SqliteGovernanceStore
   engine: FakeEngine
-  alerts: string[]
+  alerts: Notification[]
   audits: { type: string; [k: string]: unknown }[]
   logs: string[]
   clock: { ms: number }
@@ -78,7 +98,7 @@ interface Arnes {
 }
 
 async function armar(opts: {
-  procs: { id: string; oferta: string; pausedAt?: string }[]
+  procs: ProcSpec[]
   alertas?: boolean
   reconcile?: boolean
   debounceMs?: number
@@ -86,7 +106,7 @@ async function armar(opts: {
 }): Promise<Arnes> {
   const store = await SqliteGovernanceStore.open(null, {})
   const engine = new FakeEngine()
-  const alerts: string[] = []
+  const alerts: Notification[] = []
   const audits: { type: string; [k: string]: unknown }[] = []
   const logs: string[] = []
   const clock = { ms: T0 }
@@ -94,12 +114,17 @@ async function armar(opts: {
     engine,
     store: opts.storeOverride ? opts.storeOverride(store) : store,
     inputs: inputsOf(opts.procs),
+    domains: DOMINIOS,
     audit: (e) => void audits.push(e as { type: string }),
     log: (l) => void logs.push(l),
     now: () => clock.ms,
   }
-  if (opts.alertas !== false) deps.postAlert = async (text) => void alerts.push(text)
-  const loop = createFreshnessLoop(deps, { reconcile: opts.reconcile ?? false, reconcileDebounceMs: opts.debounceMs ?? 21_600_000 })
+  if (opts.alertas !== false) deps.notify = async (n) => void alerts.push(n)
+  const loop = createFreshnessLoop(deps, {
+    reconcile: opts.reconcile ?? false,
+    reconcileDebounceMs: opts.debounceMs ?? 21_600_000,
+    publicUrl: PUBLIC_URL,
+  })
   return {
     store,
     engine,
@@ -161,15 +186,15 @@ describe('freshness-loop · fase 1: observar → proyección (#105)', () => {
     a.engine.down.add('p')
     await a.loop.tick()
     expect(a.alerts).toHaveLength(1)
-    expect(a.alerts[0]).toContain('atrasada')
+    expect(a.alerts[0]!.title).toContain('atrasada')
     await a.store.close()
   })
 
   it('un fallo del propio lazo (inputs() lanza) no propaga: el tick resuelve y lo deja en el log', async () => {
     const a = await armar({ procs: [] })
     const loop = createFreshnessLoop(
-      { engine: a.engine, store: a.store, inputs: async () => { throw new Error('store no responde') }, audit: () => {}, log: (l) => void a.logs.push(l) },
-      { reconcile: true, reconcileDebounceMs: 1000 },
+      { engine: a.engine, store: a.store, inputs: async () => { throw new Error('store no responde') }, domains: DOMINIOS, audit: () => {}, log: (l) => void a.logs.push(l) },
+      { reconcile: true, reconcileDebounceMs: 1000, publicUrl: PUBLIC_URL },
     )
     await expect(loop.tick()).resolves.toBeUndefined()
     expect(a.logs.some((l) => l.includes('vuelta fallida') && l.includes('store no responde'))).toBe(true)
@@ -207,7 +232,7 @@ describe('freshness-loop · fase 2: alertas (semántica de #104 preservada)', ()
     a.engine.runs.set('p', [{ startedAt: '2026-08-06T11:50:00Z', status: 'Failed', error: 'boom' }])
     await a.loop.tick()
     expect(a.alerts).toHaveLength(1)
-    expect(a.alerts[0]).toContain('falló')
+    expect(a.alerts[0]!.title).toContain('la corrida falló')
     expect(setSetting).toHaveBeenCalledTimes(1)
 
     a.clock.ms = T0 + 300_000
@@ -219,7 +244,7 @@ describe('freshness-loop · fase 2: alertas (semántica de #104 preservada)', ()
     a.engine.runs.set('p', [{ startedAt: '2026-08-06T12:09:00Z', endedAt: '2026-08-06T12:09:30Z', status: 'Completed' }])
     await a.loop.tick()
     expect(a.alerts).toHaveLength(2)
-    expect(a.alerts[1]).toContain('recuperado')
+    expect(a.alerts[1]!.title).toContain('recuperado')
     expect(setSetting).toHaveBeenCalledTimes(2)
     expect(JSON.parse((await store.getSetting(FRESHNESS_ALERT_STATE_KEY))!)).toEqual({})
     await store.close()
@@ -241,7 +266,7 @@ describe('freshness-loop · fase 2: alertas (semántica de #104 preservada)', ()
     await a.store.close()
   })
 
-  it('sin postAlert la fase 2 está apagada: no lee ni escribe el estado, pero proyección y reconcile corren', async () => {
+  it('sin `notify` la fase 2 está apagada: no lee ni escribe el estado, pero proyección y reconcile corren', async () => {
     const store = await SqliteGovernanceStore.open(null, {})
     const getSetting = vi.fn(async (k: string) => store.getSetting(k))
     const setSetting = vi.fn(async (k: string, v: string, by?: string) => store.setSetting(k, v, by))
@@ -264,6 +289,82 @@ describe('freshness-loop · fase 2: alertas (semántica de #104 preservada)', ()
     expect((await store.listRunSnapshots())[0]?.runs).toHaveLength(1)
     expect(a.engine.sets).toEqual([{ processId: 'p', seconds: 3600 }])
     await store.close()
+    await a.store.close()
+  })
+})
+
+describe('freshness-loop · fase 2: el aviso trae dónde mirar (#100)', () => {
+  it('una corrida fallida avisa con LABELS (no ids), enlace a ESA corrida y enlace a la frescura del dominio', async () => {
+    const a = await armar({ procs: [{ id: 'proc_cartera', oferta: 'PT1H', label: 'Cargas diarias', domain: 'cartera' }] })
+    a.engine.schedules.set('proc_cartera', 3600)
+    a.engine.runs.set('proc_cartera', [{ startedAt: '2026-08-06T11:50:00Z', status: 'Failed', error: 'boom en el motor' }])
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+    const n = a.alerts[0]!
+    expect(n.title).toBe('Frescura — Cartera / Finanzas · Cargas diarias: la corrida falló')
+    expect(n.lines[0]).toBe('motivo: boom en el motor')
+    expect(n.links).toEqual([
+      { label: 'Ver corrida', url: `${PUBLIC_URL}/admin/dominio/cartera/corrida?proc=proc_cartera&started=2026-08-06T11%3A50%3A00Z` },
+      { label: 'Frescura del dominio', url: `${PUBLIC_URL}/admin/dominio/cartera/frescura` },
+    ])
+    expect(n.data).toMatchObject({ event: 'freshness-alert', processId: 'proc_cartera', reason: 'failed', domainId: 'cartera' })
+    await a.store.close()
+  })
+
+  it('el dedup sobrevive al aviso nuevo: la repetición no re-emite y la recuperación llega con su enlace', async () => {
+    const a = await armar({ procs: [{ id: 'proc_cartera', oferta: 'PT1H', label: 'Cargas diarias', domain: 'cartera' }] })
+    a.engine.schedules.set('proc_cartera', 3600)
+    a.engine.runs.set('proc_cartera', [{ startedAt: '2026-08-06T11:50:00Z', status: 'Failed', error: 'boom' }])
+    await a.loop.tick()
+    a.clock.ms = T0 + 300_000
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1) // sigue fallando: el aviso nuevo NO reabrió la puerta al ruido
+
+    a.clock.ms = T0 + 600_000
+    a.engine.runs.set('proc_cartera', [{ startedAt: '2026-08-06T12:09:00Z', endedAt: '2026-08-06T12:09:30Z', status: 'Completed' }])
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(2)
+    expect(a.alerts[1]!.severity).toBe('ok')
+    expect(a.alerts[1]!.title).toBe('Frescura — Cartera / Finanzas · Cargas diarias: recuperado')
+    expect(a.alerts[1]!.links).toEqual([{ label: 'Frescura del dominio', url: `${PUBLIC_URL}/admin/dominio/cartera/frescura` }])
+    await a.store.close()
+  })
+
+  it('sin dominio DECLARADO no hay página que enlazar: el aviso va sin enlaces y dice por qué', async () => {
+    const a = await armar({
+      procs: [
+        { id: 'p_huerfano', oferta: 'PT1H', label: 'Suelto' },
+        { id: 'p_tageado', oferta: 'PT1H', label: 'Tageado a un dominio que nadie declaró', domain: 'inexistente' },
+      ],
+    })
+    for (const id of ['p_huerfano', 'p_tageado']) {
+      a.engine.schedules.set(id, 3600)
+      a.engine.runs.set(id, [{ startedAt: '2026-08-06T11:50:00Z', status: 'Failed', error: 'boom' }])
+    }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(2)
+    for (const n of a.alerts) {
+      expect(n.title).toContain('(sin dominio)')
+      expect(n.links).toEqual([])
+      expect(n.lines).toContain('enlaces no disponibles: el proceso no pertenece a un dominio declarado')
+      expect(n.data['domainId']).toBeNull()
+    }
+    await a.store.close()
+  })
+
+  it('atrasada con historial: dice la hora esperada según el reloj y NO ofrece «Ver corrida» (no hay corrida que mirar)', async () => {
+    const a = await armar({ procs: [{ id: 'proc_cartera', oferta: 'PT30M', label: 'Cargas diarias', domain: 'cartera' }] })
+    a.engine.schedules.set('proc_cartera', 1800)
+    a.engine.runs.set('proc_cartera', [{ startedAt: '2026-08-06T11:00:00Z', endedAt: '2026-08-06T11:02:00Z', status: 'Completed' }])
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+    const n = a.alerts[0]!
+    expect(n.title).toBe('Frescura — Cartera / Finanzas · Cargas diarias: atrasada (no corre a tiempo)')
+    expect(n.lines).toEqual([
+      'última corrida exitosa: hace 58 min (2026-08-06T11:02:00Z)',
+      'se esperaba una corrida antes de: 2026-08-06T11:32:00.000Z (cadencia requerida 30 min)',
+    ])
+    expect(n.links).toEqual([{ label: 'Frescura del dominio', url: `${PUBLIC_URL}/admin/dominio/cartera/frescura` }])
     await a.store.close()
   })
 })
@@ -317,11 +418,12 @@ describe('freshness-loop · fase 3: reconcile con debounce', () => {
         engine,
         store,
         inputs: async () => inputsOf([{ id: 'p', oferta }])(),
+        domains: DOMINIOS,
         audit: (e) => void audits.push(e as { type: string }),
         log: () => {},
         now: () => clock.ms,
       },
-      { reconcile: true, reconcileDebounceMs: 6 * 3600_000 },
+      { reconcile: true, reconcileDebounceMs: 6 * 3600_000, publicUrl: PUBLIC_URL },
     )
     await loop.tick()
     expect(engine.sets).toEqual([{ processId: 'p', seconds: 90 }])
