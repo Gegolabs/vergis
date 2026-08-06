@@ -31,6 +31,7 @@ import {
   validateMeta,
   buildSidecar,
   secondsToDuration,
+  resolveRunLog,
   type AdminStore,
   type DomainDecl,
   type GroupStore,
@@ -50,12 +51,14 @@ import {
   type RunStatus,
   type IntakeUploadStore,
   type IntakeUploadRow,
+  type OneLakeEntry,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
 import { cargasBody, type CargasOps, type SlotCargas } from './admin-cargas'
+import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
 interface Chrome {
@@ -90,6 +93,33 @@ export interface DomainEntityFreshness extends EntityFreshnessRow {
   actualScheduleSeconds?: number | null
 }
 
+/** Ubicación resuelta del almacén de logs por corrida (OneLake: filesystem workspace + lakehouse). */
+export interface RunLogRef {
+  workspaceId: string
+  lakehouseId: string
+  dir: string
+}
+
+/** Origen de una corrida: slot de ingesta o proceso registrado — SIEMPRE anclado a un dominio. */
+export interface RunLogSource {
+  domainId: string
+  slotId?: string
+  processId?: string
+}
+
+/** Acceso a los logs POR CORRIDA (issue #99). Sin esta dependencia no se ofrecen enlaces «Ver log». */
+export interface RunLogsOps {
+  /** Dónde escribe logs el productor. null = no declara, o el slot/proceso NO pertenece al dominio
+   *  (fail-closed: la pertenencia se valida acá, no en la página). */
+  refOf(src: RunLogSource): Promise<RunLogRef | null>
+  /** Entradas del directorio de logs (no recursivo). `[]` si el dir no existe. Lanza si el motor no responde. */
+  list(ref: RunLogRef): Promise<OneLakeEntry[]>
+  /** Contenido (cola ≤64 KB), null si el archivo no existe. Lanza si el motor no responde. */
+  read(ref: RunLogRef, path: string): Promise<string | null>
+  /** Corridas del productor (para ubicar por startedAt la corrida pedida). Lanza si el motor no responde. */
+  runsOf(src: RunLogSource): Promise<RunRecord[]>
+}
+
 export interface AdminDeps {
   entities: MasterDataEntity[]
   mdStore: MasterDataStore
@@ -109,6 +139,8 @@ export interface AdminDeps {
   intakeLog?: (slot: IntakeSlot) => Promise<string | null>
   /** Consola de cargas (issue #58): historial + landing + retiro/reactivación + re-run. Opcional. */
   cargas?: CargasOps
+  /** Acceso a los logs POR CORRIDA (issue #99). Opcional: sin él no se ofrecen enlaces «Ver log». */
+  runLogs?: RunLogsOps
   /** Registro de cargas (issue #62): dedup por contenido + pre-check. Sin él, ambos degradan a no-op. */
   intakeUploads?: IntakeUploadStore
   /** Dispara (fire-and-forget) el indexado retroactivo de `_processed/` del slot si aún no corrió.
@@ -270,6 +302,11 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
             }
           }
           redirect(res, `/admin/dominio/${domain.id}/cargas?msg=${encodeURIComponent(msg)}`)
+          return true
+        }
+        // Log de UNA corrida (issue #99): fallida O exitosa — `Completed` no garantiza el dato.
+        if (section === 'corrida' && deps.runLogs && req.method === 'GET') {
+          send(res, 200, await corridaPage(deps, nav, domain, url.searchParams))
           return true
         }
         // Frescura del dominio (por entidad): vista + «aplicar cadencia» (reconciliador). Abierta a stewards.
@@ -869,7 +906,7 @@ function engineKind(jobType?: string): { label: string; isNotebook: boolean } {
 
 /** Celda de salud de una entidad: tipo de motor (Notebook/Spark Job) + última corrida + bandera de salud.
  * Si el proceso corre como Notebook, explicita la alerta de migración a Spark Job. */
-function freshnessHealthCell(r: DomainEntityFreshness): string {
+function freshnessHealthCell(r: DomainEntityFreshness, runHref?: (r: DomainEntityFreshness) => string | null): string {
   if (!r.engine) return '<span class="sub">sin motor</span>'
   const k = engineKind(r.engineJobType)
   const kind = `<span class="sub">[${escapeHtml(k.label)}]</span>${k.isNotebook ? ' <b style="color:var(--err)">⚠ migrar a Spark Job</b>' : ''}`
@@ -877,7 +914,10 @@ function freshnessHealthCell(r: DomainEntityFreshness): string {
   const runs = r.runs ?? []
   if (!runs.length) return `${kind}<br><span class="sub">sin corridas</span>`
   const flag = r.health?.failed ? ' · ✕ fallida' : r.health?.missed ? ' · ⚠️ atrasada' : ' · ✓'
-  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>${runErrorLine(runs[0])}`
+  // #99 · el log de esta corrida, también cuando terminó bien: `Completed` no garantiza el dato.
+  const href = runHref?.(r) ?? null
+  const verLog = href ? ` · <a class="sub" href="${escapeHtml(href)}">Ver log</a>` : ''
+  return `${kind}<br>${statusBadge(runs[0].status)} ${fmtWhen(runs[0].startedAt)}<span class="sub">${flag}</span>${verLog}${runErrorLine(runs[0])}`
 }
 
 /** Controles de la metadata requerida del slot (issue #76). Vacío si el slot no declara `meta`. */
@@ -975,7 +1015,91 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
     procesoRegistrado: !slot.trigger || engineIds.size === 0 || engineIds.has(slot.trigger.processRef),
   })))
   const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
-  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, data, token, (s) => uploadForm(domain.id, s, token)))
+  // #99 · «Ver log» por corrida, solo si la instancia cableó el acceso a los logs (sin él: cero cambio).
+  const runLogHrefOf = deps.runLogs
+    ? (s: IntakeSlot, r: RunRecord): string => `/admin/dominio/${domain.id}/corrida?slot=${encodeURIComponent(s.id)}&started=${encodeURIComponent(r.startedAt)}`
+    : undefined
+  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, data, token, (s) => uploadForm(domain.id, s, token), runLogHrefOf))
+}
+
+/**
+ * Página de UNA corrida (issue #99): resuelve el log del contrato y delega el render a admin-corrida.
+ *
+ * Fail-closed: la PERTENENCIA del slot/proceso al dominio la valida `runLogs.refOf` — sin ref no hay
+ * lectura. Todo fallo del motor se declara como `motor-fallo`: «no pude medir» nunca se muestra como
+ * «no hay log». El gate de dominio (admin ∨ steward) ya lo aplicó el ruteo.
+ */
+async function corridaPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, params: URLSearchParams): Promise<string> {
+  const ops = deps.runLogs!
+  const slotId = params.get('slot') ?? undefined
+  const processId = params.get('proc') ?? undefined
+  const started = params.get('started') ?? ''
+  const title = `${domain.label} · Corrida`
+  const page = (v: CorridaView): string => adminPage(deps, nav, title, corridaBody(v))
+
+  // Exactamente uno de slot/proc: sin eso no hay origen que resolver.
+  if ((!slotId && !processId) || (slotId && processId)) {
+    return page({
+      domainId: domain.id,
+      titulo: 'Corrida',
+      volverHref: `/admin/dominio/${domain.id}`,
+      volverLabel: domain.label,
+      run: null,
+      resolucion: { kind: 'sin-convencion' },
+    })
+  }
+
+  const slot = slotId ? (deps.intakeSlots ?? []).find((s) => s.id === slotId && (s.domain ?? '') === domain.id) : undefined
+  const titulo = slotId ? slot?.label ?? slotId : processId!
+  const volverHref = slotId ? `/admin/dominio/${domain.id}/cargas` : `/admin/dominio/${domain.id}/frescura`
+  const volverLabel = slotId ? `${domain.label} · Cargas` : `${domain.label} · Frescura`
+  const src: RunLogSource = slotId ? { domainId: domain.id, slotId } : { domainId: domain.id, processId }
+  const base = { domainId: domain.id, titulo, volverHref, volverLabel }
+  const fallo = (e: unknown): string => page({ ...base, run: null, resolucion: { kind: 'motor-fallo', detalle: errMsg(e) } })
+
+  let runs: RunRecord[]
+  try {
+    runs = await ops.runsOf(src)
+  } catch (e) {
+    return fallo(e)
+  }
+  // Match EXACTO del ISO que puso el enlace: la corrida la identifica su arranque, no una ventana.
+  const run = runs.find((r) => r.startedAt === started) ?? null
+
+  let ref: RunLogRef | null
+  try {
+    ref = await ops.refOf(src)
+  } catch (e) {
+    return fallo(e)
+  }
+  const consolaMotorHref = ref ? `https://app.fabric.microsoft.com/groups/${encodeURIComponent(ref.workspaceId)}` : undefined
+  if (!ref) return page({ ...base, run, resolucion: { kind: 'sin-convencion' } })
+  if (!run) return page({ ...base, run: null, resolucion: { kind: 'sin-log', dirVacio: false }, consolaMotorHref })
+
+  let entries: OneLakeEntry[]
+  try {
+    entries = await ops.list(ref)
+  } catch (e) {
+    return page({ ...base, run, resolucion: { kind: 'motor-fallo', detalle: errMsg(e) }, consolaMotorHref })
+  }
+  const dirVacio = !entries.some((e) => !e.isDirectory)
+  const res = resolveRunLog(run, entries)
+  let resolucion: CorridaResolucion
+  if (res.kind === 'match') {
+    let texto: string | null
+    try {
+      texto = await ops.read(ref, res.entry.path)
+    } catch (e) {
+      return page({ ...base, run, resolucion: { kind: 'motor-fallo', detalle: errMsg(e) }, consolaMotorHref })
+    }
+    // El archivo estaba en el listado pero ya no se lee: degradar, no inventar.
+    resolucion = texto == null
+      ? { kind: 'sin-log', dirVacio }
+      : { kind: 'match', nombre: res.entry.path.split('/').pop() ?? res.entry.path, lastModified: res.entry.lastModified, texto, truncado: res.entry.size > texto.length }
+  } else {
+    resolucion = res.kind === 'sin-log' ? { kind: 'sin-log', dirVacio } : res
+  }
+  return page({ ...base, run, resolucion, consolaMotorHref })
 }
 
 /** Despacha una acción POST de la consola de cargas. Devuelve el mensaje PRG. Todo auditado. */
@@ -1061,6 +1185,12 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
     const tail = log.length > 4000 ? `…${log.slice(-4000)}` : log
     return `<details class="guia"><summary class="sub">Log de la última conversión</summary><pre class="sub" style="white-space:pre-wrap;overflow-x:auto;max-height:260px;overflow-y:auto">${escapeHtml(tail.trim())}</pre></details>`
   }
+  // #99 · destino del «Ver log» de la última corrida de la entidad. Sin `runLogs` cableado no hay enlace.
+  const runLogHrefOfEntity = (r: DomainEntityFreshness): string | null => {
+    if (!deps.runLogs || !r.processId || r.runs === 'error') return null
+    const last = (r.runs ?? [])[0]
+    return last ? `/admin/dominio/${domain.id}/corrida?proc=${encodeURIComponent(r.processId)}&started=${encodeURIComponent(last.startedAt)}` : null
+  }
   const slotFor = (r: DomainEntityFreshness): IntakeSlot | undefined =>
     r.engineItemId ? domSlots.find((s) => s.trigger?.processRef && s.trigger.processRef === r.engineItemId) : undefined
   if (!rows.length && !domSlots.length) {
@@ -1090,7 +1220,7 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
         <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}${pis ? `<div class="sub">PIs: ${pis}</div>` : ''}</td>
         <td>${demanda}</td><td>${oferta}</td><td>${req}</td>
         <td>${sched}${aplicar ? `<div>${aplicar}</div>` : ''}</td>
-        <td>${freshnessHealthCell(r)}</td>
+        <td>${freshnessHealthCell(r, runLogHrefOfEntity)}</td>
         <td>${alimentar}</td></tr>`
     })
     .join('')
@@ -1110,7 +1240,9 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
     if (st === undefined) return ''
     if (st === 'error') return '<div class="sub">No se pudo consultar el estado de la conversión (reintentá refrescando).</div>'
     if (!st.length) return '<div class="sub">Sin corridas todavía.</div>'
-    return `<div class="sub">Última corrida: ${statusBadge(st[0].status)} ${fmtWhen(st[0].startedAt)}</div>${runErrorLine(st[0])}`
+    const href = deps.runLogs ? `/admin/dominio/${domain.id}/corrida?slot=${encodeURIComponent(s.id)}&started=${encodeURIComponent(st[0].startedAt)}` : null
+    const verLog = href ? ` · <a href="${escapeHtml(href)}">Ver log</a>` : ''
+    return `<div class="sub">Última corrida: ${statusBadge(st[0].status)} ${fmtWhen(st[0].startedAt)}${verLog}</div>${runErrorLine(st[0])}`
   }
   const orphanSection = orphanSlots.length
     ? `<h2>Otras cargas</h2><p class="sub">Slots de ingesta del dominio sin entidad registrada en Frescura todavía (registrá su fuente/proceso en <a href="/admin/sources">Fuentes</a> para verlas por entidad).</p>
