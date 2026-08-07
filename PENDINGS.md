@@ -36,6 +36,3 @@ la promoción PENDINGS→TODO se pide, no se toma.
   lo importa por ruta relativa a `packages/capabilities/src/version` (funciona y evita arrastrar
   vega/mssql a los tests unitarios, pero cruza la frontera del package). Decidir: re-export en el
   índice o bendecir el import directo a módulos-hoja. `reg 2026-08-07`
-- **Verificar la corrida `build` de CI del push `4fe41af`** — al cierre de la sesión estaba
-  `in_progress` (la del merge de #141 fue cancelada por concurrencia, esperado); si el job `image`
-  no queda verde, no hay imagen ghcr para el próximo deploy. `reg 2026-08-07`
