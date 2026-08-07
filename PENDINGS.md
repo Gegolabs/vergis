@@ -16,10 +16,13 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Espera decisión de César
 
-- **Diseño 003·C (issue #138 pieza 2): env → archivo recargable** — diseño listo en
-  `work/003-cluster-solicitudes-2026-08-07/03-diseno-env-recargable-v1.0.md` con tres decisiones
-  que le tocan a César (precedencia archivo-vs-env en tunables, re-siembra vs gestionado in-app,
-  alcance de fases). No se implementa sin su OK. `reg 2026-08-07`
+- **Cluster 004: 11 diseños del backlog completo esperan sus decisiones** — cada doc de
+  `work/004-cluster-disenos-backlog-2026-08-07/` marca las suyas `[propuesta — revocable por César]`.
+  Las mayores: 03/#138·2 (D1 re-siembra idempotente · D2 NO crear VERGIS_TUNABLES, la vía es
+  `platform_setting` · D3 fase 1 basta — **supersede las 3 preguntas del boceto 003·C**), 11/open-core
+  (D1–D6: corte, Miranda abierta, AGPL+CLA-ligero ANTES del primer PR externo, marca), 04/#107·F2
+  (correr la sonda del hito cero: escribe en el tenant), 08/canales (migración VERGIS_NOTIFY→CHANNELS),
+  10/hardening (D8 supply-chain operacional). `reg 2026-08-07`
 
 ## Código / CI
 
@@ -32,6 +35,23 @@ la promoción PENDINGS→TODO se pide, no se toma.
   misma convención `slug--fecha[--filtrado]` implementada dos veces. Unificar. `reg 2026-08-06`
 - **`import type { TableColumn }` sin uso** en `render-csv-piece.ts` (preexistente a #61, no
   introducido por él). `reg 2026-08-06`
+- **Miranda: dos gaps de pertenencia de sesión** — `handleMessage` (`server/miranda.ts:236-238`) y
+  `handlePreview` (`server/miranda.ts:159-171,286-296`) no verifican que la identidad sea dueña de la
+  sesión: cualquier identidad con scope `miranda` puede postear a sesiones ajenas o previsualizar
+  drafts ajenos (con SU propia RLS — el dato no fuga, la estructura del draft sí). Detectados por los
+  diseñadores de 004/02 y 004/06; el fix (check contra `createdBy`, ya persistido) es adelantable como
+  PR independiente. `reg 2026-08-07`
+- **`MIRANDA_VALIDATE_CAPS` promete `send-email`/`send-slack` que NO existen** (`serve-rls.ts:1467`,
+  única aparición en el repo): Miranda valida OK drafts que serving rechaza con
+  `channel-capability-not-catalogued`. Fix de ~1 línea + test = hito H0 del diseño 004/08. `reg 2026-08-07`
+- **Gate token comparado con `!==`, no constant-time** (`server/routes.ts:77`; el CSRF sí usa
+  `constantTimeEqual`). Fix de una línea = D6 del diseño 004/10. `reg 2026-08-07`
+- **`Dockerfile` omite el manifiesto de `packages/miranda`** en sus dos stages (funciona porque el
+  bundle no resuelve en runtime; asimetría a corregir o documentar — diseño 004/11 §1.4). `reg 2026-08-07`
+- **`TODO.md:16` rancio**: declara «HMAC + época de 4h» en `server/annotations.ts`, archivo que ya no
+  existe (el esquema de anotaciones fue retirado con la capa de notas, vergis#84); el único `createHmac`
+  vigente es el CSRF de `server/ui.ts:136`, sin época. Anotar el egreso en el TODO; la época se
+  rediseña en 004/10 H4. `reg 2026-08-07`
 - **`VERGIS_VERSION` no está re-exportado por el índice de `@vergis/capabilities`** — `server/contract.ts`
   lo importa por ruta relativa a `packages/capabilities/src/version` (funciona y evita arrastrar
   vega/mssql a los tests unitarios, pero cruza la frontera del package). Decidir: re-export en el
