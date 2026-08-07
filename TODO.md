@@ -1,8 +1,9 @@
 # TODO
 
-Pendientes del proyecto. Registro cronológico en `BITACORA.md`.
+Deuda protegida del proyecto: lo que César declaró o confirmó como pendiente (sin TTL). Lo que
+detecta el agente vive en `PENDINGS.md` (TTL 15 días → `ROTTEN.md`). Registro cronológico en
+`BITACORA.md`; decisiones tomadas en nombre de César en `DECISIONS.md`.
 
-> **El plan DETALLADO de lo pendiente (para ejecutar la próxima sesión) vive en `NEXT.md`** (raíz).
 > El registro de lo IMPLEMENTADO en la sesión 2026-07-07 (32 archivos de producción, +impacto) está en
 > `work/001-cluster-analisis-codigo-2026-07/07-registro-implementacion.md`; el plan maestro con todos
 > los hallazgos en `work/001-cluster-analisis-codigo-2026-07/00-consolidado.md`.
