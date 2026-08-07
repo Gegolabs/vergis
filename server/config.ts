@@ -306,6 +306,35 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
   }
 }
 
+/**
+ * Claves de env que `configFromEnv` consume DE VERDAD — **derivado, no declarado** (issue #139): se
+ * corre la MISMA función sobre un `Proxy` que registra cada acceso, así que la lista no puede driftear
+ * del código (una clave nueva aparece sin que nadie mantenga un arreglo).
+ *
+ * Branch-dependiente POR DISEÑO: si Miranda está apagada, sus claves no aparecen — y es verdad, no se
+ * consumieron. Una config inválida no rompe la enumeración: se devuelven las claves registradas hasta
+ * el fallo (el contrato jamás afecta al proceso que lo consulta).
+ */
+export function configEnvKeys(env: Env = process.env): string[] {
+  const seen = new Set<string>()
+  const proxied = new Proxy(env, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string') seen.add(prop)
+      return Reflect.get(target, prop, receiver)
+    },
+    has(target, prop) {
+      if (typeof prop === 'string') seen.add(prop)
+      return Reflect.has(target, prop)
+    },
+  })
+  try {
+    configFromEnv(proxied, () => 'x')
+  } catch {
+    /* config inválida: se devuelve lo registrado hasta el fallo */
+  }
+  return [...seen].sort()
+}
+
 /** Parsea y VALIDA la config de Miranda. Con el flag encendido, la key es obligatoria (aborta si falta). */
 function mirandaConfig(env: Env): MirandaConfig {
   const enabled = TRUTHY.has((env['MIRANDA_ENABLED'] ?? '').toLowerCase())

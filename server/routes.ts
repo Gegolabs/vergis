@@ -22,6 +22,9 @@ export interface RouteDeps {
   gateSecret: string
   isReady: () => boolean
   getAdmin: () => AdminHandler | null
+  /** CONTRATO OPERATIVO (`/contrato`, issue #139) — handler o null. Ausente ⇒ la ruta ni se intercepta
+   *  (cae al slug-lookup → 404 de siempre): la superficie sin la dep es idéntica a la de antes. */
+  getContract?: () => ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null
   getPiConfig: () => PiConfigHandler | null
   /** Handler de Miranda (cluster 077) o null si el flag `MIRANDA_ENABLED` está apagado (default).
    * null ⇒ `/miranda*` cae al 404 normal: con el flag apagado la superficie es idéntica a hoy. */
@@ -73,6 +76,14 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // A10 · gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).
     if (deps.gateSecret && req.headers['x-gate-token'] !== deps.gateSecret) {
       return fail(res, 403, 'Acceso denegado: falta el token del gate (el request no pasó por el proxy).')
+    }
+    // CONTRATO OPERATIVO (`/contrato`, issue #139) — gateado por rol DENTRO del handler. Va DESPUÉS
+    // del token del gate y ANTES del gate `ready`: el contrato debe poder responder aunque el motor no
+    // haya verificado — «¿por qué no arranca?» es justo la pregunta que se le hace a un nodo no-listo.
+    const contract = deps.getContract?.() ?? null
+    if (contract && url === '/contrato') {
+      contract(req, res).catch((e) => fail(res, 500, `Error en el contrato operativo: ${errMsg(e)}`))
+      return
     }
     // ADMINISTRACIÓN — gateada por rol DENTRO del handler. Va antes del gate `ready` (no sirve dato gobernado).
     const admin = deps.getAdmin()
