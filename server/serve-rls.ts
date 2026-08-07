@@ -122,7 +122,7 @@ import { createSinks, fanout, forEvent, type Notification } from './notify'
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
-import { verifyFabricServability, SYS_SECURITY_POLICIES_SQL, SYS_VIEW_LINEAGE_SQL, type PiVerdict } from './engines/fabric'
+import { verifyFabricServability, createFabricSourceStateOf, type PiVerdict } from './engines/fabric'
 import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
@@ -372,18 +372,7 @@ if (ENGINE === 'clickhouse') {
     const { state, usedRefs, refErrors, inherited, viewLineage: lineage } = await verifyFabricServability({
       pis: reports.map((r) => ({ slug: r.slug, tables: r.tables, databaseRefs: r.databaseRefs })),
       store,
-      sourceStateOf: async (ref) => {
-        const prot = (await dwh.execute({ database_ref: ref, sql: SYS_SECURITY_POLICIES_SQL }, { agent: 'vergis' })) as { rows: { sch: string; tbl: string }[] }
-        const lin = (await dwh.execute({ database_ref: ref, sql: SYS_VIEW_LINEAGE_SQL }, { agent: 'vergis' })) as { rows: { vsch: string; vname: string; bsch: string; bname: string }[] }
-        const viewLineage = new Map<string, string[]>()
-        for (const row of lin.rows) {
-          const v = `${row.vsch}.${row.vname}`
-          const b = `${row.bsch}.${row.bname}`
-          const bases = viewLineage.get(v) ?? []
-          if (!bases.includes(b)) viewLineage.set(v, [...bases, b])
-        }
-        return { protectedTables: new Set(prot.rows.map((row) => `${row.sch}.${row.tbl}`)), viewLineage }
-      },
+      sourceStateOf: createFabricSourceStateOf((input) => dwh.execute(input, { agent: 'vergis' }) as Promise<{ rows: Record<string, unknown>[] }>),
       previous: piState,
     })
     // Swap tras evaluar TODO (validate-before-swap): el estado vivo nunca queda a medias. El linaje
