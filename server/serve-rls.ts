@@ -48,7 +48,9 @@
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { watchPaths, swapRecordInPlace, reloadLiveList } from './hot-reload'
+// `watchPaths` ya no se llama directo: TODO watch pasa por `contract.watch` (instala + registra en una
+// sola llamada — ver server/contract.ts), que es quien lo invoca.
+import { swapRecordInPlace, reloadLiveList } from './hot-reload'
 import { loadInstanceConfig } from './instance-config'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
@@ -126,7 +128,8 @@ import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
-import { configFromEnv, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
+import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
+import { createContractRegistry, createContractHandler } from './contract'
 import { avatarMenu, csrfFactory } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -155,6 +158,23 @@ const PORT = config.port
 // (p. ej. 127.0.0.1) el proceso queda atado a esa interfaz — el arnés de dev, localhost-only.
 const HOST = config.host
 const REFRESH_MS = config.refreshMs
+
+// --- CONTRATO OPERATIVO consultable (`/contrato`, issue #139) ----------------
+// Registro DERIVADO del estado vivo del proceso: los watches se instalan CON `contract.watch` (registrar
+// y vigilar en una sola llamada — imposible que driften), las envs de arranque se leen CON `contract.env`,
+// las recargas se anotan donde ocurren y los caveats viven colocados en el sitio que los posee. Nada de
+// esto es un arreglo que alguien mantenga a mano. El registro JAMÁS afecta el serving (ver contract.ts).
+const HOT_RELOAD = (process.env['VERGIS_HOT_RELOAD'] ?? '1') !== '0'
+const contract = createContractRegistry({ engine: ENGINE, hotReload: HOT_RELOAD })
+contract.envKeys(configEnvKeys())
+/** `process.env` que REGISTRA cada acceso en el contrato — para los módulos que reciben el env entero
+ *  y leen dentro (instance-config resuelve nombres dinámicamente: declararlos acá sería declararlos). */
+const contractEnv: NodeJS.ProcessEnv = new Proxy(process.env, {
+  get(target, prop, receiver) {
+    if (typeof prop === 'string') contract.env(prop)
+    return Reflect.get(target, prop, receiver)
+  },
+})
 
 // Auto-chequeo de coherencia del despliegue (contrato Producto→Infra). Corre ANTES de leer specs,
 // políticas o config de gobierno: si un env referencia un path no montado, o el gobierno se pide con
@@ -228,6 +248,15 @@ function parseConnections(): Record<string, SqlConnectionProfile> | null {
 // Referencia VIVA (mismo patrón que el policy store): el hot-reload muta este objeto IN-PLACE y todos
 // los consumidores (conector, publisher, master-data) resuelven el perfil por database_ref a call-time.
 const connections = parseConnections()
+// CAVEAT colocado (no derivable) — el swap del perfil es in-place, pero un pool ya conectado no lo ve.
+// Se registra ACÁ (y no dentro de `reloadDomainGovernance`) porque el operador pregunta ANTES de recargar:
+// un caveat que solo aparece tras la primera recarga no responde la pregunta que motiva el contrato.
+if (CONNECTIONS_FILE) {
+  contract.caveat(
+    'un pool SQL ya abierto conserva las credenciales previas hasta reciclarse: un perfil de conexión ' +
+      'cambiado en caliente aplica a conexiones FUTURAS (las vivas siguen con el perfil anterior).',
+  )
+}
 
 // `ready` es SOLO el gate del arranque en frío (nada evaluado aún). Después, la servibilidad es
 // POR PI (issue #52): `piState` guarda el veredicto por slug (engine=fabric); en clickhouse la
@@ -240,16 +269,16 @@ let bootstrapAll: () => Promise<void>
 
 if (ENGINE === 'clickhouse') {
   // --- Motor B: replica gobernada en ClickHouse (bootstrap + ingesta + ROW POLICY) ---
-  const CH_URL = process.env['VERGIS_CH_URL'] ?? 'http://clickhouse:8123'
-  const ADMIN = { url: CH_URL, user: process.env['VERGIS_CH_ADMIN_USER'] ?? 'default', password: process.env['VERGIS_CH_ADMIN_PASS'] }
-  const CONSUMER_USER = process.env['VERGIS_CH_CONSUMER_USER'] ?? 'botler'
-  const TARGET_ROLE = process.env['VERGIS_CH_TARGET_ROLE'] ?? 'consumer_role'
+  const CH_URL = contract.env('VERGIS_CH_URL') ?? 'http://clickhouse:8123'
+  const ADMIN = { url: CH_URL, user: contract.env('VERGIS_CH_ADMIN_USER') ?? 'default', password: contract.env('VERGIS_CH_ADMIN_PASS') }
+  const CONSUMER_USER = contract.env('VERGIS_CH_CONSUMER_USER') ?? 'botler'
+  const TARGET_ROLE = contract.env('VERGIS_CH_TARGET_ROLE') ?? 'consumer_role'
 
   // Clave raíz ausente vs «declara cero» (issue #117): un `datasets.yaml` decapitado y uno con
   // `datasets: []` son estados distintos y ambos son error acá — un nodo clickhouse sin datasets no
   // tiene sentido —, pero el mensaje dice cuál de los dos es para no mandar a buscar el error donde no está.
   const DATASETS: DatasetCfg[] = ((): DatasetCfg[] => {
-    const declared = process.env['VERGIS_DATASETS']
+    const declared = contract.env('VERGIS_DATASETS')
     if (!declared) throw new Error('engine=clickhouse: falta VERGIS_DATASETS (datasets del nodo).')
     const path = resolve(declared)
     const ctx = `engine=clickhouse: VERGIS_DATASETS (${path})`
@@ -263,6 +292,11 @@ if (ENGINE === 'clickhouse') {
   // computa una vez para derivar las inyecciones del canal de serving (su alta necesita restart).
   let BOUND: BoundDataset[] = computeBound(DATASETS, store, TARGET_ROLE)
   const UNION_INJECTIONS = unionInjections(BOUND)
+  // CAVEAT colocado (no derivable): las inyecciones del canal de serving se fijan acá, al arranque.
+  contract.caveat(
+    'las inyecciones de claims del canal de serving (clickhouse) se fijan al arranque desde el store de ' +
+      'políticas: un claim NUEVO en una política requiere restart — sin él queda fail-closed (deny), no fuga (work/045).',
+  )
   const chProfile = { url: CH_URL, user: CONSUMER_USER, database: BOUND[0].schema.database }
   servingCap = createExecuteSqlClickHouse(chProfile, null, { injections: UNION_INJECTIONS })
   const ingestDwh = connections ? createExecuteSqlDwh(connections) : null
@@ -321,6 +355,11 @@ if (ENGINE === 'clickhouse') {
         .map((pred) => [settingForClaim(pred.claim), { setting: settingForClaim(pred.claim), claim: pred.claim }]),
     ).values(),
   ]
+  // CAVEAT colocado (no derivable): la unión de inyecciones se computa acá, una vez, al arranque.
+  contract.caveat(
+    'las inyecciones de claims del canal de serving (fabric push-down) se fijan al arranque desde el store ' +
+      'de políticas: un claim NUEVO en una política requiere restart — sin él queda fail-closed (deny), no fuga (work/045).',
+  )
   const dwh = createExecuteSqlDwh(connections, { injections })
   servingCap = dwh
 
@@ -385,7 +424,7 @@ const INTERACTIVE_MAX_ROWS = config.interactiveMaxRows
 // de la política decide qué claims importan: `groups`, `viewer_area`, etc.). Formato:
 // VERGIS_GATE_CLAIMS="viewer_area:x-forwarded-area,groups:x-forwarded-groups" (default: groups).
 // Las cabeceras del gate vienen latin1 → re-decodificar para acentos ("Producción").
-const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-groups')
+const gateClaims = (contract.env('VERGIS_GATE_CLAIMS') ?? 'groups:x-forwarded-groups')
   .split(',')
   .map((p) => p.trim())
   .filter(Boolean)
@@ -400,7 +439,7 @@ const gateClaims = (process.env['VERGIS_GATE_CLAIMS'] ?? 'groups:x-forwarded-gro
 // conoce y adjunta. Si el server queda expuesto sin el proxy delante (misconfig, puerto directo), los
 // requests sin el token se rechazan → el consumidor no puede fabricar sus claims. Vacío = sin chequeo
 // (comportamiento vivo: la protección sigue siendo que el proxy esté delante).
-const GATE_SECRET = process.env['VERGIS_GATE_SECRET'] ?? ''
+const GATE_SECRET = contract.env('VERGIS_GATE_SECRET') ?? ''
 
 // RESOLVER DE IDENTIDAD desde un DIRECTORIO (charter §4–§5): cuando el claim del criterio no viaja
 // en la cabecera del gate sino que se deriva de la identidad autenticada (p.ej. el ÁREA del viewer
@@ -432,10 +471,14 @@ const domainsCfg: DomainDecl[] = [] // dominios declarados (también gatea «Ges
 // y el header dice «corte no disponible». Fail-visible: el serving nunca espera ni inventa una fecha.
 let asOfFor: ((tables: string[]) => Promise<PiAsOf>) | null = null
 const intakeSlotsCfg: IntakeSlot[] = [] // slots de ingesta declarados
-const parseDomainsFile = (): DomainDecl[] =>
-  process.env['VERGIS_DOMAINS'] ? parseDomainsConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_DOMAINS']), 'utf8'))) : []
-const parseIntakeFile = (): IntakeSlot[] =>
-  process.env['VERGIS_INTAKE'] ? parseIntakeConfig(parseYaml(readFileSync(resolve(process.env['VERGIS_INTAKE']), 'utf8'))) : []
+const parseDomainsFile = (): DomainDecl[] => {
+  const p = contract.env('VERGIS_DOMAINS')
+  return p ? parseDomainsConfig(parseYaml(readFileSync(resolve(p), 'utf8'))) : []
+}
+const parseIntakeFile = (): IntakeSlot[] => {
+  const p = contract.env('VERGIS_INTAKE')
+  return p ? parseIntakeConfig(parseYaml(readFileSync(resolve(p), 'utf8'))) : []
+}
 let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
 // Miranda (cluster 077): null salvo que MIRANDA_ENABLED esté encendido (se construye más abajo).
@@ -608,7 +651,7 @@ const INDEX_TITLE = process.env['VERGIS_INDEX_TITLE'] ?? 'Productos de Informaci
 // logout del IdP (AAD) para un logout COMPLETO (cierra también la sesión de Microsoft). Vacío = interno.
 const SIGNOUT_RD = process.env['VERGIS_SIGNOUT_RD'] ?? ''
 const INDEX_LOGO = (() => {
-  const p = process.env['VERGIS_INDEX_LOGO']
+  const p = contract.env('VERGIS_INDEX_LOGO')
   if (!p) return ''
   try {
     const mime = p.endsWith('.svg') ? 'svg+xml' : 'png'
@@ -664,6 +707,15 @@ const server = createServer(
     gateSecret: GATE_SECRET,
     isReady: () => ready,
     getAdmin: () => admin,
+    // CONTRATO OPERATIVO (issue #139). Getter en CALL-TIME (como `getAdmin`/`getPiConfig`): `governance`
+    // se asigna en el bootstrap async del bloque de administración, así que capturarlo acá daría null
+    // para siempre. Sin store de gobierno el handler responde 403 con su motivo (no se apaga la ruta:
+    // «no hay Administración» es una respuesta operativa, un 404 no lo es).
+    getContract: () => createContractHandler({
+      registry: contract,
+      isAdmin: ((gov) => (gov ? (email: string | undefined) => gov.isAdmin(email ?? '') : null))(governance),
+      identityOf: (headers) => ({ user: identityFor(headers as GateHeaders).user }),
+    }),
     getPiConfig: () => piConfig,
     getMiranda: () => miranda,
     getNotas: () => notasHandler,
@@ -693,7 +745,7 @@ const server = createServer(
 // Apertura NO-FATAL (mismo patrón que el resto de los stores embebidos): si el archivo no abre, la
 // capa queda deshabilitada con log y el nodo sigue sirviendo sus PIs. Una nota no vale una caída.
 try {
-  notasStore = await openNotasStore(process.env['VERGIS_OUT'] ?? tmpdir())
+  notasStore = await openNotasStore(contract.env('VERGIS_OUT') ?? tmpdir())
   const store = notasStore
   // Spec parseada por slug: la necesita el gate del comentario (para leer el `anchor` del dataset y
   // re-ejecutar su recuperación). Se lee a request-time desde el descubrimiento vivo — un spec
@@ -831,7 +883,7 @@ const GOVERNANCE_DB = process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.
 // Se valida TODA config declarada por env, incondicionalmente y ANTES del bloque de administración:
 // un throw acá es top-level y tumba el proceso nombrando ENV + ruta + clave raíz. Dentro del try de
 // abajo moriría como «administración deshabilitada» — un archivo roto degradando en silencio.
-const INSTANCE_CFG = loadInstanceConfig(process.env)
+const INSTANCE_CFG = loadInstanceConfig(contractEnv)
 if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTANCE_CFG.summary}`)
 
 // Sinks por flujo (issues #100/#102): la creación resuelve passEnv/caFile de los destinos email —
@@ -1152,9 +1204,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
     // proceso.
     const notifySinks = alertSinks
-    const freshnessPollMs = Number(process.env['VERGIS_FRESHNESS_POLL_MS'] ?? 300_000)
-    const reconcileAuto = (process.env['VERGIS_RECONCILE_AUTO'] ?? 'on').toLowerCase() !== 'off'
-    const reconcileDebounceMs = Number(process.env['VERGIS_RECONCILE_DEBOUNCE_MS'] ?? 21_600_000)
+    const freshnessPollMs = Number(contract.env('VERGIS_FRESHNESS_POLL_MS') ?? 300_000)
+    const reconcileAuto = (contract.env('VERGIS_RECONCILE_AUTO') ?? 'on').toLowerCase() !== 'off'
+    const reconcileDebounceMs = Number(contract.env('VERGIS_RECONCILE_DEBOUNCE_MS') ?? 21_600_000)
     if (fabricWiring.engine && freshnessPollMs > 0) {
       const loop = createFreshnessLoop(
         {
@@ -1424,7 +1476,7 @@ if (config.miranda.enabled) {
     const systemPrompt = buildSystemPrompt({ dslDoc })
     // Capacidades válidas de un draft (dato = conector enforcing; canales = render/publish/entrega).
     const MIRANDA_VALIDATE_CAPS = [...SERVING_CAPS, 'publicar-artefacto', 'render-html-piece', 'render-csv-piece', 'send-email', 'send-slack']
-    const PROBE_REF = process.env['MIRANDA_PROBE_DB'] ?? (connections ? Object.keys(connections)[0] : '')
+    const PROBE_REF = contract.env('MIRANDA_PROBE_DB') ?? (connections ? Object.keys(connections)[0] : '')
     // Identidad simplificada de la probe (Fase 1: audiencia interna, dominios grant:all). TODO Fase 2:
     // ligar la probe a la identidad autoritativa del autor (claims), como el serving.
     const probeIdentityOf = (email: string | undefined): IdentityContext => ({ agent: 'miranda-probe', user: email })
@@ -1557,7 +1609,25 @@ void (async () => {
 // necesitaba restart. `reloadGovernance` re-lee las políticas in-place (validate-before-swap), reconstruye
 // el cache de specs y re-corre el gate de readiness. servingCap NO se reconstruye: un claim nuevo sin
 // inyección queda fail-closed (deny), no fuga — su alta sigue necesitando restart (documentado en work/045).
-const HOT_RELOAD = (process.env['VERGIS_HOT_RELOAD'] ?? '1') !== '0'
+// (`HOT_RELOAD` se define arriba, junto al registro del contrato operativo, que lo publica en `/contrato`.)
+
+// Artefactos de gobierno EFECTIVAMENTE leídos por el proceso, por tipo — la lista se deriva de las
+// MISMAS expresiones que el código usa para leerlos, así que no puede driftear. El contrato hashea
+// cada uno al cargarlo y compara contra el disco en el GET: distinto ⇒ `pending` (el nodo no lo tomó).
+const policyArtifacts = (): { source: string; path: string }[] => POLICY_PATHS.map((p) => ({ source: 'policies', path: resolve(p) }))
+const specArtifacts = (): { source: string; path: string }[] => {
+  try {
+    return specPaths().map((p) => ({ source: 'specs', path: p }))
+  } catch {
+    return [] // el dir de specs no listable: el contrato no rompe nada (lo previo se conserva)
+  }
+}
+const domainGovTargets = [
+  ...(CONNECTIONS_FILE ? [CONNECTIONS_FILE] : []),
+  ...(contract.env('VERGIS_DOMAINS') ? [resolve(contract.env('VERGIS_DOMAINS') as string)] : []),
+  ...(contract.env('VERGIS_INTAKE') ? [resolve(contract.env('VERGIS_INTAKE') as string)] : []),
+]
+const domainArtifacts = (): { source: string; path: string }[] => domainGovTargets.map((p) => ({ source: 'dominio', path: p }))
 
 /** Re-parsea conexiones + dominios + slots (issue #50) con validate-before-swap POR ARCHIVO: uno
  * malformado conserva su estado vigente y se loguea, los otros dos igual entran. Los swaps son
@@ -1591,7 +1661,11 @@ function reloadGovernance(reason: string): void {
   try {
     loadPolicyStoreInto(next)
   } catch (e) {
-    console.error(`[hot-reload] recarga de políticas falló (${reason}); store vigente conservado: ${e instanceof Error ? e.message : String(e)}`)
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error(`[hot-reload] recarga de políticas falló (${reason}); store vigente conservado: ${msg}`)
+    // Sin artefactos: lo vigente se conserva y el contrato lo refleja solo (los artefactos previos no se
+    // reemplazan, así que sus hashes siguen siendo los CARGADOS y el disco nuevo sale como `pending`).
+    contract.record({ reason, ok: false, error: msg })
     return
   }
   store.clear()
@@ -1602,6 +1676,12 @@ function reloadGovernance(reason: string): void {
   if (typeof cached.clear === 'function') cached.clear()
   const r = discovery.rebuild()
   console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${discover().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
+  // El contrato registra la recarga DONDE OCURRE, con los artefactos que acaban de entrar: sus hashes
+  // son los EFECTIVAMENTE cargados, y el GET los compara contra el disco («¿tomaste mi archivo?»).
+  contract.record(
+    { reason, ok: true, ...(r.ok ? {} : { error: `rebuild de specs falló: ${r.error}` }), policies: store.size, servablePis: discover().length },
+    [...policyArtifacts(), ...domainArtifacts(), ...(r.ok ? specArtifacts() : [])],
+  )
   // Fail-closed en el reload, con radio de daño POR MOTOR (issue #52):
   // · clickhouse: la réplica es una sola → si el re-bootstrap falla NO se sigue sirviendo con las
   //   invariantes viejas — ready=false → healthz 503 hasta que un reload exitoso lo restablezca.
@@ -1619,27 +1699,61 @@ function reloadGovernance(reason: string): void {
     console.error(`[hot-reload] verificación por-PI (${reason}) con degradados: ${msg} — los PI sanos siguen sirviendo.`)
   })
 }
+// BOOT — el contrato registra el arranque con TODOS los artefactos que el proceso acaba de cargar
+// (políticas, specs, gobierno de dominio). Desde acá, `/contrato` ya responde «¿tomaste mi archivo?»
+// aunque nunca haya ocurrido una recarga.
+contract.record({ reason: 'boot', ok: true, policies: store.size, servablePis: discover().length }, [
+  ...policyArtifacts(),
+  ...specArtifacts(),
+  ...domainArtifacts(),
+])
+
 if (HOT_RELOAD) {
   const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
-  watchPaths(specTargets, () => {
-    const r = discovery.rebuild()
-    console.log(r.ok ? `[hot-reload] specs recargadas: ${discover().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
-    // fabric: un PI recién descubierto nace fail-closed («pendiente de verificación») — re-verificar
-    // acá lo sirve sin esperar un reload de gobierno. Los degradados quedan logueados, el resto sigue.
-    if (ENGINE === 'fabric' && r.ok && ready) {
-      void bootstrapAll().catch((e) => console.error(`[hot-reload] verificación por-PI (watch:specs) con degradados: ${e instanceof Error ? e.message : String(e)}`))
-    }
-  })
-  if (POLICY_PATHS.length) watchPaths(POLICY_PATHS.map((p) => resolve(p)), () => reloadGovernance('watch:policies'))
+  // `contract.watch` instala el watch Y lo registra en una sola llamada: registrar y vigilar no pueden driftear.
+  contract.watch(
+    { envs: SPECS_DIR ? ['VERGIS_SPECS_DIR'] : ['VERGIS_SPECS'], reloads: 'specs: rebuild del descubrimiento + re-verificación por-PI (fabric)' },
+    specTargets,
+    () => {
+      const r = discovery.rebuild()
+      console.log(r.ok ? `[hot-reload] specs recargadas: ${discover().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
+      contract.record(
+        { reason: 'watch:specs', ok: r.ok, ...(r.ok ? {} : { error: r.error }), policies: store.size, servablePis: discover().length },
+        r.ok ? specArtifacts() : undefined,
+      )
+      // fabric: un PI recién descubierto nace fail-closed («pendiente de verificación») — re-verificar
+      // acá lo sirve sin esperar un reload de gobierno. Los degradados quedan logueados, el resto sigue.
+      if (ENGINE === 'fabric' && r.ok && ready) {
+        void bootstrapAll().catch((e) => console.error(`[hot-reload] verificación por-PI (watch:specs) con degradados: ${e instanceof Error ? e.message : String(e)}`))
+      }
+    },
+  )
+  if (POLICY_PATHS.length) {
+    contract.watch(
+      { envs: ['VERGIS_POLICIES'], reloads: 'gobierno completo: políticas (validate-before-swap) + rebuild specs + re-verificación' },
+      POLICY_PATHS.map((p) => resolve(p)),
+      () => reloadGovernance('watch:policies'),
+    )
+  }
   // Gobierno de dominio (issue #50): conexiones (si es archivo) + dominios + slots. La recarga es la
   // COMPLETA (reloadGovernance): un dominio nuevo llega con los tres a la vez y el re-bootstrap debe
   // verificar el PI nuevo contra el perfil nuevo — recargar solo el archivo tocado dejaría el alta a medias.
-  const domainGovTargets = [
-    ...(CONNECTIONS_FILE ? [CONNECTIONS_FILE] : []),
-    ...(process.env['VERGIS_DOMAINS'] ? [resolve(process.env['VERGIS_DOMAINS'])] : []),
-    ...(process.env['VERGIS_INTAKE'] ? [resolve(process.env['VERGIS_INTAKE'])] : []),
-  ]
-  if (domainGovTargets.length) watchPaths(domainGovTargets, () => reloadGovernance('watch:dominio'))
+  if (domainGovTargets.length) {
+    contract.watch(
+      {
+        // DERIVADO de qué archivos hay realmente: un env que no aporta ruta no se declara vigilado.
+        envs: [
+          ...(CONNECTIONS_FILE ? ['VERGIS_CONNECTIONS'] : []),
+          ...(contract.env('VERGIS_DOMAINS') ? ['VERGIS_DOMAINS'] : []),
+          ...(contract.env('VERGIS_INTAKE') ? ['VERGIS_INTAKE'] : []),
+        ],
+        reloads: 'gobierno completo (conexiones + dominios + slots) + re-verificación',
+      },
+      domainGovTargets,
+      () => reloadGovernance('watch:dominio'),
+    )
+  }
   process.on('SIGHUP', () => reloadGovernance('SIGHUP'))
+  contract.signal({ signal: 'SIGHUP', action: 'fuerza la recarga completa de gobierno (equivale a watch:policies)' })
   console.log(`[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} (SIGHUP fuerza recarga de gobierno)`)
 }
