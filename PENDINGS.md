@@ -14,6 +14,13 @@ la promoción PENDINGS→TODO se pide, no se toma.
   pero el entorno QA queda sin observabilidad real de esos procesos. Permisos del SP en el
   workspace de QA. No es regresión de 0.14.0. `reg 2026-08-06`
 
+## Espera decisión de César
+
+- **Diseño 003·C (issue #138 pieza 2): env → archivo recargable** — diseño listo en
+  `work/003-cluster-solicitudes-2026-08-07/03-diseno-env-recargable-v1.0.md` con tres decisiones
+  que le tocan a César (precedencia archivo-vs-env en tunables, re-siembra vs gestionado in-app,
+  alcance de fases). No se implementa sin su OK. `reg 2026-08-07`
+
 ## Código / CI
 
 - **`actions/checkout@v4` y `actions/setup-node@v4` avisan deprecación de Node 20** en cada corrida
@@ -25,3 +32,10 @@ la promoción PENDINGS→TODO se pide, no se toma.
   misma convención `slug--fecha[--filtrado]` implementada dos veces. Unificar. `reg 2026-08-06`
 - **`import type { TableColumn }` sin uso** en `render-csv-piece.ts` (preexistente a #61, no
   introducido por él). `reg 2026-08-06`
+- **`VERGIS_VERSION` no está re-exportado por el índice de `@vergis/capabilities`** — `server/contract.ts`
+  lo importa por ruta relativa a `packages/capabilities/src/version` (funciona y evita arrastrar
+  vega/mssql a los tests unitarios, pero cruza la frontera del package). Decidir: re-export en el
+  índice o bendecir el import directo a módulos-hoja. `reg 2026-08-07`
+- **Verificar la corrida `build` de CI del push `4fe41af`** — al cierre de la sesión estaba
+  `in_progress` (la del merge de #141 fue cancelada por concurrencia, esperado); si el job `image`
+  no queda verde, no hay imagen ghcr para el próximo deploy. `reg 2026-08-07`
