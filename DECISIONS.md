@@ -22,6 +22,12 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: se atiende solo si las olas A–D cierran; los issues de código tienen demanda de usuario y el doc no bloquea a nadie hoy.
 - **Costo de revertir**: nulo.
 
+## D-06 · 2026-08-06 — Encender vm-vergis-qa para el ensayo del deploy 0.14.0
+
+- **Bifurcación**: la VM de QA estaba deallocated; ¿ensayar (encenderla) o saltar el ensayo?
+- **Decidido**: encenderla — el ensayo en QA antes de PROD es el camino documentado (BITACORA 2026-07-13) y César autorizó «avanzar con el deploy», que lo incluye. Se deja apagada (deallocated) al terminar, como estaba.
+- **Costo de revertir**: `az vm deallocate` (minutos de cómputo del ensayo).
+
 ## D-05 · 2026-08-06 — Se corta el release 0.14.0 en el repo (CHANGELOG + version + tag), sin deploy
 
 - **Bifurcación**: dejar los 15 merges sin versión, o cortar 0.14.0 repo-side siguiendo la convención del CHANGELOG (Y sube con cada conjunto de capacidades).

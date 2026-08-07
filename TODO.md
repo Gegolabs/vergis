@@ -16,7 +16,7 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
 - [ ] Aislamiento del render Vega en subproceso sin red ni filesystem (defensa en profundidad)
 - [ ] **Gates manuales del release 0.14.0** (requieren motor/canales vivos + deploy, ver CHANGELOG 0.14.0 y los PRs #123/#127/#129/#130/#131/#132/#133): contrato escritor `_logs/` del SJD, rate limits del poll de frescura, Slack real, relay SMTP, `docker build` del sidecar PDF + fidelidad visual, pausa real en el motor, contrato D8 del convertidor (antes de declarar `revert_delete`), y modos passwordless de #66
 - [ ] **#107 fase 2** — publicar definiciones de jobs en el motor desde Vergis (exige verificar la API de autoría de items contra el tenant; issue abierto con comentario sellado)
-- [ ] **Deploy 0.14.0 a la VM** (humano/mira-ops; ⚠ nota de release de #117: verificar los YAML de instancia antes — un archivo decapitado ya no arranca)
+- [x] **Deploy 0.14.0 a la VM** — **HECHO 2026-08-06 20:33** (autorizado por César): pre-check #117 de los 13 YAML ✓, ensayo QA ✓, PROD healthz 8/8 + smoke 8 PIs + frontera externa ✓; rollbacks listos (`vergis-rollback:pre-0140`, `governance.bak-1786062563.tgz`). El reconcile de #105 corrigió un drift real en su primera vuelta (G-M1 parcial ✓)
 - [x] Caché de discovery de specs — **HECHO** (memoizado + invalidado on-change en `server/discovery.ts` vía `createCachedScanner`)
 - [ ] Migrar los specs normativos del canon (contrato Botler, spec Mira, DSL, naming) de AgencyDomains a `docs/` (declarado en README)
 - [ ] Port del kernel `@vergis/policy` a Go — solo cuando exista driver de negocio (Custos standalone, embedding, librería); ver `docs/adr-001-lenguaje-y-supply-chain.md`
