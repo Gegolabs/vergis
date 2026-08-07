@@ -190,7 +190,7 @@ describe('render · control de cabecera default=max', () => {
     const html = out.html ?? ''
     // Pie del inspector: la versión del PI (code · v) y la de Mira, por separado.
     expect(html).toContain('PI-CTRL · v1.0')
-    expect(html).toMatch(/Mira v\d+\.\d+\.\d+/)
+    expect(html).toMatch(/Vergis v\d+\.\d+\.\d+/)
   })
 
   it('?ctx.semana=W20 override: el selector muestra W20 y la query usa W20', async () => {

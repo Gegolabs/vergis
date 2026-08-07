@@ -13,7 +13,9 @@ import pkg from '../../../package.json' with { type: 'json' }
  */
 export const VERGIS_VERSION: string | null = (pkg as { version?: string }).version ?? null
 
-/** Etiqueta del motor para el pie del inspector: versión real o ausencia honesta. */
+/** Etiqueta de la plataforma para el pie del inspector: versión real o ausencia honesta.
+ *  Dice «Vergis» porque la versión ES la del producto Vergis (este package.json raíz) —
+ *  «Mira» nombra al runtime de specs (packages/mira, versionado aparte) y a instancias. */
 export const VERGIS_VERSION_LABEL: string = VERGIS_VERSION
-  ? `Mira v${VERGIS_VERSION}`
-  : 'Mira · versión desconocida'
+  ? `Vergis v${VERGIS_VERSION}`
+  : 'Vergis · versión desconocida'
