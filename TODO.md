@@ -13,7 +13,7 @@ detecta el agente vive en `PENDINGS.md` (TTL 15 días → `ROTTEN.md`). Registro
 Detalle y justificación en `docs/mejoras-diagnostico.md`:
 
 - [x] Refactor de los tres monolitos — **HECHO**: `serve-rls.ts` (7 módulos, sesión 07-07; falta solo el wrap literal `createApp()`, ver NEXT.md · Ola 3·A, aceptado como culminación); `render-html-piece.ts` 965→370 LOC en 6 módulos y `mira.ts` 669→378 LOC en 5 módulos (sesión 07-08, ver NEXT.md · Ola 3·B). Todo behavior-preserving (512 tests)
-- [x] HMAC criptográfico en el gateo de anotaciones — **HECHO** (`server/annotations.ts`, HMAC + época de 4h, con tests adversariales · A15)
+- [x] HMAC criptográfico en el gateo de anotaciones — **HECHO** (`server/annotations.ts`, HMAC + época de 4h, con tests adversariales · A15). *Nota 2026-08-07: ese archivo y su esquema fueron RETIRADOS con la capa de notas (vergis#84) — el mecanismo ya no existe en el árbol; el único HMAC vigente es el CSRF de `server/ui.ts`, sin época. La época se rediseña en `work/004-…/10-113-hardening` H4.*
 - [ ] Aislamiento del render Vega en subproceso sin red ni filesystem (defensa en profundidad)
 - [ ] **Gates manuales del release 0.14.0** (requieren motor/canales vivos + deploy, ver CHANGELOG 0.14.0 y los PRs #123/#127/#129/#130/#131/#132/#133): contrato escritor `_logs/` del SJD, rate limits del poll de frescura, Slack real, relay SMTP, `docker build` del sidecar PDF + fidelidad visual, pausa real en el motor, contrato D8 del convertidor (antes de declarar `revert_delete`), y modos passwordless de #66
 - [ ] **#107 fase 2** — publicar definiciones de jobs en el motor desde Vergis (exige verificar la API de autoría de items contra el tenant; issue abierto con comentario sellado)
