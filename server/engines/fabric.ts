@@ -75,6 +75,33 @@ export interface FabricVerifyResult {
   viewLineage: Map<string, string[]>
 }
 
+/**
+ * `sourceStateOf` real de Motor C: el estado de gobierno de UNA conexión (secpol + linaje de vistas).
+ *
+ * Las dos consultas de sistema son INDEPENDIENTES entre sí, así que se lanzan juntas y se esperan con
+ * `Promise.all`: la latencia por conexión es ≈ 1 × RTT en vez de 2 × (issue #138·3). La semántica de
+ * error no cambia: si cualquiera de las dos rechaza, el par rechaza y el llamador
+ * (`verifyFabricServability`) trata ese ref como INDETERMINADO, no como veredicto.
+ */
+export function createFabricSourceStateOf(
+  execute: (input: { database_ref: string; sql: string }) => Promise<{ rows: Record<string, unknown>[] }>,
+): (databaseRef: string) => Promise<SourceState> {
+  return async (databaseRef: string): Promise<SourceState> => {
+    const [prot, lin] = (await Promise.all([
+      execute({ database_ref: databaseRef, sql: SYS_SECURITY_POLICIES_SQL }),
+      execute({ database_ref: databaseRef, sql: SYS_VIEW_LINEAGE_SQL }),
+    ])) as [{ rows: { sch: string; tbl: string }[] }, { rows: { vsch: string; vname: string; bsch: string; bname: string }[] }]
+    const viewLineage = new Map<string, string[]>()
+    for (const row of lin.rows) {
+      const v = `${row.vsch}.${row.vname}`
+      const b = `${row.bsch}.${row.bname}`
+      const bases = viewLineage.get(v) ?? []
+      if (!bases.includes(b)) viewLineage.set(v, [...bases, b])
+    }
+    return { protectedTables: new Set(prot.rows.map((row) => `${row.sch}.${row.tbl}`)), viewLineage }
+  }
+}
+
 export async function verifyFabricServability(opts: {
   pis: VerifiablePi[]
   store: Map<string, PolicyDecl>
