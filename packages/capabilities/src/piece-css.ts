@@ -76,6 +76,9 @@ export const TABLE_INTERACTIVE_CSS = `
  *  con fallback claro → sirve en arbol y default. */
 export const TRAY_CSS = `
 .tray{display:flex;flex-direction:column}
+/* «Volver al catálogo» (#136): primera entrada de la bandeja, enlace discreto al índice (/). */
+.tray-catalog{display:block;margin:-4px 0 12px;font-size:12px;color:var(--fg-dim,#94a3b8);text-decoration:none}
+.tray-catalog:hover{color:var(--green,#2563eb)}
 .tray-foot{margin-top:auto;padding-top:14px;text-align:center}
 .tray-version{font-size:10px;color:var(--fg-dim,#94a3b8);opacity:.6;letter-spacing:.03em}
 .tray-credit{border-top:none;padding-top:3px;font-size:9px;line-height:1.5;color:var(--fg-dim,#94a3b8);opacity:.32;word-break:break-word}
