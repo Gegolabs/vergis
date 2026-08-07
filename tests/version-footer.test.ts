@@ -27,14 +27,14 @@ describe('render · versión del motor en el pie del Inspector', () => {
   it('la constante resuelve exactamente la versión del package.json raíz', () => {
     expect(rootVersion).toMatch(/^\d+\.\d+\.\d+/)
     expect(VERGIS_VERSION).toBe(rootVersion)
-    expect(VERGIS_VERSION_LABEL).toBe(`Mira v${rootVersion}`)
+    expect(VERGIS_VERSION_LABEL).toBe(`Vergis v${rootVersion}`)
   })
 
   it('el HTML renderizado muestra esa misma versión, no el fantasma 0.1.0', async () => {
     const html = await render({ piece: piece(), title: 'PI test', theme: 'arbol' })
-    expect(html).toContain(`<div class="tray-version">Mira v${rootVersion}</div>`)
+    expect(html).toContain(`<div class="tray-version">Vergis v${rootVersion}</div>`)
     // salvo que la versión real FUERA 0.1.0, el fallback difunto no debe aparecer
-    if (rootVersion !== '0.1.0') expect(html).not.toContain('Mira v0.1.0')
+    if (rootVersion !== '0.1.0') expect(html).not.toContain('Vergis v0.1.0')
   })
 
   it('la resolución no depende del filesystem en runtime (cero lectura de package.json)', () => {
