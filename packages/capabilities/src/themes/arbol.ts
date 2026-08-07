@@ -79,7 +79,11 @@ export const arbolTheme: Theme = {
   printPalette: 'blanco',
   wrap({ title, body, meta, controls, palette }: { title: string; body: string; meta?: DashboardMeta; controls?: string; palette?: string }) {
     const initialPalette = palette && ['gruvbox', 'claro', 'blanco'].includes(palette) ? palette : 'gruvbox'
-    const logo = LOGO_DATA_URI ? `<img class="logo" src="${LOGO_DATA_URI}" alt="A.R.B.O.L.">` : ''
+    // «Volver al catálogo» (#136 · D2): el logo del header es el enlace al índice (`/`). El `<a>`
+    // hereda las dimensiones del `<img>` y no altera el layout del header.
+    const logo = LOGO_DATA_URI
+      ? `<a class="brand" href="/" title="Volver al catálogo" aria-label="Volver al catálogo"><img class="logo" src="${LOGO_DATA_URI}" alt="A.R.B.O.L."></a>`
+      : ''
     // Convención de plataforma (#108): el corte as-of, mismo bloque en todos los themes.
     const metaBlock = asOfBlock(meta?.asOf)
     return `<!DOCTYPE html>
@@ -121,6 +125,7 @@ export const arbolTheme: Theme = {
   /* Bandeja abierta: el contenido se encoge a la izquierda, sin solapar */
   body:has(.tray-toggle:checked) { padding-right: 320px; }
   .app-header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding-right: 30px; }
+  .app-header .brand { display: inline-flex; align-items: center; line-height: 0; text-decoration: none; color: inherit; cursor: pointer; }
   .app-header .logo { width: 34px; height: 34px; border-radius: 50%; }
   .app-header h1 { font-size: 20px; font-weight: 600; margin: 0; flex: 1; }
   .app-header .meta { text-align: right; line-height: 1.3; }
