@@ -15,7 +15,10 @@ export const defaultTheme: Theme = {
     // El theme default es claro y sin paletas conmutables; `palette` no aplica.
     // El corte as-of es convención de PLATAFORMA (#108): el bloque va en el header de TODO theme, y
     // por eso el header existe siempre (antes solo aparecía cuando había `controls`).
-    const header = `<div class="app-header">${controls ?? ''}${asOfBlock(meta?.asOf)}</div>`
+    // «Volver al catálogo» (#136 · D2): este theme no tiene logo — su marca de header es el título,
+    // y esa marca es el enlace al índice (`/`). Va primera y empuja el resto a la derecha.
+    const brand = `<a class="brand" href="/" title="Volver al catálogo" aria-label="Volver al catálogo">${escapeHtml(title)}</a>`
+    const header = `<div class="app-header">${brand}${controls ?? ''}${asOfBlock(meta?.asOf)}</div>`
     return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -29,6 +32,7 @@ export const defaultTheme: Theme = {
   h1 { font-size: 22px; margin: 0 0 4px; }
   h3 { font-size: 14px; color: #475569; margin: 0 0 8px; font-weight: 600; }
   .app-header { display: flex; align-items: flex-start; gap: 12px; justify-content: flex-end; margin-bottom: 12px; }
+  .app-header .brand { margin-right: auto; font-size: 15px; font-weight: 600; color: #1f2937; text-decoration: none; cursor: pointer; }
   .app-header .meta { text-align: right; line-height: 1.3; }
   .app-header .meta .date { color: #1f2937; font-size: 14px; font-weight: 600; }
   .app-header .meta .gen { color: #94a3b8; font-size: 11px; }

@@ -584,6 +584,9 @@ function renderTrayShell(
     `</label>` +
     `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Inspector">` +
     `<div class="tray-head"><strong>Inspector</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
+    // «Volver al catálogo» (#136 · D3): PRIMERA entrada de la bandeja, antes de los tabs. Enlace
+    // simple al índice (`/`), que ya está gateado por identidad y filtra por lo abrible.
+    `<a class="tray-catalog" href="/" title="Volver al catálogo" aria-label="Volver al catálogo">← Catálogo</a>` +
     // 3 tabs (radios CSS puros): Controles · Guardados · Config
     `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin"${controlesChecked} hidden>` +
     `<input type="radio" name="vergis-traytab" id="vergis-tt-guardados" class="tray-tabin" hidden>` +
