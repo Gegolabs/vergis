@@ -45,8 +45,15 @@ export interface MirandaToolContext {
   updateIntent(summary: IntentSummary): Promise<{ version: number }>
   /** Registra un requerimiento de datos (handoff a César+Claude): artifact `data_request`. */
   createDataRequest(descripcion: string, tablasFaltantes: string[]): Promise<{ ok: true }>
-  /** Registra el último draft como preview efímera y devuelve su URL. */
-  renderPreview(): Promise<{ url: string }>
+  /**
+   * Registra el último draft como preview efímera y devuelve su URL.
+   * Si la instancia declaró un ROSTER de identidades inspeccionables (#110·1), devuelve además una
+   * URL por etiqueta (`identities`) y la del comparador (`compare_url`) — así Miranda puede decir
+   * «míralo como gerente-zona-norte vs vendedor-sur» con URLs concretas. Sin roster esos campos NO
+   * existen (superficie cero): la salida es `{url}` y nada más. Los claims de cada etiqueta jamás
+   * viajan acá.
+   */
+  renderPreview(): Promise<{ url: string; identities?: { label: string; url: string }[]; compare_url?: string }>
   /** Corre el self-check QC① (llamada separada al modelo) sobre el estado vigente. */
   runSelfCheck(): Promise<SelfCheckResult>
 }

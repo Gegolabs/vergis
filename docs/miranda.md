@@ -56,6 +56,7 @@ explorando → borrador → validado → autochequeado → publicado   (+ descar
 | `MIRANDA_SCOPE_GROUP` | `miranda` | Grupo de Mira que concede el scope (además de los admins). |
 | `MIRANDA_PROBE_DB` | 1ª conexión | `database_ref` contra el que corren las probes. |
 | `MIRANDA_ANNOUNCE_WEBHOOK` | — | Webhook opcional para anunciar la publicación (patrón espejo Slack; no-fatal). |
+| `MIRANDA_PREVIEW_IDENTITIES` | — | Ruta a un JSON con el **roster** de identidades inspeccionables en preview (`[{label,user,claims}]`). Sin ella la feature no existe. Roster ilegible o inválido (label duplicado, `user`/`claims` ausentes) **aborta el arranque**. |
 
 ## ¿Rutas?
 
@@ -68,6 +69,16 @@ explorando → borrador → validado → autochequeado → publicado   (+ descar
 | `/miranda/api/s/:id/validate-intent` | POST | El usuario aprueba el resumen (→ `validado`). |
 | `/miranda/api/s/:id/publish` | POST | Publica (gates en código). |
 | `/miranda/preview/:id` | GET | Sirve el último draft como spec efímero **por `serve-rls`** (RLS real; no aparece en el índice ni en healthz). |
+| `/miranda/preview/:id?as=<label>` | GET | El mismo draft rendido con la identidad del roster con esa etiqueta (`MIRANDA_PREVIEW_IDENTITIES`). Etiqueta no declarada ⇒ 404. Cada render impersonado se audita (`miranda-preview-as {session, actor, as}`). Sin roster, el parámetro se ignora. |
+| `/miranda/preview/:id/compare?a=&b=` | GET | Dos previews lado a lado (`me` = tu RLS, o una etiqueta), con una banda que nombra cada identidad y sus claims. Azúcar sobre `?as=`. Sin roster, la ruta no existe. |
+
+Toda ruta con `:id` exige **pertenencia**: dueño de la sesión o admin (ajena ⇒ 403). La preview
+impersonada NO es un bypass del gate: el actor sigue siendo el usuario autenticado con su scope
+`miranda`; lo que cambia es el `IdentityContext` que alimenta la RLS de UN render efímero, y las
+identidades suplantables las declara la INSTANCIA (roster), nunca el actor. Los claims del roster se
+usan **tal cual** (sin enriquecer desde `VERGIS_IDENTITY_MAP`): el roster es la única fuente de verdad
+de lo suplantado. Cada costura falla cerrada: sin roster ⇒ superficie cero; etiqueta no rostered ⇒
+404; claim que la política exige y el roster no trae ⇒ cero filas.
 
 AuthZ de la capacidad: scope `miranda` (admin o miembro del grupo de scope). Sin scope ⇒ 403 en todas
 las rutas y sin entrada en el menú.
@@ -83,7 +94,7 @@ las rutas y sin entrada en el menú.
 | `list_pis` / `read_spec` | `{code?}` | specs existentes (read-only) | Ejemplares; no se editan. |
 | `save_draft` | `{yaml}` | `{ok, version}` o errores del DSL | Valida (`dsl/parse`+`dsl/validate`) y guarda `spec_draft` vN. **Nunca** escribe al SPECS_DIR. |
 | `update_intent_summary` | JSON estructurado | `{ok, version}` | Guarda `intent_summary` vN; invalida `validado` si aplica. |
-| `render_preview` | — | `{url}` | Devuelve `/miranda/preview/<session>`. |
+| `render_preview` | — | `{url}` y, con roster declarado, `{identities:[{label,url}], compare_url}` | Devuelve `/miranda/preview/<session>`. Con `MIRANDA_PREVIEW_IDENTITIES` agrega una URL por etiqueta y la del comparador; **sin roster esos campos no existen**. Los claims nunca viajan a la tool. |
 | `run_self_check` | — | `{veredicto, brechas[]}` | Llamada separada al modelo (juez ≠ autor); mueve `validado`→`autochequeado` si no hay B/M. |
 | `create_data_request` | `{descripcion, tablas_faltantes[]}` | `{ok}` | Handoff a César+Claude: Miranda especifica, **no construye** datos en esta fase. |
 

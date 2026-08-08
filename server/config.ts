@@ -114,6 +114,25 @@ export interface MirandaConfig {
   scopeGroup: string
   /** Webhook opcional para anunciar la publicación de un PI (patrón espejo Slack; no-fatal). */
   announceWebhook: string | undefined
+  /**
+   * Ruta a un JSON con el ROSTER de identidades inspeccionables en preview
+   * (`MIRANDA_PREVIEW_IDENTITIES`). Vacío/ausente = la feature NO existe: ni `?as=`, ni links, ni
+   * campos nuevos en la tool (superficie cero, patrón `PdfConfig`). Con Miranda apagada la env se
+   * ignora: el campo queda `undefined` aunque la variable esté definida.
+   */
+  previewIdentitiesPath: string | undefined
+}
+
+/**
+ * Una identidad del roster de preview: la instancia declara EXPLÍCITAMENTE qué vistas son
+ * inspeccionables. Los claims son inline (auditable de un vistazo qué ve cada etiqueta) y el server
+ * los usa TAL CUAL como `IdentityContext` — sin enriquecer desde `IdentityMap`: el roster es la única
+ * fuente de verdad de lo suplantado. Jamás hay `?as=<email arbitrario>`.
+ */
+export interface PreviewIdentity {
+  label: string
+  user: string
+  claims: Record<string, string[]>
 }
 
 /**
@@ -352,7 +371,55 @@ function mirandaConfig(env: Env): MirandaConfig {
     catalogPath: env['MIRANDA_CATALOG'],
     scopeGroup: (env['MIRANDA_SCOPE_GROUP'] ?? 'miranda').trim().toLowerCase(),
     announceWebhook: env['MIRANDA_ANNOUNCE_WEBHOOK'],
+    previewIdentitiesPath: enabled ? (env['MIRANDA_PREVIEW_IDENTITIES'] ?? '').trim() || undefined : undefined,
   }
+}
+
+/**
+ * Parsea y VALIDA el roster de preview (contenido del archivo `MIRANDA_PREVIEW_IDENTITIES`). Puro:
+ * la LECTURA del archivo la hace el consumidor (`serve-rls.ts`), como todo archivo de config de este
+ * módulo. Lanza con mensaje accionable ante roster inválido — con Miranda ON eso aborta el arranque
+ * (mismo patrón que la API key ausente): un roster ilegible no debe degradar en silencio a una
+ * feature a medias.
+ */
+export function parsePreviewIdentities(raw: string, source = 'MIRANDA_PREVIEW_IDENTITIES'): PreviewIdentity[] {
+  const fail = (msg: string): never => {
+    throw new Error(`${source}: ${msg}`)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (e) {
+    return fail(`el roster no es JSON válido (${e instanceof Error ? e.message : String(e)}).`)
+  }
+  if (!Array.isArray(parsed)) return fail('el roster debe ser un arreglo de identidades `[{label,user,claims}]`.')
+  const out: PreviewIdentity[] = []
+  const seen = new Set<string>()
+  parsed.forEach((entry, i) => {
+    const at = `identidad #${i + 1}`
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return fail(`${at} no es un objeto.`)
+    const e = entry as Record<string, unknown>
+    const label = typeof e['label'] === 'string' ? e['label'].trim() : ''
+    if (!label) return fail(`${at} no declara \`label\` (etiqueta no vacía).`)
+    if (!/^[A-Za-z0-9._-]+$/.test(label)) return fail(`${at}: label '${label}' inválido (solo letras, dígitos, '.', '_' y '-').`)
+    if (seen.has(label.toLowerCase())) return fail(`label duplicado: '${label}'. Las etiquetas del roster deben ser únicas.`)
+    seen.add(label.toLowerCase())
+    const user = typeof e['user'] === 'string' ? e['user'].trim() : ''
+    if (!user) return fail(`identidad '${label}' no declara \`user\` (email de la identidad suplantada).`)
+    const rawClaims = e['claims']
+    if (!rawClaims || typeof rawClaims !== 'object' || Array.isArray(rawClaims)) {
+      return fail(`identidad '${label}' no declara \`claims\` (objeto claim → valor(es); \`{}\` es válido y significa sin claims).`)
+    }
+    const claims: Record<string, string[]> = {}
+    for (const [c, v] of Object.entries(rawClaims as Record<string, unknown>)) {
+      if (v == null) continue
+      if (Array.isArray(v)) claims[c] = v.map(String)
+      else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') claims[c] = [String(v)]
+      else return fail(`identidad '${label}': claim '${c}' debe ser string o arreglo de strings.`)
+    }
+    out.push({ label, user, claims })
+  })
+  return out
 }
 
 /** Envs retirados que siguen apareciendo en despliegues vivos: se avisan y se ignoran (jamás se

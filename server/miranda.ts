@@ -11,6 +11,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { escapeHtml, type MirandaStore, type MirandaSession } from '@vergis/capabilities'
+import type { IdentityContext } from '@vergis/botler'
 import {
   runAgentTurn,
   runSelfCheck,
@@ -62,6 +63,22 @@ export interface MirandaServerDeps {
   writeSpec(filename: string, content: string): Promise<void>
   /** Renderiza un draft efímero por el riel serve-rls con la identidad del request (RLS real). */
   renderPreviewHtml(draftYaml: string, headers: IncomingMessage['headers']): Promise<string>
+  /**
+   * ROSTER de identidades inspeccionables en preview (#110·1, D1) — lo declara la instancia
+   * (`MIRANDA_PREVIEW_IDENTITIES`), jamás el actor. Ausente o vacío ⇒ la feature NO existe: ni
+   * `?as=`, ni links en el panel, ni campos nuevos en la tool (superficie cero).
+   * Los `claims` viajan solo a la banda de la página `/compare`, que los NOMBRA: sin ellos la
+   * verificación es una ficción no auditable (riesgo P1 del diseño). No van a la salida de la tool.
+   */
+  previewIdentities?: { label: string; user: string; claims?: Record<string, string[]> }[]
+  /**
+   * Renderiza el draft «como lo vería» la identidad del roster con esa etiqueta — mismo riel que
+   * `renderPreviewHtml`, cambiando SOLO la identidad. Lanza si el label no está en el roster.
+   * Cableado solo cuando hay roster: su ausencia ES la superficie cero de la feature.
+   */
+  renderPreviewHtmlAs?(draftYaml: string, label: string): Promise<string>
+  /** Auditoría (log administrativo del server). Cada render impersonado emite un evento (D4). */
+  audit?: (event: Record<string, unknown>) => void
   secret: string
   brandTitle?: string
   announce?: (message: string) => Promise<void>
@@ -86,6 +103,22 @@ export const mirandaValidateCaps = (servingCaps: Iterable<string>): string[] => 
   'render-csv-piece',
 ]
 
+/**
+ * Identidad con la que se rinde una preview impersonada: los campos del roster TAL CUAL. NO se
+ * enriquece desde `VERGIS_IDENTITY_MAP` — el roster es la única fuente de verdad de lo suplantado
+ * (una impersonación a medias que se ve «verificada» es peor que ninguna). `agent` se pasa desde el
+ * server para que sea el MISMO que produce el gate en un request real: así el render impersonado es
+ * idéntico a lo que esa identidad vería de verdad.
+ *
+ * Vive acá (y no como literal en `serve-rls.ts`) por la razón de `mirandaValidateCaps`: `serve-rls.ts`
+ * tiene top-level `await` y no se puede importar desde un test — escrito ahí, esto sería inobservable.
+ */
+export const previewIdentityFor = (entry: { user: string; claims?: Record<string, string[]> }, agent: string): IdentityContext => ({
+  agent,
+  user: entry.user,
+  claims: { ...(entry.claims ?? {}) },
+})
+
 const STATE_LABEL: Record<string, string> = {
   explorando: 'Explorando',
   borrador: 'Borrador',
@@ -105,6 +138,13 @@ const normEmail = (e: string | undefined): string => (e ?? '').trim().toLowerCas
 export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   const csrf = csrfFactory(deps.secret)
   const pg = (title: string, body: string) => page(`${deps.brandTitle ?? 'Vergis'} · Miranda`, title, body)
+
+  /** El roster EFECTIVO: la feature existe solo si la instancia declaró identidades Y el server
+   *  cableó el render impersonado. Sin las dos cosas, `?as=`, `/compare`, los links del panel y los
+   *  campos de la tool no existen (D1: superficie cero). */
+  const roster = (): { label: string; user: string; claims?: Record<string, string[]> }[] =>
+    deps.renderPreviewHtmlAs ? (deps.previewIdentities ?? []) : []
+  const rosterHas = (label: string): boolean => roster().some((i) => i.label === label)
 
   /** Contexto de tools para una sesión + identidad. */
   function toolContext(sessionId: string, email: string | undefined): MirandaToolContext {
@@ -158,7 +198,15 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       renderPreview: async () => {
         const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
         if (!draft) throw new Error('No hay draft para previsualizar.')
-        return { url: `/miranda/preview/${sessionId}` }
+        const url = `/miranda/preview/${sessionId}`
+        const list = roster()
+        // Sin roster la salida es EXACTAMENTE la de siempre: el modelo no ve campos que no existen.
+        if (!list.length) return { url }
+        return {
+          url,
+          identities: list.map((i) => ({ label: i.label, url: `${url}?as=${encodeURIComponent(i.label)}` })),
+          compare_url: `${url}/compare?a=me&b=${encodeURIComponent(list[0].label)}`,
+        }
       },
       runSelfCheck: async () => {
         const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
@@ -199,8 +247,10 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   }
 
   async function tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/miranda'
+    const rawUrl = req.url ?? '/'
+    const path = rawUrl.split('?')[0].replace(/\/+$/, '') || '/miranda'
     if (path !== '/miranda' && !path.startsWith('/miranda/')) return false
+    const query = new URLSearchParams(rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '')
     const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
     if (!(await deps.hasScope(email))) {
       send(res, 403, pg('Sin acceso', `<p class="msg err">No tienes el scope <code>miranda</code>. Pídeselo a un administrador.</p><p><a href="/">← Catálogo</a></p>`))
@@ -208,11 +258,18 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     }
     const token = csrf(email)
     try {
-      // Preview (GET) — sirve el draft efímero por serve-rls con la identidad del request.
+      // Preview (GET) — sirve el draft efímero por serve-rls con la identidad del request, o con la
+      // de una etiqueta del roster (`?as=`) cuando la instancia lo declaró.
       const mPrev = path.match(/^\/miranda\/preview\/([^/]+)$/)
       if (mPrev && req.method === 'GET') {
         if (!(await requireSession(mPrev[1], email, res))) return true
-        return await handlePreview(mPrev[1], req, res)
+        return await handlePreview(mPrev[1], req, res, query.get('as'), email)
+      }
+      // Comparador de dos identidades lado a lado — azúcar sobre `?as=`, sin lógica de datos propia.
+      const mCmp = path.match(/^\/miranda\/preview\/([^/]+)\/compare$/)
+      if (mCmp && req.method === 'GET' && roster().length) {
+        if (!(await requireSession(mCmp[1], email, res))) return true
+        return handleCompare(mCmp[1], res, query.get('a'), query.get('b'))
       }
 
       // Lista de sesiones.
@@ -333,15 +390,64 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     }
   }
 
-  async function handlePreview(sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  async function handlePreview(sessionId: string, req: IncomingMessage, res: ServerResponse, as: string | null, actor: string): Promise<boolean> {
     const draft = await deps.gov.latestMirandaArtifact(sessionId, 'spec_draft')
     if (!draft) {
       send(res, 404, pg('Sin draft', `<p class="msg err">No hay draft que previsualizar en esta sesión.</p>`))
       return true
     }
-    const html = await deps.renderPreviewHtml(draft.content, req.headers)
+    // Sin roster, `?as=` se comporta como si el parámetro no existiera (superficie cero, D1).
+    const impersonate = as && roster().length ? as : null
+    let html: string
+    if (impersonate) {
+      if (!rosterHas(impersonate)) {
+        send(res, 404, pg('Identidad no declarada', `<p class="msg err">La identidad de preview <code>${escapeHtml(impersonate)}</code> no está declarada en el roster de esta instancia.</p><p><a href="/miranda/s/${escapeHtml(sessionId)}">← Sesión</a></p>`))
+        return true
+      }
+      // D4 — el actor REAL queda siempre en el registro: la impersonación es trazable por construcción.
+      deps.audit?.({ type: 'miranda-preview-as', session: sessionId, actor, as: impersonate })
+      html = await deps.renderPreviewHtmlAs!(draft.content, impersonate)
+    } else {
+      html = await deps.renderPreviewHtml(draft.content, req.headers)
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
     res.end(html)
+    return true
+  }
+
+  /** Dos previews lado a lado. `me` = tu propia RLS; cualquier otro valor debe ser una etiqueta del
+   *  roster. Cero lógica de datos: cada panel es un iframe a `/miranda/preview/:id[?as=…]`. */
+  function handleCompare(sessionId: string, res: ServerResponse, a: string | null, b: string | null): boolean {
+    const list = roster()
+    const pick = (v: string | null, fallback: string): string => (v ?? fallback)
+    const one = pick(a, 'me')
+    const two = pick(b, list[0]?.label ?? 'me')
+    for (const label of [one, two]) {
+      if (label !== 'me' && !rosterHas(label)) {
+        send(res, 404, pg('Identidad no declarada', `<p class="msg err">La identidad de preview <code>${escapeHtml(label)}</code> no está declarada en el roster de esta instancia.</p><p><a href="/miranda/s/${escapeHtml(sessionId)}">← Sesión</a></p>`))
+        return true
+      }
+    }
+    const panel = (label: string): string => {
+      const it = list.find((i) => i.label === label)
+      const who = label === 'me' ? 'Tu identidad (tu RLS)' : `${escapeHtml(label)} · ${escapeHtml(it?.user ?? '')}`
+      const claims = label === 'me' || !it?.claims ? '' : `<div class="sub">${escapeHtml(Object.entries(it.claims).map(([c, v]) => `${c}=${v.join('|')}`).join(' · ')) || 'sin claims'}</div>`
+      const src = label === 'me' ? `/miranda/preview/${encodeURIComponent(sessionId)}` : `/miranda/preview/${encodeURIComponent(sessionId)}?as=${encodeURIComponent(label)}`
+      return `<div style="flex:1;min-width:320px;display:flex;flex-direction:column">
+        <div style="padding:8px 12px;border:1px solid var(--border);border-radius:8px 8px 0 0;background:var(--card)"><b>${who}</b>${claims}</div>
+        <iframe src="${src}" title="${escapeHtml(label)}" style="width:100%;height:70vh;border:1px solid var(--border);border-top:0;border-radius:0 0 8px 8px;background:#fff"></iframe>
+      </div>`
+    }
+    send(
+      res,
+      200,
+      pg(
+        'Comparar identidades',
+        `<p><a href="/miranda/s/${escapeHtml(sessionId)}">← Sesión</a></p>
+         <p class="sub">El mismo draft por el riel RLS real, rendido con dos identidades. Los claims de cada etiqueta son los que declaró la instancia.</p>
+         <div style="display:flex;gap:16px;flex-wrap:wrap">${panel(one)}${panel(two)}</div>`,
+      ),
+    )
     return true
   }
 
@@ -397,6 +503,28 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     )
   }
 
+  /** Links de preview del panel. Sin roster: exactamente el link de siempre (superficie cero). Con
+   *  roster: «Ver con tu RLS» + un link por etiqueta + el comparador de dos identidades. */
+  function renderPreviewLinks(sessionId: string): string {
+    const base = `/miranda/preview/${encodeURIComponent(sessionId)}`
+    const mine = `<a href="${base}" target="_blank">Ver preview (con tu RLS) ↗</a>`
+    const list = roster()
+    if (!list.length) return `<p>${mine}</p>`
+    const opts = (sel: string): string =>
+      [`<option value="me">tu identidad</option>`, ...list.map((i) => `<option value="${escapeHtml(i.label)}"${i.label === sel ? ' selected' : ''}>${escapeHtml(i.label)}</option>`)].join('')
+    const links = list
+      .map((i) => `<li><a href="${base}?as=${encodeURIComponent(i.label)}" target="_blank">Ver como <b>${escapeHtml(i.label)}</b> (${escapeHtml(i.user)}) ↗</a></li>`)
+      .join('')
+    return `<p>${mine}</p>
+      <div class="l">Ver como otra identidad (roster de la instancia)</div>
+      <ul>${links}</ul>
+      <form method="get" action="${base}/compare" target="_blank" class="row">
+        <select name="a">${opts('')}</select>
+        <select name="b">${opts(list[0].label)}</select>
+        <button class="add">Comparar…</button>
+      </form>`
+  }
+
   function renderIntentPanel(intentJson: string | undefined, s: MirandaSession, token: string, sessionId: string, qcJson?: string, draftYaml?: string): string {
     let summary = '<p class="sub">Aún no hay un resumen de intención. Sigue conversando con Miranda.</p>'
     if (intentJson) {
@@ -432,7 +560,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       s.state === 'autochequeado'
         ? `<form method="post" action="/miranda/api/s/${escapeHtml(sessionId)}/publish"><input type="hidden" name="_csrf" value="${token}"><button class="add">Publicar</button></form>`
         : ''
-    const preview = draftYaml ? `<p><a href="/miranda/preview/${escapeHtml(sessionId)}" target="_blank">Ver preview (con tu RLS) ↗</a></p>` : ''
+    const preview = draftYaml ? renderPreviewLinks(sessionId) : ''
     const dslToggle = draftYaml
       ? `<details style="margin-top:12px"><summary class="sub">ver DSL (read-only)</summary><pre style="overflow:auto;background:var(--card);padding:12px;border-radius:8px;font-size:12px">${escapeHtml(draftYaml)}</pre></details>`
       : ''

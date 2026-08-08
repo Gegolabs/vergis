@@ -110,8 +110,9 @@ export async function updateIntentSummary(input: unknown, ctx: MirandaToolContex
 
 export async function renderPreview(_input: unknown, ctx: MirandaToolContext): Promise<ToolResult> {
   try {
-    const { url } = await ctx.renderPreview()
-    return { url }
+    const { url, identities, compare_url } = await ctx.renderPreview()
+    // Los campos del roster solo aparecen si la instancia lo declaró (superficie cero sin roster).
+    return identities?.length ? { url, identities, compare_url } : { url }
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
   }
