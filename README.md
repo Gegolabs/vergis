@@ -91,7 +91,15 @@ Canonical product docs live in `docs/`:
 
 ## Edition and license
 
-Core **AGPL-3.0-or-later**, functionally complete on single-node. The Enterprise edition (HA / Kubernetes / carrier-grade) is commercial. The canon's normative specs (Botler contract, Mira spec, DSL, naming) ship with AgencyDomains; their migration to this repo's `docs/` is pending.
+The entire Product in this repository is **AGPL-3.0-or-later** and **functionally complete on
+single-node** — that phrase is a normative clause, not marketing: see
+[ADR-002](docs/adr-002-open-core.md) for the open-core boundary, its two veto tests (auditability,
+adoption) and the anti-crippleware promise. Commercial territory is what only an organization
+operating at scale buys: HA / Kubernetes / carrier-grade, the multi-instance fleet control plane,
+and the operated service — none of it exists as code today, and when it does it will live in a
+separate program talking to Vergis over its APIs, never linked into the AGPL process. The canon's
+normative specs (Botler contract, Mira spec, DSL, naming) ship with AgencyDomains; their migration
+to this repo's `docs/` is pending.
 
 ---
 
