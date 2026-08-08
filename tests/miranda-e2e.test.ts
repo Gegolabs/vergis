@@ -100,6 +100,7 @@ describe('WP7 · e2e explorando→publicado (sin red)', () => {
       catalog: [{ name: 'dbo.v_saldos' }],
       identityOf: () => ({ user: EMAIL }),
       hasScope: async () => true,
+      isAdmin: async () => false,
       probe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),
       columnsOf: async () => [{ name: 'empresa', type: 'nvarchar' }, { name: 'saldo', type: 'int' }],
       validateDraft: (yaml) => {

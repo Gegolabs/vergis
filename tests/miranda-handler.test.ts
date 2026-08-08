@@ -50,6 +50,7 @@ async function build(over: Partial<MirandaServerDeps> = {}, transport?: Anthropi
     catalog: [{ name: 'dbo.v_saldos' }],
     identityOf: () => ({ user: EMAIL }),
     hasScope: async () => true,
+    isAdmin: async () => false,
     probe: async () => ({ rows: [] }),
     columnsOf: async () => [],
     validateDraft: () => ({ ok: true }),
