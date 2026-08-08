@@ -529,6 +529,77 @@ export interface GovernanceSeed {
   processOutputs?: { processId: string; tableRef: string }[]
 }
 
+/** Lo que la proyección semilla → store sabe sembrar. `admins` NO entra: su siembra es de arranque. */
+export type ReseedSeed = Pick<GovernanceSeed, 'groups' | 'sources' | 'tableSources' | 'processes' | 'processOutputs'>
+
+/**
+ * Valida TODA la semilla ANTES de tocar la DB (validate-before-write). En el arranque daba igual —un
+ * throw mata el proceso—, pero la MISMA proyección corre en caliente (`reseed`, issue #138·2): una
+ * semilla con la fila N inválida no puede dejar escritas las filas 1..N−1. Lanza con el mismo mensaje
+ * que lanzaba la validación inline.
+ */
+function validateSeed(seed: ReseedSeed): void {
+  for (const g of seed.groups ?? []) {
+    if (!SLUG_RE.test(g.id.trim().toLowerCase())) throw new Error(`governance: id de grupo semilla inválido '${g.id}'.`)
+  }
+  for (const s of seed.sources ?? []) validateOferta(s.oferta) // duración ISO o `evento`
+}
+
+/**
+ * La proyección semilla → store: LA MISMA función que corre `open()` al arranque y `reseed()` en
+ * caliente. Compartirla es lo que hace imposible que boot y recarga driften (issue #138·2).
+ *
+ * PRECEDENCIA (#101/#105/#107), heredada sin cambios: el re-sembrado SALTA los ids que una baja
+ * in-app dejó tombstoneados, NO pisa las filas gestionadas in-app (`managed_at IS NOT NULL`) y jamás
+ * toca `managed_at`; los miembros de grupo entran con `DO NOTHING`. La semilla nunca REMUEVE: el yaml
+ * es piso declarativo, no espejo.
+ */
+function applySeed(db: SqlDb, seed: ReseedSeed): void {
+  validateSeed(seed) // TODO validado antes del primer write
+  for (const g of seed.groups ?? []) {
+    const id = g.id.trim().toLowerCase()
+    db.run(`INSERT INTO mira_group (group_id, label, seed) VALUES (?,?,1) ON CONFLICT(group_id) DO UPDATE SET seed=1, label=excluded.label`, [id, g.label])
+    for (const m of g.members ?? []) {
+      const email = normEmail(m)
+      if (!email) continue
+      // Salta los que un admin removió en runtime (tombstone): el re-sembrado NO los resucita.
+      db.run(
+        `INSERT INTO mira_group_member (group_id, email, added_by, added_at)
+         SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mira_group_seed_removed WHERE group_id = ? AND email = ?)
+         ON CONFLICT(group_id, email) DO NOTHING`,
+        [id, email, 'config:VERGIS_GROUPS', now(), id, email],
+      )
+    }
+  }
+  for (const s of seed.sources ?? [])
+    db.run(
+      `INSERT INTO source (source_id, label, oferta, domain, connected_by)
+       SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM source_registry_removed WHERE kind = 'source' AND id = ?)
+       ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
+         domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by
+       WHERE source.managed_at IS NULL`,
+      [s.id.trim().toLowerCase(), s.label, s.oferta.trim().toUpperCase(), s.domain?.trim().toLowerCase() ?? null, s.connectedBy ?? 'config:VERGIS_SOURCES', s.id.trim().toLowerCase()],
+    )
+  for (const ts of seed.tableSources ?? [])
+    db.run(`INSERT INTO table_source (table_ref, source_id) VALUES (?,?) ON CONFLICT(table_ref) DO UPDATE SET source_id=excluded.source_id`, [ts.tableRef.trim(), ts.sourceId.trim().toLowerCase()])
+  for (const p of seed.processes ?? [])
+    db.run(
+      `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir)
+       SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM source_registry_removed WHERE kind = 'process' AND id = ?)
+       ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
+         engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
+         engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
+         engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type),
+         logs_workspace=COALESCE(excluded.logs_workspace, ingestion_process.logs_workspace),
+         logs_lakehouse=COALESCE(excluded.logs_lakehouse, ingestion_process.logs_lakehouse),
+         logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)
+       WHERE ingestion_process.managed_at IS NULL`,
+      [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null, ...logsCols(p.logs, p.id), p.id.trim().toLowerCase()],
+    )
+  for (const po of seed.processOutputs ?? [])
+    db.run(`INSERT INTO process_output (process_id, table_ref) VALUES (?,?) ON CONFLICT(process_id, table_ref) DO NOTHING`, [po.processId.trim().toLowerCase(), po.tableRef.trim()])
+}
+
 export class SqliteGovernanceStore implements GovernanceStore {
   private constructor(
     private db: SqlDb,
@@ -569,60 +640,26 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INGESTION_PROCESS_STATE_DDL)
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
     db.run(`INSERT OR IGNORE INTO miranda_seq (id, next_code) VALUES (1, ?)`, [MIRANDA_SEQ_SEED])
-    for (const g of seed.groups ?? []) {
-      const id = g.id.trim().toLowerCase()
-      if (!SLUG_RE.test(id)) throw new Error(`governance: id de grupo semilla inválido '${g.id}'.`)
-      db.run(`INSERT INTO mira_group (group_id, label, seed) VALUES (?,?,1) ON CONFLICT(group_id) DO UPDATE SET seed=1, label=excluded.label`, [id, g.label])
-      for (const m of g.members ?? []) {
-        const email = normEmail(m)
-        if (!email) continue
-        // Salta los que un admin removió en runtime (tombstone): el re-sembrado NO los resucita.
-        db.run(
-          `INSERT INTO mira_group_member (group_id, email, added_by, added_at)
-           SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mira_group_seed_removed WHERE group_id = ? AND email = ?)
-           ON CONFLICT(group_id, email) DO NOTHING`,
-          [id, email, 'config:VERGIS_GROUPS', now(), id, email],
-        )
-      }
-    }
-    // Semilla del registro de fuentes (instancia). PRECEDENCIA (#107): el re-sembrado SALTA los ids que
-    // una baja in-app dejó tombstoneados y NO pisa las filas gestionadas in-app (`managed_at IS NOT NULL`);
-    // jamás toca `managed_at`. Para una instancia que solo gestiona por yaml, la conducta es la de siempre.
-    for (const s of seed.sources ?? []) {
-      validateOferta(s.oferta) // valida (duración ISO o `evento`)
-      db.run(
-        `INSERT INTO source (source_id, label, oferta, domain, connected_by)
-         SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM source_registry_removed WHERE kind = 'source' AND id = ?)
-         ON CONFLICT(source_id) DO UPDATE SET label=excluded.label, oferta=excluded.oferta,
-           domain=COALESCE(excluded.domain, source.domain), connected_by=excluded.connected_by
-         WHERE source.managed_at IS NULL`,
-        [s.id.trim().toLowerCase(), s.label, s.oferta.trim().toUpperCase(), s.domain?.trim().toLowerCase() ?? null, s.connectedBy ?? 'config:VERGIS_SOURCES', s.id.trim().toLowerCase()],
-      )
-    }
-    for (const ts of seed.tableSources ?? [])
-      db.run(`INSERT INTO table_source (table_ref, source_id) VALUES (?,?) ON CONFLICT(table_ref) DO UPDATE SET source_id=excluded.source_id`, [ts.tableRef.trim(), ts.sourceId.trim().toLowerCase()])
-    for (const p of seed.processes ?? [])
-      db.run(
-        `INSERT INTO ingestion_process (process_id, label, source_id, engine_workspace, engine_item, engine_job_type, logs_workspace, logs_lakehouse, logs_dir)
-         SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM source_registry_removed WHERE kind = 'process' AND id = ?)
-         ON CONFLICT(process_id) DO UPDATE SET label=excluded.label, source_id=excluded.source_id,
-           engine_workspace=COALESCE(excluded.engine_workspace, ingestion_process.engine_workspace),
-           engine_item=COALESCE(excluded.engine_item, ingestion_process.engine_item),
-           engine_job_type=COALESCE(excluded.engine_job_type, ingestion_process.engine_job_type),
-           logs_workspace=COALESCE(excluded.logs_workspace, ingestion_process.logs_workspace),
-           logs_lakehouse=COALESCE(excluded.logs_lakehouse, ingestion_process.logs_lakehouse),
-           logs_dir=COALESCE(excluded.logs_dir, ingestion_process.logs_dir)
-         WHERE ingestion_process.managed_at IS NULL`,
-        [p.id.trim().toLowerCase(), p.label, p.sourceId.trim().toLowerCase(), p.engine?.workspaceId ?? null, p.engine?.itemId ?? null, p.engine?.jobType ?? null, ...logsCols(p.logs, p.id), p.id.trim().toLowerCase()],
-      )
-    for (const po of seed.processOutputs ?? [])
-      db.run(`INSERT INTO process_output (process_id, table_ref) VALUES (?,?) ON CONFLICT(process_id, table_ref) DO NOTHING`, [po.processId.trim().toLowerCase(), po.tableRef.trim()])
+    applySeed(db, seed)
     persistSqliteDb(db, file)
     return new SqliteGovernanceStore(db, file)
   }
 
   private persist(): void {
     persistSqliteDb(this.db, this.file)
+  }
+
+  /**
+   * Re-corre la proyección semilla → store EN CALIENTE (issue #138·2): exactamente la misma función
+   * que `open()` ejecuta al arranque, con las mismas guardas (`managed_at`, tombstones, `DO NOTHING`
+   * de miembros). Idempotente — cambia el CUÁNDO llega la siembra, no el QUÉ siembra.
+   *
+   * Validate-before-write: una semilla inválida lanza SIN haber escrito una sola fila, para que una
+   * recarga rechazada jamás deje el store a medio sembrar.
+   */
+  async reseed(seed: ReseedSeed): Promise<void> {
+    applySeed(this.db, seed)
+    this.persist()
   }
 
   // ── AdminStore (rol admin de plataforma) ──

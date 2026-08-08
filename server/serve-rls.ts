@@ -51,7 +51,7 @@ import { fileURLToPath } from 'node:url'
 // `watchPaths` ya no se llama directo: TODO watch pasa por `contract.watch` (instala + registra en una
 // sola llamada — ver server/contract.ts), que es quien lo invoca.
 import { swapRecordInPlace, reloadLiveList } from './hot-reload'
-import { loadInstanceConfig } from './instance-config'
+import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES } from './instance-config'
 import { type NavQuery } from './nav'
 import { tmpdir } from 'node:os'
 import { resolve, join, dirname } from 'node:path'
@@ -102,6 +102,7 @@ import {
   type RevertRef,
   type PiAsOf,
   type GroupSeed,
+  type SourcesConfig,
   type DomainDecl,
   type IntakeSlot,
   type RunRecord,
@@ -118,7 +119,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
-import { createSinks, fanout, forEvent, type Notification } from './notify'
+import { createSinks, fanout, forEvent, type Notification, type ReportSchedule } from './notify'
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
@@ -478,7 +479,9 @@ let piConfig: PiConfigHandler | null = null
 // Miranda (cluster 077): null salvo que MIRANDA_ENABLED esté encendido (se construye más abajo).
 let miranda: MirandaHandler | null = null
 let piAclEnabled = false
-let piOwners: Record<string, string> = {}
+// Dueños semilla de PI: REGISTRO VIVO (issue #138·2). `const` + swap in-place — quien lo consulta lo
+// hace por clave a call-time (bootstrap de un PI sin gobierno), así que mutarlo recarga sin re-cablear.
+const piOwners: Record<string, string> = {}
 let defaultCollabGroups: string[] = []
 // Secreto HMAC de los tokens CSRF de las superficies SSR de gestión (admin, config por-PI, Miranda).
 // Sin `VERGIS_CSRF_SECRET` se genera uno aleatorio por arranque: sirve para dev, pero en producción
@@ -888,11 +891,18 @@ if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTA
 
 // Sinks por flujo (issues #100/#102): la creación resuelve passEnv/caFile de los destinos email —
 // config rota tumba el BOOT con nombre (patrón #117), no muere como «administración deshabilitada».
+// ARREGLOS VIVOS (issue #138·2): los consumidores (fan-out de alertas, lazo del reporte) capturan
+// ESTA referencia y la iteran a call-time — la recarga los repuebla por splice, sin re-cablear nada.
 const alertSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'alerts'))
 const reportSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'reports'))
+/** ¿La instancia tiene bloque de gobierno? Gatea el reporte — y su invariante se RE-verifica en cada
+ *  recarga del slice notify (D5 de #138·2): `report:` no puede aparecer donde no hay qué reportar. */
+const HAS_GOV_BLOCK = !!(process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length)
 // El reporte lee la proyección del store de gobierno: sin bloque de gobierno no hay qué reportar.
-if (INSTANCE_CFG.notify.report && !(process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length))
+if (INSTANCE_CFG.notify.report && !HAS_GOV_BLOCK)
   throw new Error('VERGIS_NOTIFY declara report: pero la instancia no tiene bloque de gobierno (VERGIS_MASTER_DATA o VERGIS_ADMIN_SEED).')
+/** Cadencia VIVA del reporte (issue #138·2): `null` = reporte apagado. El lazo la consulta por tick. */
+let liveReportSchedule: ReportSchedule | null = INSTANCE_CFG.notify.report ?? null
 
 if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
   try {
@@ -923,7 +933,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     defaultCollabGroups = (process.env['VERGIS_DEFAULT_COLLABORATOR_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     const defaultStewardGroups = (process.env['VERGIS_DEFAULT_STEWARD_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     stewardGroups = defaultStewardGroups // idem: el avatar del catálogo decide si mostrar «Gestión»
-    piOwners = INSTANCE_CFG.piOwners
+    Object.assign(piOwners, INSTANCE_CFG.piOwners) // registro vivo: se puebla, no se reasigna
     const useFabricStore = ENGINE === 'fabric' && connections
     const mdStore = useFabricStore
       ? createDwhMasterDataStore(connections)
@@ -1204,7 +1214,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // request path. Nace encendido cuando hay motor: la memoria del producto no puede depender de que
     // alguien declare un destino de aviso (los destinos gatean SOLO los avisos). No mantiene vivo el
     // proceso.
-    const notifySinks = alertSinks
+    const notifySinks = alertSinks // el arreglo VIVO: la recarga lo repuebla in-place
     const freshnessPollMs = Number(contract.env('VERGIS_FRESHNESS_POLL_MS') ?? 300_000)
     const reconcileAuto = (contract.env('VERGIS_RECONCILE_AUTO') ?? 'on').toLowerCase() !== 'off'
     const reconcileDebounceMs = Number(contract.env('VERGIS_RECONCILE_DEBOUNCE_MS') ?? 21_600_000)
@@ -1215,7 +1225,10 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           store: govStore,
           inputs: freshnessInputs,
           // Fan-out a los destinos declarados: un destino caído se loguea y no tumba el tick.
-          ...(notifySinks.length ? { notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)) } : {}),
+          // INCONDICIONAL (issue #138·2): el closure se instala haya destinos o no, porque el arreglo
+          // es vivo y un destino que aparece en caliente debe empezar a recibir SIN reconstruir el lazo
+          // en vuelo. Con cero destinos, `fanout` es un no-op — el costo de instalarlo siempre es nulo.
+          notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
           domains: domainsCfg,
           audit: (e) => auditLog.append(e),
           log: (l) => console.log(`[vergis-rls] ${l}`),
@@ -1231,28 +1244,32 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     }
     // Reporte periódico de lo ejecutado (issue #102): latido incondicional — se envía SIEMPRE a la
     // hora configurada, con novedades o sin ellas. Un día sin correo = señal de problema, por diseño.
-    // Independiente del lazo de frescura y del motor: se gatea SOLO por `report:` declarado.
+    // Independiente del lazo de frescura y del motor.
+    //
+    // El LAZO se arma siempre que hay bloque de gobierno (issue #138·2): el interval de 60 s cuesta
+    // nada y la cadencia se consulta POR TICK, así que `report:` puede aparecer, cambiar de hora o
+    // desaparecer en caliente. Gatearlo por `report:` al boot obligaba a un restart para encenderlo.
     const reportCfg = INSTANCE_CFG.notify.report
-    if (reportCfg) {
-      const tzReporte = reportCfg.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-      const reportLoop = createReportLoop(
-        {
-          store: govStore,
-          inputs: freshnessInputs,
-          domains: domainsCfg.map((d) => ({ id: d.id, label: d.label })),
-          sinks: reportSinks,
-          audit: (e) => auditLog.append(e as LogEventInput),
-          log: (l) => console.log(`[vergis-rls] ${l}`),
-        },
-        { schedule: reportCfg, timezone: tzReporte, baseUrl: INSTANCE_CFG.publicUrl, freshnessPollMs, engineCabled: !!fabricWiring.engine },
-      )
-      setInterval(() => void reportLoop.tick(), REPORT_CHECK_MS).unref?.()
-      setTimeout(() => void reportLoop.tick(), 15_000).unref?.() // catch-up al arrancar (ventana perdida)
-      console.log(
-        `[vergis-rls] reporte periódico activo (${reportCfg.every === 'weekly' ? `semanal ${reportCfg.weekday ?? 'monday'}` : 'diario'} ` +
-          `a las ${reportCfg.at} ${tzReporte} · ${reportSinks.length} destino(s))`,
-      )
-    }
+    const tzHost = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const reportLoop = createReportLoop(
+      {
+        store: govStore,
+        inputs: freshnessInputs,
+        domains: domainsCfg.map((d) => ({ id: d.id, label: d.label })),
+        sinks: reportSinks, // arreglo VIVO: la recarga lo repuebla in-place
+        audit: (e) => auditLog.append(e as LogEventInput),
+        log: (l) => console.log(`[vergis-rls] ${l}`),
+      },
+      { schedule: () => liveReportSchedule, timezone: tzHost, baseUrl: INSTANCE_CFG.publicUrl, freshnessPollMs, engineCabled: !!fabricWiring.engine },
+    )
+    setInterval(() => void reportLoop.tick(), REPORT_CHECK_MS).unref?.()
+    setTimeout(() => void reportLoop.tick(), 15_000).unref?.() // catch-up al arrancar (ventana perdida)
+    console.log(
+      reportCfg
+        ? `[vergis-rls] reporte periódico activo (${reportCfg.every === 'weekly' ? `semanal ${reportCfg.weekday ?? 'monday'}` : 'diario'} ` +
+            `a las ${reportCfg.at} ${reportCfg.timezone ?? tzHost} · ${reportSinks.length} destino(s))`
+        : '[vergis-rls] reporte periódico en espera: sin `report:` declarado (el lazo está armado; declararlo en el yaml lo enciende sin restart)',
+    )
     admin = createAdmin({
       entities,
       mdStore,
@@ -1689,6 +1706,92 @@ function reloadDomainGovernance(reason: string): void {
   reloadLiveList(intakeSlotsCfg, parseIntakeFile, 'slots de ingesta', reason, console.log, console.error, 'slots')
 }
 
+// ── Config de INSTANCIA recargable (issue #138·2) ────────────────────────────────────────────────
+// Rutas de los slices recargables, DERIVADAS de qué envs hay realmente (mismo criterio que
+// `domainGovTargets`): un env que no aporta ruta no se declara vigilado ni se recarga.
+const NOTIFY_PATH = contract.env('VERGIS_NOTIFY') ? resolve(contract.env('VERGIS_NOTIFY') as string) : null
+const PI_OWNERS_PATH = contract.env('VERGIS_PI_OWNERS') ? resolve(contract.env('VERGIS_PI_OWNERS') as string) : null
+const SOURCES_PATH = contract.env('VERGIS_SOURCES') ? resolve(contract.env('VERGIS_SOURCES') as string) : null
+const instanceArtifacts = (): { source: string; path: string }[] => [
+  ...(NOTIFY_PATH ? [{ source: 'notify', path: NOTIFY_PATH }] : []),
+  ...(PI_OWNERS_PATH ? [{ source: 'pi-owners', path: PI_OWNERS_PATH }] : []),
+  ...(SOURCES_PATH ? [{ source: 'sources', path: SOURCES_PATH }] : []),
+]
+
+/**
+ * Recarga la config de instancia POR ARCHIVO (D4 de #138·2): cada slice se re-parsea con su propio
+ * parser y hace validate-before-swap por su cuenta — un `notify.yaml` roto NO impide que un
+ * `sources.yaml` sano entre. NUNCA lanza: los errores de arranque tumban el proceso, una recarga jamás.
+ *
+ * Cada slice deja su propio `contract.record`: el sano registra su artefacto (hash del que entró), el
+ * roto registra `ok:false` SIN artefactos — así el hash previo sobrevive y `/contrato` muestra el
+ * archivo de disco como `pending` («no tomé lo que hay ahí»).
+ */
+function reloadInstanceSlices(reason: string): void {
+  // ── notify: destinos de aviso + cadencia del reporte ──
+  if (NOTIFY_PATH) {
+    try {
+      const next = loadSlice(contractEnv, RELOADABLE_SLICES.notify) ?? { destinations: [] }
+      // D5: los invariantes de BOOT se re-verifican en la recarga, y su incumplimiento RECHAZA EL
+      // SLICE (no el proceso). Ambos dependen de env/wiring, que no pueden aparecer en caliente.
+      if (next.destinations.length > 0 && !INSTANCE_CFG.publicUrl)
+        throw new Error('declara destinos pero falta VERGIS_PUBLIC_URL (los avisos llevan enlaces absolutos); es una env: exige restart.')
+      if (next.report && !HAS_GOV_BLOCK)
+        throw new Error('declara report: pero la instancia no tiene bloque de gobierno (VERGIS_MASTER_DATA o VERGIS_ADMIN_SEED).')
+      // `createSinks` LANZA ante `passEnv` ausente o `caFile` ilegible (#100/#102) — construir ANTES
+      // de tocar los arreglos vivos es lo que convierte ese throw en «se conserva lo vigente».
+      const nextAlerts = createSinks(forEvent(next, 'alerts'))
+      const nextReports = createSinks(forEvent(next, 'reports'))
+      alertSinks.splice(0, alertSinks.length, ...nextAlerts)
+      reportSinks.splice(0, reportSinks.length, ...nextReports)
+      liveReportSchedule = next.report ?? null
+      console.log(
+        `[hot-reload] avisos (${reason}): ${alertSinks.length} destino(s) de alerta · ${reportSinks.length} de reporte · ` +
+          `reporte ${liveReportSchedule ? `${liveReportSchedule.every} a las ${liveReportSchedule.at}` : 'apagado'}`,
+      )
+      contract.record({ reason, ok: true }, [{ source: 'notify', path: NOTIFY_PATH }])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[hot-reload] recarga de avisos falló (${reason}); destinos vigentes conservados: VERGIS_NOTIFY (${NOTIFY_PATH}): ${msg}`)
+      contract.record({ reason, ok: false, error: `notify: ${msg}` })
+    }
+  }
+  // ── pi-owners: dueños semilla, swap del registro vivo ──
+  if (PI_OWNERS_PATH) {
+    try {
+      const next = loadSlice(contractEnv, RELOADABLE_SLICES.piOwners) ?? {}
+      const diff = swapRecordInPlace(piOwners, next)
+      if (diff.added.length || diff.changed.length || diff.removed.length)
+        console.log(`[hot-reload] dueños de PI (${reason}): +${diff.added.length} · ${diff.changed.length} cambiados · -${diff.removed.length} (${Object.keys(piOwners).length} declarados)`)
+      contract.record({ reason, ok: true }, [{ source: 'pi-owners', path: PI_OWNERS_PATH }])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[hot-reload] recarga de dueños de PI falló (${reason}); mapa vigente conservado: VERGIS_PI_OWNERS (${PI_OWNERS_PATH}): ${msg}`)
+      contract.record({ reason, ok: false, error: `pi-owners: ${msg}` })
+    }
+  }
+  // ── sources: re-siembra del registro de fuentes (la MISMA proyección de open(), D1) ──
+  if (SOURCES_PATH && governance) {
+    const store = governance
+    void (async (): Promise<void> => {
+      try {
+        // `?? { sources: [] }` es inalcanzable acá (SOURCES_PATH no-nulo ⇒ el env está declarado); va
+        // por totalidad del tipo, no por conducta esperada.
+        const next: SourcesConfig = loadSlice(contractEnv, RELOADABLE_SLICES.sources) ?? { sources: [] }
+        // `reseed` valida TODO antes del primer write: una semilla rota no deja el store a medias.
+        // Los lectores (frescura, as-of, vistas) re-leen el store por tick/request: nada que re-cablear.
+        await store.reseed({ sources: next.sources, tableSources: next.tableSources, processes: next.processes, processOutputs: next.processOutputs })
+        console.log(`[hot-reload] registro de fuentes re-sembrado (${reason}): ${(await store.listSources()).length} fuente(s) · ${(await store.listProcesses()).length} proceso(s)`)
+        contract.record({ reason, ok: true }, [{ source: 'sources', path: SOURCES_PATH }])
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.error(`[hot-reload] re-siembra de fuentes falló (${reason}); registro vigente conservado: VERGIS_SOURCES (${SOURCES_PATH}): ${msg}`)
+        contract.record({ reason, ok: false, error: `sources: ${msg}` })
+      }
+    })()
+  }
+}
+
 function reloadGovernance(reason: string): void {
   // Primero el gobierno de dominio (conexiones/dominios/slots): el re-bootstrap de abajo ya debe ver
   // los perfiles nuevos para verificar un PI sobre un warehouse recién dado de alta (issue #50 + #52).
@@ -1742,7 +1845,36 @@ contract.record({ reason: 'boot', ok: true, policies: store.size, servablePis: d
   ...policyArtifacts(),
   ...specArtifacts(),
   ...domainArtifacts(),
+  ...instanceArtifacts(),
 ])
+// Caveats de la config de instancia (issue #138·2) — colocados donde el operador pregunta, en la
+// misma superficie que le dice qué se recarga y qué no.
+contract.caveat(
+  'VERGIS_MASTER_DATA y VERGIS_DATASETS son de ARRANQUE aunque sean archivos: arrastran esquema/DDL y ' +
+    'superficies cableadas al abrir el proceso (el binding de admin y stores se fija al arrancar). Cambiarlos exige restart.',
+)
+if (SOURCES_PATH)
+  contract.caveat(
+    'La re-siembra de VERGIS_SOURCES es un PISO declarativo, no un espejo: lo gestionado in-app gana y nunca se pisa, ' +
+      'los ids dados de baja in-app no resucitan, y retirar una fuente del yaml NO la borra del registro (la baja es in-app).',
+  )
+if (PI_OWNERS_PATH)
+  contract.caveat(
+    'Un dueño cambiado en VERGIS_PI_OWNERS aplica solo a los PI que aún no tienen gobierno: el traspaso de dueño de un PI ya ' +
+      'bootstrapeado es una operación in-app, y la semilla no la pisa.',
+  )
+if (NOTIFY_PATH)
+  contract.caveat(
+    'Un destino de aviso que aparece por recarga se estrena con las transiciones FUTURAS: el estado de dedup vive en el lazo, ' +
+      'no en los destinos — no hay replay de alertas ya en curso. VERGIS_PUBLIC_URL y los secretos (passEnv) son env: no pueden ' +
+      'aparecer en caliente, y una recarga que los exija se rechaza conservando lo vigente.',
+  )
+if (NOTIFY_PATH)
+  contract.caveat(
+    'Cambiar la HORA del reporte en caliente puede producir UN latido extra el día del cambio: la hora nueva define un ' +
+      'período que bajo la anterior no existía, y el registro de envíos no lo tiene marcado. Coherente con el at-least-once ' +
+      'del lazo — un latido duplicado es inocuo, uno perdido sería una falsa alarma.',
+  )
 // …y deja la huella de ESTA versión en el journal (#139 N2). Obligatorio al boot aunque nadie consulte
 // `/contrato` jamás: si solo se persistiera en el GET, una instancia que no consulta no dejaría
 // referencia para el próximo despliegue — y el delta que importa es justo el del despliegue siguiente.
@@ -1793,7 +1925,41 @@ if (HOT_RELOAD) {
       () => reloadGovernance('watch:dominio'),
     )
   }
-  process.on('SIGHUP', () => reloadGovernance('SIGHUP'))
-  contract.signal({ signal: 'SIGHUP', action: 'fuerza la recarga completa de gobierno (equivale a watch:policies)' })
-  console.log(`[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} (SIGHUP fuerza recarga de gobierno)`)
+  // Config de INSTANCIA (issue #138·2): UN watch para los tres archivos, con recarga POR ARCHIVO
+  // adentro. El debounce de `watchPaths` ya coalesce las ráfagas y las recargas son idempotentes, así
+  // que re-correr los tres ante el toque de uno es barato — mismo criterio que el watch de dominio.
+  // El slice `sources` solo se vigila si hay bloque de gobierno: sin store no hay dónde sembrarlo.
+  const instanceTargets = [...(NOTIFY_PATH ? [NOTIFY_PATH] : []), ...(PI_OWNERS_PATH ? [PI_OWNERS_PATH] : []), ...(SOURCES_PATH && governance ? [SOURCES_PATH] : [])]
+  if (instanceTargets.length) {
+    contract.watch(
+      {
+        // DERIVADAS de qué archivos hay realmente — y ES ESTE registro el que las mueve de `bootOnly`
+        // a `reloadableContent` en el snapshot: la clasificación del contrato se deriva de los watches
+        // instalados, nunca de una lista que declarar aparte.
+        envs: [
+          ...(NOTIFY_PATH ? ['VERGIS_NOTIFY'] : []),
+          ...(PI_OWNERS_PATH ? ['VERGIS_PI_OWNERS'] : []),
+          ...(SOURCES_PATH && governance ? ['VERGIS_SOURCES'] : []),
+        ],
+        reloads:
+          'config de instancia, por archivo: destinos de aviso y cadencia del reporte · dueños semilla de PI ' +
+          '(solo aplican a PIs aún sin gobierno: el traspaso de dueño es in-app) · re-siembra del registro de fuentes ' +
+          '(lo gestionado in-app gana; la semilla nunca remueve)',
+      },
+      instanceTargets,
+      () => reloadInstanceSlices('watch:instancia'),
+    )
+  }
+  // D7: la promesa de SIGHUP es «fuerza la recarga COMPLETA». Con la config de instancia recargable,
+  // seguir recargando solo el gobierno la volvería mentira — y SIGHUP es la vía manual del operador
+  // cuyo watch se perdió (bind-mount con inotify no propagado).
+  process.on('SIGHUP', () => {
+    reloadGovernance('SIGHUP')
+    reloadInstanceSlices('SIGHUP')
+  })
+  contract.signal({ signal: 'SIGHUP', action: 'fuerza la recarga completa: gobierno (equivale a watch:policies) + config de instancia (avisos, dueños de PI, fuentes)' })
+  console.log(
+    `[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} · ` +
+      `instancia=${instanceTargets.length} (SIGHUP fuerza la recarga completa)`,
+  )
 }
