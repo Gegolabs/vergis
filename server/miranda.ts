@@ -47,6 +47,10 @@ export interface MirandaServerDeps {
   identityOf(headers: IncomingMessage['headers']): { user?: string }
   /** ¿La identidad tiene el scope `miranda`? (admin o miembro del grupo de scope). */
   hasScope(email: string | undefined): Promise<boolean>
+  /** ¿La identidad es admin de la plataforma? (para el guard de pertenencia — el admin ve/opera toda
+   *  sesión). Opcional en la interfaz por compatibilidad de cableados existentes; ausente ⇒
+   *  fail-closed (nadie es admin, solo el dueño entra). */
+  isAdmin?(email: string | undefined): Promise<boolean>
   /** Ejecuta una probe (SQL ya guardado) con la identidad del autor. */
   probe(sql: string, email: string | undefined): Promise<{ rows: Record<string, unknown>[] }>
   /** Columnas+tipos de un objeto del catálogo. */
@@ -75,6 +79,10 @@ const STATE_LABEL: Record<string, string> = {
 
 /** Solo identificador simple (anti-inyección en profile_column). */
 const IDENT_RE = /^[A-Za-z0-9_]+$/
+
+/** Normalización de email para comparar dueño vs requester (misma semántica que `normEmail` del
+ *  store de gobierno: trim + lowercase). Local para no ampliar la superficie exportada del paquete. */
+const normEmail = (e: string | undefined): string => (e ?? '').trim().toLowerCase()
 
 export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   const csrf = csrfFactory(deps.secret)
@@ -156,6 +164,22 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     }
   }
 
+  /** Resuelve la sesión y exige pertenencia (dueño o admin). Responde 404/403 él mismo y devuelve
+   *  null si cortó; la ruta solo continúa con una sesión autorizada en la mano.
+   *  Sesión sin `createdBy` (filas legadas) = solo-admin (fail-closed). */
+  async function requireSession(sessionId: string, email: string, res: ServerResponse): Promise<MirandaSession | null> {
+    const s = await deps.gov.getMirandaSession(sessionId)
+    if (!s) {
+      send(res, 404, pg('No encontrada', `<p class="msg err">Sesión no encontrada.</p><p><a href="/miranda">← Sesiones</a></p>`))
+      return null
+    }
+    const owner = normEmail(s.createdBy)
+    if (owner && owner === normEmail(email)) return s
+    if (await deps.isAdmin?.(email)) return s
+    send(res, 403, pg('Sin acceso', `<p class="msg err">Esta sesión pertenece a otra persona.</p><p><a href="/miranda">← Sesiones</a></p>`))
+    return null
+  }
+
   async function tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/miranda'
     if (path !== '/miranda' && !path.startsWith('/miranda/')) return false
@@ -168,7 +192,10 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     try {
       // Preview (GET) — sirve el draft efímero por serve-rls con la identidad del request.
       const mPrev = path.match(/^\/miranda\/preview\/([^/]+)$/)
-      if (mPrev && req.method === 'GET') return await handlePreview(mPrev[1], req, res)
+      if (mPrev && req.method === 'GET') {
+        if (!(await requireSession(mPrev[1], email, res))) return true
+        return await handlePreview(mPrev[1], req, res)
+      }
 
       // Lista de sesiones.
       if (path === '/miranda' && req.method === 'GET') {
@@ -187,7 +214,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       // Conversación.
       const mSess = path.match(/^\/miranda\/s\/([^/]+)$/)
       if (mSess && req.method === 'GET') {
-        send(res, 200, await sessionPage(mSess[1], email, token))
+        const s = await requireSession(mSess[1], email, res)
+        if (!s) return true
+        send(res, 200, await sessionPageOf(s, token))
         return true
       }
       // Turno del chat.
@@ -195,6 +224,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       if (mMsg && req.method === 'POST') {
         const f = await readForm(req)
         requireCsrf(f, token)
+        if (!(await requireSession(mMsg[1], email, res))) return true
         await handleMessage(mMsg[1], email, (f['text'] ?? '').trim())
         redirect(res, `/miranda/s/${mMsg[1]}`)
         return true
@@ -204,8 +234,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       if (mVal && req.method === 'POST') {
         const f = await readForm(req)
         requireCsrf(f, token)
-        const s = await deps.gov.getMirandaSession(mVal[1])
-        if (s && !(await deps.gov.latestMirandaArtifact(mVal[1], 'intent_summary'))) {
+        const s = await requireSession(mVal[1], email, res)
+        if (!s) return true
+        if (!(await deps.gov.latestMirandaArtifact(mVal[1], 'intent_summary'))) {
           send(res, 400, pg('Sin resumen', `<p class="msg err">Aún no hay un resumen de intención que validar.</p><p><a href="/miranda/s/${escapeHtml(mVal[1])}">← Volver</a></p>`))
           return true
         }
@@ -218,6 +249,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
       if (mPub && req.method === 'POST') {
         const f = await readForm(req)
         requireCsrf(f, token)
+        if (!(await requireSession(mPub[1], email, res))) return true
         return await handlePublish(mPub[1], res)
       }
       send(res, 404, pg('No encontrado', `<p class="msg err">Ruta no encontrada.</p>`))
@@ -317,9 +349,9 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     )
   }
 
-  async function sessionPage(sessionId: string, _email: string, token: string): Promise<string> {
-    const s = await deps.gov.getMirandaSession(sessionId)
-    if (!s) return pg('No encontrada', `<p class="msg err">Sesión no encontrada.</p>`)
+  /** Página de la sesión — recibe la sesión YA resuelta y autorizada por `requireSession`. */
+  async function sessionPageOf(s: MirandaSession, token: string): Promise<string> {
+    const sessionId = s.id
     const messages = await deps.gov.listMirandaMessages(sessionId)
     const chat = renderChat(messages)
     const intentArt = await deps.gov.latestMirandaArtifact(sessionId, 'intent_summary')
