@@ -87,7 +87,7 @@ null) || INDEX_TITLE` (`serve-rls.ts:671`). Los settings de notas usan la misma 
 
 ## 2 · Decisiones selladas
 
-### D1 · Recargar GROUPS/PI_OWNERS/SOURCES = re-correr la MISMA proyección idempotente del arranque `[propuesta — revocable por César]`
+### D1 · Recargar GROUPS/PI_OWNERS/SOURCES = re-correr la MISMA proyección idempotente del arranque `[aprobada por César · 2026-08-08]`
 
 **Sellada: la recarga re-ejecuta exactamente la siembra de `open()` — ni más ni menos.** La pregunta
 del boceto («¿re-siembra o solo entidades nuevas?») se disuelve al verificar §1.5: la siembra vigente
@@ -111,7 +111,7 @@ retener el estado anterior del archivo y decidir caso a caso qué es «nuevo», 
 guardas que el store ya posee, y produce una semántica DISTINTA a la del restart — el operador tendría
 que aprender dos conductas para el mismo archivo según cómo entró. Peor herramienta, más código.
 
-### D2 · Tunables: la vía caliente es `platform_setting` (in-app > env); NO se crea `VERGIS_TUNABLES` `[propuesta — revocable por César]`
+### D2 · Tunables: la vía caliente es `platform_setting` (in-app > env); NO se crea `VERGIS_TUNABLES` `[aprobada por César · 2026-08-08]`
 
 **Sellada: los escalares que merecen cambio en caliente se gestionan como settings de plataforma en
 Administración, con la precedencia que el producto ya cablea para `index_title`
@@ -136,7 +136,7 @@ Alcance de fase 2 (por escalar, según su consumo verificado en §1.3): `interac
 (inyección por request — trivial), `data_cache_ttl_ms` (el wrapper pasa a leer TTL por provider),
 `refresh_ms` (re-arme del timer al cambiar). `index_title` ya está. Escalares nuevos nacen settings.
 
-### D3 · Alcance: la fase 1 cierra la pieza 2 del issue; las fases 2 y 3 quedan diseñadas con disparador `[propuesta — revocable por César]`
+### D3 · Alcance: la fase 1 cierra la pieza 2 del issue; las fases 2 y 3 quedan diseñadas con disparador `[aprobada por César · 2026-08-08]`
 
 **Sellada: implementar fase 1 (notify completo + pi-owners + sources) da por resuelta la pieza 2 de
 #138.** El incidente y el issue nombran «destinos de aviso»; el inventario del boceto ubica ahí el

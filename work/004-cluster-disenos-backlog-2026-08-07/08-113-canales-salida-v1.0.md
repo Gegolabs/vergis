@@ -81,7 +81,7 @@ subscriptions:
 
 **Racional.** `VERGIS_NOTIFY` hoy mezcla las dos cosas: un destino email lleva transporte Y audiencia Y flujo en el mismo registro (`server/notify.ts:69-78`). Funciona para dos flujos fijos; no escala a «N specs entregan por el canal X a audiencias distintas» sin duplicar credenciales por spec. El corte canal/suscripción es el que permite que `delivery.channels[].channel: correo-institucional` de un spec resuelva contra el mismo transporte que el reporte, con otra audiencia. La audiencia es del tipo de canal: en email es `to`/`to_group`; en un incoming webhook de Slack viene horneada en la URL.
 
-**Criterio de excelencia:** este es el modelo correcto aunque obligue a migrar `VERGIS_NOTIFY`. Lo construido (parse, sinks, gating) se **reusa como implementación de los tipos de canal**, no como forma del registro. `[propuesta — revocable por César]`: `VERGIS_NOTIFY` se acepta un release como alias con aviso de deprecación (mapeo mecánico: cada `destination` ⇒ un canal + una suscripción por cada `event`), y muere en el siguiente. Alternativa descartada: mantener dos registros para siempre — dos fuentes de verdad de credenciales, y el bug del futuro es «actualicé el SMTP en uno y el otro siguió mandando por el viejo».
+**Criterio de excelencia:** este es el modelo correcto aunque obligue a migrar `VERGIS_NOTIFY`. Lo construido (parse, sinks, gating) se **reusa como implementación de los tipos de canal**, no como forma del registro. `[aprobada por César · 2026-08-08]`: `VERGIS_NOTIFY` se acepta un release como alias con aviso de deprecación (mapeo mecánico: cada `destination` ⇒ un canal + una suscripción por cada `event`), y muere en el siguiente. Alternativa descartada: mantener dos registros para siempre — dos fuentes de verdad de credenciales, y el bug del futuro es «actualicé el SMTP en uno y el otro siguió mandando por el viejo».
 
 ### D2 — Contrato del render por canal: el canal NO recibe el HTML de pantalla
 
@@ -197,7 +197,7 @@ Reglas de validación (mismo orden y estilo de `validate.ts`): `channel` debe ex
 Por cada entrega vencida (tick global de 60 s, `lastDueAt` compartido):
 
 1. **Resolver audiencia**: `to_group` → `listMembers` en el momento (D3.4); lista final de emails.
-2. **Por destinatario** (cap `VERGIS_DELIVERY_MAX_RECIPIENTS`, default 25 — `[propuesta — revocable por César]`, es un knob de gasto):
+2. **Por destinatario** (cap `VERGIS_DELIVERY_MAX_RECIPIENTS`, default 25 — `[aprobada por César · 2026-08-08]`, es un knob de gasto):
    a. identidad ← directorio; sin mapeo ⇒ **skip fail-closed** + registro + aviso `alerts` (D3.2);
    b. compuerta de artefacto: rol efectivo ≥ visor o skip fail-closed (D3.3);
    c. render bajo su identidad: `runPi(report, identidadDelDestinatario, {page}, undefined, {print: true})` → sidecar PDF, y/o `render-csv-piece` — los renders que la pantalla ya usa, con la MISMA identidad-por-consumidor que `runSpec` ya acepta (`packages/cli/src/run.ts:50-55`);

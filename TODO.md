@@ -22,6 +22,16 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
 - [ ] Migrar los specs normativos del canon (contrato Botler, spec Mira, DSL, naming) de AgencyDomains a `docs/` (declarado en README)
 - [ ] Port del kernel `@vergis/policy` a Go — solo cuando exista driver de negocio (Custos standalone, embedding, librería); ver `docs/adr-001-lenguaje-y-supply-chain.md`
 
+### Decisiones y acciones de César (2026-08-08, ronda de decisiones del cluster 004)
+
+- [ ] **Marca «Vergis» (y eventualmente «Custos»/«Miranda»)** — D6 de `004/11` DIFERIDA por César:
+  la decide después. El registro temprano es barato; la ausencia es irreversible si otro registra
+  primero. Estado registral sin verificar. (Insumo disponible a pedido: memo de disponibilidad +
+  clases de Niza.)
+- [ ] **Revisión (suya o de abogado) del borrador de `CONTRIBUTING.md`** — la cláusula DCO +
+  licencia de contribución (11/D5, aprobada) se redacta como borrador y NO se publica sin esta
+  revisión. La ventana del dual licensing se cierra con el primer PR externo sin acuerdo.
+
 ### Pendientes de sesión 2026-06-11
 
 - [ ] **Habilitar la app de Renovate** en el repo/org Gegolabs — `renovate.json` no opera sin la app instalada en GitHub (acción de admin GitHub, humano)

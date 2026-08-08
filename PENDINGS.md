@@ -25,13 +25,9 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Espera decisión de César
 
-- **Cluster 004: 11 diseños del backlog completo esperan sus decisiones** — cada doc de
-  `work/004-cluster-disenos-backlog-2026-08-07/` marca las suyas `[propuesta — revocable por César]`.
-  Las mayores: 03/#138·2 (D1 re-siembra idempotente · D2 NO crear VERGIS_TUNABLES, la vía es
-  `platform_setting` · D3 fase 1 basta — **supersede las 3 preguntas del boceto 003·C**), 11/open-core
-  (D1–D6: corte, Miranda abierta, AGPL+CLA-ligero ANTES del primer PR externo, marca), 04/#107·F2
-  (correr la sonda del hito cero: escribe en el tenant), 08/canales (migración VERGIS_NOTIFY→CHANNELS),
-  10/hardening (D8 supply-chain operacional). `reg 2026-08-07`
+*(vacío — las decisiones del cluster 004 se resolvieron el 2026-08-08: 13 aprobadas, 1 diferida
+a `TODO.md` (marca). Quedan diferidas POR DISEÑO con disparador propio, no esperando a César:
+multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
