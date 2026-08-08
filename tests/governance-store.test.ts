@@ -449,3 +449,89 @@ describe('GovernanceStore · registro gestionable in-app y precedencia sobre la 
     await g.close()
   })
 })
+
+describe('GovernanceStore · reseed en caliente: la MISMA proyección del arranque (#138·2)', () => {
+  const SEMILLA_R = {
+    sources: [{ id: 'sap', label: 'SAP (yaml)', oferta: 'PT1H', domain: 'cartera' }],
+    processes: [{ id: 'p_sap', label: 'Ingesta SAP (yaml)', sourceId: 'sap' }],
+    tableSources: [{ tableRef: 'dw.fct_saldos', sourceId: 'sap' }],
+    processOutputs: [{ processId: 'p_sap', tableRef: 'dw.fct_saldos' }],
+  }
+
+  it('(1) NO pisa una fila gestionada in-app aunque el yaml recargado traiga otros valores', async () => {
+    const g = await SqliteGovernanceStore.open(null, SEMILLA_R)
+    await g.upsertSource('sap', 'SAP B1 (in-app)', 'PT30M', { domain: 'cartera', managed: true })
+    await g.reseed({ sources: [{ id: 'sap', label: 'SAP renombrada en el yaml', oferta: 'PT6H' }] })
+    expect((await g.listSources())[0]).toMatchObject({ label: 'SAP B1 (in-app)', oferta: 'PT30M', managed: true })
+    await g.close()
+  })
+
+  it('(2) NO resucita un id tombstoneado por una baja in-app', async () => {
+    const g = await SqliteGovernanceStore.open(null, SEMILLA_R)
+    await g.deleteProcess('p_sap')
+    await g.deleteSource('sap')
+    await g.reseed(SEMILLA_R)
+    expect(await g.listSources()).toEqual([])
+    expect(await g.listProcesses()).toEqual([])
+    await g.close()
+  })
+
+  it('(3) tras un alta in-app que revoca el tombstone, el reseed sí entra', async () => {
+    const g = await SqliteGovernanceStore.open(null, SEMILLA_R)
+    await g.deleteSource('sap')
+    await g.upsertSource('sap', 'SAP recontratada', 'PT1H') // el alta in-app revoca el tombstone
+    await g.reseed({ sources: [{ id: 'otra', label: 'Otra fuente', oferta: 'PT2H' }] })
+    expect((await g.listSources()).map((s) => s.id).sort()).toEqual(['otra', 'sap'])
+    await g.close()
+  })
+
+  it('(4) semilla inválida en la fila N: NINGUNA fila escrita (validate-before-write)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await expect(
+      g.reseed({
+        sources: [
+          { id: 'buena', label: 'Fuente sana', oferta: 'PT1H' },
+          { id: 'mala', label: 'Fuente con oferta rota', oferta: 'cada ratito' },
+        ],
+      }),
+    ).rejects.toThrow()
+    expect(await g.listSources()).toEqual([]) // la fila 1 NO quedó escrita
+    await g.close()
+  })
+
+  it('(4-bis) id de grupo semilla inválido: ningún grupo escrito', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await expect(
+      g.reseed({
+        groups: [
+          { id: 'analistas', label: 'Analistas', members: ['a@b.cl'] },
+          { id: 'NO VÁLIDO!', label: 'Roto' },
+        ],
+      }),
+    ).rejects.toThrow(/id de grupo semilla inválido/i)
+    expect(await g.listGroups()).toEqual([])
+    await g.close()
+  })
+
+  it('(5) open(seed) y open({}) + reseed(seed) dejan el store IDÉNTICO (misma proyección)', async () => {
+    const conOpen = await SqliteGovernanceStore.open(null, SEMILLA_R)
+    const conReseed = await SqliteGovernanceStore.open(null, {})
+    await conReseed.reseed(SEMILLA_R)
+    expect(await conReseed.listSources()).toEqual(await conOpen.listSources())
+    expect(await conReseed.listProcesses()).toEqual(await conOpen.listProcesses())
+    expect(await conReseed.listTableSources()).toEqual(await conOpen.listTableSources())
+    expect(await conReseed.listProcessOutputs()).toEqual(await conOpen.listProcessOutputs())
+    await conOpen.close()
+    await conReseed.close()
+  })
+
+  it('(5-bis) grupos: reseed reproduce la siembra de open, y un miembro removido in-app no vuelve', async () => {
+    const GRUPOS = { groups: [{ id: 'analistas', label: 'Analistas', members: ['a@b.cl', 'c@d.cl'] }] }
+    const g = await SqliteGovernanceStore.open(null, GRUPOS)
+    await g.removeMember('analistas', 'c@d.cl')
+    await g.reseed(GRUPOS)
+    expect((await g.listGroups()).map((x) => x.id)).toEqual(['analistas'])
+    expect((await g.listMembers('analistas')).map((m) => m.email)).toEqual(['a@b.cl'])
+    await g.close()
+  })
+})
