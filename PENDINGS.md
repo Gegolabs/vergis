@@ -1,11 +1,18 @@
 # PENDINGS — detectados por el agente
 
 Pendientes que **detectó el agente**, no encargó el humano. TTL 15 días desde `reg`: al vencer
-pasan a `ROTTEN.md`. Lo que César declare o confirme como pendiente vive en `TODO.md` (sin TTL);
+pasan a `PENDINGS-done.md` §vencidas. Lo que César declare o confirme como pendiente vive en `TODO.md` (sin TTL);
 la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Operación / despliegue
 
+- **Lo mergeado hoy sigue SIN desplegar** — `main` (`6cc0bd7`) lleva `/contrato` (#141) y la
+  paralelización de la verificación fabric (#140) más los fixes de NUL y lockfile; la instancia
+  A.R.B.O.L. corre 0.14.0. La fila del deploy 0.14.0 en `TODO.md` está cerrada y **nada registra
+  este hand-off**. Producción es gated (Ley WW Norma 5): requiere autorización de César, y el
+  runbook es la skill `mira-ops`. CI verde y la imagen ghcr lista. `reg 2026-08-07`
+- **`CHANGELOG.md` sin cortar** — termina en 0.14.0; lo mergeado hoy no tiene entrada ni tag. El
+  corte de versión es decisión de César (precedente: D-05 del 2026-08-06). `reg 2026-08-07`
 - **`VERGIS_CSRF_SECRET` no definido en PROD ni en QA** — el server genera uno aleatorio al arrancar
   y lo avisa: los formularios de gestión abiertos no sobreviven un restart ni se comparten entre
   réplicas. Fijarlo en `vergis.env` de cada VM. `reg 2026-08-06`
@@ -48,10 +55,17 @@ la promoción PENDINGS→TODO se pide, no se toma.
   `constantTimeEqual`). Fix de una línea = D6 del diseño 004/10. `reg 2026-08-07`
 - **`Dockerfile` omite el manifiesto de `packages/miranda`** en sus dos stages (funciona porque el
   bundle no resuelve en runtime; asimetría a corregir o documentar — diseño 004/11 §1.4). `reg 2026-08-07`
-- **`TODO.md:16` rancio**: declara «HMAC + época de 4h» en `server/annotations.ts`, archivo que ya no
-  existe (el esquema de anotaciones fue retirado con la capa de notas, vergis#84); el único `createHmac`
-  vigente es el CSRF de `server/ui.ts:136`, sin época. Anotar el egreso en el TODO; la época se
-  rediseña en 004/10 H4. `reg 2026-08-07`
+
+## Práctica / entorno (fuera del árbol de Vergis)
+
+- **`~/evals-finaliza/` no está bajo control de versiones** — ahí viven la clave, los 3 reportes
+  del A/B, los 2 veredictos y el reporte de bug de esta sesión. Perderlos borraría la evidencia del
+  experimento. Decidir: `git init` local (sin remoto basta) o declarar en el arnés que es scratch
+  desechable. `reg 2026-08-07`
+- **`~/.claude/settings.json` modificado sin atribución** — aparece `M` en el repo `dotclaude` y
+  **no hay evidencia en esta sesión de haberlo tocado** (podría ser de otra sesión o del propio
+  `/model`, que persiste el default). No se commiteó por eso (Norma 6). Revisar el diff a mano y
+  sellarlo o revertirlo. `reg 2026-08-07`
 - **`VERGIS_VERSION` no está re-exportado por el índice de `@vergis/capabilities`** — `server/contract.ts`
   lo importa por ruta relativa a `packages/capabilities/src/version` (funciona y evita arrastrar
   vega/mssql a los tests unitarios, pero cruza la frontera del package). Decidir: re-export en el

@@ -1,7 +1,7 @@
 # TODO
 
 Deuda protegida del proyecto: lo que César declaró o confirmó como pendiente (sin TTL). Lo que
-detecta el agente vive en `PENDINGS.md` (TTL 15 días → `ROTTEN.md`). Registro cronológico en
+detecta el agente vive en `PENDINGS.md` (TTL 15 días → `PENDINGS-done.md` §vencidas). Registro cronológico en
 `BITACORA.md`; decisiones tomadas en nombre de César en `DECISIONS.md`.
 
 > El registro de lo IMPLEMENTADO en la sesión 2026-07-07 (32 archivos de producción, +impacto) está en
