@@ -6,6 +6,11 @@ cerrar.
 
 ## Cerradas con veredicto
 
+- **Cluster 004: los diseños esperaban las decisiones de César** (reg 2026-08-07).
+  **Cerrado 2026-08-08:** César resolvió las 14 en sesión guiada — 13 aprobadas tal como estaban
+  selladas (03/D1-D2-D3 · 04/D8-D9-D12 con sonda a workspace real · 05/D5 · 08/D1+cap25 ·
+  10/D8 a+b+c · 11/D1-D2-D3-D4-D5) y 1 diferida (11/D6 marca → `TODO.md`). Los marcadores de los
+  docs quedaron sellados `[aprobada por César · 2026-08-08]`.
 - **Miranda: CINCO rutas sin check de pertenencia de sesión** (reg 2026-08-07 como 2 rutas,
   ampliado 2026-08-08 a 5 por re-revisión: `sessionPage` exponía el transcript completo y
   `publish` permitía publicar el draft ajeno; la lista filtraba por dueño — ilusión de privacidad).

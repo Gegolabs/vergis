@@ -2,7 +2,7 @@
 
 **Frente:** #113 (épica de roadmap, ítem «Open-core — definir el corte entre núcleo abierto y lo que no lo es»)
 **Horizonte:** largo plazo — arquitectura decidida + primer hito ejecutable (regla 5 del plan del cluster)
-**Naturaleza:** diseño de PRODUCTO tanto como de código. Toda decisión de negocio va sellada `[propuesta — revocable por César]`.
+**Naturaleza:** diseño de PRODUCTO tanto como de código. Toda decisión de negocio fue sometida y resuelta el 2026-08-08: D1–D5 aprobadas por César; D6 (marca) diferida — queda en `TODO.md`.
 **Aviso de competencia:** este documento razona sobre licencias de software. Su autor es diseñador, no abogado; cada afirmación jurídica lleva marcada dónde termina la certeza. Nada aquí es asesoría legal — antes de firmar un contrato comercial o aceptar el primer PR externo, la estructura elegida pasa por un abogado.
 
 ---
@@ -68,7 +68,7 @@ Más `server/` (~9.100 líneas en `server/*.ts`, `wc -l`): serving RLS multi-PI,
 
 ## 2 · Decisiones selladas
 
-### D1 · El criterio del corte: dos tests positivos y uno negativo `[propuesta — revocable por César]`
+### D1 · El criterio del corte: dos tests positivos y uno negativo `[aprobada por César · 2026-08-08]`
 
 **Propuesta.** Una pieza es **núcleo abierto** si pasa cualquiera de los dos tests positivos; es **comercializable** solo si además no cae en el test negativo:
 
@@ -86,7 +86,7 @@ Más `server/` (~9.100 líneas en `server/*.ts`, `wc -l`): serving RLS multi-PI,
 
 **Alternativa descartada:** criterio único «lo que crea adopción es abierto, lo que monetiza es cerrado». Descartada porque es circular (todo monetiza en potencia) y sin los vetos 1-2 degenera en crippleware al primer trimestre malo.
 
-### D2 · El mapa pieza a pieza `[propuesta — revocable por César]`
+### D2 · El mapa pieza a pieza `[aprobada por César · 2026-08-08]`
 
 | Pieza (ancla) | Veredicto | Test que decide | Racional de la frontera |
 |---|---|---|---|
@@ -107,7 +107,7 @@ Más `server/` (~9.100 líneas en `server/*.ts`, `wc -l`): serving RLS multi-PI,
 
 **Alternativa descartada (mapa):** cerrar `server/` dejando abiertos solo los paquetes (modelo «SDK abierto, producto cerrado»). Descartada: rompe el test 2 y la promesa publicada, y el server es donde vive el riel «no hay camino de servir sin RLS» (`README.md:31`) — exactamente lo que un auditor quiere leer.
 
-### D3 · Miranda queda abierta `[propuesta — revocable por César]`
+### D3 · Miranda queda abierta `[aprobada por César · 2026-08-08]`
 
 Miranda es la decisión de verdad contestable — es la feature «wow», la más cara de construir, y la que un competidor copiaría primero. Se sella **abierta**, por cuatro razones:
 
@@ -118,7 +118,7 @@ Miranda es la decisión de verdad contestable — es la feature «wow», la más
 
 **Alternativa descartada:** Miranda comercial (o «community limitada a N specs/mes»). Racional del descarte además de lo anterior: un límite de uso en código AGPL es removible por cualquiera (§D4, opción c), así que solo funcionaría cerrando el paquete — y eso choca con la razón 1. **Lo que sí queda libre para monetizar** sin tocar este sello: rúbricas/catálogos curados por Gegolabs, tuning por vertical y la operación de Miranda en instancias hosteadas — todo eso es contenido/servicio de instancia, no código del Producto.
 
-### D4 · Mecánica del corte: monorepo público 100 % AGPL hoy; repo privado para lo comercial cuando exista `[propuesta — revocable por César]`
+### D4 · Mecánica del corte: monorepo público 100 % AGPL hoy; repo privado para lo comercial cuando exista `[aprobada por César · 2026-08-08]`
 
 Las tres mecánicas, pesadas contra el CI/release real (§1.4):
 
@@ -132,7 +132,7 @@ Las tres mecánicas, pesadas contra el CI/release real (§1.4):
 
 **Consecuencia operativa hoy:** ninguna. El corte no exige mover un archivo, cambiar el CI ni partir el bundle. Lo único que exige es **escribirse** (H1) para que las piezas futuras nazcan del lado correcto.
 
-### D5 · Compatibilidad con la licencia vigente — y la ventana que se cierra sola `[propuesta — revocable por César]`
+### D5 · Compatibilidad con la licencia vigente — y la ventana que se cierra sola `[aprobada por César · 2026-08-08]`
 
 **¿La AGPL-3.0-or-later es compatible con el corte propuesto?** Sí, y es la licencia correcta para él:
 
@@ -142,7 +142,7 @@ Las tres mecánicas, pesadas contra el CI/release real (§1.4):
   - **Mecanismo propuesto:** `CONTRIBUTING.md` con **DCO (sign-off) + cláusula de licencia de contribución** que otorga a Gegolabs derecho de relicenciar lo contribuido (un CLA ligero inline, no un formulario aparte — fricción mínima, ventana preservada). **Alternativa descartada:** DCO solo — preserva la limpieza del inbound pero NO habilita relicenciar; la descartamos justamente porque cierra la ventana que queremos mantener abierta. *(La redacción exacta de la cláusula es trabajo de abogado — aquí se sella la existencia del mecanismo, no su texto.)*
 - **Qué NO se propone:** cambiar de licencia (SSPL, BSL, fair-source). La AGPL ya está publicada, el foso que da es suficiente para el tamaño actual del riesgo (cero competidores hosteando Vergis), y cada uno de esos cambios cobra un precio reputacional que hoy no compra nada. Ver §Destranque E3 para el evento que reabriría la pregunta.
 
-### D6 · Identidad de marca como segundo foso `[propuesta — revocable por César]`
+### D6 · Identidad de marca como segundo foso `[diferida por César · 2026-08-08 — la decidirá después; registrada en TODO.md]`
 
 La licencia protege el código; **la marca protege el nombre**, y en open-core el nombre es lo único que un fork no se puede llevar (Grafana puede forkearse; llamarse Grafana, no). Propuesta mínima: decidir conscientemente (César) si registrar «Vergis» (y eventualmente «Custos», «Miranda» como sub-marcas) como marca — el registro temprano es barato y su ausencia es irreversible si otro lo hace primero. No se diseña aquí una política de trademark; solo se sella que **la pregunta es parte del corte open-core** y queda en la mesa de César. *(Conjetura declarada: no verifiqué el estado registral de «Vergis» en ningún registro de marcas.)*
 
