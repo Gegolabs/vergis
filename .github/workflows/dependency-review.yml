@@ -1,0 +1,22 @@
+name: dependency-review
+
+on:
+  pull_request:
+    branches: [main]
+
+# Mínimo privilegio: la action solo lee el diff de dependencias del PR.
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
