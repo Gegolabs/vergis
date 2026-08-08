@@ -6,11 +6,13 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Operación / despliegue
 
-- **Lo mergeado hoy sigue SIN desplegar** — `main` (`6cc0bd7`) lleva `/contrato` (#141) y la
-  paralelización de la verificación fabric (#140) más los fixes de NUL y lockfile; la instancia
-  A.R.B.O.L. corre 0.14.0. La fila del deploy 0.14.0 en `TODO.md` está cerrada y **nada registra
-  este hand-off**. Producción es gated (Ley WW Norma 5): requiere autorización de César, y el
-  runbook es la skill `mira-ops`. CI verde y la imagen ghcr lista. `reg 2026-08-07`
+- **El delta sin desplegar creció** — `main` (`cf375a4`) lleva, además de lo del 07 (`/contrato` #141,
+  paralelización fabric #140, fixes NUL/lockfile), los 4 PRs de la tanda 005 del 08: **guard de
+  pertenencia de Miranda (#142 — fix de seguridad)**, delta N2 del contrato (#143), H0 de canales
+  (#144) y preview RLS con roster (#145). La instancia A.R.B.O.L. corre 0.14.0. Producción es gated
+  (Norma 5): requiere autorización de César; runbook = skill `mira-ops`. Dos verificaciones quedan
+  esperando ese deploy: el smoke del journal N2 (siembra en el 1º, delta en el 2º — D6) y la preview
+  impersonada contra motor vivo (conjetura declarada del PR #145). `reg 2026-08-07 · act 2026-08-08`
 - **`CHANGELOG.md` sin cortar** — termina en 0.14.0; lo mergeado hoy no tiene entrada ni tag. El
   corte de versión es decisión de César (precedente: D-05 del 2026-08-06). `reg 2026-08-07`
 - **`VERGIS_CSRF_SECRET` no definido en PROD ni en QA** — el server genera uno aleatorio al arrancar
@@ -42,19 +44,6 @@ la promoción PENDINGS→TODO se pide, no se toma.
   misma convención `slug--fecha[--filtrado]` implementada dos veces. Unificar. `reg 2026-08-06`
 - **`import type { TableColumn }` sin uso** en `render-csv-piece.ts` (preexistente a #61, no
   introducido por él). `reg 2026-08-06`
-- **Miranda: CINCO rutas sin check de pertenencia de sesión** (no dos — ampliado por re-revisión
-  Fable 2026-08-08, que midió la superficie completa de `tryHandle`): además de `handleMessage`
-  (`miranda.ts:236`) y `handlePreview` (`:286`), tampoco verifican dueño `sessionPage`
-  (`GET /miranda/s/:id`, `:320` — expone transcript completo, intent, QC y draft; ignora su
-  parámetro `_email`), `validate-intent` (`:203` — avanza el estado ajeno) y **`publish`** (`:221` —
-  publica el draft ajeno como PI servido; `publishSpec` no verifica autor). Agravante: `listPage` SÍ
-  filtra por dueño — la lista se ve privada mientras la URL directa se la salta. La severidad
-  registrada el 07 («la estructura del draft sí» fuga) subestimaba: fuga el transcript y la acción
-  de publicar. **En ejecución**: diseño completo en `work/005-…/01-diseno-pertenencia-…`, frente F1
-  del plan 005. `reg 2026-08-07 · ampliado 2026-08-08`
-- **`MIRANDA_VALIDATE_CAPS` promete `send-email`/`send-slack` que NO existen** (`serve-rls.ts:1467`,
-  única aparición en el repo): Miranda valida OK drafts que serving rechaza con
-  `channel-capability-not-catalogued`. Fix de ~1 línea + test = hito H0 del diseño 004/08. `reg 2026-08-07`
 - **Gate token comparado con `!==`, no constant-time** (`server/routes.ts:77`; el CSRF sí usa
   `constantTimeEqual`). Fix de una línea = D6 del diseño 004/10. `reg 2026-08-07`
 - **`Dockerfile` omite el manifiesto de `packages/miranda`** en sus dos stages (funciona porque el

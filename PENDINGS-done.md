@@ -6,6 +6,15 @@ cerrar.
 
 ## Cerradas con veredicto
 
+- **Miranda: CINCO rutas sin check de pertenencia de sesión** (reg 2026-08-07 como 2 rutas,
+  ampliado 2026-08-08 a 5 por re-revisión: `sessionPage` exponía el transcript completo y
+  `publish` permitía publicar el draft ajeno; la lista filtraba por dueño — ilusión de privacidad).
+  **Cerrado 2026-08-08:** guard `dueño-o-admin` central en las 5 rutas — PR #142 mergeado
+  (`dbbc4ba`), +24 tests con experimento de refutación. Diseño `work/005-…/01-…`; semántica D-08.
+- **`MIRANDA_VALIDATE_CAPS` prometía `send-email`/`send-slack` inexistentes** (reg 2026-08-07).
+  **Cerrado 2026-08-08:** hito H0 de #113 — PR #144 mergeado (`e799b7a`); la lista vive en el
+  builder puro `mirandaValidateCaps` y el experimento confirmó el rechazo
+  `channel-capability-not-catalogued` con caso de control. Cero apariciones en `server/`.
 - **`TODO.md:16` rancio** — declaraba «HMAC + época de 4h» en `server/annotations.ts`, archivo
   retirado con la capa de notas (vergis#84); el único `createHmac` vigente es el CSRF de
   `server/ui.ts:136`, sin época.
