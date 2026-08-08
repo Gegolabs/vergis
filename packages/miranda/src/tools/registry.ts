@@ -126,7 +126,12 @@ const ENTRIES: ToolEntry[] = [
     fn: updateIntentSummary,
   },
   {
-    def: { name: 'render_preview', description: 'Registra el último draft como preview efímera servida por el riel RLS real y devuelve su URL.', input_schema: OBJ() },
+    def: {
+      name: 'render_preview',
+      description:
+        'Registra el último draft como preview efímera servida por el riel RLS real y devuelve su URL. Si la instancia declaró identidades inspeccionables, devuelve también una URL por etiqueta (`identities`) y la del comparador lado a lado (`compare_url`): ofrécelas para verificar que la RLS hace lo que la política dice.',
+      input_schema: OBJ(),
+    },
     fn: renderPreview,
   },
   {
