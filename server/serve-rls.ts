@@ -58,9 +58,9 @@ import { resolve, join, dirname } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
+import { AppendOnlyLog, withResultCache, DEFAULT_GATE_MAPPING, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
 import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
-import { createMiranda, mirandaValidateCaps, type MirandaServerDeps } from './miranda'
+import { createMiranda, mirandaValidateCaps, previewIdentityFor, type MirandaServerDeps } from './miranda'
 import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
   bootstrapClickHouse,
@@ -128,7 +128,7 @@ import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
-import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
+import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
 import { createContractRegistry, createContractHandler } from './contract'
 import { createContractJournal } from './contract-delta'
 import { avatarMenu, csrfFactory } from './ui'
@@ -845,6 +845,11 @@ try {
 // (VERGIS_MASTER_DATA) o admins semilla (VERGIS_ADMIN_SEED). El store de data maestra es Fabric en
 // engine=fabric (la fuente única que el PI lee por JOIN) y SQLite embebido en local/clickhouse.
 let admin: AdminHandler | null = null
+/** Seam del log de auditoría administrativa (`admin-audit.log`) para consumidores FUERA del bloque de
+ *  administración, donde el `AppendOnlyLog` es un const local. Abrir un segundo `AppendOnlyLog` sobre
+ *  el mismo archivo partiría la cadena de hashes (seq/prevHash propios), así que se expone el append
+ *  del ÚNICO log. Null si la administración no arrancó: quien lo use debe tolerar su ausencia. */
+let auditAppend: ((e: LogEventInput) => void) | null = null
 const ADMIN_SEED = (process.env['VERGIS_ADMIN_SEED'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 const OUT = (process.env['VERGIS_OUT'] ?? tmpdir()).replace(/\/$/, '')
 /** Store de gobierno (SQLite): una sola expresión de la ruta para todos sus consumidores. */
@@ -926,6 +931,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Audit log LONGEVO (vive todo el proceso): modo file-only (retain:false) — append() no acumula
     // en RAM (crecía sin cota, una entrada por evento admin); la fuente de verdad es el archivo.
     const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`, undefined, { retain: false })
+    auditAppend = (e) => auditLog.append(e)
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
@@ -1446,6 +1452,21 @@ if (config.miranda.enabled) {
         return []
       }
     })()
+    // Roster de identidades inspeccionables en preview (#110·1, D1) — config de instancia. Sin la env
+    // NO existe la feature: ni `?as=`, ni links, ni campos nuevos en la tool (superficie cero). Con la
+    // env, un roster ilegible o inválido ABORTA el arranque (el catch de abajo re-lanza): un roster a
+    // medias haría «verificar la RLS» sobre una ficción.
+    const previewRoster: PreviewIdentity[] = (() => {
+      const p = config.miranda.previewIdentitiesPath
+      if (!p) return []
+      let raw: string
+      try {
+        raw = readFileSync(resolve(p), 'utf8')
+      } catch (e) {
+        throw new Error(`MIRANDA_PREVIEW_IDENTITIES apunta a un roster ilegible (${resolve(p)}): ${e instanceof Error ? e.message : String(e)}`)
+      }
+      return parsePreviewIdentities(raw)
+    })()
     // Schema del DSL (para validar drafts) — mismos candidatos que runSpec.
     const mirandaSchema = (() => {
       for (const c of [resolve(dirname(fileURLToPath(import.meta.url)), '../schema/mira-spec.schema.json'), resolve(process.cwd(), 'schema/mira-spec.schema.json')]) {
@@ -1476,6 +1497,31 @@ if (config.miranda.enabled) {
     // Identidad simplificada de la probe (Fase 1: audiencia interna, dominios grant:all). TODO Fase 2:
     // ligar la probe a la identidad autoritativa del autor (claims), como el serving.
     const probeIdentityOf = (email: string | undefined): IdentityContext => ({ agent: 'miranda-probe', user: email })
+    /** UN solo riel de render de preview: el draft se escribe a un tmp y pasa por `runSpec`. Lo único
+     *  que varía entre «con tu RLS» y «como <etiqueta>» es la `identity` — mismas capabilities, mismo
+     *  motor, misma RLS data-anchored. */
+    const renderDraftWith = async (draftYaml: string, identity: IdentityContext): Promise<string> => {
+      const tmp = join(OUT, `.miranda-preview-${randomBytes(8).toString('hex')}.yaml`)
+      writeFileSync(tmp, draftYaml)
+      try {
+        const out = await runSpec({
+          specPath: tmp,
+          identity,
+          baseDir: OUT,
+          registerStarters: false,
+          extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
+          interactiveMaxRows: INTERACTIVE_MAX_ROWS,
+        })
+        if (!out.ok) throw new Error(out.fallback?.reason ?? 'la preview no renderizó')
+        return out.html ?? ''
+      } finally {
+        try {
+          unlinkSync(tmp)
+        } catch {
+          /* noop */
+        }
+      }
+    }
 
     const mirandaDeps: MirandaServerDeps = {
       gov: govForMiranda,
@@ -1525,28 +1571,21 @@ if (config.miranda.enabled) {
         if (!SPECS_DIR) throw new Error('Miranda requiere VERGIS_SPECS_DIR para publicar (no hay directorio de specs).')
         writeFileSync(join(resolve(SPECS_DIR), filename), content)
       },
-      renderPreviewHtml: async (draftYaml, headers) => {
-        const tmp = join(OUT, `.miranda-preview-${randomBytes(8).toString('hex')}.yaml`)
-        writeFileSync(tmp, draftYaml)
-        try {
-          const out = await runSpec({
-            specPath: tmp,
-            identity: identityFor(headers as GateHeaders),
-            baseDir: OUT,
-            registerStarters: false,
-            extraCapabilities: [servingCap, renderHtmlPiece, renderCsvPiece, publicarArtefacto],
-            interactiveMaxRows: INTERACTIVE_MAX_ROWS,
-          })
-          if (!out.ok) throw new Error(out.fallback?.reason ?? 'la preview no renderizó')
-          return out.html ?? ''
-        } finally {
-          try {
-            unlinkSync(tmp)
-          } catch {
-            /* noop */
+      renderPreviewHtml: async (draftYaml, headers) => renderDraftWith(draftYaml, identityFor(headers as GateHeaders)),
+      // Roster vacío ⇒ el dep NO se cablea: la ruta `?as=` y los links quedan invisibles (D1).
+      previewIdentities: previewRoster.length ? previewRoster.map((i) => ({ label: i.label, user: i.user, claims: i.claims })) : undefined,
+      renderPreviewHtmlAs: previewRoster.length
+        ? async (draftYaml, label) => {
+            const it = previewRoster.find((i) => i.label === label)
+            if (!it) throw new Error(`Identidad de preview no declarada: '${label}'.`)
+            // El IdentityContext del roster TAL CUAL — sin enriquecer desde IdentityMap. `agent` es el
+            // mismo que produce el gate en un request real (`DEFAULT_GATE_MAPPING.agent`), para que el
+            // render impersonado sea idéntico a lo que esa identidad vería de verdad.
+            return renderDraftWith(draftYaml, previewIdentityFor(it, DEFAULT_GATE_MAPPING.agent ?? 'vergis'))
           }
-        }
-      },
+        : undefined,
+      // D4: cada render impersonado se audita al log administrativo (el actor real siempre queda).
+      audit: (e) => auditAppend?.(e as LogEventInput),
       secret: CSRF_SECRET,
       brandTitle: INDEX_TITLE,
       announce: config.miranda.announceWebhook
