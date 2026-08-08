@@ -1244,28 +1244,32 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     }
     // Reporte periódico de lo ejecutado (issue #102): latido incondicional — se envía SIEMPRE a la
     // hora configurada, con novedades o sin ellas. Un día sin correo = señal de problema, por diseño.
-    // Independiente del lazo de frescura y del motor: se gatea SOLO por `report:` declarado.
+    // Independiente del lazo de frescura y del motor.
+    //
+    // El LAZO se arma siempre que hay bloque de gobierno (issue #138·2): el interval de 60 s cuesta
+    // nada y la cadencia se consulta POR TICK, así que `report:` puede aparecer, cambiar de hora o
+    // desaparecer en caliente. Gatearlo por `report:` al boot obligaba a un restart para encenderlo.
     const reportCfg = INSTANCE_CFG.notify.report
-    if (reportCfg) {
-      const tzReporte = reportCfg.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-      const reportLoop = createReportLoop(
-        {
-          store: govStore,
-          inputs: freshnessInputs,
-          domains: domainsCfg.map((d) => ({ id: d.id, label: d.label })),
-          sinks: reportSinks,
-          audit: (e) => auditLog.append(e as LogEventInput),
-          log: (l) => console.log(`[vergis-rls] ${l}`),
-        },
-        { schedule: reportCfg, timezone: tzReporte, baseUrl: INSTANCE_CFG.publicUrl, freshnessPollMs, engineCabled: !!fabricWiring.engine },
-      )
-      setInterval(() => void reportLoop.tick(), REPORT_CHECK_MS).unref?.()
-      setTimeout(() => void reportLoop.tick(), 15_000).unref?.() // catch-up al arrancar (ventana perdida)
-      console.log(
-        `[vergis-rls] reporte periódico activo (${reportCfg.every === 'weekly' ? `semanal ${reportCfg.weekday ?? 'monday'}` : 'diario'} ` +
-          `a las ${reportCfg.at} ${tzReporte} · ${reportSinks.length} destino(s))`,
-      )
-    }
+    const tzHost = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const reportLoop = createReportLoop(
+      {
+        store: govStore,
+        inputs: freshnessInputs,
+        domains: domainsCfg.map((d) => ({ id: d.id, label: d.label })),
+        sinks: reportSinks, // arreglo VIVO: la recarga lo repuebla in-place
+        audit: (e) => auditLog.append(e as LogEventInput),
+        log: (l) => console.log(`[vergis-rls] ${l}`),
+      },
+      { schedule: () => liveReportSchedule, timezone: tzHost, baseUrl: INSTANCE_CFG.publicUrl, freshnessPollMs, engineCabled: !!fabricWiring.engine },
+    )
+    setInterval(() => void reportLoop.tick(), REPORT_CHECK_MS).unref?.()
+    setTimeout(() => void reportLoop.tick(), 15_000).unref?.() // catch-up al arrancar (ventana perdida)
+    console.log(
+      reportCfg
+        ? `[vergis-rls] reporte periódico activo (${reportCfg.every === 'weekly' ? `semanal ${reportCfg.weekday ?? 'monday'}` : 'diario'} ` +
+            `a las ${reportCfg.at} ${reportCfg.timezone ?? tzHost} · ${reportSinks.length} destino(s))`
+        : '[vergis-rls] reporte periódico en espera: sin `report:` declarado (el lazo está armado; declararlo en el yaml lo enciende sin restart)',
+    )
     admin = createAdmin({
       entities,
       mdStore,
@@ -1864,6 +1868,12 @@ if (NOTIFY_PATH)
     'Un destino de aviso que aparece por recarga se estrena con las transiciones FUTURAS: el estado de dedup vive en el lazo, ' +
       'no en los destinos — no hay replay de alertas ya en curso. VERGIS_PUBLIC_URL y los secretos (passEnv) son env: no pueden ' +
       'aparecer en caliente, y una recarga que los exija se rechaza conservando lo vigente.',
+  )
+if (NOTIFY_PATH)
+  contract.caveat(
+    'Cambiar la HORA del reporte en caliente puede producir UN latido extra el día del cambio: la hora nueva define un ' +
+      'período que bajo la anterior no existía, y el registro de envíos no lo tiene marcado. Coherente con el at-least-once ' +
+      'del lazo — un latido duplicado es inocuo, uno perdido sería una falsa alarma.',
   )
 // …y deja la huella de ESTA versión en el journal (#139 N2). Obligatorio al boot aunque nadie consulte
 // `/contrato` jamás: si solo se persistiera en el GET, una instancia que no consulta no dejaría

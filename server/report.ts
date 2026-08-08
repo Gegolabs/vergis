@@ -413,8 +413,13 @@ export interface ReportLoopDeps {
 }
 
 export interface ReportLoopConfig {
-  schedule: ReportSchedule
-  /** Ya resuelta (schedule.timezone ?? tz del host). */
+  /**
+   * La cadencia se consulta POR TICK (issue #138·2), no se captura al construir: `null` = reporte
+   * apagado (el tick retorna temprano). Así `report:` puede aparecer, cambiar de hora o desaparecer
+   * en caliente sin reconstruir el lazo — que es lo que exigiría un restart.
+   */
+  schedule: () => ReportSchedule | null
+  /** Fallback de zona horaria cuando el schedule vigente no declara la suya (tz del host). */
   timezone: string
   baseUrl: string
   freshnessPollMs: number
@@ -425,7 +430,6 @@ const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export function createReportLoop(deps: ReportLoopDeps, cfg: ReportLoopConfig): { tick(): Promise<void> } {
   const now = deps.now ?? Date.now
-  const tz = cfg.timezone
   let lastSent: ReportLastSent | null = null
   let hydrated = false
   /** Último intento fallido en TODOS los destinos (en memoria: los intentos no se persisten). */
@@ -440,22 +444,28 @@ export function createReportLoop(deps: ReportLoopDeps, cfg: ReportLoopConfig): {
       }
       inFlight = true
       try {
+        // La cadencia VIGENTE, resuelta acá y no en la construcción: sin ella el tick es un no-op
+        // (reporte apagado). El interval de 60 s cuesta nada, así que el lazo se arma siempre y es
+        // esta consulta —no un re-cableado— la que enciende o apaga el reporte.
+        const schedule = cfg.schedule()
+        if (!schedule) return
+        const tz = schedule.timezone ?? cfg.timezone
         if (!hydrated) {
           lastSent = parseReportLastSent(await deps.store.getSetting(REPORT_LAST_SENT_KEY))
           hydrated = true
         }
-        const dueMs = lastDueAt(now(), cfg.schedule, tz)
+        const dueMs = lastDueAt(now(), schedule, tz)
         const periodKey = periodKeyOf(dueMs, tz)
         if (lastSent?.periodKey === periodKey) return // ya enviado: el caso sano no loguea
         if (lastAttemptMs != null && now() - lastAttemptMs < REPORT_RETRY_MS) return
 
         // Ventana: del due anterior a este due; EXTENDIDA hacia atrás si hay envíos perdidos.
-        let winStartMs = prevDueBefore(dueMs, cfg.schedule, tz)
+        let winStartMs = prevDueBefore(dueMs, schedule, tz)
         let periodos = 1
         const desdeUltimo = lastSent?.dueAt ? Date.parse(lastSent.dueAt) : NaN
         if (Number.isFinite(desdeUltimo)) {
           while (winStartMs > desdeUltimo && periodos < REPORT_MAX_CATCHUP_PERIODS) {
-            winStartMs = prevDueBefore(winStartMs, cfg.schedule, tz)
+            winStartMs = prevDueBefore(winStartMs, schedule, tz)
             periodos++
           }
         }
@@ -464,7 +474,7 @@ export function createReportLoop(deps: ReportLoopDeps, cfg: ReportLoopConfig): {
           fromIso: new Date(winStartMs).toISOString(),
           toIso: new Date(dueMs).toISOString(),
           timezone: tz,
-          every: cfg.schedule.every,
+          every: schedule.every,
           periodos,
           primero: lastSent == null,
         }
