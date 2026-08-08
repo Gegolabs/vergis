@@ -70,6 +70,42 @@ function loadOne<T>(env: EnvLike, name: string, parse: (doc: unknown) => T, read
 }
 
 /**
+ * Un slice RECARGABLE de la config de instancia: el env que lo declara y el parser que lo valida
+ * (issue #138·2). El boot y la recarga en caliente consumen LA MISMA entrada de esta tabla — divergir
+ * es imposible por construcción, que es el riesgo real de tener dos caminos de carga.
+ */
+export interface InstanceSlice<T> {
+  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES'
+  parse: (doc: unknown) => T
+}
+
+/**
+ * Los slices que se recargan sin recrear el proceso (fase 1 de #138·2: avisos, dueños de PI y
+ * registro de fuentes). Fase 3 añade `VERGIS_GROUPS` acá y en el watch; el resto de la config de
+ * instancia es irreductiblemente de arranque (arrastra esquema y superficies cableadas).
+ */
+export const RELOADABLE_SLICES: {
+  notify: InstanceSlice<NotifyConfig>
+  piOwners: InstanceSlice<Record<string, string>>
+  sources: InstanceSlice<SourcesConfig>
+} = {
+  notify: { env: 'VERGIS_NOTIFY', parse: parseNotifyConfig },
+  piOwners: { env: 'VERGIS_PI_OWNERS', parse: parsePiOwnersConfig },
+  sources: { env: 'VERGIS_SOURCES', parse: parseSourcesConfig },
+}
+
+/**
+ * Re-parsea UN slice desde disco. `undefined` si su env no está declarado (la config no se usa).
+ * Cualquier error del parser sale envuelto con el ENV y la ruta absoluta, igual que en el boot.
+ *
+ * PURA respecto del proceso: no swapea nada, no toca estado vivo. Quien la llama decide qué hacer
+ * con el resultado — así el validate-before-swap de la recarga es del orquestador, no de acá.
+ */
+export function loadSlice<T>(env: EnvLike, slice: InstanceSlice<T>, readFile: ReadFile = defaultReadFile): T | undefined {
+  return loadOne(env, slice.env, slice.parse, readFile)
+}
+
+/**
  * Valida TODA config declarada por env, incondicionalmente (un `domains.yaml` declarado se valida
  * aunque la instancia no tenga data maestra ni admins). Lanza al primer archivo roto: el throw es
  * top-level en `serve-rls.ts` y tumba el proceso.
@@ -79,9 +115,11 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const groupSeeds = loadOne(env, 'VERGIS_GROUPS', parseGroupsConfig, readFile)
   const domains = loadOne(env, 'VERGIS_DOMAINS', parseDomainsConfig, readFile)
   const intakeSlots = loadOne(env, 'VERGIS_INTAKE', parseIntakeConfig, readFile)
-  const sourceReg = loadOne(env, 'VERGIS_SOURCES', parseSourcesConfig, readFile)
-  const piOwners = loadOne(env, 'VERGIS_PI_OWNERS', parsePiOwnersConfig, readFile)
-  const notify = loadOne(env, 'VERGIS_NOTIFY', parseNotifyConfig, readFile)
+  // Los tres slices recargables se cargan por la MISMA tabla que usa la recarga (arriba): el boot no
+  // puede parsearlos distinto de como los parseará el watch.
+  const sourceReg = loadSlice(env, RELOADABLE_SLICES.sources, readFile)
+  const piOwners = loadSlice(env, RELOADABLE_SLICES.piOwners, readFile)
+  const notify = loadSlice(env, RELOADABLE_SLICES.notify, readFile)
 
   // Los avisos llevan enlaces ABSOLUTOS a la vista de detalle (issue #100): sin URL pública, un
   // destino declarado produciría avisos sin dónde mirar. Se rompe el arranque —donde el operador está
