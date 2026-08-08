@@ -1,0 +1,490 @@
+/**
+ * DELTA DEL CONTRATO OPERATIVO ENTRE VERSIONES (issue #139, Nivel 2) — «¿qué cambió en el contrato
+ * operativo respecto de la versión que corría antes EN ESTA INSTANCIA?».
+ *
+ * El delta se COMPUTA (D1): es el diff estructural de dos proyecciones del contrato — la de la versión
+ * que corre y la persistida de la última versión distinta que corrió acá. NO hay changelog del contrato
+ * mantenido a mano: un changelog autorado envejece por el mismo mecanismo que el manual del operador
+ * (alguien tiene que acordarse, y la entrada que falta no falla nunca). La autoría entra por el único
+ * lugar donde no puede envejecer: el código que registra el contrato.
+ *
+ * Proyección diffable (D2): SOLO lo estable entre boots de una versión. Quedan FUERA `startedAt`,
+ * `reloads`, `artifacts`, `env.unknown` y `watches[].paths` — esos son ruido de instancia/runtime, y los
+ * paths además son VALORES de env. La proyección lleva solo NOMBRES de env y textos autorados en código.
+ *
+ * Fail-safe absoluto, heredado del N1: el journal JAMÁS lanza y JAMÁS afecta el serving. Todo error
+ * interno se traga con `console.error('[contrato] …')`; el archivo es estado derivable — perderlo cuesta
+ * un «primer-registro», jamás datos.
+ */
+import { createHash } from 'node:crypto'
+import { mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from 'node:fs'
+import { join } from 'node:path'
+import type { ContractSnapshot, SignalEntry } from './contract'
+
+/** Proyección diffable del contrato (D2): SOLO lo estable entre boots de una versión. */
+export interface ContractProjection {
+  /** Watches sin `paths` (son valores de env de la instancia); `envs` ordenados; watches por `reloads`. */
+  watches: { envs: string[]; reloads: string }[]
+  /** Ordenados por `signal`. */
+  signals: SignalEntry[]
+  /** Sin `unknown` (typos/deprecados de ESTA instancia, no de la versión); ordenados. */
+  env: { bootOnly: string[]; reloadableContent: string[] }
+  /** Ordenados. */
+  caveats: string[]
+}
+
+export interface JournalEntry {
+  version: string
+  engine: string
+  hotReload: boolean
+  firstBootAt: string
+  lastBootAt: string
+  boots: number
+  projectionSha256: string
+  projection: ContractProjection
+}
+
+export type EnvClass = 'bootOnly' | 'reloadableContent'
+
+export interface DeltaChanges {
+  watches: {
+    added: ContractProjection['watches']
+    removed: ContractProjection['watches']
+    modified: { before: ContractProjection['watches'][0]; after: ContractProjection['watches'][0] }[]
+  }
+  signals: {
+    added: SignalEntry[]
+    removed: SignalEntry[]
+    modified: { before: SignalEntry; after: SignalEntry }[]
+  }
+  env: {
+    /** bootOnly → reloadableContent: YA NO exige restart. */
+    nowReloadable: string[]
+    /** reloadableContent → bootOnly: AHORA exige restart. */
+    nowBootOnly: string[]
+    added: { key: string; class: EnvClass }[]
+    removed: { key: string; class: EnvClass }[]
+  }
+  caveats: { added: string[]; removed: string[] }
+}
+
+export type DeltaReason = 'primer-registro' | 'version-desconocida' | 'journal-no-disponible'
+
+export interface ContractDelta {
+  current: { version: string | null }
+  reference: { version: string; lastBootAt: string; engine: string; hotReload: boolean } | null
+  reason: DeltaReason | null
+  /** Aviso: parte del delta puede deberse a la config de la instancia, no a la versión (D5). */
+  contextChanged: Partial<Record<'engine' | 'hotReload', { reference: string | boolean; current: string | boolean }>> | null
+  unchanged: boolean
+  changes: DeltaChanges | null
+}
+
+/** Entradas de journal conservadas (las más recientes por `lastBootAt`; la corriente jamás se expulsa). */
+export const JOURNAL_RETENTION = 30
+
+/** Nombre del subdirectorio y archivo del journal dentro de `<outDir>`. */
+export const JOURNAL_SUBDIR = 'contrato'
+export const JOURNAL_FILE = 'journal.json'
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+const uniqSorted = (xs: string[]): string[] => [...new Set(xs)].sort()
+
+/** Comparación estable de strings (sin depender del locale del contenedor). */
+const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+/** Lo único del snapshot que la proyección mira (el resto es ruido de instancia/runtime, D2). */
+type Projectable = Pick<ContractSnapshot, 'watches' | 'signals' | 'env' | 'caveats'>
+
+/** Proyección normalizada + determinista del snapshot (D2). Pura. */
+export function projectContract(s: Projectable): ContractProjection {
+  const watchKey = (w: { envs: string[]; reloads: string }): string => `${w.reloads}\u0000${w.envs.join(',')}`
+  const watchesMap = new Map<string, { envs: string[]; reloads: string }>()
+  for (const w of s.watches) {
+    const proj = { envs: uniqSorted(w.envs), reloads: w.reloads }
+    watchesMap.set(watchKey(proj), proj)
+  }
+  const watches = [...watchesMap.values()].sort((a, b) => cmp(watchKey(a), watchKey(b)))
+
+  const signalsMap = new Map<string, SignalEntry>()
+  for (const sig of s.signals) signalsMap.set(`${sig.signal}\u0000${sig.action}`, { signal: sig.signal, action: sig.action })
+  const signals = [...signalsMap.values()].sort((a, b) => cmp(a.signal, b.signal) || cmp(a.action, b.action))
+
+  return {
+    watches,
+    signals,
+    env: { bootOnly: uniqSorted(s.env.bootOnly), reloadableContent: uniqSorted(s.env.reloadableContent) },
+    caveats: uniqSorted(s.caveats),
+  }
+}
+
+/** Serialización canónica de la proyección (claves en orden fijo, arreglos ya normalizados). */
+function canonical(p: ContractProjection): string {
+  return JSON.stringify({
+    watches: p.watches.map((w) => ({ envs: w.envs, reloads: w.reloads })),
+    signals: p.signals.map((s) => ({ signal: s.signal, action: s.action })),
+    env: { bootOnly: p.env.bootOnly, reloadableContent: p.env.reloadableContent },
+    caveats: p.caveats,
+  })
+}
+
+/** sha256 hex de la serialización canónica de la proyección. Pura. */
+export function projectionHash(p: ContractProjection): string {
+  return createHash('sha256').update(canonical(p)).digest('hex')
+}
+
+const sameEnvs = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i])
+
+/**
+ * Diff estructural (D5, D7). Pura. `changes` con conjuntos vacíos ⇒ el caller marca `unchanged`.
+ *
+ * Identidad de un watch, en pasadas deterministas: igualdad exacta → sin cambio; mismo conjunto `envs`
+ * → `modified` (cambió la descripción de la recarga); mismo string `reloads` → `modified` (cambiaron
+ * los envs que lo configuran); resto → added/removed.
+ */
+export function diffProjections(reference: ContractProjection, current: ContractProjection): DeltaChanges {
+  // ── Watches: tres pasadas ────────────────────────────────────────────────────────────────────────
+  const refW = reference.watches.map((w) => ({ ...w, envs: [...w.envs] }))
+  const curW = current.watches.map((w) => ({ ...w, envs: [...w.envs] }))
+  const refLeft = refW.map((w, i) => ({ w, i, taken: false }))
+  const curLeft = curW.map((w, i) => ({ w, i, taken: false }))
+  const modifiedW: { before: ContractProjection['watches'][0]; after: ContractProjection['watches'][0] }[] = []
+
+  // 1) igualdad exacta
+  for (const r of refLeft) {
+    const hit = curLeft.find((c) => !c.taken && c.w.reloads === r.w.reloads && sameEnvs(c.w.envs, r.w.envs))
+    if (hit) {
+      r.taken = true
+      hit.taken = true
+    }
+  }
+  // 2) mismo conjunto de envs (cambió el texto de `reloads`)
+  for (const r of refLeft) {
+    if (r.taken) continue
+    const hit = curLeft.find((c) => !c.taken && sameEnvs(c.w.envs, r.w.envs))
+    if (hit) {
+      r.taken = true
+      hit.taken = true
+      modifiedW.push({ before: r.w, after: hit.w })
+    }
+  }
+  // 3) mismo string `reloads` (cambiaron los envs que configuran el watch)
+  for (const r of refLeft) {
+    if (r.taken) continue
+    const hit = curLeft.find((c) => !c.taken && c.w.reloads === r.w.reloads)
+    if (hit) {
+      r.taken = true
+      hit.taken = true
+      modifiedW.push({ before: r.w, after: hit.w })
+    }
+  }
+
+  // ── Signals: clave natural `signal` ──────────────────────────────────────────────────────────────
+  const refS = new Map(reference.signals.map((s) => [s.signal, s]))
+  const curS = new Map(current.signals.map((s) => [s.signal, s]))
+  const signalsAdded: SignalEntry[] = []
+  const signalsRemoved: SignalEntry[] = []
+  const signalsModified: { before: SignalEntry; after: SignalEntry }[] = []
+  for (const [sig, s] of curS) {
+    const prev = refS.get(sig)
+    if (!prev) signalsAdded.push(s)
+    else if (prev.action !== s.action) signalsModified.push({ before: prev, after: s })
+  }
+  for (const [sig, s] of refS) if (!curS.has(sig)) signalsRemoved.push(s)
+
+  // ── Env: la reclasificación es de PRIMERA CLASE (D5) ─────────────────────────────────────────────
+  const refClass = new Map<string, EnvClass>()
+  for (const k of reference.env.bootOnly) refClass.set(k, 'bootOnly')
+  for (const k of reference.env.reloadableContent) refClass.set(k, 'reloadableContent')
+  const curClass = new Map<string, EnvClass>()
+  for (const k of current.env.bootOnly) curClass.set(k, 'bootOnly')
+  for (const k of current.env.reloadableContent) curClass.set(k, 'reloadableContent')
+
+  const nowReloadable: string[] = []
+  const nowBootOnly: string[] = []
+  const envAdded: { key: string; class: EnvClass }[] = []
+  const envRemoved: { key: string; class: EnvClass }[] = []
+  for (const [k, cls] of curClass) {
+    const prev = refClass.get(k)
+    if (prev === undefined) envAdded.push({ key: k, class: cls })
+    else if (prev === cls) continue
+    else if (cls === 'reloadableContent') nowReloadable.push(k)
+    else nowBootOnly.push(k)
+  }
+  for (const [k, cls] of refClass) if (!curClass.has(k)) envRemoved.push({ key: k, class: cls })
+
+  // ── Caveats: igualdad de texto (el texto ES el contrato del caveat) ──────────────────────────────
+  const refC = new Set(reference.caveats)
+  const curC = new Set(current.caveats)
+
+  return {
+    watches: {
+      added: curLeft.filter((c) => !c.taken).map((c) => c.w),
+      removed: refLeft.filter((r) => !r.taken).map((r) => r.w),
+      modified: modifiedW,
+    },
+    signals: {
+      added: signalsAdded.sort((a, b) => cmp(a.signal, b.signal)),
+      removed: signalsRemoved.sort((a, b) => cmp(a.signal, b.signal)),
+      modified: signalsModified.sort((a, b) => cmp(a.before.signal, b.before.signal)),
+    },
+    env: {
+      nowReloadable: nowReloadable.sort(),
+      nowBootOnly: nowBootOnly.sort(),
+      added: envAdded.sort((a, b) => cmp(a.key, b.key)),
+      removed: envRemoved.sort((a, b) => cmp(a.key, b.key)),
+    },
+    caveats: {
+      added: current.caveats.filter((c) => !refC.has(c)),
+      removed: reference.caveats.filter((c) => !curC.has(c)),
+    },
+  }
+}
+
+/** `true` si el diff no encontró ninguna diferencia. */
+export function isEmptyChanges(c: DeltaChanges): boolean {
+  return (
+    c.watches.added.length === 0 &&
+    c.watches.removed.length === 0 &&
+    c.watches.modified.length === 0 &&
+    c.signals.added.length === 0 &&
+    c.signals.removed.length === 0 &&
+    c.signals.modified.length === 0 &&
+    c.env.nowReloadable.length === 0 &&
+    c.env.nowBootOnly.length === 0 &&
+    c.env.added.length === 0 &&
+    c.env.removed.length === 0 &&
+    c.caveats.added.length === 0 &&
+    c.caveats.removed.length === 0
+  )
+}
+
+export interface ContractJournal {
+  /** Merge/append de la observación corriente + persistencia atómica (D3, D4). Con `version: null`
+   *  no escribe. JAMÁS lanza: todo error interno → `console.error('[contrato] …')` y no-op. */
+  observe(snapshot: ContractSnapshot): void
+  /** Delta contra la referencia por recencia (D3) o contra `desde` (D5). Puro sobre el estado en
+   *  memoria; con `desde` no registrado devuelve `null` (el handler arma el 404 con `versions()`). */
+  delta(snapshot: ContractSnapshot, desde?: string): ContractDelta | null
+  /** Versiones registradas en esta instancia (orden lexicográfico estable). */
+  versions(): string[]
+}
+
+/** Merge de dos proyecciones de la MISMA versión y MISMO contexto: unión (D4). */
+function unionProjections(a: ContractProjection, b: ContractProjection): ContractProjection {
+  const watches = [...a.watches, ...b.watches]
+  const signals = [...a.signals, ...b.signals]
+  // Re-aplica la derivación del snapshot sobre la unión: reloadable manda, bootOnly es el resto.
+  const reloadableContent = uniqSorted([...a.env.reloadableContent, ...b.env.reloadableContent])
+  const reloadableSet = new Set(reloadableContent)
+  const bootOnly = uniqSorted([...a.env.bootOnly, ...b.env.bootOnly]).filter((k) => !reloadableSet.has(k))
+  return projectContract({
+    watches: watches.map((w) => ({ ...w, paths: [] })),
+    signals,
+    env: { bootOnly, reloadableContent, unknown: [] },
+    caveats: [...a.caveats, ...b.caveats],
+  })
+}
+
+interface JournalFile {
+  entries: JournalEntry[]
+}
+
+const isProjection = (p: unknown): p is ContractProjection => {
+  if (typeof p !== 'object' || p === null) return false
+  const x = p as Record<string, unknown>
+  return (
+    Array.isArray(x['watches']) &&
+    Array.isArray(x['signals']) &&
+    Array.isArray(x['caveats']) &&
+    typeof x['env'] === 'object' &&
+    x['env'] !== null &&
+    Array.isArray((x['env'] as Record<string, unknown>)['bootOnly']) &&
+    Array.isArray((x['env'] as Record<string, unknown>)['reloadableContent'])
+  )
+}
+
+const isEntry = (e: unknown): e is JournalEntry => {
+  if (typeof e !== 'object' || e === null) return false
+  const x = e as Record<string, unknown>
+  return (
+    typeof x['version'] === 'string' &&
+    typeof x['engine'] === 'string' &&
+    typeof x['hotReload'] === 'boolean' &&
+    typeof x['firstBootAt'] === 'string' &&
+    typeof x['lastBootAt'] === 'string' &&
+    typeof x['boots'] === 'number' &&
+    typeof x['projectionSha256'] === 'string' &&
+    isProjection(x['projection'])
+  )
+}
+
+export function createContractJournal(opts: { dir: string; now?: () => Date }): ContractJournal {
+  const clock = opts.now ?? ((): Date => new Date())
+  const dir = join(opts.dir, JOURNAL_SUBDIR)
+  const file = join(dir, JOURNAL_FILE)
+  let entries: JournalEntry[] = []
+  /** `true` si el journal quedó inutilizable (ilegible por I/O, o no escribible) — D6. */
+  let unavailable = false
+  /** El log de indisponibilidad se emite UNA vez, no en cada GET. */
+  let loggedUnavailable = false
+  /** Versiones ya observadas por ESTE journal (= por este proceso: el journal se crea al boot). La
+   *  primera observación de una versión en la vida del proceso ES el boot (D4·1) y siempre persiste y
+   *  cuenta `boots`; las siguientes son GETs y solo escriben si la huella cambió (D4·2). */
+  const observedThisLife = new Set<string>()
+
+  const markUnavailable = (msg: string): void => {
+    unavailable = true
+    if (!loggedUnavailable) {
+      loggedUnavailable = true
+      console.error(`[contrato] journal no disponible (${file}): ${msg} — el delta se degrada, el snapshot no.`)
+    }
+  }
+
+  // Carga inicial: una sola vez al construir. Corrupto ⇒ se parte de vacío + log (el archivo es estado
+  // derivable y se sobrescribe en la próxima persistencia); ausente ⇒ vacío SIN log (es lo normal).
+  try {
+    const raw = readFileSync(file, 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    const list = (parsed as JournalFile | null)?.entries
+    if (!Array.isArray(list)) throw new Error('el archivo no tiene un arreglo `entries`')
+    entries = list.filter(isEntry)
+    if (entries.length !== list.length) {
+      console.error(`[contrato] journal con ${list.length - entries.length} entrada(s) inválida(s) en ${file} — se descartan.`)
+    }
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException | null)?.code
+    if (code !== 'ENOENT') {
+      entries = []
+      console.error(`[contrato] journal ilegible o corrupto (${file}): ${errMsg(e)} — se parte de journal vacío.`)
+    }
+  }
+
+  /** Escritura atómica (tmp + rename). Solo si tiene éxito se adopta la lista en memoria: un journal
+   *  que no se pudo escribir no debe dejar el proceso creyendo que sí. */
+  const persist = (candidate: JournalEntry[], currentVersion: string): void => {
+    // Cap por recencia; la entrada de la versión corriente jamás se expulsa.
+    const sorted = [...candidate].sort((a, b) => cmp(b.lastBootAt, a.lastBootAt) || cmp(b.version, a.version))
+    let kept = sorted.slice(0, JOURNAL_RETENTION)
+    if (!kept.some((e) => e.version === currentVersion)) {
+      const cur = sorted.find((e) => e.version === currentVersion)
+      if (cur) kept = [cur, ...kept.slice(0, JOURNAL_RETENTION - 1)]
+    }
+    mkdirSync(dir, { recursive: true })
+    const tmp = `${file}.tmp`
+    writeFileSync(tmp, `${JSON.stringify({ entries: kept }, null, 2)}\n`, 'utf8')
+    try {
+      renameSync(tmp, file)
+    } catch (e) {
+      try {
+        unlinkSync(tmp)
+      } catch {
+        /* el tmp huérfano se sobrescribe en la próxima persistencia */
+      }
+      throw e
+    }
+    entries = kept
+  }
+
+  return {
+    observe(snapshot) {
+      try {
+        // `version: null` (ausencia honesta del build): dos builds sin versión serían indistinguibles y
+        // el merge fabricaría una entrada quimera. No se escribe nada.
+        if (snapshot.version == null) return
+        const version = snapshot.version
+        const projection = projectContract(snapshot)
+        const at = clock().toISOString()
+        const isBootObservation = !observedThisLife.has(version)
+        observedThisLife.add(version)
+        const prev = entries.find((e) => e.version === version)
+        let next: JournalEntry
+        let candidate: JournalEntry[]
+        if (!prev) {
+          next = {
+            version,
+            engine: snapshot.engine,
+            hotReload: snapshot.hotReload,
+            firstBootAt: at,
+            lastBootAt: at,
+            boots: 1,
+            projectionSha256: projectionHash(projection),
+            projection,
+          }
+          candidate = [...entries, next]
+        } else {
+          const contextSame = prev.engine === snapshot.engine && prev.hotReload === snapshot.hotReload
+          // Contexto distinto ⇒ REEMPLAZO: unir proyecciones de contextos distintos fabricaría un
+          // contrato que ninguna config produjo (una clave a la vez bootOnly y reloadable).
+          const merged = contextSame ? unionProjections(prev.projection, projection) : projection
+          const sha = projectionHash(merged)
+          // El boot (D4·1) siempre persiste; un GET con huella idéntica no toca disco (D4·2).
+          if (!isBootObservation && contextSame && sha === prev.projectionSha256) return
+          next = {
+            ...prev,
+            engine: snapshot.engine,
+            hotReload: snapshot.hotReload,
+            lastBootAt: isBootObservation ? at : prev.lastBootAt,
+            boots: isBootObservation ? prev.boots + 1 : prev.boots,
+            projectionSha256: sha,
+            projection: merged,
+          }
+          candidate = entries.map((e) => (e.version === version ? next : e))
+        }
+        persist(candidate, version)
+        unavailable = false
+      } catch (e) {
+        markUnavailable(errMsg(e))
+      }
+    },
+
+    delta(snapshot, desde) {
+      const current = { version: snapshot.version }
+      const base: ContractDelta = {
+        current,
+        reference: null,
+        reason: null,
+        contextChanged: null,
+        unchanged: false,
+        changes: null,
+      }
+      try {
+        if (unavailable) return { ...base, reason: 'journal-no-disponible' }
+        if (snapshot.version == null) return { ...base, reason: 'version-desconocida' }
+        const projection = projectContract(snapshot)
+        let ref: JournalEntry | undefined
+        if (desde !== undefined) {
+          ref = entries.find((e) => e.version === desde)
+          if (!ref) return null
+        } else {
+          const candidates = entries.filter((e) => e.version !== snapshot.version)
+          // Referencia por RECENCIA, no por orden semver: «qué corría antes acá» es historia de la
+          // instancia — así un rollback 0.16→0.15 diffea contra 0.16, que es lo que el operador vio.
+          ref = candidates.sort((a, b) => cmp(b.lastBootAt, a.lastBootAt))[0]
+          if (!ref) return { ...base, reason: 'primer-registro' }
+        }
+        const changes = diffProjections(ref.projection, projection)
+        const contextChanged: NonNullable<ContractDelta['contextChanged']> = {}
+        if (ref.engine !== snapshot.engine) contextChanged.engine = { reference: ref.engine, current: snapshot.engine }
+        if (ref.hotReload !== snapshot.hotReload) contextChanged.hotReload = { reference: ref.hotReload, current: snapshot.hotReload }
+        return {
+          current,
+          reference: { version: ref.version, lastBootAt: ref.lastBootAt, engine: ref.engine, hotReload: ref.hotReload },
+          reason: null,
+          contextChanged: Object.keys(contextChanged).length > 0 ? contextChanged : null,
+          unchanged: isEmptyChanges(changes),
+          changes,
+        }
+      } catch (e) {
+        // El delta jamás degrada el snapshot: ante cualquier fallo interno responde su ausencia honesta.
+        console.error(`[contrato] fallo al computar el delta: ${errMsg(e)}`)
+        return { ...base, reason: 'journal-no-disponible' }
+      }
+    },
+
+    versions() {
+      return entries.map((e) => e.version).sort(cmp)
+    },
+  }
+}

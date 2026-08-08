@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { watchPaths } from './hot-reload'
+import type { ContractJournal } from './contract-delta'
 import { VERGIS_VERSION } from '../packages/capabilities/src/version'
 
 /** Un watch instalado: qué envs lo configuran, qué rutas vigila y qué recarga cuando dispara. */
@@ -202,9 +203,14 @@ export function createContractRegistry(opts: {
  * Handler de `GET /contrato` — SOLO ADMINS (D2): el contrato expone rutas del contenedor y nombres de
  * env, superficie de operación y no de consumo. Sin store de gobierno (`isAdmin: null`) responde 403
  * con mensaje claro. Devuelve `true` si atendió la request.
+ *
+ * Nivel 2 (delta entre versiones): la respuesta gana una sección `delta` y admite `?desde=<version>`.
+ * El `observe` del journal va DESPUÉS del gate de rol — un 403 no escribe disco.
  */
 export function createContractHandler(deps: {
   registry: ContractRegistry
+  /** Journal del delta entre versiones (issue #139 N2). Capa de composición: el registry no cambia. */
+  journal: ContractJournal
   isAdmin: ((email: string | undefined) => Promise<boolean>) | null
   /** Identidad de la request (el mismo `identityFor` del server; admin.ts usa este mismo patrón). */
   identityOf: (headers: IncomingMessage['headers']) => { user?: string }
@@ -232,8 +238,25 @@ export function createContractHandler(deps: {
     if (!allowed) {
       return deny(res, 403, 'El contrato operativo es superficie de administración: se requiere rol de administrador.')
     }
+    // Del gate para acá se puede tocar disco: un 403 JAMÁS escribe el journal.
+    const snap = deps.registry.snapshot()
+    deps.journal.observe(snap)
+    // El router pela el query del match de ruta, así que `?desde=` llega intacto acá (routes.ts).
+    const desde = new URL(req.url ?? '/', 'http://contrato.local').searchParams.get('desde') ?? undefined
+    const delta = deps.journal.delta(snap, desde)
+    if (delta === null) {
+      // Solo ocurre con `?desde=` de una versión que esta instancia nunca corrió.
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(
+        JSON.stringify({
+          error: `La versión '${desde}' no está en el registro de esta instancia.`,
+          disponibles: deps.journal.versions(),
+        }),
+      )
+      return true
+    }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(JSON.stringify(deps.registry.snapshot()))
+    res.end(JSON.stringify({ ...snap, delta }))
     return true
   }
 }
