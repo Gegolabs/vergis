@@ -30,6 +30,38 @@ Beyond *mocks*, Mira consumes real data through access Capabilities (e.g. `execu
 
 `server/serve-rls.ts` serves one or more **Information Products** **per consumer** (data-anchored RLS): it discovers the specs (`VERGIS_SPECS_DIR`/`VERGIS_SPECS`), routes by `identity.code` (per-consumer index at `/`), applies the **policy store** policy (`VERGIS_POLICIES`) over the ClickHouse store (`VERGIS_DATASETS`), and injects the gate claims. **There is no path to serve without RLS** (the static server was retired). The image (`Dockerfile`) is **generic and instance-agnostic**: specs, policies, datasets and connections are injected via the environment.
 
+### Operational contract (`GET /contrato`)
+
+The node answers for itself, so the operator never has to trust an external manual that nobody
+invalidates. `GET /contrato` is **admin-only** (it is operations surface, not consumption surface: it
+requires governance and an admin role), answers JSON, and responds **even when the engine is not
+ready** — «why won't it start?» is exactly the question you ask an unhealthy node. It never exposes
+env **values** or secrets: only variable **names**, file paths, sha256 hashes and authored texts.
+
+**Snapshot** — what this process is doing *right now*, derived from live state, never a hand-kept
+list: `version` · `engine` · `startedAt` · `hotReload` · `watches[]` (which envs configure each
+watch, which paths it watches, what it reloads) · `signals[]` (e.g. `SIGHUP` → what it does) ·
+`reloads{last,recent}` · `artifacts[]` with the sha256 of what was **loaded** vs the sha256 **on disk
+now** and a `pending` flag — that pair answers «did the node take my file?» without reading logs —
+· `env{bootOnly,reloadableContent,unknown}` (which variables demand a restart, which reload their
+content, and which are present but never consumed — a typo doesn't disappear silently) · `caveats[]`.
+
+**Delta between versions** — the `delta` section answers «what changed in the operational contract
+compared with the version that ran here before?», so deploying a new image is the moment the
+operator's stale rules invalidate themselves. It is **computed**, never authored: each boot records a
+diffable projection of the contract in `<VERGIS_OUT>/contrato/journal.json` (the instance's
+persistent volume, since the image is instance-agnostic), and the delta is the structural diff
+against the most recently seen different version. Highlights `env.nowReloadable` (no longer requires
+a restart) and `env.nowBootOnly` (now does) as first-class facts, plus added/removed/modified
+watches, signals and caveats. `unchanged: true` is an answer too: your rules still hold.
+
+- `GET /contrato?desde=<version>` diffs against any version this instance has run (multi-version
+  jumps, audits). An unregistered version returns **404** with the `disponibles` list.
+- With no reference yet the payload says so honestly instead of fabricating a diff: `reason` is
+  `primer-registro` (the first release carrying this feature only **seeds** the journal — the delta
+  appears from the second deployment on), `version-desconocida` (build without a version) or
+  `journal-no-disponible`. The journal never degrades the snapshot and never affects serving.
+
 ## Layout
 
 ```
