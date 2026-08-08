@@ -11,6 +11,7 @@ COPY packages/botler/package.json packages/botler/package.json
 COPY packages/capabilities/package.json packages/capabilities/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/mira/package.json packages/mira/package.json
+COPY packages/miranda/package.json packages/miranda/package.json
 COPY packages/policy/package.json packages/policy/package.json
 RUN npm ci --ignore-scripts
 COPY . .
@@ -29,6 +30,7 @@ COPY packages/botler/package.json packages/botler/package.json
 COPY packages/capabilities/package.json packages/capabilities/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/mira/package.json packages/mira/package.json
+COPY packages/miranda/package.json packages/miranda/package.json
 COPY packages/policy/package.json packages/policy/package.json
 RUN npm ci --omit=dev --ignore-scripts
 
