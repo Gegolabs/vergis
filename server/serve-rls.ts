@@ -130,6 +130,7 @@ import { createDiscovery, type Report } from './discovery'
 import { createIdentity } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings } from './config'
 import { createContractRegistry, createContractHandler } from './contract'
+import { createContractJournal } from './contract-delta'
 import { avatarMenu, csrfFactory } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
@@ -167,6 +168,10 @@ const REFRESH_MS = config.refreshMs
 const HOT_RELOAD = (process.env['VERGIS_HOT_RELOAD'] ?? '1') !== '0'
 const contract = createContractRegistry({ engine: ENGINE, hotReload: HOT_RELOAD })
 contract.envKeys(configEnvKeys())
+// Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
+// la instancia — el volumen de `VERGIS_OUT` (`config.outDir`, junto a `governance.sqlite`). La imagen es
+// genérica e instance-agnóstica: la referencia de «qué corría antes acá» no puede viajar en ella.
+const contractJournal = createContractJournal({ dir: config.outDir })
 /** `process.env` que REGISTRA cada acceso en el contrato — para los módulos que reciben el env entero
  *  y leen dentro (instance-config resuelve nombres dinámicamente: declararlos acá sería declararlos). */
 const contractEnv: NodeJS.ProcessEnv = new Proxy(process.env, {
@@ -702,6 +707,7 @@ const server = createServer(
     // «no hay Administración» es una respuesta operativa, un 404 no lo es).
     getContract: () => createContractHandler({
       registry: contract,
+      journal: contractJournal,
       isAdmin: ((gov) => (gov ? (email: string | undefined) => gov.isAdmin(email ?? '') : null))(governance),
       identityOf: (headers) => ({ user: identityFor(headers as GateHeaders).user }),
     }),
@@ -1696,6 +1702,10 @@ contract.record({ reason: 'boot', ok: true, policies: store.size, servablePis: d
   ...specArtifacts(),
   ...domainArtifacts(),
 ])
+// …y deja la huella de ESTA versión en el journal (#139 N2). Obligatorio al boot aunque nadie consulte
+// `/contrato` jamás: si solo se persistiera en el GET, una instancia que no consulta no dejaría
+// referencia para el próximo despliegue — y el delta que importa es justo el del despliegue siguiente.
+contractJournal.observe(contract.snapshot())
 
 if (HOT_RELOAD) {
   const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
