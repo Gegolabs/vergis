@@ -42,12 +42,16 @@ la promoción PENDINGS→TODO se pide, no se toma.
   misma convención `slug--fecha[--filtrado]` implementada dos veces. Unificar. `reg 2026-08-06`
 - **`import type { TableColumn }` sin uso** en `render-csv-piece.ts` (preexistente a #61, no
   introducido por él). `reg 2026-08-06`
-- **Miranda: dos gaps de pertenencia de sesión** — `handleMessage` (`server/miranda.ts:236-238`) y
-  `handlePreview` (`server/miranda.ts:159-171,286-296`) no verifican que la identidad sea dueña de la
-  sesión: cualquier identidad con scope `miranda` puede postear a sesiones ajenas o previsualizar
-  drafts ajenos (con SU propia RLS — el dato no fuga, la estructura del draft sí). Detectados por los
-  diseñadores de 004/02 y 004/06; el fix (check contra `createdBy`, ya persistido) es adelantable como
-  PR independiente. `reg 2026-08-07`
+- **Miranda: CINCO rutas sin check de pertenencia de sesión** (no dos — ampliado por re-revisión
+  Fable 2026-08-08, que midió la superficie completa de `tryHandle`): además de `handleMessage`
+  (`miranda.ts:236`) y `handlePreview` (`:286`), tampoco verifican dueño `sessionPage`
+  (`GET /miranda/s/:id`, `:320` — expone transcript completo, intent, QC y draft; ignora su
+  parámetro `_email`), `validate-intent` (`:203` — avanza el estado ajeno) y **`publish`** (`:221` —
+  publica el draft ajeno como PI servido; `publishSpec` no verifica autor). Agravante: `listPage` SÍ
+  filtra por dueño — la lista se ve privada mientras la URL directa se la salta. La severidad
+  registrada el 07 («la estructura del draft sí» fuga) subestimaba: fuga el transcript y la acción
+  de publicar. **En ejecución**: diseño completo en `work/005-…/01-diseno-pertenencia-…`, frente F1
+  del plan 005. `reg 2026-08-07 · ampliado 2026-08-08`
 - **`MIRANDA_VALIDATE_CAPS` promete `send-email`/`send-slack` que NO existen** (`serve-rls.ts:1467`,
   única aparición en el repo): Miranda valida OK drafts que serving rechaza con
   `channel-capability-not-catalogued`. Fix de ~1 línea + test = hito H0 del diseño 004/08. `reg 2026-08-07`
