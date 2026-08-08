@@ -67,6 +67,25 @@ export interface MirandaServerDeps {
   announce?: (message: string) => Promise<void>
 }
 
+/**
+ * Capacidades válidas de un draft de Miranda: las del serving (el conector enforcing de la
+ * instancia) más los canales de render/publicación que el catálogo de serving registra de verdad.
+ *
+ * Vive acá y no como literal en `serve-rls.ts` por dos razones. Primera, testeabilidad:
+ * `serve-rls.ts` es un módulo con top-level `await` que no se puede importar desde un test, así que
+ * la lista escrita ahí era inobservable. Segunda, y es la que importa: mientras fue inobservable
+ * prometió dos capabilities de entrega por correo y por Slack que no existen en ninguna parte del
+ * repo — Miranda validaba OK drafts que `Botler.register` rechazaba después con
+ * `channel-capability-not-catalogued`. La lista no promete lo que el catálogo no registra, y hay un
+ * test que lo mide (`tests/miranda-validate-caps.test.ts`).
+ */
+export const mirandaValidateCaps = (servingCaps: Iterable<string>): string[] => [
+  ...servingCaps,
+  'publicar-artefacto',
+  'render-html-piece',
+  'render-csv-piece',
+]
+
 const STATE_LABEL: Record<string, string> = {
   explorando: 'Explorando',
   borrador: 'Borrador',

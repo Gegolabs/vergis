@@ -60,7 +60,7 @@ import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
 import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
-import { createMiranda, type MirandaServerDeps } from './miranda'
+import { createMiranda, mirandaValidateCaps, type MirandaServerDeps } from './miranda'
 import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
   bootstrapClickHouse,
@@ -1464,7 +1464,8 @@ if (config.miranda.enabled) {
     const rubric = rubricDir ? readIf(join(resolve(rubricDir), 'qc1.md')) : undefined
     const systemPrompt = buildSystemPrompt({ dslDoc })
     // Capacidades válidas de un draft (dato = conector enforcing; canales = render/publish/entrega).
-    const MIRANDA_VALIDATE_CAPS = [...SERVING_CAPS, 'publicar-artefacto', 'render-html-piece', 'render-csv-piece', 'send-email', 'send-slack']
+    // La lista la construye `mirandaValidateCaps` (server/miranda.ts) — testeable desde afuera.
+    const MIRANDA_VALIDATE_CAPS = mirandaValidateCaps(SERVING_CAPS)
     const PROBE_REF = contract.env('MIRANDA_PROBE_DB') ?? (connections ? Object.keys(connections)[0] : '')
     // Identidad simplificada de la probe (Fase 1: audiencia interna, dominios grant:all). TODO Fase 2:
     // ligar la probe a la identidad autoritativa del autor (claims), como el serving.
