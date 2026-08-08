@@ -48,9 +48,8 @@ export interface MirandaServerDeps {
   /** ¿La identidad tiene el scope `miranda`? (admin o miembro del grupo de scope). */
   hasScope(email: string | undefined): Promise<boolean>
   /** ¿La identidad es admin de la plataforma? (para el guard de pertenencia — el admin ve/opera toda
-   *  sesión). Opcional en la interfaz por compatibilidad de cableados existentes; ausente ⇒
-   *  fail-closed (nadie es admin, solo el dueño entra). */
-  isAdmin?(email: string | undefined): Promise<boolean>
+   *  sesión). Obligatorio: el compilador garantiza que ningún cableado lo olvide. */
+  isAdmin(email: string | undefined): Promise<boolean>
   /** Ejecuta una probe (SQL ya guardado) con la identidad del autor. */
   probe(sql: string, email: string | undefined): Promise<{ rows: Record<string, unknown>[] }>
   /** Columnas+tipos de un objeto del catálogo. */
@@ -175,7 +174,7 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
     }
     const owner = normEmail(s.createdBy)
     if (owner && owner === normEmail(email)) return s
-    if (await deps.isAdmin?.(email)) return s
+    if (await deps.isAdmin(email)) return s
     send(res, 403, pg('Sin acceso', `<p class="msg err">Esta sesión pertenece a otra persona.</p><p><a href="/miranda">← Sesiones</a></p>`))
     return null
   }
