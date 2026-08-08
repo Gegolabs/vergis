@@ -3,7 +3,7 @@
 // clave presente y vacía (legítima) — y la línea de conteos del arranque.
 
 import { describe, it, expect } from 'vitest'
-import { loadInstanceConfig, type EnvLike, type ReadFile } from '../server/instance-config'
+import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES, type EnvLike, type InstanceSlice, type ReadFile } from '../server/instance-config'
 
 /** `readFile` de mentira: mapa ruta-sufijo → contenido YAML. */
 const fs = (files: Record<string, string>): ReadFile => {
@@ -141,5 +141,49 @@ describe('instance-config · destinos de aviso y URL pública (#100)', () => {
     expect(() => loadInstanceConfig({ VERGIS_NOTIFY: 'n.yaml' }, fs({ 'n.yaml': 'destinations:\n  - type: teams\n    url: https://x\n' }))).toThrow(
       /VERGIS_NOTIFY \(\/.*n\.yaml\): notify: destino #0 con type inválido 'teams'/,
     )
+  })
+})
+
+describe('instance-config · slices recargables (#138·2)', () => {
+  it('env no declarado → undefined (la config no se usa; no es un error)', () => {
+    for (const slice of Object.values(RELOADABLE_SLICES) as InstanceSlice<unknown>[]) {
+      expect(loadSlice({}, slice, fs({}))).toBeUndefined()
+    }
+  })
+
+  it('cada slice re-parsea desde disco con SU parser, sin tocar nada más', () => {
+    const env: EnvLike = { VERGIS_NOTIFY: 'n.yaml', VERGIS_PI_OWNERS: 'o.yaml', VERGIS_SOURCES: 's.yaml' }
+    const read = fs({
+      'n.yaml': 'destinations:\n  - id: ops\n    type: slack-webhook\n    url: https://hooks.slack.com/x\n',
+      'o.yaml': 'owners:\n  PI-1: ana@gh.cl\n',
+      's.yaml': 'sources:\n  - id: sap\n    label: SAP\n    oferta: PT1H\n',
+    })
+    expect(loadSlice(env, RELOADABLE_SLICES.notify, read)?.destinations.map((d) => d.id)).toEqual(['ops'])
+    expect(loadSlice(env, RELOADABLE_SLICES.piOwners, read)).toEqual({ 'PI-1': 'ana@gh.cl' })
+    expect(loadSlice(env, RELOADABLE_SLICES.sources, read)?.sources?.map((s) => s.id)).toEqual(['sap'])
+  })
+
+  it('archivo roto (YAML inválido) → lanza nombrando el ENV y la ruta absoluta', () => {
+    const env: EnvLike = { VERGIS_NOTIFY: 'cfg/n.yaml' }
+    expect(() => loadSlice(env, RELOADABLE_SLICES.notify, fs({ 'n.yaml': 'destinations: [\n' }))).toThrow(/VERGIS_NOTIFY \(\/.*n\.yaml\)/)
+  })
+
+  it('archivo DECAPITADO (perdió la clave raíz) → lanza igual que en el boot (4.8)', () => {
+    const casos: [InstanceSlice<unknown>, string, RegExp][] = [
+      [RELOADABLE_SLICES.notify, 'n.yaml', /falta la clave raíz 'destinations'/],
+      [RELOADABLE_SLICES.piOwners, 'o.yaml', /falta la clave raíz 'owners'/],
+      [RELOADABLE_SLICES.sources, 's.yaml', /falta la clave raíz 'sources'/],
+    ]
+    for (const [slice, file, patron] of casos) {
+      const llamar = (): unknown => loadSlice({ [slice.env]: file }, slice, fs({ [file]: 'otra_cosa: 1\n' }))
+      expect(llamar).toThrow(patron)
+      expect(llamar).toThrow(new RegExp(slice.env))
+    }
+  })
+
+  it('el boot y la recarga usan LA MISMA entrada: el slice produce lo que `loadInstanceConfig` dejó', () => {
+    const env: EnvLike = { VERGIS_PI_OWNERS: 'o.yaml' }
+    const read = fs({ 'o.yaml': 'owners:\n  PI-7: Beto@gh.cl\n' })
+    expect(loadSlice(env, RELOADABLE_SLICES.piOwners, read)).toEqual(loadInstanceConfig(env, read).piOwners)
   })
 })
