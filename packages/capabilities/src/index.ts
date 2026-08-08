@@ -109,6 +109,7 @@ export type {
   GroupMember,
   GroupSeed,
   GovernanceSeed,
+  ReseedSeed,
   PiGovernance,
   PiDemanda,
 } from './governance-store'
