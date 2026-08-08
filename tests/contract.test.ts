@@ -6,12 +6,13 @@
 // `pending:true` — sin leer código, sin `docker logs` y sin manual externo.
 
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, unlinkSync, existsSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createContractRegistry, createContractHandler, type ContractSnapshot } from '../server/contract'
+import { createContractJournal, type ContractDelta } from '../server/contract-delta'
 import { createRequestHandler, type RouteDeps } from '../server/routes'
 import { configEnvKeys } from '../server/config'
 import type { Report } from '../server/discovery'
@@ -242,7 +243,7 @@ function deps(over: Partial<RouteDeps> = {}): RouteDeps {
   }
 }
 
-function contractDeps(over: { isAdmin?: ((email: string | undefined) => Promise<boolean>) | null } = {}) {
+function contractDeps(over: { isAdmin?: ((email: string | undefined) => Promise<boolean>) | null; journalDir?: string } = {}) {
   const dir = work()
   const pol = join(dir, 'politicas.yaml')
   writeFileSync(pol, 'policies:\n  ventas: {}\n')
@@ -252,12 +253,15 @@ function contractDeps(over: { isAdmin?: ((email: string | undefined) => Promise<
   c.signal({ signal: 'SIGHUP', action: 'fuerza la recarga completa de gobierno' })
   c.caveat('las inyecciones del canal de serving se fijan al arranque: un claim nuevo requiere restart')
   c.record({ reason: 'boot', ok: true, policies: 1, servablePis: 1 }, [{ source: 'policies', path: pol }])
+  const journalDir = over.journalDir ?? dir
+  const journal = createContractJournal({ dir: journalDir })
   const handler = createContractHandler({
     registry: c,
+    journal,
     isAdmin: over.isAdmin === undefined ? async (email) => email === 'ana@x.com' : over.isAdmin,
     identityOf: (h) => ({ user: (h['x-forwarded-email'] as string) ?? 'ana@x.com' }),
   })
-  return { dir, pol, registry: c, handler, cleanup: () => { unwatch(); rmSync(dir, { recursive: true, force: true }) } }
+  return { dir, pol, journalDir, journal, registry: c, handler, cleanup: () => { unwatch(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 describe('contrato · GET /contrato por el router real', () => {
@@ -347,7 +351,12 @@ describe('contrato · «¿el nodo tomó mi archivo?» (aceptación del issue #13
     const c = createContractRegistry({ engine: 'fabric', hotReload: true, envSource: {} })
     // El watch dispara → el server recarga → registra DONDE OCURRE (acá se simula esa llamada).
     c.record({ reason: 'watch:policies', ok: true, policies: 1, servablePis: 1 }, [{ source: 'policies', path: pol }])
-    const handler = createContractHandler({ registry: c, isAdmin: async () => true, identityOf: () => ({ user: 'ops@x.com' }) })
+    const handler = createContractHandler({
+      registry: c,
+      journal: createContractJournal({ dir }),
+      isAdmin: async () => true,
+      identityOf: () => ({ user: 'ops@x.com' }),
+    })
     const ask = async (): Promise<ContractSnapshot> => {
       const { res, calls, done } = mkRes()
       createRequestHandler(deps({ getContract: () => handler }))(mkReq('/contrato'), res)
@@ -376,5 +385,113 @@ describe('contrato · «¿el nodo tomó mi archivo?» (aceptación del issue #13
     expect(recargado.reloads.last!.reason).toBe('SIGHUP')
 
     rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+// ── NIVEL 2 · el delta entre versiones, por el router real ─────────────────────────────────────────
+// `VERGIS_VERSION` es import build-time: el arnés NO mockea el módulo — inyecta las versiones
+// «anteriores» sembrando el journal con `observe` de snapshots fabricados sobre el MISMO dir.
+const journalFile = (dir: string): string => join(dir, 'contrato', 'journal.json')
+
+function fakeSnap(over: Partial<ContractSnapshot> = {}): ContractSnapshot {
+  return {
+    version: '0.0.0-anterior',
+    engine: 'fabric',
+    startedAt: '2026-08-01T00:00:00.000Z',
+    hotReload: true,
+    watches: [],
+    signals: [],
+    reloads: { last: null, recent: [] },
+    artifacts: [],
+    env: { bootOnly: ['PORT', 'VERGIS_ENGINE', 'VERGIS_POLICIES'], reloadableContent: [], unknown: [] },
+    caveats: ['las inyecciones del canal de serving se fijan al arranque: un claim nuevo requiere restart'],
+    ...over,
+  }
+}
+
+async function askContrato(handler: ReturnType<typeof createContractHandler>, url = '/contrato') {
+  const { res, calls, done } = mkRes()
+  createRequestHandler(deps({ getContract: () => handler }))(mkReq(url), res)
+  await done
+  return calls
+}
+
+describe('contrato · delta entre versiones (issue #139 · Nivel 2)', () => {
+  it('dos vidas, un journal: el GET dice contra QUÉ versión se compara y qué watch apareció', async () => {
+    expect(VERGIS_VERSION).not.toBeNull() // premisa: el build hornea la versión (si no, sería `version-desconocida`)
+    const journalDir = work()
+    // Vida 1 — la versión anterior corrió acá sin el watch de políticas y con VERGIS_POLICIES bootOnly.
+    createContractJournal({ dir: journalDir }).observe(fakeSnap())
+    // Vida 2 — la versión que corre (VERGIS_VERSION) trae el watch: `contractDeps` lo instala.
+    const k = contractDeps({ journalDir })
+    const calls = await askContrato(k.handler)
+    expect(calls.status).toBe(200)
+    const body = JSON.parse(calls.body) as ContractSnapshot & { delta: ContractDelta }
+    expect(body.watches[0]).toMatchObject({ envs: ['VERGIS_POLICIES'] }) // el snapshot N1, intacto
+    expect(body.delta.reason).toBeNull()
+    expect(body.delta.reference).toMatchObject({ version: '0.0.0-anterior' })
+    expect(body.delta.current.version).toBe(VERGIS_VERSION)
+    expect(body.delta.changes!.watches.added).toEqual([{ envs: ['VERGIS_POLICIES'], reloads: 'gobierno completo' }])
+    // La invalidación de la regla del operador, nombrada sola:
+    expect(body.delta.changes!.env.nowReloadable).toEqual(['VERGIS_POLICIES'])
+    expect(body.delta.unchanged).toBe(false)
+    // Y jamás el path de la instancia (que sí viaja en el snapshot N1).
+    expect(JSON.stringify(body.delta)).not.toContain(k.pol)
+    k.cleanup()
+    rmSync(journalDir, { recursive: true, force: true })
+  })
+
+  it('instancia virgen: `primer-registro` y el journal queda SEMBRADO para el próximo despliegue', async () => {
+    const journalDir = work()
+    const k = contractDeps({ journalDir })
+    const body = JSON.parse((await askContrato(k.handler)).body) as { delta: ContractDelta }
+    expect(body.delta).toMatchObject({ reason: 'primer-registro', reference: null, changes: null })
+    expect(existsSync(journalFile(journalDir))).toBe(true)
+    expect(createContractJournal({ dir: journalDir }).versions()).toEqual([VERGIS_VERSION])
+    k.cleanup()
+    rmSync(journalDir, { recursive: true, force: true })
+  })
+
+  it('`?desde=` diffea contra esa versión; una no registrada → 404 con las disponibles', async () => {
+    const journalDir = work()
+    createContractJournal({ dir: journalDir }).observe(fakeSnap({ version: '0.0.1-julio', caveats: [] }))
+    const k = contractDeps({ journalDir })
+    const feliz = await askContrato(k.handler, '/contrato?desde=0.0.1-julio')
+    expect(feliz.status).toBe(200)
+    const body = JSON.parse(feliz.body) as { delta: ContractDelta }
+    expect(body.delta.reference!.version).toBe('0.0.1-julio')
+    expect(body.delta.changes!.caveats.added).toHaveLength(1)
+
+    const perdida = await askContrato(k.handler, '/contrato?desde=0.9.0')
+    expect(perdida.status).toBe(404)
+    const err = JSON.parse(perdida.body) as { error: string; disponibles: string[] }
+    expect(err.error).toContain("'0.9.0'")
+    expect(err.disponibles).toContain('0.0.1-julio')
+    expect(err.disponibles).toContain(VERGIS_VERSION)
+    k.cleanup()
+    rmSync(journalDir, { recursive: true, force: true })
+  })
+
+  it('un 403 NO escribe disco: el `observe` va después del gate de rol', async () => {
+    const journalDir = work()
+    const k = contractDeps({ journalDir, isAdmin: async () => false })
+    const calls = await askContrato(k.handler)
+    expect(calls.status).toBe(403)
+    expect(existsSync(journalFile(journalDir))).toBe(false)
+    k.cleanup()
+    rmSync(journalDir, { recursive: true, force: true })
+  })
+
+  it('GET repetido sin cambios: el journal no se reescribe (huella igual ⇒ el GET típico no toca disco)', async () => {
+    const journalDir = work()
+    const k = contractDeps({ journalDir })
+    await askContrato(k.handler)
+    const mtime = statSync(journalFile(journalDir)).mtimeMs
+    await new Promise((r) => setTimeout(r, 10))
+    await askContrato(k.handler)
+    await askContrato(k.handler)
+    expect(statSync(journalFile(journalDir)).mtimeMs).toBe(mtime)
+    k.cleanup()
+    rmSync(journalDir, { recursive: true, force: true })
   })
 })
