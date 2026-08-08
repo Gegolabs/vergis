@@ -117,7 +117,12 @@ function fakeSink(id: string, falla = false): FakeSink {
   return s
 }
 
-function armar(g: Store, sinks: NotificationSink[], reloj: { now: number }, extra?: Partial<{ freshnessPollMs: number; engineCabled: boolean; inputs: typeof INPUTS; schedule: ReportSchedule }>) {
+function armar(
+  g: Store,
+  sinks: NotificationSink[],
+  reloj: { now: number },
+  extra?: Partial<{ freshnessPollMs: number; engineCabled: boolean; inputs: typeof INPUTS; schedule: ReportSchedule; scheduleProvider: () => ReportSchedule | null }>,
+) {
   const logs: string[] = []
   const auditorias: Record<string, unknown>[] = []
   const loop = createReportLoop(
@@ -131,7 +136,9 @@ function armar(g: Store, sinks: NotificationSink[], reloj: { now: number }, extr
       now: () => reloj.now,
     },
     {
-      schedule: extra?.schedule ?? DIARIO,
+      // La cadencia es un PROVIDER consultado por tick (#138·2); los casos que no la mueven pasan
+      // el mismo valor de siempre y no notan la diferencia.
+      schedule: extra?.scheduleProvider ?? ((): ReportSchedule | null => extra?.schedule ?? DIARIO),
       timezone: TZ,
       baseUrl: BASE,
       freshnessPollMs: extra?.freshnessPollMs ?? 300_000,
@@ -496,6 +503,92 @@ describe('report · robustez del lazo', () => {
     const { loop: loop2, logs: logs2 } = armar(g, [explosivo], { now: t('2026-08-07T12:00:00Z') })
     await expect(loop2.tick()).resolves.toBeUndefined()
     expect(logs2).toContain('reporte[explosivo]: revienta síncrono')
+    await g.close()
+  })
+})
+
+// ── 4 · La cadencia es un provider consultado por tick (#138·2) ──────────────────────────────────
+
+describe('report · cadencia viva: encender, cambiar y apagar sin reconstruir el lazo', () => {
+  it('provider null ⇒ tick no-op; al devolver un schedule, el MISMO lazo empieza a enviar', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await sembrar(g)
+    const sink = fakeSink('correo')
+    const reloj = { now: t('2026-08-06T12:00:00Z') }
+    const vivo: { sched: ReportSchedule | null } = { sched: null } // sin `report:` al boot
+    const { loop } = armar(g, [sink], reloj, { scheduleProvider: () => vivo.sched })
+
+    await loop.tick()
+    expect(sink.vistos).toHaveLength(0) // apagado: el tick retorna temprano, sin tocar el store
+    expect(await g.getSetting(REPORT_LAST_SENT_KEY)).toBeNull()
+
+    vivo.sched = DIARIO // `report:` aparece por recarga del yaml
+    await loop.tick()
+
+    // REFUTARÍA el diseño: 0 envíos — encender el reporte exigiría reconstruir el lazo (o sea, restart).
+    expect(sink.vistos).toHaveLength(1)
+    expect(sink.vistos[0]!.data['periodKey']).toBe('2026-08-06')
+    await g.close()
+  })
+
+  it('cambiar el `at` en caliente redefine el próximo due, sin reconstruir nada', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await sembrar(g)
+    const sink = fakeSink('correo')
+    const reloj = { now: t('2026-08-06T12:00:00Z') } // 08:00 en Santiago
+    const vivo: { sched: ReportSchedule | null } = { sched: DIARIO } // 07:30 → ya venció hoy
+    const { loop } = armar(g, [sink], reloj, { scheduleProvider: () => vivo.sched })
+    await loop.tick()
+    expect(sink.vistos).toHaveLength(1)
+    expect(sink.vistos[0]!.data['periodKey']).toBe('2026-08-06')
+
+    // El yaml cambia a las 20:00. El due de HOY aún no llega, así que el período vigente pasa a ser
+    // el de AYER a las 20:00 — un período que bajo la hora vieja nunca existió y por tanto no está
+    // registrado como enviado. CONDUCTA MEDIDA: sale UN latido extra el día del cambio de hora.
+    // Es coherente con el at-least-once del lazo (un latido duplicado es inocuo; uno perdido sería
+    // una falsa alarma) y se prefiere a inventarle memoria de cadencias pasadas al registro.
+    vivo.sched = { at: '20:00', every: 'daily' }
+    await loop.tick()
+    expect(sink.vistos).toHaveLength(2)
+    expect(sink.vistos[1]!.data['periodKey']).toBe('2026-08-05')
+    expect(sink.vistos[1]!.lines[0]).toContain('→ 2026-08-05 20:00') // el due ya se computa con la hora NUEVA
+
+    // Al pasar la hora nueva, el envío del período de hoy sale a la hora que el yaml ahora manda.
+    reloj.now = t('2026-08-07T00:30:00Z') // 20:30 del 06 en Santiago
+    await loop.tick()
+    expect(sink.vistos).toHaveLength(3)
+    expect(sink.vistos[2]!.data['periodKey']).toBe('2026-08-06')
+    expect(sink.vistos[2]!.lines[0]).toContain('→ 2026-08-06 20:00')
+    await g.close()
+  })
+
+  it('apagar `report:` en caliente detiene los envíos sin tocar el proceso', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await sembrar(g)
+    const sink = fakeSink('correo')
+    const reloj = { now: t('2026-08-06T12:00:00Z') }
+    const vivo: { sched: ReportSchedule | null } = { sched: DIARIO }
+    const { loop } = armar(g, [sink], reloj, { scheduleProvider: () => vivo.sched })
+    await loop.tick()
+    expect(sink.vistos).toHaveLength(1)
+
+    vivo.sched = null // el bloque `report:` se retira del yaml
+    reloj.now = t('2026-08-07T12:00:00Z') // período nuevo: con el reporte encendido habría enviado
+    await loop.tick()
+    expect(sink.vistos).toHaveLength(1)
+    await g.close()
+  })
+
+  it('la tz se re-resuelve con el schedule vigente: cambiarla mueve el due', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await sembrar(g)
+    const sink = fakeSink('correo')
+    const reloj = { now: t('2026-08-06T12:00:00Z') }
+    const vivo: { sched: ReportSchedule | null } = { sched: { at: '07:30', every: 'daily', timezone: 'UTC' } }
+    const { loop } = armar(g, [sink], reloj, { scheduleProvider: () => vivo.sched })
+    await loop.tick()
+    // Con tz UTC el due de hoy es 07:30Z (ya pasó) y la ventana se declara en UTC, no en la del cfg.
+    expect(sink.vistos[0]!.lines[0]).toBe('período: 2026-08-05 07:30 → 2026-08-06 07:30 (UTC)')
     await g.close()
   })
 })
