@@ -43,7 +43,11 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
-import { credentialProviderFor, SCOPE_FABRIC, type CredentialSource, type TokenSource } from '@vergis/capabilities'
+// Import directo al módulo hoja (no al barrel `@vergis/capabilities`): el barrel arrastra `mssql`
+// y `sql.js` en tiempo de evaluación, lo que impide bundlear la sonda como .mjs autocontenido para
+// correrla dentro del contenedor de la VM (donde vive el secreto, Ley WW Norma 5). `aad-token.ts`
+// solo tiene un import type-only de mssql, que se borra al compilar → bundle chico y sin nativos.
+import { credentialProviderFor, SCOPE_FABRIC, type CredentialSource, type TokenSource } from '../packages/capabilities/src/aad-token'
 
 const FABRIC_API = 'https://api.fabric.microsoft.com/v1'
 const HTTP_TIMEOUT_MS = 30_000
