@@ -42,8 +42,6 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   introducido por él). `reg 2026-08-06`
 - **Gate token comparado con `!==`, no constant-time** (`server/routes.ts:77`; el CSRF sí usa
   `constantTimeEqual`). Fix de una línea = D6 del diseño 004/10. `reg 2026-08-07`
-- **`Dockerfile` omite el manifiesto de `packages/miranda`** en sus dos stages (funciona porque el
-  bundle no resuelve en runtime; asimetría a corregir o documentar — diseño 004/11 §1.4). `reg 2026-08-07`
 
 ## Práctica / entorno (fuera del árbol de Vergis)
 
