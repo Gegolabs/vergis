@@ -6,6 +6,10 @@ cerrar.
 
 ## Cerradas con veredicto
 
+- **`Dockerfile` omitía el manifiesto de `packages/miranda`** (reg 2026-08-07).
+  **Cerrado 2026-08-08:** COPY añadido a ambos stages — PR #149. El experimento del build
+  (`docker build` exit 0, daemon real) decidió corrección sobre omisión documentada, como mandaba
+  la pieza 5 del H1 de open-core.
 - **Cluster 004: los diseños esperaban las decisiones de César** (reg 2026-08-07).
   **Cerrado 2026-08-08:** César resolvió las 14 en sesión guiada — 13 aprobadas tal como estaban
   selladas (03/D1-D2-D3 · 04/D8-D9-D12 con sonda a workspace real · 05/D5 · 08/D1+cap25 ·
