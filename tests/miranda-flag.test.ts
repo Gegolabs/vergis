@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { configFromEnv } from '../server/config'
+import { configFromEnv, parsePreviewIdentities } from '../server/config'
 import { createRequestHandler, type RouteDeps } from '../server/routes'
 import type { Report } from '../server/discovery'
 
@@ -24,6 +24,59 @@ describe('config · Miranda tras el flag', () => {
     expect(c.miranda.apiKey).toBe('sk-x')
     expect(c.miranda.model).toBe('claude-opus-5')
     expect(c.miranda.maxTurns).toBe(20)
+  })
+})
+
+// #110·1 — el ROSTER de identidades inspeccionables en preview. Sin la env, la feature no existe;
+// con ella, un roster inválido debe abortar el arranque en vez de degradar a una feature a medias.
+describe('config · roster de preview (MIRANDA_PREVIEW_IDENTITIES)', () => {
+  const ON = { MIRANDA_ENABLED: '1', ANTHROPIC_API_KEY: 'sk-x' }
+  it('sin la env → previewIdentitiesPath undefined (superficie cero)', () => {
+    expect(configFromEnv(ON, fixedSecret).miranda.previewIdentitiesPath).toBeUndefined()
+  })
+  it('con la env y Miranda ON → la ruta viaja al server', () => {
+    const c = configFromEnv({ ...ON, MIRANDA_PREVIEW_IDENTITIES: '/etc/vergis/roster.json' }, fixedSecret)
+    expect(c.miranda.previewIdentitiesPath).toBe('/etc/vergis/roster.json')
+  })
+  it('con Miranda OFF la env se IGNORA (la feature no puede existir sin Miranda)', () => {
+    const c = configFromEnv({ MIRANDA_PREVIEW_IDENTITIES: '/etc/vergis/roster.json' }, fixedSecret)
+    expect(c.miranda.enabled).toBe(false)
+    expect(c.miranda.previewIdentitiesPath).toBeUndefined()
+  })
+
+  it('roster válido → labels, user y claims normalizados a arreglos', () => {
+    const r = parsePreviewIdentities(
+      JSON.stringify([
+        { label: 'gerente-zona-norte', user: 'persona.norte@inst.test', claims: { groups: ['gerencia'], area: 'Norte' } },
+        { label: 'vendedor-sur', user: 'persona.sur@inst.test', claims: { groups: ['ventas'], area: ['Sur'] } },
+      ]),
+    )
+    expect(r).toEqual([
+      { label: 'gerente-zona-norte', user: 'persona.norte@inst.test', claims: { groups: ['gerencia'], area: ['Norte'] } },
+      { label: 'vendedor-sur', user: 'persona.sur@inst.test', claims: { groups: ['ventas'], area: ['Sur'] } },
+    ])
+  })
+  it('JSON ilegible → aborta', () => {
+    expect(() => parsePreviewIdentities('{no-json')).toThrow(/MIRANDA_PREVIEW_IDENTITIES/)
+  })
+  it('no es arreglo → aborta', () => {
+    expect(() => parsePreviewIdentities('{"identities":[]}')).toThrow(/arreglo/)
+  })
+  it('label duplicado → aborta nombrando la etiqueta', () => {
+    const raw = JSON.stringify([
+      { label: 'dup', user: 'a@x.com', claims: {} },
+      { label: 'DUP', user: 'b@x.com', claims: {} },
+    ])
+    expect(() => parsePreviewIdentities(raw)).toThrow(/duplicado: 'DUP'/)
+  })
+  it('sin `user` → aborta', () => {
+    expect(() => parsePreviewIdentities(JSON.stringify([{ label: 'x', claims: {} }]))).toThrow(/user/)
+  })
+  it('sin `claims` → aborta (un roster a medias verifica una ficción)', () => {
+    expect(() => parsePreviewIdentities(JSON.stringify([{ label: 'x', user: 'a@x.com' }]))).toThrow(/claims/)
+  })
+  it('label con caracteres fuera del alfabeto de URL → aborta', () => {
+    expect(() => parsePreviewIdentities(JSON.stringify([{ label: 'a b/c', user: 'a@x.com', claims: {} }]))).toThrow(/inválido/)
   })
 })
 
