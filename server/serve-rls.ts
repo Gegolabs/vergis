@@ -1481,6 +1481,7 @@ if (config.miranda.enabled) {
       catalog,
       identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
       hasScope: async (email) => (await govForMiranda.isAdmin(email)) || (await govForMiranda.isMember(config.miranda.scopeGroup, email)),
+      isAdmin: async (email) => govForMiranda.isAdmin(email),
       probe: async (sql, email) => {
         const out = (await servingCap.execute({ database_ref: PROBE_REF, sql }, probeIdentityOf(email))) as { rows: Record<string, unknown>[] }
         return { rows: out.rows ?? [] }
