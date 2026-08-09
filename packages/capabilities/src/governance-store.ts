@@ -17,7 +17,17 @@ import {
   type PrincipalType,
 } from './pi-authz'
 import { durationToSeconds, validateOferta } from './freshness'
-import { ensureJobPublicationTable } from './job-publication'
+import {
+  ensureJobPublicationTable,
+  lastOkPublication,
+  listPublications,
+  pendingUnknownPublications,
+  recordPublication,
+  resolveUnknownPublication,
+  type PublicationInput,
+  type PublicationRow,
+  type PublishOutcome,
+} from './job-publication'
 import type { RunRecord, RunStatus } from './ingestion-observability'
 import type { ClaveAccion } from './intake-revert'
 import {
@@ -341,7 +351,39 @@ export interface IngestionRunStore {
   listRunSnapshots(opts?: { runsPerProcess?: number }): Promise<IngestionRunSnapshot[]>
 }
 
-export interface GovernanceStore extends AdminStore, GroupStore, PiGovStore, SourceRegistryStore, PlatformSettingStore, MirandaStore, IntakeUploadStore, IntakeRevertStore, IngestionRunStore {
+/**
+ * Ledger APPEND-ONLY de publicaciones de jobs (#107 fase 2, D6). Las ops son PURAS y viven en
+ * `job-publication.ts`; el store las expone porque es el dueño del `SqlDb` de gobierno —y de su
+ * `persist()`: una escritura del ledger que no se vuelca al archivo se perdería en el próximo
+ * arranque, y este ledger es la única memoria de lo que Vergis publicó.
+ */
+export interface JobPublicationStore {
+  /** Registra UN intento (cualquiera de los cuatro desenlaces). Devuelve el id asignado. */
+  recordPublication(row: PublicationInput): Promise<number>
+  /** Última publicación `ok` del destino (por proceso, o por item del motor). */
+  lastOkPublication(sel: { processId: string } | { workspaceId: string; itemId: string }): Promise<PublicationRow | null>
+  /** Historial para la UI, recientes primero. */
+  listPublications(opts?: { processId?: string; limit?: number }): Promise<PublicationRow[]>
+  /** Las `desconocida` que siguen esperando el «Re-verificar» de D7. */
+  pendingUnknownPublications(opts?: { processId?: string }): Promise<PublicationRow[]>
+  /** Resuelve una `desconocida` con el desenlace MEDIDO: fila NUEVA, la original jamás se muta. */
+  resolveUnknownPublication(
+    id: number,
+    resolution: { outcome: Exclude<PublishOutcome, 'desconocida'>; detail?: string; itemId?: string; byUser?: string; at?: string },
+  ): Promise<number>
+}
+
+export interface GovernanceStore
+  extends AdminStore,
+    GroupStore,
+    PiGovStore,
+    SourceRegistryStore,
+    PlatformSettingStore,
+    MirandaStore,
+    IntakeUploadStore,
+    IntakeRevertStore,
+    IngestionRunStore,
+    JobPublicationStore {
   close(): Promise<void>
 }
 
@@ -1364,6 +1406,36 @@ export class SqliteGovernanceStore implements GovernanceStore {
     }
     stmt.free()
     return out
+  }
+
+  // ── JobPublicationStore (ledger de publicaciones de jobs, #107 fase 2) ──
+  // Las ops son las puras de `job-publication.ts` sobre ESTE db; acá se les agrega lo único que no
+  // pueden saber: cuándo volcar el archivo. Las lecturas no persisten (no escriben).
+  async recordPublication(row: PublicationInput): Promise<number> {
+    const id = recordPublication(this.db, row)
+    this.persist()
+    return id
+  }
+
+  async lastOkPublication(sel: { processId: string } | { workspaceId: string; itemId: string }): Promise<PublicationRow | null> {
+    return lastOkPublication(this.db, sel)
+  }
+
+  async listPublications(opts: { processId?: string; limit?: number } = {}): Promise<PublicationRow[]> {
+    return listPublications(this.db, opts)
+  }
+
+  async pendingUnknownPublications(opts: { processId?: string } = {}): Promise<PublicationRow[]> {
+    return pendingUnknownPublications(this.db, opts)
+  }
+
+  async resolveUnknownPublication(
+    id: number,
+    resolution: { outcome: Exclude<PublishOutcome, 'desconocida'>; detail?: string; itemId?: string; byUser?: string; at?: string },
+  ): Promise<number> {
+    const nuevo = resolveUnknownPublication(this.db, id, resolution)
+    this.persist()
+    return nuevo
   }
 
   // ── IngestionRunStore (proyección de corridas + schedule observado, issue #105) ──

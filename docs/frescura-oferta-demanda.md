@@ -72,6 +72,16 @@ que el motor solo, que no conoce la demanda de negocio:
 Por eso delegar el disparo y quedarse con la observabilidad da un panorama **más** completo que un
 scheduler propio.
 
+### De dónde sale el `engine_ref` — publicar el job
+
+Toda esta cadena cuelga de un dato: el **`engine_ref`** que ata el proceso al item del motor. Un
+proceso sin él no es observable. Ese eslabón se puede cerrar **desde Mira**: al **publicar el job** de
+un proceso (Gestión de Plataforma — ver
+[`gestion-de-dominio.md`](gestion-de-dominio.md) §5), el item se crea en el motor y, con el read-back
+verificado, el proceso queda con su `engine_ref` escrito. **Desde ahí no hay nada más que cablear**:
+observar el run-history, derivar la cadencia, empujar el schedule, alertar, pausar y reconciliar
+operan tal cual — publicar es el eslabón *previo* a esta cadena, no una pieza nueva dentro de ella.
+
 ## 6 · Lazo con la publicación de data maestra
 
 La **publicación** de una data maestra (proyección `__replica`, ver
@@ -110,6 +120,7 @@ maestra.
 | Reconciliador — **periódico con debounce** | ✅ fase 3 del lazo (`VERGIS_RECONCILE_AUTO=off` la apaga). No re-empuja el mismo deseado al mismo proceso dentro de `VERGIS_RECONCILE_DEBOUNCE_MS` (default 6 h) — el motor redondea el schedule a minutos y un deseado no múltiplo de 60 no converge nunca; un deseado que cambia se empuja de inmediato. Tras cada push se re-observa el schedule y se registra lo leído |
 | **Reporte periódico de lo ejecutado** (el latido) | ✅ `server/report.ts`, lazo propio gateado solo por el bloque `report:` de `VERGIS_NOTIFY` (hora, timezone IANA, `daily`/`weekly`). Se envía SIEMPRE al cerrar el período —con novedades, sin ellas y aun con los insumos caídos (reporte de indisponibilidad)—: la AUSENCIA del correo es la señal. Por proceso: si corrió, cuándo, con qué desenlace, y explícitamente lo que no corrió debiendo, con enlaces a la vista transversal y al log de cada fallo. Lee solo la proyección local y el registro; el motor jamás. Catch-up con ventana extendida (hasta 7 períodos, el hueco declarado en el cuerpo) e idempotencia por período en `platform_setting` (`report.last_sent`, persistida tras la primera entrega). Destinos con routing por `events`: `email-smtp` (cliente de submission propio, `server/smtp.ts`, cero dependencias), `slack-webhook` o `webhook` |
 | Engine_ref del proceso (proceso↔item Fabric) + dominio de la fuente (tag) | ✅ `governance-store.ts` (migración idempotente) |
+| **Publicar el job** de un proceso (crear el item en el motor → `engine_ref`) | ✅ `/admin/sources` (admins de plataforma), plantillas de la instancia (`VERGIS_JOB_TEMPLATES`), plan sellado + read-back canónico + ledger append-only. Ver [`gestion-de-dominio.md`](gestion-de-dominio.md) §5 |
 | **Gestión por rol** — registro editable in-app (fuentes/procesos/salidas/mapeos, admins de plataforma) + pausa/reanudación por proceso (stewards del dominio) | ✅ `/admin/sources` y Frescura del dominio (`admin.ts`). La oferta —insumo de la cadencia— se edita in-app; la demanda sigue viviendo en cada PI. La semilla `VERGIS_SOURCES` **no pisa lo gestionado in-app** y no resucita lo dado de baja. Un proceso pausado se sigue observando, pero el lazo no lo alerta ni le corrige el schedule, y «Aplicar cadencia» lo rechaza |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/038`.
