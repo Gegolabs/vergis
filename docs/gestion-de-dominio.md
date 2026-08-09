@@ -28,7 +28,8 @@ es acceso (roles/grupos), **la conexión técnica de fuentes** y settings.
 Son **dos cosas distintas** y por eso viven en clases de gestión distintas:
 
 - **Fuentes** = *conectar* una fuente y declarar su **oferta** (cada cuánto se actualiza), **dar de alta
-  procesos** que apuntan a un item **ya publicado** en el motor, y declarar sus salidas y mapeos. Es un
+  procesos** que apuntan a un item del motor —ya existente, o **publicado desde acá** (§5)— y declarar
+  sus salidas y mapeos. Es un
   acto **técnico** (credenciales, endpoint, item del motor que la ingesta) → **Gestión de Plataforma**,
   y se hace **in-app**, sin editar el yaml de la VM ni reiniciar. Cada fuente lleva su `domain` (tag),
   pero el **registro/conexión** se administra de forma central.
@@ -213,7 +214,121 @@ Gateada por **rol de dominio** (steward/admin), **validada** (patrón de nombre 
 de data maestra. El write a OneLake y el run-now usan **token AAD por Service Principal** (recursos
 NO-SQL; la auth de SQL va por `mssql`).
 
-## 5 · El espacio completo de gestión de dominio
+## 5 · Publicar el job de un proceso
+
+Dar de alta un proceso en Fuentes supone que **ya existe** el item que lo ejecuta en el motor. Publicar
+es el eslabón que faltaba antes de esa cadena: crear (o actualizar) **ese item** desde Mira, sin salir
+a la consola del motor. Vive en **Gestión de Plataforma** (`/admin/sources`, junto al registro de
+fuentes) porque publicar es un acto de plataforma, no de dominio.
+
+### Qué es publicar — y qué NO es
+
+> **Se publica la CÁSCARA del job, jamás el código del convertidor.** El item del motor (un
+> SparkJobDefinition, un pipeline) es una **declaración** que *apunta* al código que vive en
+> `Files/code/…` del lakehouse de la instancia. Ese código —y el contrato de ingesta, y el QC— es
+> terreno de la instancia y su convertidor. **Mira nunca escribe en `Files/code`.**
+
+Es la misma separación de la ingesta (staging vs transform) y del manifiesto de reversión: *Vergis
+declara y propaga, el convertidor ejecuta*.
+
+### Las plantillas son de la instancia
+
+La instancia declara sus plantillas en un manifiesto (`VERGIS_JOB_TEMPLATES`) y las **partes** de la
+definición —el JSON del item, con placeholders— en archivos junto a él, cuyas rutas se resuelven
+relativas al directorio del manifiesto:
+
+```yaml
+templates:
+  - id: sjd_ingesta_excel
+    label: "Ingesta Excel (SJD estándar)"
+    version: "1.0"                       # entre comillas: 1.0 sin comillas es el número 1
+    itemType: SparkJobDefinition         # jobType de fase 1: sparkjob
+    params:
+      - { name: main_file,    label: "Script principal (abfss)", required: true }
+      - { name: lakehouse_id, label: "Lakehouse por defecto",    required: true }
+    parts:
+      - { path: SparkJobDefinitionV1.json, file: parts/sjd-ingesta-excel.json }
+```
+
+- **Las versiona el repo de la instancia**, con su flujo repo→despliegue. **No hay editor in-app de
+  plantillas**: Mira registra `plantilla@versión` en cada publicación, y nada más.
+- **Carga fail-closed y fatal al arranque**: manifiesto sin clave raíz, parte inexistente o ilegible,
+  parte que no es JSON, placeholder no declarado o parámetro sin placeholder ⇒ **el nodo no levanta**,
+  nombrando env + ruta + detalle. Descubrir un manifiesto incoherente al publicar sería tarde.
+- Los parámetros se sustituyen **como valores string dentro del JSON ya parseado**, nunca por
+  concatenación de texto: un valor con comillas o llaves no puede romper la estructura de la
+  definición ni inyectar claves nuevas.
+- `VERGIS_JOB_TEMPLATES` es **solo-arranque**: un cambio en las plantillas se aplica al reiniciar (no
+  entra en la recarga en caliente de la config de instancia).
+
+### El flujo: dos fases, con el drift a la vista
+
+1. **Plan.** Se elige proceso + plantilla y se completan sus parámetros. Mira renderiza la definición,
+   le calcula su **sha canónico**, lee del motor la definición vigente y muestra el plan: **crear vs
+   actualizar**, workspace e item destino, `plantilla@versión`, el sha, y —si corresponde— el
+   **drift**: *la definición que hoy tiene el motor no es la última que Vergis publicó*. El plan se
+   sella con un **hash de todos sus insumos**.
+2. **Confirmar.** Si entre el plan y la confirmación cambió cualquier insumo, el hash no calza y **no
+   se ejecuta nada**: se responde con el plan fresco para volver a mirarlo.
+
+> **El drift se declara, jamás se auto-corrige.** El motor es terreno donde también opera la
+> instancia: que alguien haya editado el item ahí es **información que el humano confirma**, no una
+> diferencia que el Producto reconcilie por su cuenta.
+
+### Éxito = read-back, no «el POST devolvió 200»
+
+Una publicación queda **`ok` únicamente** si el `getDefinition` posterior devuelve lo publicado. La
+comparación es **canónica y acotada a las partes publicadas**: el motor normaliza el payload al
+persistirlo (`""` → `null`, re-serialización) y puede **agregar partes propias** (`.platform`) —
+comparar bytes crudos o la definición completa marcaría como sospechosa toda publicación legítima.
+
+Los cuatro desenlaces, todos asentados en un **ledger append-only** (`job_publication`, en el mismo
+SQLite de gobierno) y auditados (`jobs-publish`):
+
+| Desenlace | Qué significa | Qué queda |
+|---|---|---|
+| `ok` | el read-back devolvió la definición publicada | historial + `engine_ref` si fue un create |
+| `denegada` | el motor rechazó la autoría | el **`errorCode` crudo** del motor, a la vista |
+| `fallida` | error de la escritura, o read-back no equivalente | el mensaje/código, sin `engine_ref` |
+| `desconocida` | la operación larga no culminó en la ventana | el `operationId`, y la fila en la cola de **Re-verificar** |
+
+**`desconocida` no es `fallida`.** Queda pendiente con su `operationId` y la acción **«Re-verificar»**
+la resuelve **con lo medido**: re-observa el item y agrega una fila nueva con el desenlace real. La
+original **jamás se muta** — el ledger es la memoria de lo publicado; el estado vigente del item lo
+dice el motor.
+
+**Al culminar un create, el proceso queda con su `engine_ref`** y desde ahí la cadena de fase 1
+(observar, agendar, pausar, reconciliar) opera sin más — ver
+[`frescura-oferta-demanda.md`](frescura-oferta-demanda.md).
+
+### Quién puede, y qué no hace Mira
+
+- **Solo admins de plataforma.** El steward de dominio recibe **403** en la sección y en todo POST de
+  publicación; conserva exactamente lo suyo (pausa/reanudación, cargas). CSRF en toda escritura.
+- **Fail-closed en tres capas:** sin plantillas declaradas, sin credencial de autoría resuelta, o sin
+  el registro de fuentes escribible ⇒ **la sección no existe y sus rutas no responden** — ni un solo
+  form. Una instancia que no declara plantillas no cambia en nada.
+- **Mira no borra items del motor.** Dar de baja un proceso deja el item intacto (borrarlo destruiría
+  su run-history, que es evidencia operacional, en un terreno compartido con la instancia).
+- **Mira no edita plantillas in-app** ni escribe en `Files/code`.
+
+### El corte instancia / Producto
+
+| Instancia / convertidor | Producto (Mira/Vergis) |
+|---|---|
+| Código del convertidor (`Files/code/…`) y su despliegue | Orquestación de la publicación (render, plan, operación larga, read-back) |
+| Plantillas (manifiesto + partes) y su versionado en su repo | Carga y validación de plantillas, ledger, detección de drift |
+| Contrato de ingesta (logs `[delta]`/`✖`, `revert_delete`, sidecars) | UI de administración, roles, CSRF, auditoría |
+| El motor mismo (workspaces, capacidades, items pre-existentes) | `engine_ref` → cadena de fase 1 (observar/agendar/pausar) |
+
+### Configuración de instancia
+
+| Env | Qué declara |
+|---|---|
+| `VERGIS_JOB_TEMPLATES` | ruta al manifiesto de plantillas (sus partes se resuelven relativas a él). **Solo-arranque**, fail-closed y fatal. Sin él, la sección no existe |
+| `VERGIS_AUTHORING_SP` | *(opcional)* `database_ref` de `VERGIS_CONNECTIONS` con el perfil de credencial para la **autoría** — así el camino de serving no porta un token capaz de reescribir definiciones. Sin él, se usa el mismo SP del intake. **Declarado y no resoluble ⇒ el arranque falla** nombrando env y perfil: config rota, no un default silencioso |
+
+## 6 · El espacio completo de gestión de dominio
 
 Un dominio posee su producto de datos de punta a punta. Las facetas (✅ vivas / 🔭 previstas):
 
@@ -227,7 +342,7 @@ Un dominio posee su producto de datos de punta a punta. Las facetas (✅ vivas /
 
 El área de dominio muestra las facetas vivas y un roadmap visible («Próximamente») de las 🔭.
 
-## 6 · Para agentes — el contrato
+## 7 · Para agentes — el contrato
 
 1. **Dos clases de gestión.** Plataforma (transversal, admins) vs dominio (por dominio, stewards). No
    metas en plataforma lo que es de un dominio ni viceversa.
@@ -239,8 +354,14 @@ El área de dominio muestra las facetas vivas y un roadmap visible («Próximame
 5. **Valida y audita todo write-path de archivos.** Patrón + tamaño; auditá quién/qué/cuándo/disparó.
 6. **Verifica la topología.** Dónde aterriza cada slot (workspace/lakehouse/ruta) y qué SP escribe es
    dato de instancia — confírmalo contra la config real antes de actuar.
+7. **Publicar = la cáscara del job, nunca el código.** El item del motor apunta al código del
+   convertidor (`Files/code/…`); ese terreno es de la instancia. No escribas ahí desde el Producto, no
+   borres items del motor y no agregues un editor de plantillas: se versionan en el repo de la
+   instancia.
+8. **Nada es «publicado» sin read-back.** El `ok` lo da el `getDefinition` posterior comparado
+   canónicamente. Sin él, el desenlace es `desconocida` — pendiente, no exitoso.
 
-## 7 · Estado de implementación
+## 8 · Estado de implementación
 
 | Pieza | Estado |
 |-------|--------|
@@ -253,6 +374,9 @@ El área de dominio muestra las facetas vivas y un roadmap visible («Próximame
 | Fuentes (registro técnico) en Gestión de Plataforma | ✅ (`admin.ts` · `/admin/sources`) |
 | Registro editable in-app (fuentes, procesos, salidas, mapeos) con precedencia sobre la semilla | ✅ (`admin.ts` · `governance-store.ts`) |
 | Pausar/reanudar un proceso desde Frescura (steward) | ✅ (`admin.ts` · `serve-rls.ts` · `fabric-engine.ts`) |
+| Publicar el job de un proceso: plantillas de instancia + render | ✅ (`job-templates.ts` · `instance-config.ts` · `VERGIS_JOB_TEMPLATES`) |
+| Publicar: cliente de autoría del motor (crear/leer/actualizar definición, operación larga) | ✅ (`fabric-authoring.ts`; credencial separable con `VERGIS_AUTHORING_SP`) |
+| Publicar: plan sellado por hash + drift + ledger append-only + read-back canónico + «Re-verificar» | ✅ (`job-publication.ts` · `definition-canonical.ts` · `admin.ts` · `/admin/sources`) |
 | Facetas 🔭 (catálogo, linaje, calidad, RLS de dominio, identidad, PIs) | previstas (roadmap visible) |
 
 > Instancia de referencia (beta): Grupo Hijuelas — `arbol-lab/work/041`. GH es **contra qué se prueba**,
