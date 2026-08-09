@@ -122,6 +122,7 @@ export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } fr
 export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
 export type { IntakeRevertStore, IntakeRevertRow } from './governance-store'
 export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from './governance-store'
+export type { JobPublicationStore } from './governance-store'
 // #107 fase 2 · H3 — ledger de publicaciones de jobs y derivación del plan (puro sobre shas).
 export {
   ensureJobPublicationTable,
