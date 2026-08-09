@@ -17,6 +17,7 @@ import {
   type PrincipalType,
 } from './pi-authz'
 import { durationToSeconds, validateOferta } from './freshness'
+import { ensureJobPublicationTable } from './job-publication'
 import type { RunRecord, RunStatus } from './ingestion-observability'
 import type { ClaveAccion } from './intake-revert'
 import {
@@ -638,6 +639,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INTAKE_BACKFILL_DDL)
     db.run(INGESTION_RUN_DDL)
     db.run(INGESTION_PROCESS_STATE_DDL)
+    // #107 fase 2: ledger append-only de publicaciones de jobs. Sus ops viven en `job-publication.ts`
+    // (puras sobre SqlDb, patrón admin-roles); acá solo nace la tabla, en el mismo db de gobierno.
+    ensureJobPublicationTable(db)
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
     db.run(`INSERT OR IGNORE INTO miranda_seq (id, next_code) VALUES (1, ?)`, [MIRANDA_SEQ_SEED])
     applySeed(db, seed)
