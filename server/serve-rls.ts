@@ -44,6 +44,16 @@
  *                       del producto).
  *  - VERGIS_PUBLIC_URL  URL pública de la instancia, base de los enlaces profundos del aviso.
  *                       REQUERIDA si hay destinos declarados (si no, el arranque LANZA).
+ *
+ * Publicación de jobs en el motor (issue #107 fase 2) — Vergis publica la CÁSCARA del job (el item
+ * que apunta al código del convertidor), nunca el código. Ver `docs/gestion-de-dominio.md`:
+ *  - VERGIS_JOB_TEMPLATES  ruta al manifiesto de plantillas de la instancia (`job-templates.yaml`;
+ *                          sus partes se resuelven relativas a él). SOLO-ARRANQUE: fail-closed y
+ *                          fatal si el manifiesto o una parte no valida. Sin el env, la sección de
+ *                          publicación no existe.
+ *  - VERGIS_AUTHORING_SP   `database_ref` de VERGIS_CONNECTIONS con el perfil de credencial para la
+ *                          AUTORÍA (opcional). Sin él, se usa el mismo SP del intake. Declarado y
+ *                          no resoluble ⇒ el arranque LANZA (config rota, no default silencioso).
  */
 import { createServer } from 'node:http'
 import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
@@ -84,6 +94,7 @@ import {
   createFabricJobs,
   createFabricJobStatus,
   createFabricEngineClient,
+  createFabricItemAuthoring,
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   createDwhPublisher,
@@ -116,8 +127,9 @@ import {
   type NotasStore,
   type NotasRenderContext,
   type SqlConnectionProfile,
+  type TokenSource,
 } from '@vergis/capabilities'
-import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type RunLogsOps } from './admin'
+import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
 import { createSinks, fanout, forEvent, type Notification, type ReportSchedule } from './notify'
 import { createReportLoop, REPORT_CHECK_MS } from './report'
@@ -254,6 +266,21 @@ function parseConnections(): Record<string, SqlConnectionProfile> | null {
 // Referencia VIVA (mismo patrón que el policy store): el hot-reload muta este objeto IN-PLACE y todos
 // los consumidores (conector, publisher, master-data) resuelven el perfil por database_ref a call-time.
 const connections = parseConnections()
+// Perfil de credencial para la AUTORÍA de jobs (#107 fase 2 · D9): un `database_ref` del MISMO
+// VERGIS_CONNECTIONS, para que el camino de serving no porte un token capaz de reescribir
+// definiciones. Sin el env, la autoría usa el SP del intake (default pragmático sellado).
+// Declarado-y-no-resoluble es CONFIG ROTA, no un default silencioso: fatal al arranque, nombrando
+// env, perfil y los perfiles disponibles (molde fail-closed de `instance-config.ts`). Se valida acá
+// —top-level, fuera del try de administración— porque adentro moriría como «administración
+// deshabilitada», que es exactamente el silencio que esto evita.
+const AUTHORING_SP_REF = (process.env['VERGIS_AUTHORING_SP'] ?? '').trim() || null
+if (AUTHORING_SP_REF && !connections?.[AUTHORING_SP_REF]) {
+  const disponibles = Object.keys(connections ?? {})
+  throw new Error(
+    `VERGIS_AUTHORING_SP declara el perfil '${AUTHORING_SP_REF}', que no existe en VERGIS_CONNECTIONS ` +
+      `(perfiles: ${disponibles.length ? disponibles.join(', ') : 'ninguno'}).`,
+  )
+}
 // CAVEAT colocado (no derivable) — el swap del perfil es in-place, pero un pool ya conectado no lo ve.
 // Se registra ACÁ (y no dentro de `reloadDomainGovernance`) porque el operador pregunta ANTES de recargar:
 // un caveat que solo aparece tras la primera recarga no responde la pregunta que motiva el contrato.
@@ -945,7 +972,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; backfill?: (slot: IntakeSlot) => void; engine?: IngestionEngineClient; runLogs?: RunLogsOps } => {
+    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; backfill?: (slot: IntakeSlot) => void; engine?: IngestionEngineClient; runLogs?: RunLogsOps; tokens?: TokenSource; tokensRef?: string } => {
       if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
@@ -1175,6 +1202,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           },
         },
         engine,
+        // El `TokenSource` del SP del intake, expuesto para que la autoría de jobs (#107 fase 2, D9)
+        // reuse ESTE proveedor cuando no hay perfil separado declarado: una segunda instancia sobre
+        // el mismo perfil abriría un segundo caché de tokens por scope, sin ganar nada.
+        tokens,
+        ...(ref ? { tokensRef: ref } : {}),
       }
     })()
     // Proveedor del CORTE AS-OF del header (issue #108): una sola instancia (su caché por proceso vive
@@ -1270,6 +1302,39 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             `a las ${reportCfg.at} ${reportCfg.timezone ?? tzHost} · ${reportSinks.length} destino(s))`
         : '[vergis-rls] reporte periódico en espera: sin `report:` declarado (el lazo está armado; declararlo en el yaml lo enciende sin restart)',
     )
+    // ── Publicación de jobs en el motor (#107 fase 2 · §5 del diseño) ──────────────────────────
+    // Se construye SOLO si están las piezas que la vuelven ejercible: plantillas declaradas por la
+    // instancia (`VERGIS_JOB_TEMPLATES`) Y credencial de autoría resuelta. El tercer requisito del
+    // fail-closed —el registro de fuentes escribible, donde aterriza el `engine_ref` de D10— lo
+    // cumple `sourcesAdmin: govStore`, que existe siempre dentro de este bloque; el admin lo
+    // re-verifica igual (`publicaOn`). Falta cualquiera ⇒ `jobsPublish` queda `undefined` y NADA
+    // cambia: cero forms, rutas mudas, contrato de regresión cero de fase 1.
+    const jobsPublish = ((): JobsPublishOps | undefined => {
+      // `LoadedJobTemplate` (config) y `JobTemplateBundle` (admin) son la MISMA forma
+      // (`{ template, partFiles }`) — `admin.ts` la declara estructuralmente para no depender del
+      // cargador de config. Esta asignación no convierte nada: el typecheck es quien lo verifica.
+      const templates: JobTemplateBundle[] = INSTANCE_CFG.jobTemplates
+      if (!templates.length) return undefined // sin nada publicable, la sección no existe
+      // D9: el perfil separado si se declaró (ya validado al top-level: acá existe o el proceso no
+      // llegó hasta acá), y si no, el MISMO SP del intake — default pragmático sellado por César.
+      const tokens = AUTHORING_SP_REF ? credentialProviderFor(connections![AUTHORING_SP_REF], { label: `database_ref '${AUTHORING_SP_REF}'` }) : fabricWiring.tokens
+      if (!tokens) return undefined // sin credencial resuelta no hay quién autore
+      const perfil = AUTHORING_SP_REF ?? fabricWiring.tokensRef ?? '?'
+      console.log(`[vergis-rls] publicación de jobs activa: ${templates.length} plantilla(s) · credencial del perfil '${perfil}'${AUTHORING_SP_REF ? ' (VERGIS_AUTHORING_SP)' : ' (el del intake)'}`)
+      return {
+        templates,
+        authoring: createFabricItemAuthoring(tokens),
+        // El ledger append-only vive en el MISMO db de gobierno (su tabla nace en el `open` del
+        // store) y sus ops son puras; el store es quien las expone porque es el dueño del `persist`.
+        ledger: {
+          lastOk: (sel) => govStore.lastOkPublication(sel),
+          record: (row) => govStore.recordPublication(row),
+          pendingUnknown: () => govStore.pendingUnknownPublications(),
+          resolveUnknown: (id, resolution) => govStore.resolveUnknownPublication(id, resolution),
+          list: (opts) => govStore.listPublications(opts),
+        },
+      }
+    })()
     admin = createAdmin({
       entities,
       mdStore,
@@ -1309,6 +1374,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // Gestión in-app del registro (#107): el registro deja de ser propiedad exclusiva del yaml. Lo
       // editado acá sobrevive a la re-siembra de `VERGIS_SOURCES` y lo dado de baja no resucita.
       sourcesAdmin: govStore,
+      // Publicación de jobs en el motor (#107 fase 2): dependencia OPCIONAL. `undefined` = la
+      // sección no existe (sin plantillas o sin credencial de autoría) — fail-closed D4.
+      jobsPublish,
       // Estado por proceso para la vista de Fuentes (#101): lo último conocido de la proyección (#105) +
       // salud con la MISMA clasificación de Frescura. Una lectura de proyección por GET; el motor, jamás.
       // Sin motor no se cablea: la vista queda como el registro puro (no se fabrican columnas de estado
