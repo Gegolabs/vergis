@@ -9,8 +9,9 @@
 | 003 | `work/003-cluster-solicitudes-2026-08-07/` — directorio (cluster) · solicitudes de arquitectura: contrato operativo (#139 N1), medición del arranque en frío (#138·3), diseño env recargable (#138·2, en revisión) | 2026-08-07 | 003 | issues #138, #139 |
 | 004 | `work/004-cluster-disenos-backlog-2026-08-07/` — directorio (cluster) · diseño detallado de TODO el backlog: 11 diseños Fable en paralelo (delta contrato, Miranda-contrato, config recargable, publicación jobs, rúbrica convenciones, Miranda post-F1, realtime, canales, sql-local, hardening, open-core) | 2026-08-07 | 004 | issues #107, #110, #111, #113, #138, #139 |
 | 005 | `work/005-cluster-ejecucion-atendibles-2026-08-08/` — directorio (cluster) · ejecución de los atendibles: plan orquestador (4 frentes, 2 olas, Opus en worktrees) + diseño del guard de pertenencia de sesiones de Miranda (5 rutas, ampliación del hallazgo de PENDINGS) | 2026-08-08 | 005 | diseños 004/01·06·08, issues #110, #113, #139 |
+| 006 | `work/006-cluster-107-f2-publicacion/` — directorio (cluster) · fase 2 de #107: plan orquestador de los hitos H1-H5 (capability de autoría, plantillas, ledger, flujo admin, wiring) en 3 olas, con los deltas del hito cero (D7 canonicaliza) | 2026-08-08 | 006 | diseño 004/04, issue #107, hito cero D-09 |
 
-Próximo disponible: 006
+Próximo disponible: 007
 
 ---
 
