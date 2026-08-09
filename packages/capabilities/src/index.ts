@@ -120,6 +120,21 @@ export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } fr
 export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
 export type { IntakeRevertStore, IntakeRevertRow } from './governance-store'
 export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from './governance-store'
+// #107 fase 2 · H3 — ledger de publicaciones de jobs y derivación del plan (puro sobre shas).
+export {
+  ensureJobPublicationTable,
+  recordPublication,
+  lastOkPublication,
+  listPublications,
+  pendingUnknownPublications,
+  resolveUnknownPublication,
+  derivePublishPlan,
+  assertParamsSinSecretos,
+  resolucionMarca,
+  JOB_PUBLICATION_DDL,
+  RESOLUCION_PREFIJO,
+} from './job-publication'
+export type { PublishAction, PublishOutcome, PublishParams, PublicationRow, PublicationInput, PublishPlanInput, PublishPlan } from './job-publication'
 export { parseGroupsConfig, parsePiOwnersConfig, parseSourcesConfig } from './governance-config'
 export type { SourcesConfig } from './governance-config'
 export { requireRootKey } from './config-root'
