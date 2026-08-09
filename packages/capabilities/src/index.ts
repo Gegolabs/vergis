@@ -123,6 +123,10 @@ export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from
 export { parseGroupsConfig, parsePiOwnersConfig, parseSourcesConfig } from './governance-config'
 export type { SourcesConfig } from './governance-config'
 export { requireRootKey } from './config-root'
+export { canonicalDefinitionSha256, definitionsEquivalent, canonicalPayload } from './definition-canonical'
+export type { CanonicalizablePart } from './definition-canonical'
+export { parseJobTemplatesConfig, parseTemplateParts, renderTemplate } from './job-templates'
+export type { JobTemplate, JobTemplateParam, JobTemplatePart, JobTemplatesConfig, RenderedPart, RenderedDefinition } from './job-templates'
 export { canTransition, isMirandaState, MIRANDA_STATES } from './miranda-session'
 export type { MirandaSessionState, MirandaMessageRole, MirandaArtifactKind } from './miranda-session'
 export {
