@@ -24,6 +24,13 @@ import {
   AdminLockout,
   MasterDataConflict,
   GovernanceConflict,
+  AuthoringDenied,
+  AuthoringError,
+  AuthoringUnknown,
+  canonicalDefinitionSha256,
+  definitionsEquivalent,
+  derivePublishPlan,
+  renderTemplate,
   canManageDomain,
   manageableDomains,
   slotMaxBytes,
@@ -54,6 +61,14 @@ import {
   type IntakeUploadRow,
   type OneLakeEntry,
   type RevertPlan,
+  type ItemAuthoringClient,
+  type JobTemplate,
+  type PublicationInput,
+  type PublicationRow,
+  type PublishOutcome,
+  type PublishParams,
+  type PublishPlan,
+  type RenderedDefinition,
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
@@ -153,6 +168,51 @@ export interface RunLogsOps {
   runsOf(src: RunLogSource): Promise<RunRecord[]>
 }
 
+/**
+ * Una plantilla de job declarada por la instancia CON el contenido de sus partes ya leído del disco
+ * (issue #107 fase 2, D3). Es la forma que produce `server/instance-config.ts` (`LoadedJobTemplate`);
+ * acá se declara estructuralmente para que `admin.ts` no dependa del cargador de config.
+ */
+export interface JobTemplateBundle {
+  template: JobTemplate
+  /** `path` de la parte → contenido crudo del archivo declarado. */
+  partFiles: Record<string, string>
+}
+
+/**
+ * Puerto del ledger APPEND-ONLY de publicaciones (D6). Lo cablea el wiring sobre el db de gobierno
+ * (las ops puras viven en `packages/capabilities/src/job-publication.ts`); acá entra como puerto para
+ * que la ruta no sepa de SQL ni de persistencia.
+ */
+export interface JobPublicationLedger {
+  /** Última publicación `ok` del proceso. `null` = Vergis nunca publicó este destino. */
+  lastOk(sel: { processId: string }): Promise<PublicationRow | null>
+  /** Registra UN intento (cualquiera de los cuatro desenlaces) y devuelve su id. */
+  record(row: PublicationInput): Promise<number>
+  /** Las `desconocida` que esperan el «Re-verificar» de D7. */
+  pendingUnknown(): Promise<PublicationRow[]>
+  /** Resuelve una `desconocida` con el desenlace MEDIDO (fila nueva; la original no se muta). */
+  resolveUnknown(
+    id: number,
+    resolution: { outcome: Exclude<PublishOutcome, 'desconocida'>; detail?: string; itemId?: string; byUser?: string },
+  ): Promise<number>
+  /** Historial para la UI, recientes primero. */
+  list(opts?: { limit?: number }): Promise<PublicationRow[]>
+}
+
+/**
+ * Publicación de jobs en el motor (#107 fase 2). Dependencia OPCIONAL y fail-closed en tres capas
+ * (D4): sin esta dep, o sin plantillas declaradas, o sin `sourcesAdmin` (que es donde aterriza el
+ * `engine_ref` de D10), la sección no existe y sus rutas no responden.
+ */
+export interface JobsPublishOps {
+  /** Plantillas de la instancia. Vacío ⇒ la sección no existe (no hay nada publicable). */
+  templates: JobTemplateBundle[]
+  /** Cliente de autoría del motor (mismo SP del intake o el perfil separado de D9). */
+  authoring: ItemAuthoringClient
+  ledger: JobPublicationLedger
+}
+
 export interface AdminDeps {
   entities: MasterDataEntity[]
   mdStore: MasterDataStore
@@ -189,6 +249,8 @@ export interface AdminDeps {
   sourceRegistry?: () => Promise<{ sources: SourceRow[]; processes: ProcessRow[]; outputs: { processId: string; tableRef: string }[] }>
   /** Escritura del registro de fuentes (#107). Sin él, `/admin/sources` queda GET-only (solo lectura). */
   sourcesAdmin?: SourceRegistryStore
+  /** Publicación de jobs en el motor (#107 fase 2). Sin él, la sección no existe (D4, fail-closed). */
+  jobsPublish?: JobsPublishOps
   /** Estado por proceso para la vista de Fuentes (issue #101). Opcional: sin él, la vista es el
    * registro puro (sin columnas de estado) — instancias sin motor. */
   processStates?: () => Promise<ProcessIngestionState[]>
@@ -467,6 +529,52 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         if (!isAdmin) return denyPlatform()
         send(res, 200, await sourcesPage(deps, nav, token, url.searchParams.get('msg') ?? undefined, url.searchParams.get('edit') ?? undefined, url.searchParams.get('editp') ?? undefined))
         return true
+      }
+      // ── Publicación de jobs en el motor (#107 fase 2) — DOS FASES con plan sellado por hash (D5) ──
+      // Va ANTES de la gestión del registro porque comparte el prefijo `/admin/sources/`: sin esta
+      // guarda, `publish-plan` caería en `handleSourcesWrite` como «operación desconocida».
+      if (path === '/admin/sources/publish-plan' || path === '/admin/sources/publish-exec' || path === '/admin/sources/publish-reverify') {
+        // Fail-closed (D4): sin publisher cableado la ruta NO existe (404), y solo entonces; el 403 por
+        // rol se decide después, para que un no-admin no aprenda si la instancia publica o no.
+        if (!publicaOn(deps) || req.method !== 'POST') {
+          send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Ruta no encontrada.</p>`))
+          return true
+        }
+        if (!isAdmin) return denyPlatform()
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        try {
+          if (path === '/admin/sources/publish-reverify') {
+            const msg = await reverificarPublicacion(deps, f, email)
+            redirect(res, `/admin/sources?msg=${encodeURIComponent(msg)}`)
+            return true
+          }
+          const ctx = await derivarPublicacion(deps, f)
+          if (path === '/admin/sources/publish-plan') {
+            deps.audit({ type: 'jobs-publish', op: 'publish-plan', process: ctx.proc.id, template: `${ctx.tpl.template.id}@${ctx.tpl.template.version}`, sha: ctx.rendered.sha256, by: email })
+            send(res, 200, adminPage(deps, nav, 'Publicar el job', publishPlanBody(ctx, token)))
+            return true
+          }
+          // publish-exec: el hash sella el plan CONFIRMADO. Si el estado cambió, no se ejecuta nada.
+          const hash = (f['hash'] ?? '').trim()
+          if (!hash) throw new ValidationError('Falta el sello del plan confirmado.')
+          if (hash !== ctx.plan.hash) {
+            send(res, 409, adminPage(deps, nav, 'Publicar el job', publishPlanBody(ctx, token, 'El estado cambió desde que viste este plan — revisalo de nuevo.')))
+            return true
+          }
+          const out = await ejecutarPublicacion(deps, ctx, email)
+          if (out.outcome === 'ok') {
+            redirect(res, `/admin/sources?msg=${encodeURIComponent(out.msg)}`)
+            return true
+          }
+          // Los otros tres desenlaces YA quedaron en el ledger: la página los muestra con su detalle
+          // crudo (el `errorCode` de Fabric, el `operationId` del LRO) en vez de esconderlos tras un PRG.
+          send(res, 200, await sourcesPage(deps, nav, token, `Error: ${out.msg}`))
+          return true
+        } catch (e) {
+          send(res, statusForError(e), await sourcesPage(deps, nav, token, `Error: ${errMsg(e)}`))
+          return true
+        }
       }
       // Gestión in-app del registro (#107): alta/edición/baja de fuentes, procesos, salidas y mapeos.
       // TODAS son de plataforma (solo admin): un steward no gestiona el registro transversal.
@@ -1083,13 +1191,70 @@ async function sourcesPage(deps: AdminDeps, nav: Chrome, token?: string, msg?: s
         <button class="add">Mapear</button>
       </form>`
   }
+  const publicacion = token && publicaOn(deps) ? await jobsPublishSection(deps, token, processes) : ''
   return adminPage(deps, nav,
     'Fuentes',
     `${feedback}${bajada}${aviso}
      <table><thead><tr>${cols}</tr></thead>
      <tbody>${rows || `<tr><td colspan="${conEstado ? 7 : 5}" class="sub">Sin fuentes registradas.</td></tr>`}</tbody></table>
-     ${gestion}`,
+     ${gestion}${publicacion}`,
   )
+}
+
+/**
+ * Sección «Publicación de jobs» (#107 fase 2): un form por plantilla declarada, el historial del
+ * ledger y la cola de re-verificación de las `desconocida`.
+ *
+ * Publicar es acto de PLATAFORMA (D4): esta sección solo se pinta dentro de `/admin/sources`, que ya
+ * es admin-only, y solo si `publicaOn` — sin plantillas, sin publisher o sin registro escribible no
+ * aparece un solo form.
+ */
+async function jobsPublishSection(deps: AdminDeps, token: string, processes: ProcessRow[]): Promise<string> {
+  const ops = deps.jobsPublish!
+  const csrfIn = `<input type="hidden" name="_csrf" value="${escapeHtml(token)}">`
+  const procOpts = processes
+    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.id)} · ${escapeHtml(p.label)}${p.engine ? ` (item ${escapeHtml(p.engine.itemId)})` : ' (sin item)'}</option>`)
+    .join('')
+  const forms = ops.templates
+    .map((t) => {
+      const campos = t.template.params
+        .map((p) => `<label class="fld"><span>${escapeHtml(p.label)}${p.required ? ' *' : ''}</span><input name="${PUBLISH_PARAM_PREFIX}${escapeHtml(p.name)}"${p.required ? ' required' : ''}></label>`)
+        .join('')
+      return `<form method="post" action="/admin/sources/publish-plan" class="grid">${csrfIn}
+        <input type="hidden" name="template" value="${escapeHtml(t.template.id)}">
+        <label class="fld"><span>Proceso *</span><select name="process" required>${procOpts}</select></label>
+        <label class="fld"><span>Workspace del motor (solo si el proceso aún no tiene item)</span><input name="workspace"></label>
+        <label class="fld"><span>Nombre del item (al crear; por defecto, el id del proceso)</span><input name="item_name"></label>
+        ${campos}
+        <div class="actions"><button class="add">Ver el plan · ${escapeHtml(t.template.label)} <span class="sub">${escapeHtml(t.template.id)}@${escapeHtml(t.template.version)}</span></button></div>
+      </form>`
+    })
+    .join('')
+  const [historial, pendientes] = await Promise.all([ops.ledger.list({ limit: 20 }), ops.ledger.pendingUnknown()])
+  const marca = (o: PublishOutcome): string =>
+    o === 'ok' ? '<b style="color:var(--accent)">✓ ok</b>'
+      : o === 'denegada' ? '<b style="color:var(--err)">⊘ denegada</b>'
+        : o === 'fallida' ? '<b style="color:var(--err)">✕ fallida</b>'
+          : '<b>? desconocida</b>'
+  const filas = historial
+    .map((r) => `<tr><td class="sub">${escapeHtml(fmtWhen(r.at))}</td><td><span class="c">${escapeHtml(r.processId)}</span></td>` +
+      `<td>${escapeHtml(r.templateId)}@${escapeHtml(r.templateVersion)}</td><td>${escapeHtml(r.action)}</td>` +
+      `<td><code>${escapeHtml(r.definitionSha256.slice(0, 12))}…</code></td><td>${marca(r.outcome)}</td><td class="sub">${escapeHtml(r.detail ?? '')}</td></tr>`)
+    .join('')
+  const colaHtml = pendientes.length
+    ? `<p class="sub">Publicaciones con desenlace <b>desconocido</b> (el motor no confirmó): re-observá el item para resolverlas — Vergis nunca las da por publicadas.</p>` +
+      pendientes
+        .map((r) => `<form method="post" action="/admin/sources/publish-reverify" style="display:inline">${csrfIn}<input type="hidden" name="id" value="${r.id}">` +
+          `<button class="add">Re-verificar #${r.id} · ${escapeHtml(r.processId)}</button></form> `)
+        .join('')
+    : ''
+  return `<h2>Publicación de jobs</h2>
+    <p class="sub">Publica en el motor la <b>cáscara</b> del job de un proceso a partir de una plantilla de la instancia. El <b>código</b> del convertidor no se toca: la plantilla solo lo apunta. Se muestra primero el plan y nada se escribe sin confirmarlo.</p>
+    ${forms}
+    <h2>Historial de publicaciones</h2>
+    <table><thead><tr><th>Cuándo</th><th>Proceso</th><th>Plantilla</th><th>Acción</th><th>Definición</th><th>Desenlace</th><th>Detalle</th></tr></thead>
+    <tbody>${filas || '<tr><td colspan="7" class="sub">Sin publicaciones.</td></tr>'}</tbody></table>
+    ${colaHtml}`
 }
 
 /**
@@ -1184,6 +1349,291 @@ async function handleSourcesWrite(deps: AdminDeps, store: SourceRegistryStore, o
     default:
       throw new ValidationError(`Operación desconocida: '${op}'.`)
   }
+}
+
+// ─── Publicación de jobs en el motor (#107 fase 2 · §4-5 del diseño) ─────────
+/**
+ * FAIL-CLOSED EN TRES CAPAS (D4). La publicación existe solo si están las tres piezas:
+ *  · `jobsPublish` cableado — hay credencial de autoría resuelta;
+ *  · al menos UNA plantilla declarada por la instancia (`VERGIS_JOB_TEMPLATES`) — sin plantillas no
+ *    hay nada publicable y la sección no existe;
+ *  · `sourcesAdmin` — sin él no se puede escribir el `engine_ref` sobre el proceso (D10), y una
+ *    publicación que el registro no puede recordar dejaría el motor y Vergis desalineados.
+ * Falta cualquiera ⇒ cero forms y rutas inexistentes: el contrato de regresión cero de fase 1.
+ */
+function publicaOn(deps: AdminDeps): boolean {
+  return deps.jobsPublish != null && deps.jobsPublish.templates.length > 0 && deps.sourcesAdmin != null
+}
+
+/** Prefijo de los campos de parámetro en el form (`p_<nombre>`): aísla los valores del render. */
+const PUBLISH_PARAM_PREFIX = 'p_'
+
+/**
+ * Qué `jobType` de fase 1 le corresponde al item recién publicado (D10: publicar desemboca en la
+ * cadena observar/agendar/pausar, que se mueve por `jobType`).
+ *
+ * `SparkJobDefinition → sparkjob` es HECHO MEDIDO: el hito cero agendó el item de prueba por
+ * `…/jobs/sparkjob/schedules` (crudos en #107). El resto del mapa es **CONJETURA no medida** — se
+ * mantiene porque es lo que la API pública documenta, y el caso desconocido degrada al `itemType`
+ * crudo en vez de inventar un nombre.
+ */
+function jobTypeDeItemType(itemType: string): string {
+  const t = itemType.toLowerCase()
+  if (t === 'sparkjobdefinition') return 'sparkjob'
+  if (t === 'datapipeline') return 'Pipeline' // conjetura
+  if (t === 'notebook') return 'RunNotebook' // conjetura
+  return itemType
+}
+
+/** Todo lo que una publicación necesita, ya derivado y consistente entre sí (plan + insumos). */
+interface PublishContext {
+  tpl: JobTemplateBundle
+  proc: ProcessRow
+  workspaceId: string
+  /** Nombre del item a crear en el motor (irrelevante en un update). */
+  displayName: string
+  values: PublishParams
+  rendered: RenderedDefinition
+  plan: PublishPlan
+}
+
+/**
+ * Deriva el plan de publicación desde el form (D5, fase 1 de dos). Es la ÚNICA derivación: `exec`
+ * vuelve a llamarla y compara hashes, así el sello cubre exactamente los mismos insumos que se
+ * mostraron.
+ *
+ * Δ2: `derivePublishPlan` es puro sobre shas — quien hace la red (el `getDefinition` del motor) y
+ * quien canonicaliza es esta función.
+ *
+ * **La comparación se acota a las parts publicadas** (Δ6, hecho medido): el motor agrega parts
+ * propias (`.platform`) al read-back. Comparar la definición completa marcaría drift eterno.
+ */
+async function derivarPublicacion(deps: AdminDeps, f: Record<string, string>): Promise<PublishContext> {
+  const ops = deps.jobsPublish!
+  const val = (k: string): string => (f[k] ?? '').trim()
+  const tpl = ops.templates.find((t) => t.template.id === val('template'))
+  if (!tpl) throw new ValidationError(`Plantilla desconocida: '${val('template')}'.`)
+  const processId = val('process').toLowerCase()
+  const proc = (await deps.sourcesAdmin!.listProcesses()).find((p) => p.id === processId)
+  if (!proc) throw new ValidationError(`Proceso desconocido: '${processId}'.`)
+
+  const values: PublishParams = {}
+  for (const p of tpl.template.params) values[p.name] = val(PUBLISH_PARAM_PREFIX + p.name)
+  // El render valida sus propias reglas (D11: requeridos presentes, sin claves de más). Sus fallos son
+  // entrada del admin, no del sistema: viajan como 400 para que corrija sin perder la vista.
+  let rendered: RenderedDefinition
+  try {
+    rendered = renderTemplate(tpl.template, tpl.partFiles, values)
+  } catch (e) {
+    throw new ValidationError(errMsg(e))
+  }
+
+  // El destino: si el proceso ya tiene `engine_ref`, MANDA ÉL (publicar no re-apunta un proceso a otro
+  // workspace por un campo de form); si no lo tiene, el workspace se declara acá y el item nace.
+  const workspaceId = proc.engine?.workspaceId ?? val('workspace')
+  if (!workspaceId) throw new ValidationError('Falta el workspace del motor donde publicar.')
+  const itemId = proc.engine?.itemId ?? null
+  const displayName = val('item_name') || proc.id
+
+  const publicados = new Set(rendered.parts.map((p) => p.path))
+  let engineSha: string | null = null
+  if (itemId) {
+    const def = await ops.authoring.getDefinition(workspaceId, itemId)
+    engineSha = def ? canonicalDefinitionSha256(def.parts.filter((p) => publicados.has(p.path))) : null
+  }
+  const lastOk = await ops.ledger.lastOk({ processId: proc.id })
+  let plan: PublishPlan
+  try {
+    plan = derivePublishPlan({
+      processId: proc.id,
+      templateId: tpl.template.id,
+      templateVersion: tpl.template.version,
+      workspaceId,
+      itemId,
+      renderedSha: rendered.sha256,
+      engineSha,
+      lastOkSha: lastOk?.definitionSha256 ?? null,
+      params: values,
+    })
+  } catch (e) {
+    throw new ValidationError(errMsg(e))
+  }
+  return { tpl, proc, workspaceId, displayName, values, rendered, plan }
+}
+
+/**
+ * La página de CONFIRMACIÓN del plan (D5, patrón `revertPlanBody` de #63): qué se va a hacer, sobre
+ * qué destino, con qué plantilla y con qué definición — y el DRIFT declarado, jamás auto-corregido
+ * (D6). El form de ejecución re-manda los mismos insumos + el `hash` que los sella.
+ */
+function publishPlanBody(ctx: PublishContext, token: string, aviso?: string): string {
+  const { plan, tpl, proc } = ctx
+  const back = `<p class="sub"><a href="/admin/sources">← Fuentes</a></p>`
+  const avisoHtml = aviso ? `<p class="msg err">${escapeHtml(aviso)}</p>` : ''
+  const puntos: string[] = [
+    plan.action === 'create'
+      ? `se <b>crea</b> el item «${escapeHtml(ctx.displayName)}» (${escapeHtml(tpl.template.itemType)}) en el workspace <code>${escapeHtml(plan.workspaceId)}</code>`
+      : `se <b>actualiza</b> la definición del item <code>${escapeHtml(plan.itemId ?? '')}</code> del workspace <code>${escapeHtml(plan.workspaceId)}</code>`,
+    `plantilla <code>${escapeHtml(tpl.template.id)}@${escapeHtml(tpl.template.version)}</code>`,
+    `definición <code>${escapeHtml(plan.renderedSha.slice(0, 12))}…</code>`,
+  ]
+  if (plan.sinCambios) puntos.push('el motor ya tiene <b>exactamente</b> esta definición: publicar no cambiaría nada')
+  if (plan.drift) {
+    puntos.push(
+      '⚠ <b>drift</b>: la definición que hay en el motor <b>no</b> es la última publicada desde Vergis — alguien la editó allá. ' +
+        'Publicar la <b>reemplaza</b>; Vergis nunca la corrige por su cuenta.',
+    )
+  }
+  // El caso que el drift booleano no cubre: el motor tiene definición y el ledger no tiene nada `ok`.
+  // Pasa cuando el `engine_ref` de fase 1 apunta a un item PRE-EXISTENTE. No es drift (no hay contra
+  // qué comparar) y es exactamente lo que el humano debe saber antes de sobrescribirlo.
+  if (plan.engineSha !== null && plan.lastOkSha === null) {
+    puntos.push('⚠ el item <b>ya existe</b> en el motor con una definición que <b>Vergis nunca publicó</b> — publicar la sobrescribe')
+  }
+  const paramRows = tpl.template.params
+    .map((p) => `<tr><td><span class="c">${escapeHtml(p.name)}</span></td><td>${escapeHtml(ctx.values[p.name] ?? '')}</td></tr>`)
+    .join('')
+  const ocultos = [
+    `<input type="hidden" name="process" value="${escapeHtml(proc.id)}">`,
+    `<input type="hidden" name="template" value="${escapeHtml(tpl.template.id)}">`,
+    `<input type="hidden" name="workspace" value="${escapeHtml(ctx.workspaceId)}">`,
+    `<input type="hidden" name="item_name" value="${escapeHtml(ctx.displayName)}">`,
+    `<input type="hidden" name="hash" value="${escapeHtml(plan.hash)}">`,
+    ...tpl.template.params.map((p) => `<input type="hidden" name="${PUBLISH_PARAM_PREFIX}${escapeHtml(p.name)}" value="${escapeHtml(ctx.values[p.name] ?? '')}">`),
+  ].join('')
+  return `${back}${avisoHtml}<h2>Publicar el job de <code>${escapeHtml(proc.id)}</code></h2>
+    <p><b>Qué va a pasar:</b></p>
+    <ul>${puntos.map((p) => `<li>${p}</li>`).join('')}</ul>
+    <table><thead><tr><th>Parámetro</th><th>Valor</th></tr></thead><tbody>${paramRows || '<tr><td colspan="2" class="sub">Sin parámetros.</td></tr>'}</tbody></table>
+    <form method="post" action="/admin/sources/publish-exec" onsubmit="return confirm('Esta acción escribe la definición del job en el motor. ¿Confirmar?')">
+      <input type="hidden" name="_csrf" value="${escapeHtml(token)}">${ocultos}
+      <button class="add">Publicar en el motor</button>
+    </form>`
+}
+
+/**
+ * Ejecuta el plan confirmado (D5 fase 2) y sella su desenlace en el ledger (D6): los CUATRO desenlaces
+ * dejan fila, incluido el que no se sabe.
+ *
+ * **`ok` SOLO por read-back (D7)**: se vuelve a leer la definición del motor y se compara
+ * CANÓNICAMENTE (Δ1 — el motor normaliza lo que persiste) y solo sobre las parts publicadas (Δ6 — el
+ * motor agrega las suyas). Un LRO que no culmina es `desconocida` con su `operationId`, jamás
+ * «publicado».
+ */
+async function ejecutarPublicacion(deps: AdminDeps, ctx: PublishContext, by: string): Promise<{ outcome: PublishOutcome; msg: string }> {
+  const ops = deps.jobsPublish!
+  const { plan, tpl, proc, rendered } = ctx
+  const publicados = new Set(rendered.parts.map((p) => p.path))
+  let outcome: PublishOutcome
+  let detail: string | undefined
+  let itemId: string | undefined = plan.itemId ?? undefined
+  try {
+    if (plan.action === 'create') {
+      const creado = await ops.authoring.createItem(ctx.workspaceId, {
+        displayName: ctx.displayName,
+        type: tpl.template.itemType,
+        definition: { parts: rendered.parts },
+      })
+      itemId = creado.itemId
+    } else {
+      await ops.authoring.updateDefinition(ctx.workspaceId, itemId!, { parts: rendered.parts })
+    }
+    const back = await ops.authoring.getDefinition(ctx.workspaceId, itemId!)
+    const leidas = back ? back.parts.filter((p) => publicados.has(p.path)) : []
+    if (back && definitionsEquivalent(leidas, rendered.parts)) {
+      outcome = 'ok'
+    } else {
+      outcome = 'fallida'
+      detail = back
+        ? 'read-back: la definición del motor NO es equivalente a la publicada'
+        : 'read-back: el item no existe en el motor tras la escritura'
+    }
+  } catch (e) {
+    if (e instanceof AuthoringDenied) {
+      outcome = 'denegada'
+      detail = e.errorCode ? `errorCode=${e.errorCode}` : errMsg(e)
+    } else if (e instanceof AuthoringUnknown) {
+      outcome = 'desconocida'
+      detail = e.operationId ? `operationId=${e.operationId}` : errMsg(e)
+    } else if (e instanceof AuthoringError) {
+      outcome = 'fallida'
+      detail = e.errorCode ? `errorCode=${e.errorCode}` : errMsg(e)
+    } else {
+      throw e
+    }
+  }
+  await ops.ledger.record({
+    processId: proc.id,
+    templateId: tpl.template.id,
+    templateVersion: tpl.template.version,
+    workspaceId: ctx.workspaceId,
+    ...(itemId ? { itemId } : {}),
+    action: plan.action,
+    definitionSha256: rendered.sha256,
+    params: ctx.values,
+    outcome,
+    ...(detail ? { detail } : {}),
+    byUser: by,
+  })
+  deps.audit({
+    type: 'jobs-publish', op: 'publish-exec', process: proc.id, template: `${tpl.template.id}@${tpl.template.version}`,
+    sha: rendered.sha256, outcome, by, ...(itemId ? { item: itemId } : {}), ...(detail ? { detail } : {}),
+  })
+  // D10: el create que culminó `ok` desemboca en la cadena de fase 1 — el proceso queda con su
+  // `engine_ref` y desde ahí observar/agendar/pausar funcionan sin tocar nada más.
+  if (outcome === 'ok' && plan.action === 'create' && itemId) {
+    await deps.sourcesAdmin!.upsertProcess(
+      proc.id, proc.label, proc.sourceId,
+      { workspaceId: ctx.workspaceId, itemId, jobType: proc.engine?.jobType ?? jobTypeDeItemType(tpl.template.itemType) },
+      proc.logs, { managed: true },
+    )
+  }
+  const msgs: Record<PublishOutcome, string> = {
+    ok: `Job de ${proc.id} publicado (${plan.action === 'create' ? 'item creado' : 'definición actualizada'}) y verificado por read-back.`,
+    denegada: `El motor DENEGÓ la publicación de ${proc.id}${detail ? ` — ${detail}` : ''}.`,
+    fallida: `La publicación de ${proc.id} falló${detail ? ` — ${detail}` : ''}.`,
+    desconocida: `La publicación de ${proc.id} quedó DESCONOCIDA${detail ? ` — ${detail}` : ''}; re-verificala desde la lista.`,
+  }
+  return { outcome, msg: msgs[outcome] }
+}
+
+/**
+ * «Re-verificar» una publicación `desconocida` (D7): re-observa el item por `getDefinition`, compara
+ * canónicamente contra el sha que se intentó publicar y resuelve la fila con el desenlace MEDIDO.
+ * Nunca adivina: si el motor no responde, la fila sigue desconocida.
+ */
+async function reverificarPublicacion(deps: AdminDeps, f: Record<string, string>, by: string): Promise<string> {
+  const ops = deps.jobsPublish!
+  const id = Number((f['id'] ?? '').trim())
+  if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Id de publicación inválido.')
+  const row = (await ops.ledger.pendingUnknown()).find((r) => r.id === id)
+  if (!row) throw new ValidationError(`La publicación #${id} no está pendiente de re-verificación.`)
+  if (!row.itemId) throw new ValidationError(`La publicación #${id} no dejó item conocido: no hay qué re-observar (buscá el item por nombre en el motor).`)
+  const tpl = ops.templates.find((t) => t.template.id === row.templateId)
+  if (!tpl) throw new ValidationError(`La plantilla '${row.templateId}' ya no está declarada: no se puede acotar la comparación a sus partes.`)
+  const publicados = new Set(tpl.template.parts.map((p) => p.path))
+  const def = await ops.authoring.getDefinition(row.workspaceId, row.itemId)
+  const sha = def ? canonicalDefinitionSha256(def.parts.filter((p) => publicados.has(p.path))) : null
+  const outcome: Exclude<PublishOutcome, 'desconocida'> = sha === row.definitionSha256 ? 'ok' : 'fallida'
+  const detail = def
+    ? outcome === 'ok' ? 'read-back: el motor tiene la definición publicada' : `read-back: el motor tiene otra definición (${sha?.slice(0, 12)}…)`
+    : 'read-back: el item no existe en el motor'
+  await ops.ledger.resolveUnknown(id, { outcome, detail, itemId: row.itemId, byUser: by })
+  deps.audit({
+    type: 'jobs-publish', op: 'publish-reverify', process: row.processId, template: `${row.templateId}@${row.templateVersion}`,
+    sha: row.definitionSha256, outcome, by, item: row.itemId, detail,
+  })
+  if (outcome === 'ok' && row.action === 'create') {
+    const proc = (await deps.sourcesAdmin!.listProcesses()).find((p) => p.id === row.processId)
+    if (proc && !proc.engine) {
+      await deps.sourcesAdmin!.upsertProcess(
+        proc.id, proc.label, proc.sourceId,
+        { workspaceId: row.workspaceId, itemId: row.itemId, jobType: jobTypeDeItemType(tpl.template.itemType) },
+        proc.logs, { managed: true },
+      )
+    }
+  }
+  return `Publicación #${id} re-verificada: ${outcome === 'ok' ? 'el motor tiene la definición publicada' : detail}.`
 }
 
 /** Tipo de motor que corre el proceso, legible, + si es un Notebook (debe migrar a Spark Job). */
