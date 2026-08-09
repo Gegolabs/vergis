@@ -1,0 +1,21 @@
+# Plantillas de publicación de jobs — muestra de `VERGIS_JOB_TEMPLATES` (issue #107 fase 2).
+#
+# En una instancia real este archivo y su directorio `parts/` viven en el REPO DE LA INSTANCIA y los
+# versiona su flujo repo→despliegue (D3): Vergis no los edita in-app, solo registra
+# `template_id@version` en cada publicación.
+#
+# Vergis publica la CÁSCARA del job (el item del motor que apunta al código), nunca el código del
+# convertidor (D2): `main_file` apunta a `Files/code/…` del lakehouse de la instancia — terreno de
+# la instancia, no del Producto.
+#
+# Las rutas `file:` se resuelven relativas AL DIRECTORIO DE ESTE ARCHIVO.
+templates:
+  - id: sjd_ingesta_excel
+    label: "Ingesta Excel (SJD estándar)"
+    version: "1.0"                       # string entre comillas: en YAML, 1.0 sin comillas es el número 1
+    itemType: SparkJobDefinition         # jobType de fase 1: sparkjob
+    params:
+      - { name: main_file, label: "Script principal (abfss)", required: true }
+      - { name: lakehouse_id, label: "Lakehouse por defecto", required: true }
+    parts:
+      - { path: SparkJobDefinitionV1.json, file: parts/sjd-ingesta-excel.json }
