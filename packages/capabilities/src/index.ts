@@ -97,6 +97,8 @@ export { deriveRevertPlan, executeRevertPlan, revertManifestName, buildRevertMan
 export type { RevertPlan, RevertDeps, RevertRef, RevertResult, ClaveAccion } from './intake-revert'
 export { createFabricScheduler, createFabricEngineClient } from './fabric-engine'
 export type { FabricScheduler, EngineResolver } from './fabric-engine'
+export { createFabricItemAuthoring, AuthoringError, AuthoringDenied, AuthoringConflict, AuthoringUnknown } from './fabric-authoring'
+export type { ItemAuthoringClient, ItemDeclaration, ItemDefinition, DefinitionPart } from './fabric-authoring'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
 export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION } from './governance-store'
