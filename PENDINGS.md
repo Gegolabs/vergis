@@ -19,8 +19,6 @@ la promoción PENDINGS→TODO se pide, no se toma.
   impersonada contra motor vivo (#145), el eslabón `serve-rls → runSpec` con identidad del roster
   (#145), y la entrega HTTP real por sink recargado (la línea del fan-out, #151).
   `reg 2026-08-07 · act 2026-08-10`
-- **`CHANGELOG.md` sin cortar** — termina en 0.14.0; lo mergeado hoy no tiene entrada ni tag. El
-  corte de versión es decisión de César (precedente: D-05 del 2026-08-06). `reg 2026-08-07`
 - **`VERGIS_CSRF_SECRET` no definido en PROD ni en QA** — el server genera uno aleatorio al arrancar
   y lo avisa: los formularios de gestión abiertos no sobreviven un restart ni se comparten entre
   réplicas. Fijarlo en `vergis.env` de cada VM. `reg 2026-08-06`
@@ -46,7 +44,11 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   del A/B, los 2 veredictos y el reporte de bug de esta sesión. Perderlos borraría la evidencia del
   experimento. Decidir: `git init` local (sin remoto basta) o declarar en el arnés que es scratch
   desechable. `reg 2026-08-07`
-- **`~/.claude/settings.json` modificado sin atribución** — aparece `M` en el repo `dotclaude` y
-  **no hay evidencia en esta sesión de haberlo tocado** (podría ser de otra sesión o del propio
-  `/model`, que persiste el default). No se commiteó por eso (Norma 6). Revisar el diff a mano y
-  sellarlo o revertirlo. `reg 2026-08-07`
+- **`dotclaude` con cambios sin sellar de otras sesiones** — *revisado el 2026-08-10, y el diff es
+  SANO*: `settings.json` gana un hook `Stop` que llama `hooks/sync-cmux-title.sh` (el script existe,
+  ejecutable, del 08-08) y reubica la clave `model` sin cambiar su valor (el `/model` reescribe el
+  archivo); `WATCH.md`+`WATCH-logs.md` traen la **ocurrencia 7 de W-01** completa (rebase ajeno en
+  el worktree de Cibeles, hoy); `commands/label.md` borrado; `personas/alida-…` de la sesión nuncio.
+  **NO se selló a propósito**: son cambios de sesiones que pueden seguir vivas, y commitear el
+  estado parcial de otro actor es exactamente el fenómeno W-01 que el propio diff está registrando.
+  Lo que queda es que cada sesión selle lo suyo. `reg 2026-08-07 · act 2026-08-10`

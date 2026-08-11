@@ -4,6 +4,52 @@ Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
 
+## 0.15.0 — 2026-08-10
+
+**El nodo que se explica a sí mismo** — 21 PRs (#140–#160) sobre los issues #107 #110 #111 #113
+#138 #139. Tests 1409 → 1661.
+
+- **Seguridad — el fix que cambia la postura**: cinco rutas de Miranda no verificaban dueño de
+  sesión (#142). No eran las dos que el hallazgo original reportaba: además de `message` y
+  `preview`, tampoco lo hacían `GET /miranda/s/:id` (transcript, intent, QC y draft completos),
+  `validate-intent` y **`publish`** — cualquier identidad con scope podía publicar el draft ajeno
+  como PI servido. Agravante: la lista SÍ filtraba por dueño, o sea que había **ilusión de
+  privacidad** que la URL directa saltaba. Guard `dueño-o-admin` central en las cinco (404
+  inexistente / 403 ajena; sesión legada sin `created_by` = solo-admin, fail-closed), con
+  experimento de refutación: removido el guard, 10 tests caen. El gate del proxy pasa a
+  comparación en **tiempo constante** (#160).
+- **`GET /contrato` — el binario contesta «¿esto exige reiniciar?» y «¿tomaste mi archivo?»**
+  (#139, N1 en #141 y N2 en #143). Derivado del estado, jamás declarado a mano: la misma llamada
+  que instala un watch lo registra, y las claves de env se descubren corriendo `configFromEnv`
+  sobre un Proxy que registra accesos —lo que además delata las presentes-y-jamás-consumidas—.
+  `artifacts` compara sha256 de lo CARGADO contra lo que hay EN DISCO: distinto ⇒ `pending`.
+  N2 agrega el **delta entre versiones** con journal por instancia, y `nowReloadable`/`nowBootOnly`
+  como campos de primera clase: la reclasificación es el dato que invalida las reglas del operador.
+- **Config recargable en caliente** (#138·2 fase 1, #151): `VERGIS_NOTIFY`, `VERGIS_PI_OWNERS` y
+  `VERGIS_SOURCES` salen de la vía que exige recrear el proceso — watch por slice con
+  validate-before-swap (un yaml roto conserva lo vigente y queda `ok:false` en el ring), `SIGHUP`
+  recarga todo lo recargable, y la reclasificación `bootOnly→reloadableContent` aparece sola en
+  `/contrato`. La respuesta del binario a «¿esto exige reiniciar?» cambió de «sí» a «no» para esos
+  tres, y lo dice él mismo.
+- **Publicación de definiciones de jobs en el motor** (#107 fase 2, #152–#158): autoría de items
+  verificada contra el tenant real antes de construir, plantillas de job, publicación, superficie
+  admin y wiring. La comparación es **canónica**, no byte-a-byte: el motor normaliza el payload
+  (`""→null`, re-serialización) y compararlo crudo producía falsos negativos.
+- **Miranda**: preview de RLS con **dos identidades de un roster declarado por instancia**
+  (#145) — jamás impersonate libre, sin roster la superficie es cero, y cada render impersonado se
+  audita con el actor real. Y se retira una promesa falsa: `MIRANDA_VALIDATE_CAPS` ofrecía
+  `send-email`/`send-slack`, capabilities que no existen en el repo — Miranda validaba OK drafts
+  que el serving rechazaba al registrarlos (#144).
+- **Rendimiento del arranque en frío** (#140): medido que **no escala con N PIs** —
+  `sourceStateOf` corre 1 vez por conexión, no por PI, y la evaluación por PI es pura en memoria.
+  Lo único serial real eran las 2 queries de sistema por conexión; paralelizadas, 122,5 ms → 61,7 ms.
+- **Gobernanza y supply chain**: ADR-002 fija el corte open-core antes de que lo fije el primer
+  contribuidor externo (#146); catálogo de convenciones de plataforma sembrado en `rubric/` (#147);
+  endurecimiento D8 de supply chain (#148), manifiesto de `packages/miranda` en el Dockerfile
+  (#149) y fix de audit (#150). **Renovate pasa a correr self-hosted en el CI** (#160): el cooldown
+  de 14 días del ADR-001 llevaba desde junio declarado pero inerte, porque instalar la GitHub App
+  exige un acto humano que nunca ocurrió.
+
 ## 0.14.0 — 2026-08-06
 
 **El barrido del backlog** — 15 frentes en una sesión (issues #61 #62 #63 #65 #66 #95 #99 #100 #101
