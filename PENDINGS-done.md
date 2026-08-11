@@ -6,6 +6,16 @@ cerrar.
 
 ## Cerradas con veredicto
 
+- **El delta sin desplegar / PROD en 0.14.0** (reg 2026-08-07, act 08-10).
+  **Cerrado 2026-08-11 22:21:** desplegado **0.15.0** a `vm-vergis` con ventana aprobada por César.
+  8/8 PIs en 200 con pie `Vergis v0.15.0`, `healthz ok:true phase:serving pis:{8,8}`, sin regresión.
+  Ensayo previo en QA el 10-ago (6/6) y QA devuelta a `deallocated`. **Corte medido: 10.511 ms** —
+  42 % sobre los 7.391 ms que cita la regla 17 bis del lab; la causa del delta **no está medida** y
+  no se le atribuye ninguna. Dos de las cuatro conjeturas que esperaban este deploy quedaron
+  **verificadas** (#139·N2 siembra con `primer-registro`; #151 reclasifica en producción con 4
+  watches y `SIGHUP`); la de #145 **sigue sin verificar** porque PROD no declara
+  `MIRANDA_PREVIEW_IDENTITIES`. Registro completo en el `BITACORA.md` del lab (`778dd55`).
+
 - **`VERGIS_VERSION` no está re-exportado por el índice de `@vergis/capabilities`** (reg 2026-08-07).
   **Cerrado 2026-08-10 (D-13):** se **bendice el import directo a módulos-hoja**, documentado en el
   sitio que lo usa. Lo que decidió: el mismo lote produjo un segundo caso idéntico —`server/pdf.ts`
