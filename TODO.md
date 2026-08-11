@@ -37,6 +37,11 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
 - [ ] **Revisión (suya o de abogado) del borrador de `CONTRIBUTING.md`** — la cláusula DCO +
   licencia de contribución (11/D5, aprobada) se redacta como borrador y NO se publica sin esta
   revisión. La ventana del dual licensing se cierra con el primer PR externo sin acuerdo.
+  **Borrador REDACTADO 2026-08-10** en `CONTRIBUTING.draft.md` (D-18). El nombre no es cosmético:
+  GitHub muestra `CONTRIBUTING.md` a todo el que abre un issue o PR, y ahí la cláusula empieza a
+  obligar a terceros — **renombrarlo ES el acto de publicación**, y ése es tuyo. Dos cosas
+  marcadas dentro del borrador esperan dato: la redacción legal de la cláusula y la dirección de
+  contacto de seguridad (`security@gegolabs.com`, sin confirmar).
 
 ### Pendientes de sesión 2026-06-11
 

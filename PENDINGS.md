@@ -19,9 +19,21 @@ la promoción PENDINGS→TODO se pide, no se toma.
   impersonada contra motor vivo (#145), el eslabón `serve-rls → runSpec` con identidad del roster
   (#145), y la entrega HTTP real por sink recargado (la línea del fan-out, #151).
   `reg 2026-08-07 · act 2026-08-10`
-- **`VERGIS_CSRF_SECRET` no definido en PROD ni en QA** — el server genera uno aleatorio al arrancar
-  y lo avisa: los formularios de gestión abiertos no sobreviven un restart ni se comparten entre
-  réplicas. Fijarlo en `vergis.env` de cada VM. `reg 2026-08-06`
+- **PROD sigue en 0.14.0: el deploy de 0.15.0 quedó como hand-off** — QA está en **0.15.0**
+  (ensayo 2026-08-10 21:10, 6/6 PIs en 200, `healthz ok:true phase:serving`). PROD **no** se subió:
+  al llegar al repo de la instancia (`clientes/ratio/hijuelas/arbol/lab`) el árbol tenía 5 archivos
+  modificados y 2 sin trackear **de otra sesión** —incluido `RESOURCES.md`, fuente de verdad del
+  runbook— y su `git log` mostraba **dos cierres del mismo día sobre esa misma VM**, con `P-22`/
+  `P-174a` vivas (la VM sirve un respaldo del mapa de identidad). Es la compuerta de `/ww:work run`:
+  árbol ajeno sin sellar ⇒ se reporta antes de escribir encima. **Ocurrencia 8 de W-01, registrada.**
+  Rollback listo si se retoma: digest previo `sha256:ba001f0e…` + `compose.yml.bak-1786409546`.
+  `reg 2026-08-10`
+- **`VERGIS_CSRF_SECRET` no definido en QA** — *actualizado 2026-08-10*: en **PROD ya está aplicado**
+  (sesión de A.R.B.O.L. del 2026-08-10 tarde, KV `arbol-secrets/vergis-csrf-secret`, corte medido
+  6.597 ms). En **QA sigue sin definir** — verificado hoy: `vergis.env` de QA no declara ninguno de
+  `VERGIS_NOTIFY|PI_OWNERS|SOURCES|POLICIES` ni el CSRF. Consecuencia observable: `/contrato` reporta
+  `watches: []` en QA, que **no es defecto** sino ausencia de archivos que vigilar.
+  `reg 2026-08-06 · act 2026-08-10`
 - **QA: 403 del service principal al observar 2 items del motor** (`ingest_finanzas_saldos`,
   `ingest_personas_asistencia`) — el lazo de frescura degrada como fue diseñado (registra y sigue),
   pero el entorno QA queda sin observabilidad real de esos procesos. Permisos del SP en el
