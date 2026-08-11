@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TABLE_RUNTIME_SOURCE, vtCsvCell, vtCsv, vtCsvName } from '../packages/capabilities/src/table-runtime'
+import { TABLE_RUNTIME_SOURCE, vtCsvCell, vtCsv, vtCsvName, vtDownloadName } from '../packages/capabilities/src/table-runtime'
 import { TABLE_INTERACTIVE_CSS } from '../packages/capabilities/src/piece-css'
 
 /**
@@ -120,5 +120,28 @@ describe('vtCsvName · nombre del archivo (GH #61 / D7)', () => {
 
   it('título vacío → base «tabla»', () => {
     expect(vtCsvName('', 'Listado', '2026-08-06', false)).toBe('tabla--listado--2026-08-06.csv')
+  })
+})
+
+describe('vtDownloadName · la gramática ÚNICA de nombre de archivo (unificación #61/#65)', () => {
+  // La gramática vivía escrita dos veces (`vtCsvName` y `pdfFilename`). Ahora ambas delegan acá.
+  // Los tests de arriba y los de `pdfFilename` (tests/pdf-client.test.ts) siguen verdes sin tocarse:
+  // ESA es la prueba de que la unificación preservó el comportamiento de las dos.
+  it('produce la misma forma para cualquier extensión y fallback', () => {
+    expect(vtDownloadName('Reporte Facturas', 'Listado', '2026-08-06', true, 'csv', 'tabla')).toBe(
+      'reporte-facturas--listado--2026-08-06--filtrado.csv',
+    )
+    expect(vtDownloadName('Reporte Facturas', 'Listado', '2026-08-06', true, 'pdf', 'documento')).toBe(
+      'reporte-facturas--listado--2026-08-06--filtrado.pdf',
+    )
+  })
+
+  it('el fallback solo aparece con título vacío, y es el que le pase cada llamador', () => {
+    expect(vtDownloadName('', 'x', '2026-08-06', false, 'csv', 'tabla')).toBe('tabla--x--2026-08-06.csv')
+    expect(vtDownloadName('', 'x', '2026-08-06', false, 'pdf', 'documento')).toBe('documento--x--2026-08-06.pdf')
+  })
+
+  it('viaja al navegador: la fuente inyectada la incluye (si no, el CSV del cliente rompería)', () => {
+    expect(TABLE_RUNTIME_SOURCE).toContain('vtDownloadName(')
   })
 })

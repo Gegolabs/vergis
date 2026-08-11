@@ -5,9 +5,39 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) |
 
 ---
+
+## D-14 · 2026-08-10 — La baja del port a Go de `TODO.md` (y el delta que la funda)
+
+- **Bifurcación**: César pidió detalle para evaluar si dar de baja el port del kernel a Go. ¿Se descarta el port, se deja el pendiente, o se hace otra cosa?
+- **Decidido** (mandato explícito de César, «baja el port a Go»): **no se descarta el port — se retira el duplicado**. La decisión ya vivía en ADR-001 §Decisión·2; la línea de `TODO.md` la repetía con menos matiz y **había quedado falsa**: ADR-002 catalogó `packages/policy` como pieza abierta prioridad 1, con lo que «Custos como producto standalone» dejó de ser driver de ingreso. El ADR gana un delta con el reencuadre, los disparadores vivos (embedding, librería/WASM — ninguno con demanda) y la contra-consideración del Motor L (#113·09), etiquetada como leída-no-medida.
+- **Colateral**: la cifra «2.100 iteraciones de property testing» del ADR-001 **no se reproduce** — lo medido es 800+800 = 1.600 (2.400 aserciones). Corregida con nota visible. La conclusión del ADR no se cae; la cifra era carga y estaba mal.
+- **Informe**: `work/007-informe-port-go-2026-08-10/01-informe-baja-port-go-v1.0.md` (+ PDF en `export/`).
+- **Costo de revertir**: nulo — reponer una línea en `TODO.md`. El port sigue disponible con sus disparadores sellados.
+
+## D-13 · 2026-08-10 — Se bendice el import directo a módulos-hoja de `@vergis/capabilities`
+
+- **Bifurcación**: pendiente abierto desde el 07 (`VERGIS_VERSION` importado por ruta relativa en `server/contract.ts`): ¿re-exportar en el índice del package, o bendecir el import directo a módulos-hoja?
+- **Decidido**: **bendecir el import directo**, con dos requisitos — el módulo-hoja no tiene imports propios, y el import lleva su porqué escrito al lado. Lo que inclinó la balanza: este mismo lote produjo un segundo caso con la razón idéntica (`server/pdf.ts` → `table-runtime`), y la razón es dura, no de gusto: entrar por el índice arrastra vega/mssql a tests de módulos que son puros por contrato. Dos casos con la misma causa dejan de ser excepción.
+- **Costo de revertir**: bajo — añadir los re-exports al índice y cambiar 2 líneas de import.
+
+## D-12 · 2026-08-10 — Versiones de GitHub Actions elegidas aplicando el cooldown del propio proyecto
+
+- **Bifurcación**: el pendiente decía «subir `checkout`/`setup-node` a v5». Al medir, la vigente es **v7** y hay una v46.2.2 recién salida del action de Renovate. ¿Se sigue la letra del pendiente, se toma lo último, o se aplica el criterio del proyecto?
+- **Decidido**: **aplicar el `minimumReleaseAge` de 14 días del propio `renovate.json`** como criterio de selección. `checkout@v7` (publicada 07-20) y `setup-node@v7` (07-14) lo cumplen; para el action de Renovate se eligió **v46.1.21** (07-27) descartando v46.2.2/v46.2.1/v46.2.0 por tener 1/8/13 días. El arnés que hace cumplir el cooldown no se salta el cooldown.
+- **No tocadas a mano**: las `docker/*` del build — las propondrá Renovate con su changelog, que es exactamente para lo que se encendió.
+- **Costo de revertir**: bajo — son líneas de `uses:`; el CI valida el cambio en el mismo push.
+
+## D-11 · 2026-08-10 — Renovate corre SELF-HOSTED en el CI, no como GitHub App
+
+- **Bifurcación**: `renovate.json` existe desde el 2026-06-11 pero es **inerte** sin la App instalada, e instalarla exige consentimiento OAuth del owner de la org (acción humana no automatizable). Opciones: (a) Renovate self-hosted por GitHub Actions, (b) migrar a Dependabot nativo, (c) seguir esperando la instalación, (d) nada.
+- **Decidido** (César eligió A al presentarle las cuatro): **(a) self-hosted** — `.github/workflows/renovate.yml`, semanal + `workflow_dispatch`. Conserva el `renovate.json` **tal cual**, sin traducir nada: el cooldown de 14 días, `osvVulnerabilityAlerts` y el pinning por digest siguen siendo los ya razonados. Dependabot habría exigido reescribir la config y su pinning de Actions es más limitado.
+- **Sub-decisión — fail-closed**: sin el secret `RENOVATE_TOKEN` el workflow **falla en rojo** en vez de saltarse el trabajo. Misma doctrina que #117: un control que no corre tiene que distinguirse de un control que corrió y no encontró nada. Un scheduled run rojo ES la señal de que el cooldown no está activo.
+- **También**: `RENOVATE_REQUIRE_CONFIG=required` — sin config en el repo, aborta; los defaults de Renovate **no** traen el cooldown, que es su razón de ser acá.
+- **Hand-off**: crear el PAT y guardarlo como secret. Es lo único que queda, y es de César.
+- **Costo de revertir**: nulo — borrar un archivo de workflow.
 
 ## D-10 · 2026-08-08 — Deltas de arquitectura del plan 006 sobre el diseño de la fase 2 de #107
 

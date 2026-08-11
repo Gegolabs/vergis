@@ -30,6 +30,37 @@ export function debounce(fn: () => void, ms: number): { trigger: () => void; can
 }
 
 /**
+ * ¿Este evento del directorio corresponde a un cambio del archivo vigilado?
+ *
+ * Los tres casos, y por qué:
+ *  - **`fn === base`** — el propio archivo, con nombre. Dispara. Es el caso normal.
+ *  - **`fn` con otro nombre** — cambió un vecino identificado. No dispara; nunca lo hizo.
+ *  - **`fn` ausente (`null`/`''`)** — macOS entrega esto cuando sabe que ALGO cambió en el
+ *    directorio pero no QUÉ. Disparar siempre acá hacía que las escrituras del store —cuando
+ *    `VERGIS_OUT` comparte directorio con los yaml vigilados— gatillaran recargas y ensuciaran
+ *    el ring de `/contrato` con eventos sin cambio detrás. Ignorarlo tampoco sirve: se perderían
+ *    cambios reales. Se **desambigua por mtime**: dispara solo si el vigilado cambió de veras.
+ *
+ * Un archivo que desaparece o se vuelve ilegible (`mtime → null`) cuenta como cambio: fail-loud,
+ * que el consumidor vea el error en vez de silenciarlo acá.
+ *
+ * Pura y exportada a propósito: el caso interesante —`filename` ausente— NO se puede producir a
+ * voluntad con el `fs.watch` real, así que un test de integración sobre él sería un instrumento
+ * que no sabe reprobar. Acá la decisión se mide de forma determinista.
+ */
+export function decideWatchEvent(
+  fn: string | null | undefined,
+  base: string,
+  lastMtime: number | null,
+  mtimeOf: () => number | null,
+): { trigger: boolean; mtime: number | null } {
+  if (fn === base) return { trigger: true, mtime: mtimeOf() }
+  if (fn) return { trigger: false, mtime: lastMtime }
+  const now = mtimeOf()
+  return now === lastMtime ? { trigger: false, mtime: lastMtime } : { trigger: true, mtime: now }
+}
+
+/**
  * Observa `paths` (archivos o directorios) y llama `onChange` (debounced) ante cualquier evento.
  * Tolerante: un path que no se puede observar se loguea y se omite (no tumba el arranque). Devuelve
  * un `unwatch()` que cierra los watchers y cancela el debounce pendiente.
@@ -58,9 +89,21 @@ export function watchPaths(
         // cambia el inode del archivo → un `watch` DIRECTO sobre él quedaría mirando el inode viejo y
         // dejaría de disparar en silencio. El watch del directorio sobrevive el rename.
         const base = basename(p)
+        // El veredicto por evento vive en `decideWatchEvent` (ver su doc: el caso `filename`
+        // ausente de macOS se desambigua por mtime para no recargar por escrituras vecinas).
+        const mtimeOf = (): number | null => {
+          try {
+            return statSync(p).mtimeMs
+          } catch {
+            return null
+          }
+        }
+        let lastMtime = mtimeOf()
         watchers.push(
           watch(dirname(p), { persistent: false }, (_ev, fn) => {
-            if (!fn || fn === base) d.trigger()
+            const verdict = decideWatchEvent(fn, base, lastMtime, mtimeOf)
+            lastMtime = verdict.mtime
+            if (verdict.trigger) d.trigger()
           }),
         )
       }
