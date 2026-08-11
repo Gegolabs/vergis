@@ -6,6 +6,47 @@ cerrar.
 
 ## Cerradas con veredicto
 
+- **`VERGIS_VERSION` no está re-exportado por el índice de `@vergis/capabilities`** (reg 2026-08-07).
+  **Cerrado 2026-08-10 (D-13):** se **bendice el import directo a módulos-hoja**, documentado en el
+  sitio que lo usa. Lo que decidió: el mismo lote produjo un segundo caso idéntico —`server/pdf.ts`
+  importando `table-runtime`— y ambos tienen la misma razón dura: entrar por el índice de
+  `@vergis/capabilities` arrastra vega/mssql a tests de módulos que son puros por contrato. Con dos
+  casos deja de ser una excepción y pasa a ser el patrón. Requisito: el módulo-hoja debe no tener
+  imports propios (`version` y `table-runtime` los tienen en cero) y el import lleva su porqué al
+  lado. Revertir = añadir los re-exports al índice y cambiar 2 líneas.
+
+- **Gate token comparado con `!==`, no constant-time** (reg 2026-08-07).
+  **Cerrado 2026-08-10:** `constantTimeEqual` en `server/routes.ts` (D6 del diseño 004/10), más
+  `headerValue()` para que un header repetido (array) falle cerrado en vez de compararse crudo.
+  *Honestidad del instrumento:* la mutación de vuelta a `!==` **no reprueba** ningún test — una
+  comparación en tiempo constante no tiene diferencia observable en la salida, que es justamente su
+  punto. Lo que sí está testeado: la semántica preservada (3 casos nuevos en `routes.test.ts`) y
+  `constantTimeEqual` con sus propios tests en `http-util`.
+
+- **Gramática de nombre de archivo duplicada** entre `vtCsvName` (#61) y `pdfFilename` (#65)
+  (reg 2026-08-06). **Cerrado 2026-08-10:** unificada en `vtDownloadName`, única implementación;
+  `vtCsvName` la envuelve para el navegador (va en `PURE_FNS`, viaja por `.toString()`) y
+  `server/pdf.ts` la importa. Restricción que la partida no conocía: `vtCsvName` es autocontenida a
+  propósito, así que la unificación tenía que serlo también. Evidencia de preservación: las dos
+  suites de nombres siguen verdes **sin tocarse**.
+
+- **`import type { TableColumn }` sin uso** en `render-csv-piece.ts` (reg 2026-08-06).
+  **Cerrado 2026-08-10:** eliminado.
+
+- **`actions/checkout@v4` y `actions/setup-node@v4` avisan deprecación de Node 20**
+  (reg 2026-08-06). **Cerrado 2026-08-10:** ambas a **v7** (no a v5 como decía la partida — v7 es
+  la vigente y cumple el cooldown de 14 días del propio `renovate.json`: publicadas el 07-20 y el
+  07-14). Las `docker/*` quedan deliberadamente sin tocar a mano: las propondrá Renovate con su
+  changelog, que es para lo que se encendió.
+
+- **Recargas espurias si los yaml vigilados comparten directorio con `VERGIS_OUT`**
+  (reg 2026-08-08). **Cerrado 2026-08-10:** el evento sin nombre de macOS (`filename=null`) se
+  desambigua por mtime — dispara solo si el archivo vigilado cambió de veras; si desaparece,
+  dispara igual (fail-loud). La decisión se extrajo a `decideWatchEvent`, pura y exportada, porque
+  el caso interesante **no se puede producir a voluntad con el `fs.watch` real** y un test de
+  integración sobre él habría sido un instrumento que no sabe reprobar. Validado por mutación:
+  quitar el guard hace fallar 2 tests.
+
 - **`Dockerfile` omitía el manifiesto de `packages/miranda`** (reg 2026-08-07).
   **Cerrado 2026-08-08:** COPY añadido a ambos stages — PR #149. El experimento del build
   (`docker build` exit 0, daemon real) decidió corrección sobre omisión documentada, como mandaba

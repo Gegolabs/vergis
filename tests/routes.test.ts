@@ -116,6 +116,27 @@ describe('routes · gate opt-in (A10)', () => {
     createRequestHandler(deps({ gateSecret: 's3cr' }))(mkReq('/healthz'), res)
     expect(calls.status).toBe(200)
   })
+  // D6 del diseño 004/10: la comparación pasó a tiempo constante. Estos casos fijan la SEMÁNTICA
+  // (qué se acepta y qué no); que además sea constant-time lo garantiza `constantTimeEqual`, con
+  // sus propios tests en http-util. Un token de largo distinto y uno del mismo largo con un byte
+  // cambiado deben ser indistinguibles en resultado: ambos 403.
+  it('token del mismo largo con un byte distinto → 403', () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(deps({ gateSecret: 's3cr' }))(mkReq('/', 'GET', { 'x-gate-token': 's3cX' }), res)
+    expect(calls.status).toBe(403)
+  })
+  it('token con prefijo correcto pero más corto → 403 (no hay crédito por acertar el prefijo)', () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(deps({ gateSecret: 's3cr' }))(mkReq('/', 'GET', { 'x-gate-token': 's3c' }), res)
+    expect(calls.status).toBe(403)
+  })
+  it('header REPETIDO (llega como array) → 403, no se concatena ni se toma el primero', () => {
+    const { res, calls } = mkRes()
+    const req = mkReq('/', 'GET', {})
+    ;(req.headers as Record<string, unknown>)['x-gate-token'] = ['s3cr', 'otro']
+    createRequestHandler(deps({ gateSecret: 's3cr' }))(req, res)
+    expect(calls.status).toBe(403)
+  })
 })
 
 describe('routes · admin / config / ready', () => {

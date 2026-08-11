@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { debounce, createCachedScanner, watchPaths, swapRecordInPlace, reloadLiveList } from '../server/hot-reload'
+import { debounce, createCachedScanner, watchPaths, swapRecordInPlace, reloadLiveList, decideWatchEvent } from '../server/hot-reload'
 import { parseDomainsConfig } from '@vergis/capabilities'
 
 describe('swapRecordInPlace (issue #50 · hot-reload de perfiles de conexión)', () => {
@@ -141,6 +141,40 @@ describe('watchPaths', () => {
     un()
     rmSync(dir, { recursive: true, force: true })
     expect(fired).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('decideWatchEvent · desambiguación del evento sin nombre (recargas espurias)', () => {
+  // El fenómeno: `VERGIS_OUT` comparte directorio con los yaml vigilados, el store escribe, macOS
+  // entrega `filename=null`, y el watcher recargaba sin que el archivo vigilado hubiera cambiado.
+  const stat = (v: number | null) => () => v
+
+  it('el archivo vigilado, con su nombre: dispara y refresca el mtime', () => {
+    expect(decideWatchEvent('policy.yaml', 'policy.yaml', 100, stat(140))).toEqual({ trigger: true, mtime: 140 })
+  })
+
+  it('un vecino IDENTIFICADO: no dispara y no toca el mtime conocido', () => {
+    expect(decideWatchEvent('otro.json', 'policy.yaml', 100, stat(999))).toEqual({ trigger: false, mtime: 100 })
+  })
+
+  it('EL CASO: evento sin nombre y el vigilado intacto ⇒ NO dispara (era la recarga espuria)', () => {
+    expect(decideWatchEvent(null, 'policy.yaml', 100, stat(100))).toEqual({ trigger: false, mtime: 100 })
+    expect(decideWatchEvent(undefined, 'policy.yaml', 100, stat(100))).toEqual({ trigger: false, mtime: 100 })
+    expect(decideWatchEvent('', 'policy.yaml', 100, stat(100))).toEqual({ trigger: false, mtime: 100 })
+  })
+
+  // CONTROL de que el guard sabe reprobar: si la desambiguación fuera «ignorar todo evento sin
+  // nombre», este caso —cambio REAL que solo llegó sin nombre— se perdería en silencio.
+  it('evento sin nombre pero el vigilado SÍ cambió ⇒ dispara (no se pierde el cambio real)', () => {
+    expect(decideWatchEvent(null, 'policy.yaml', 100, stat(250))).toEqual({ trigger: true, mtime: 250 })
+  })
+
+  it('el vigilado desapareció (mtime ilegible) ⇒ dispara: fail-loud, no silencio', () => {
+    expect(decideWatchEvent(null, 'policy.yaml', 100, stat(null))).toEqual({ trigger: true, mtime: null })
+  })
+
+  it('sigue sin disparar mientras el archivo ausente siga ausente (sin bucle de recargas)', () => {
+    expect(decideWatchEvent(null, 'policy.yaml', null, stat(null))).toEqual({ trigger: false, mtime: null })
   })
 })
 

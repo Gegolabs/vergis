@@ -8,7 +8,7 @@
 import type { IncomingMessage, ServerResponse, RequestListener } from 'node:http'
 import type { GateHeaders, IdentityContext } from '@vergis/botler'
 import { navFromUrl } from './nav'
-import { fail } from './http-util'
+import { fail, constantTimeEqual, headerValue } from './http-util'
 import { contentDisposition, PdfUnavailableError } from './pdf'
 import type { Report } from './discovery'
 import type { AdminHandler } from './admin'
@@ -74,7 +74,11 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
       return
     }
     // A10 · gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).
-    if (deps.gateSecret && req.headers['x-gate-token'] !== deps.gateSecret) {
+    // Comparación en tiempo constante (D6 del diseño 004/10): `!==` corta en el primer byte
+    // distinto y filtra por temporización cuántos caracteres del token acertó quien prueba.
+    // El CSRF de `ui.ts` ya usaba `constantTimeEqual`; este gate era la asimetría que quedaba.
+    // `?? ''` porque el header puede venir ausente o repetido (array): ambos casos son «no acertó».
+    if (deps.gateSecret && !constantTimeEqual(headerValue(req.headers['x-gate-token']), deps.gateSecret)) {
       return fail(res, 403, 'Acceso denegado: falta el token del gate (el request no pasó por el proxy).')
     }
     // CONTRATO OPERATIVO (`/contrato`, issue #139) — gateado por rol DENTRO del handler. Va DESPUÉS
