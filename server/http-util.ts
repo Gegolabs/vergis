@@ -20,6 +20,13 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb)
 }
 
+/** Valor escalar de un header para comparar contra un secreto. Un header REPETIDO llega como
+ *  array: no se concatena ni se toma el primero — se trata como ausente, y la comparación
+ *  falla cerrada. Un cliente legítimo jamás manda el token del gate dos veces. */
+export function headerValue(h: string | string[] | undefined): string {
+  return typeof h === 'string' ? h : ''
+}
+
 /** Lee el cuerpo como string con límite DURO: al excederlo, corta el stream y rechaza. */
 export function readBody(req: IncomingMessage, limit: number): Promise<string> {
   return new Promise((resolveBody, reject) => {

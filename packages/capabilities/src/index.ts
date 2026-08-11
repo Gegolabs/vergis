@@ -39,6 +39,7 @@ export {
   vtCsvCell,
   vtCsv,
   vtCsvName,
+  vtDownloadName,
 } from './table-runtime'
 export type { VtState, VtTreeNode } from './table-runtime'
 export {

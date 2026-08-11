@@ -6,16 +6,19 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Operación / despliegue
 
-- **El delta sin desplegar creció** — `main` (`cf375a4`) lleva, además de lo del 07 (`/contrato` #141,
-  paralelización fabric #140, fixes NUL/lockfile), los 4 PRs de la tanda 005 del 08: **guard de
-  pertenencia de Miranda (#142 — fix de seguridad)**, delta N2 del contrato (#143), H0 de canales
-  (#144), preview RLS con roster (#145), ADR-002+licencias (#146), rúbrica (#147),
-  supply-chain D8 (#148), Dockerfile-miranda (#149), audit fix (#150) y la **fase 1 de config
-  recargable de #138·2 (#151)**. La instancia A.R.B.O.L. corre 0.14.0. Producción es gated
-  (Norma 5): requiere autorización de César; runbook = skill `mira-ops`. Dos verificaciones quedan
-  esperando ese deploy: el smoke del journal N2 (siembra en el 1º, delta en el 2º — D6), la preview
-  impersonada contra motor vivo (PR #145) y la entrega HTTP real por sink recargado (la línea del
-  fan-out, conjetura declarada del PR #151). `reg 2026-08-07 · act 2026-08-08`
+- **El delta sin desplegar creció otra vez** — `main` va en `8ae8acf`: **82 commits / ~17 PRs desde
+  el deploy 0.14.0 del 2026-08-06**. Además de lo del 07 (`/contrato` #141, paralelización fabric
+  #140) y la tanda 005 del 08 (**guard de pertenencia de Miranda #142 — fix de seguridad**, delta
+  N2 #143, H0 de canales #144, preview RLS con roster #145, ADR-002 #146, rúbrica #147,
+  supply-chain D8 #148, Dockerfile-miranda #149, audit fix #150, **fase 1 de config recargable de
+  #138·2 #151**), lleva la **fase 2 completa de #107** (#152-#158: autoría de items, plantillas de
+  job, publicación, admin, wiring) y el lote mecánico del 10 (gate constant-time, gramática de
+  nombre unificada, desambiguación del watcher, actions v7, Renovate self-hosted). La instancia
+  A.R.B.O.L. corre 0.14.0. **Cuatro verificaciones esperan ese deploy** —son conjeturas declaradas,
+  no hechos—: el smoke del journal N2 (siembra en el 1º deploy, delta en el 2º — D6), la preview
+  impersonada contra motor vivo (#145), el eslabón `serve-rls → runSpec` con identidad del roster
+  (#145), y la entrega HTTP real por sink recargado (la línea del fan-out, #151).
+  `reg 2026-08-07 · act 2026-08-10`
 - **`CHANGELOG.md` sin cortar** — termina en 0.14.0; lo mergeado hoy no tiene entrada ni tag. El
   corte de versión es decisión de César (precedente: D-05 del 2026-08-06). `reg 2026-08-07`
 - **`VERGIS_CSRF_SECRET` no definido en PROD ni en QA** — el server genera uno aleatorio al arrancar
@@ -34,23 +37,9 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **Recargas espurias si los yaml vigilados comparten directorio con `VERGIS_OUT`** — `watchPaths`
-  vigila el directorio y en macOS `fs.watch` puede entregar `filename=null`, ante lo cual dispara
-  por diseño heredado (`server/hot-reload.ts:63`): las escrituras del store gatillan recargas de
-  slices. Inocuo (recargas idempotentes) pero ensucia el ring de `/contrato`. Observado por el
-  ejecutor de la fase 1 de #138·2 en el arnés de dev. `reg 2026-08-08`
-- **`actions/checkout@v4` y `actions/setup-node@v4` avisan deprecación de Node 20** en cada corrida
-  del workflow `build`. Subir a v5 cuando toque. `reg 2026-08-06`
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
   La instancia A.R.B.O.L. usa el theme `arbol`, así que no la afecta. `reg 2026-08-06`
-- **Gramática de nombre de archivo duplicada** entre `vtCsvName` (#61) y `pdfFilename` (#65) —
-  misma convención `slug--fecha[--filtrado]` implementada dos veces. Unificar. `reg 2026-08-06`
-- **`import type { TableColumn }` sin uso** en `render-csv-piece.ts` (preexistente a #61, no
-  introducido por él). `reg 2026-08-06`
-- **Gate token comparado con `!==`, no constant-time** (`server/routes.ts:77`; el CSRF sí usa
-  `constantTimeEqual`). Fix de una línea = D6 del diseño 004/10. `reg 2026-08-07`
-
 ## Práctica / entorno (fuera del árbol de Vergis)
 
 - **`~/evals-finaliza/` no está bajo control de versiones** — ahí viven la clave, los 3 reportes
@@ -61,7 +50,3 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   **no hay evidencia en esta sesión de haberlo tocado** (podría ser de otra sesión o del propio
   `/model`, que persiste el default). No se commiteó por eso (Norma 6). Revisar el diff a mano y
   sellarlo o revertirlo. `reg 2026-08-07`
-- **`VERGIS_VERSION` no está re-exportado por el índice de `@vergis/capabilities`** — `server/contract.ts`
-  lo importa por ruta relativa a `packages/capabilities/src/version` (funciona y evita arrastrar
-  vega/mssql a los tests unitarios, pero cruza la frontera del package). Decidir: re-export en el
-  índice o bendecir el import directo a módulos-hoja. `reg 2026-08-07`

@@ -283,6 +283,33 @@ export function vtCsv(cols: { field: string; label?: string }[], rows: Record<st
  * AUTOCONTENIDA a propósito (el slug es una función local): viaja al browser vía `.toString()`.
  */
 export function vtCsvName(docTitle: unknown, kitLabel: unknown, dateISO: string, filtered: boolean): string {
+  return vtDownloadName(docTitle, kitLabel, dateISO, filtered, 'csv', 'tabla')
+}
+
+/**
+ * LA gramática de nombre de archivo descargable de la plataforma — única implementación.
+ * `<doc>[--<segmento>]--YYYY-MM-DD[--filtrado].<ext>`
+ *
+ * El título identifica el PI; el segmento (la tabla en el CSV, la página en el PDF) aparece solo
+ * cuando aporta —se omite si es vacío o igual al slug del título, para no producir
+ * `reporte--reporte`—; la fecha ancla la foto; el sufijo `--filtrado` avisa que el archivo NO es
+ * el completo. Separador `--` porque los slugs internos ya usan `-`.
+ *
+ * Nació dos veces —`vtCsvName` (#61 · D7) y `pdfFilename` (#65 · D10)— con la misma gramática
+ * escrita dos veces. Unificada acá: `vtCsvName` la envuelve para el navegador y `server/pdf.ts`
+ * la importa para el PDF. Un cambio de gramática se hace ahora en un solo sitio.
+ *
+ * AUTOCONTENIDA a propósito (el slug es una función local, sin imports): viaja al browser vía
+ * `.toString()` en `PURE_FNS`, igual que su envoltorio. No introducir dependencias acá.
+ */
+export function vtDownloadName(
+  docTitle: unknown,
+  segment: unknown,
+  dateISO: string,
+  filtered: boolean,
+  ext: string,
+  fallback: string,
+): string {
   const slug = function (s: unknown): string {
     return String(s == null ? '' : s)
       .trim()
@@ -290,10 +317,10 @@ export function vtCsvName(docTitle: unknown, kitLabel: unknown, dateISO: string,
       .replace(/\s+/g, '-')
       .toLowerCase()
   }
-  const base = slug(docTitle) || 'tabla'
-  const tabla = slug(kitLabel)
-  const mid = tabla && tabla !== base ? '--' + tabla : ''
-  return base + mid + '--' + dateISO + (filtered ? '--filtrado' : '') + '.csv'
+  const base = slug(docTitle) || fallback
+  const seg = slug(segment)
+  const mid = seg && seg !== base ? '--' + seg : ''
+  return base + mid + '--' + dateISO + (filtered ? '--filtrado' : '') + '.' + ext
 }
 
 /**
@@ -313,6 +340,8 @@ const PURE_FNS = [
   vtCsvCell,
   vtCsv,
   vtCsvName,
+  // `vtCsvName` la llama: sin ella emitida acá, el CSV del navegador rompería.
+  vtDownloadName,
 ]
 
 /**
