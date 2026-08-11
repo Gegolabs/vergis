@@ -41,7 +41,6 @@ Las **tres obligaciones**, ninguna opcional:
   > instrumento declarado; el recreate del CSRF de esa tarde midió 6,6 s).
 
 - **(b) César aprueba la ventana** — es quien sabe qué hay en UAT o en cotejo ahora mismo.
-  **Al 2026-08-10 había PI-16 recién entregado a QA**: preguntar explícitamente por su estado.
 - **(c) Medir el corte** (`SIGTERM` → rutas sirviendo) y registrarlo en el `BITACORA.md` del lab.
   **No medirlo por la duración del comando**: `docker restart` devuelve `rc=0` en 375 ms y eso se
   equivoca por un **factor de 20**.
