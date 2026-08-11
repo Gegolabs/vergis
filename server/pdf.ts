@@ -22,29 +22,23 @@ export class PdfUnavailableError extends Error {
   }
 }
 
-/** Slug de plataforma: minúsculas, sin caracteres fuera de `[\wÀ-ÿ -]`, espacios → `-`. */
-function slug(s: unknown): string {
-  return String(s == null ? '' : s)
-    .trim()
-    .replace(/[^\wÀ-ÿ -]+/g, '')
-    .replace(/\s+/g, '-')
-    .toLowerCase()
-}
-
 /**
  * Nombre del archivo descargado (issue #65 · D10) — la MISMA gramática del CSV (#61 · D7):
  * `<doc>[--<página>]--YYYY-MM-DD[--filtrado].pdf`.
  *
  * El título identifica el PI; el segmento de página aparece solo en PI multi-vista (identifica QUÉ
  * vista congela el PDF) y se omite si es vacío o igual al slug del título; la fecha ancla la foto; el
- * sufijo `--filtrado` avisa que el documento NO es el completo. Separador `--` porque los slugs
- * internos ya usan `-`.
+ * sufijo `--filtrado` avisa que el documento NO es el completo.
+ *
+ * La gramática vivía DUPLICADA (esta función y `vtCsvName`, misma convención escrita dos veces).
+ * Ahora ambas delegan en `vtDownloadName`, su única implementación. Import a módulo-hoja a
+ * propósito: `table-runtime` no tiene imports, y entrar por el índice de `@vergis/capabilities`
+ * arrastraría vega/mssql a los tests unitarios de este módulo, que es puro por contrato.
  */
+import { vtDownloadName } from '../packages/capabilities/src/table-runtime'
+
 export function pdfFilename(docTitle: string, page: string | undefined, dateISO: string, filtered: boolean): string {
-  const base = slug(docTitle) || 'documento'
-  const vista = slug(page)
-  const mid = vista && vista !== base ? '--' + vista : ''
-  return base + mid + '--' + dateISO + (filtered ? '--filtrado' : '') + '.pdf'
+  return vtDownloadName(docTitle, page, dateISO, filtered, 'pdf', 'documento')
 }
 
 /**

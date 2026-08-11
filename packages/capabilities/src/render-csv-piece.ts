@@ -1,5 +1,5 @@
 import { VergisError, type Capability } from '@vergis/botler'
-import type { ResolvedNode, TableColumn } from './piece-types'
+import type { ResolvedNode } from './piece-types'
 import { vtCsvCell } from './table-runtime'
 
 /**
