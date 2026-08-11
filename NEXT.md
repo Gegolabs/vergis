@@ -1,8 +1,10 @@
 # NEXT — Desplegar 0.15.0 a PROD
 
 > **Kit de retome.** Escrito para arrancar **en frío**, sin la conversación que lo originó.
-> Estampado **2026-08-10 21:0x (-04)**. Si al leerlo `main` avanzó más allá de `v0.15.0`, este kit
-> está rancio: re-derivar antes de ejecutar.
+> Estampado **2026-08-10 21:00 (-04)** · **re-derivado 2026-08-11 18:15** contra la VM real: PROD
+> sigue en 0.14.0 (`Up 28 h`, sin reinicios), 8/8 sirviendo, y el digest de rollback es el mismo.
+> Ninguna cifra de este kit envejeció. Si al leerlo `main` avanzó más allá de `v0.15.0`, o PROD ya
+> no dice 0.14.0, está rancio: re-derivar antes de ejecutar.
 
 ## El objetivo, en una línea
 
@@ -18,7 +20,9 @@ release está cortado y tagueado, la imagen publicada, y **el ensayo en QA sali�
 | **QA** (`vm-vergis-qa`) | **0.15.0** — 6/6 PIs en 200, `healthz ok:true phase:serving` | ensayo de esta sesión |
 | **PROD** (`vm-vergis`) | **0.14.0** — 8/8 PIs sirviendo, sano | `healthz` consultado hoy |
 
-⚠️ **QA quedó ENCENDIDA.** Si ya no hace falta: `az vm deallocate -g rg-arbol-qw04 -n vm-vergis-qa`.
+**QA quedó `deallocated`** (2026-08-11 18:17, como estaba antes del ensayo — precedente D-06). Su
+ensayo ya rindió: **no hace falta re-encenderla** para este deploy. Si se la necesitara otra vez:
+`az vm start -g rg-arbol-qw04 -n vm-vergis-qa`.
 
 ---
 
@@ -57,6 +61,10 @@ cd ~/wworkspace/clientes/ratio/hijuelas/arbol/lab && git status --short && git l
 
 **Árbol sucio ⇒ no se despliega**: se averigua de quién es y se espera a que selle. Un deploy sobre
 un `RESOURCES.md` en vuelo es desplegar contra un mapa que alguien está redibujando.
+
+✅ **Verificado el 2026-08-11 18:06: el árbol está LIMPIO.** Los 7 archivos se sellaron en 8 commits
+(PI-07, terreno de plantación y personas, tanda de pasivo). **Esta compuerta está destrancada.**
+Nota sin consecuencia para el deploy: el repo está `ahead 8` — sellado localmente, sin pushear.
 
 ---
 
