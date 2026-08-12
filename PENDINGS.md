@@ -129,7 +129,26 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   **Por qué importa más que su síntoma:** el workflow declara por escrito la doctrina fail-closed
   —«preferimos el rojo honesto; un control apagado tiene que verse, no degradarse en silencio»— y
   este caso **la viola**: el control corre a un quinceavo de su alcance con cara de vigente.
-  **Bloquea el último eslabón de verificación del `postUpgradeTasks`.** `reg 2026-08-12`
+  **Bloquea el último eslabón de verificación del `postUpgradeTasks`.**
+  **EXPERIMENTO CORRIDO (2026-08-12) — la hipótesis no se pudo probar, y en el intento apareció algo
+  peor.** Se corrieron dos corridas seguidas **sin empujar nada entre medio** (`31600283903` y
+  `31600458840`, HEAD congelado en `2164479`), para ver si la segunda —sin nada que rebasar— pasaba
+  de largo. **No se llegó a la condición: la rama se reescribe en TODA corrida aunque `main` no se
+  mueva**, y ambas abortaron tras ella. Lo que sí quedó medido, y es un hallazgo nuevo:
+  **`pin-dependencies` OSCILA entre dos contenidos en corridas alternas.** Los trees de los dos
+  commits consecutivos difieren (`caf064a…` vs `86d4516…`) y el diff entre ellos muestra que la
+  corrida A dejó los workflows **SIN** los pins (`actions/checkout@v7`) y la B **se los volvió a
+  poner** (`actions/checkout@3d3c42e5… # v7`). Cada corrida deshace lo que hizo la anterior, escribe,
+  y aborta. **Es un bucle: Renovate nunca avanzará más allá de esta rama mientras siga así.**
+  **La causa sigue SIN identificar** — y ya se falló una vez por apurar una. Candidata plausible y
+  **no medida**: los `403` de rate limit anónimo de DockerHub que aparecen en los logs al listar tags
+  de `node`/`python` dejarían resoluciones incompletas que la corrida siguiente completa. **Conjetura,
+  no mecanismo.**
+  **Salida práctica, y es decisión de César** (por eso no se tomó): sacar esa rama del camino —crear
+  su PR y mergearlo, ya que el pinning por digest es deseable y está en el ADR-001— o deshabilitar
+  temporalmente los presets de pinning. Cualquiera de las dos debería destrabar el resto del tablero,
+  **y es a la vez el experimento decisivo** que la hipótesis pide.
+  `reg 2026-08-12`
 
 - **El PAT de Renovate no puede publicar commit statuses (403)** — `POST /repos/Gegolabs/vergis/statuses/<sha>`
   ⇒ **403 «Resource not accessible by personal access token»**, medido en las corridas `31596456516`,
