@@ -55,12 +55,26 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   `lockfileVersion` y queda libre de elegir npm; (3) **se cerró el rango** (`engines.npm >=10` +
   `constraints.npm` explícito, commit `81423d8`) y se forzó el rebase de las dos ramas por la
   casilla `rebase-all-open-prs` del dashboard… **y el lockfile siguió en 156.**
-  ⇒ **La hipótesis del constraint es INSUFICIENTE, o Renovate no lo aplica en este montaje.** El
-  fix se deja puesto (es correcto e inocuo) pero **no resolvió**. Siguiente lever, **sin verificar**:
-  que la acción corra con `binarySource=install` para que honre los constraints instalando la
-  herramienta declarada — el log muestra `containerbase` presente, así que la vía existe; no está
-  medido que sea la causa. **No se midió qué npm usa Renovate**: el `debug` no lo imprime y haría
-  falta `trace`. `reg 2026-08-12`
+  ⇒ **La hipótesis del constraint es INSUFICIENTE.** Medido bien: las dos ramas SÍ se regeneraron
+  (`Branch updated`, HEADs nuevos, verificado por API contra el repo, no por refs locales) y el
+  conteo siguió en 156. El fix se deja puesto (correcto e inocuo) pero **no resolvió**.
+  **Estado exacto al cerrar (2026-08-12 03:1x):**
+  - `RENOVATE_BINARY_SOURCE: install` **aplicado en el workflow, pero SIN PROBAR**: desde entonces
+    ninguna rama que toque el lockfile se ha regenerado, así que el experimento **no ha corrido**.
+    ⚠️ Casi se da por validado con `renovate/pin-dependencies` (234 refs) — pero esa rama **no toca
+    `package-lock.json`** (solo workflows y Dockerfiles): su 234 es el de `main` heredado. Instrumento
+    que no mide lo que parece.
+  - **Por qué no corre: `prHourlyLimit` de `config:recommended` (2 PRs/hora), ya agotado.** El
+    dashboard #169 lo dice en su sección «Rate-Limited». Queda **armada la casilla
+    `unlimit-branch=renovate/typescript-5.x`**: la próxima corrida crea esa rama, que sí regenera
+    lockfile — **ahí se mide el experimento**. Esperado si el fix sirve: 234.
+  - 🔴 **DAÑO PROPIO A REVERTIR: `#167` y `#168` (los dos PRs de seguridad) están CERRADOS.** Se
+    borraron sus ramas a mano para forzar una regeneración desde cero, bajo el supuesto —**falso**—
+    de que era autorreparable: una rama borrada cierra el PR de forma irreversible y Renovate lee el
+    PR cerrado como rechazo. Recuperación en curso: `recreateWhen: "always"` **TEMPORAL** en
+    `renovate.json`. **QUITARLO en cuanto los dos PRs vuelvan** — si se queda, resucita cualquier PR
+    que César cierre a propósito.
+  - No se midió qué npm usa Renovate: el `debug` no lo imprime, haría falta `trace`. `reg 2026-08-12`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
