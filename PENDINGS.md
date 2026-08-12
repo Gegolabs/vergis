@@ -48,10 +48,19 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   trae **156 referencias `@esbuild/` contra las 234 de `main`** (y 12 vs 16 de `openharmony`), así que
   `npm ci` —que exige correspondencia exacta árbol↔lock— aborta en 6-10 s con `Missing:
   @esbuild/…@0.28.2 from lock file`. Afecta a **todo** PR futuro de Renovate, no solo a estos dos.
-  **La causa NO está medida**: que sea la versión de npm del entorno de Renovate, o su resolución de
-  optional deps por plataforma, es hipótesis — el experimento barato que la decidiría es regenerar
-  el lockfile de esa rama con el npm del repo y comparar el conteo. Parchear una rama a mano NO
-  cierra esto: cerraría un PR y dejaría la causa viva. `reg 2026-08-12`
+  **Experimento corrido (2026-08-12), con resultado parcial:** (1) regenerado el lockfile de esa
+  rama en un worktree con el npm del repo (10.9.8) vuelve a **234**, con `ajv` en 8.20.0 y
+  `found 0 vulnerabilities` ⇒ **el defecto no es del repo, es del lado de Renovate**; (2) su log en
+  debug mostraba `extractedConstraints: {"node":">=22","npm":">=7"}` — infiere el mínimo del
+  `lockfileVersion` y queda libre de elegir npm; (3) **se cerró el rango** (`engines.npm >=10` +
+  `constraints.npm` explícito, commit `81423d8`) y se forzó el rebase de las dos ramas por la
+  casilla `rebase-all-open-prs` del dashboard… **y el lockfile siguió en 156.**
+  ⇒ **La hipótesis del constraint es INSUFICIENTE, o Renovate no lo aplica en este montaje.** El
+  fix se deja puesto (es correcto e inocuo) pero **no resolvió**. Siguiente lever, **sin verificar**:
+  que la acción corra con `binarySource=install` para que honre los constraints instalando la
+  herramienta declarada — el log muestra `containerbase` presente, así que la vía existe; no está
+  medido que sea la causa. **No se midió qué npm usa Renovate**: el `debug` no lo imprime y haría
+  falta `trace`. `reg 2026-08-12`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
