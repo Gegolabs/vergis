@@ -8,7 +8,10 @@
   "minimumReleaseAge": "14 days",
   "description": [
     "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
-    "`constraints.npm` acota el npm con que Renovate regenera el lockfile. NO resolvió el defecto por el que sus PRs nacen con el CI en rojo (156 refs @esbuild/ contra 234 de main): se midió y quedó refutado, igual que `binarySource=install`. Se deja porque es correcto e inocuo. El defecto sigue abierto — ver PENDINGS.md.",
+    "`postUpgradeTasks` COMPENSA —no cura— el defecto por el que los PRs de Renovate nacen con el CI en rojo: su lockfile trae 156 refs `@esbuild/` contra las 234 de `main`, y `npm ci` aborta. Regenerar el lockfile después del upgrade lo repara. MEDIDO el 2026-08-12 en `linux/amd64` con node 22 / npm 10.9.8 —el entorno del runner— sobre el árbol exacto de la rama `renovate/npm-ajv-vulnerability`: 156 antes, 234 después, preservando el bump (ajv 8.20.0). `executionMode: branch` lo corre una vez por rama, no una por upgrade.",
+    "La CAUSA del defecto sigue sin identificar, y esta medición la acota: no es que npm pode las optional deps, porque el MISMO comando en el MISMO entorno produce 234. Renovate regenera el lockfile por otra vía. Si la divergencia produjera algo más allá de las optional deps de esbuild, esto lo enmascararía — no es peor que el workaround manual, solo automático.",
+    "`constraints.npm` acota el npm con que Renovate regenera el lockfile. NO resolvió el defecto: se midió y quedó refutado, igual que `binarySource=install`. Se deja porque es correcto e inocuo.",
+    "El comando de `postUpgradeTasks` NO corre si el administrador del bot no lo permite: `allowedCommands` es opción global-only (antes `allowedPostUpgradeCommands`) y se pasa por env en `.github/workflows/renovate.yml`. Lo podemos hacer por ser self-hosted; como GitHub App no se podría.",
     "Los comentarios van ACÁ, en `description`, que es clave válida del esquema y acepta un array. Una clave inventada (p. ej. `_comentario_x`) invalida el archivo entero y Renovate DETIENE todos los PRs hasta que se corrija — ocurrió el 2026-08-11 (issue #170) y dejó sin efecto el propio flag que el comentario documentaba."
   ],
   "osvVulnerabilityAlerts": true,
@@ -16,6 +19,15 @@
     "npm": ">=10"
   },
   "rangeStrategy": "bump",
+  "postUpgradeTasks": {
+    "commands": [
+      "npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+    ],
+    "fileFilters": [
+      "package-lock.json"
+    ],
+    "executionMode": "branch"
+  },
   "labels": [
     "dependencies"
   ]
