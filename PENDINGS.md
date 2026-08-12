@@ -69,7 +69,20 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   **Impacto hoy: acotado.** Las dos CVEs se aplicaron a mano (PR #173, mergeado) con el lockfile
   regenerado por el npm del repo, así que no dependen de esto. Lo que sigue roto es que **todo PR
   futuro de Renovate nace con el CI en rojo** y hay que rehacerle el lockfile a mano para mergearlo.
-  `reg 2026-08-11`
+  **Vía propuesta (2026-08-12) — COMPENSAR, no diagnosticar.** Perseguir la causa quemó dos
+  hipótesis sin resultado; el reencuadre es que la pregunta útil no es «¿cuál es la causa?» sino
+  «¿qué cuesta la fricción?». Y cuesta donde duele: si cada PR exige trabajo a mano, nadie mergea y
+  **el cooldown de 14 días se vuelve decorativo** — peor, la falla aterriza en el camino de
+  seguridad, donde un CVE que se saltó el cooldown como fue diseñado se queda en rojo esperando.
+  **Propuesta: `postUpgradeTasks` corriendo `npm install --package-lock-only` tras cada
+  actualización**, con el npm del repo — literalmente lo que hacemos a mano, automatizado. La
+  palanca **existe y la controlamos por ser self-hosted**: `allowedCommands` es opción *global-only*
+  del administrador del bot (antes `allowedPostUpgradeCommands`), y el administrador somos nosotros;
+  como GitHub App no se podría. **Verificado que la opción existe** (docs de Renovate);
+  **NO verificado en este montaje**. Criterio de éxito, declarado antes de medir: el lockfile del
+  próximo PR de Renovate da **234**. Es compensación, no cura: la causa sigue sin identificar y si
+  la divergencia produce algo más allá de las optional deps de esbuild, esto lo enmascara — aunque
+  no es peor que el workaround manual, solo automático. `reg 2026-08-11 · act 2026-08-12`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.

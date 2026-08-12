@@ -1,89 +1,100 @@
 # NEXT — Vergis
 
-PROD corre **0.15.0** y está sano (8/8 PIs, `healthz ok:true`). Renovate opera con su config válida,
-las dos CVEs ya están aplicadas, y **no queda ningún frente a medio ejecutar**.
+PROD corre **0.15.0** y está sano. Renovate opera completo: el cooldown de 14 días protegiendo **y**
+la excepción para CVEs urgentes leyendo de verdad —verificado con señal positiva, no con ausencia de
+error—. Las dos CVEs (`ajv`, `yaml`) están cerradas. Árbol limpio, un solo PR abierto (#166, del lab,
+esperando ventana de César).
 
-Lo que sigue abierto es un **defecto conocido con dos hipótesis ya refutadas**, y no bloquea nada
-urgente: los PRs que Renovate abre nacen con el CI en rojo porque su regeneración del
-`package-lock.json` pierde entradas de plataforma. Mergear uno suyo exige rehacerle el lockfile a
-mano; el cooldown de supply chain —la razón de ser de tenerlo— sí funciona.
+Quedan **dos frentes decididos y sin arrancar**, en el orden en que conviene tomarlos.
 
 ## Próximo paso
 
-**Habilitar el permiso de alertas de vulnerabilidad — es de César y son dos clics.**
+**Compensar el defecto del lockfile de Renovate con `postUpgradeTasks`.** Es corto y destranca todo
+lo demás: mientras cada PR suyo nazca rojo, nadie los mergea y el cooldown queda decorativo.
 
-El dashboard (issue #169) avisa `WARN: Cannot access vulnerability alerts`. Sin ese permiso,
-`osvVulnerabilityAlerts: true` **no tiene de dónde leer**, y esa clave es la mitad del diseño del
-ADR-001: la que permite que un CVE urgente **se salte el cooldown de 14 días**. Hoy el cooldown está
-protegiendo, pero la excepción que lo hace seguro no.
+**El reencuadre que lo justifica** —y es lo que no hay que volver a discutir—: la pregunta útil no es
+«¿cuál es la causa?» sino «¿qué cuesta la fricción?». **Perseguir la causa ya quemó dos hipótesis sin
+resultado** (ver Terreno recorrido). Y la fricción cuesta donde más duele: la falla aterriza en el
+camino de seguridad, donde un CVE que se saltó el cooldown —como fue diseñado— se queda en rojo
+esperando trabajo manual.
 
-**El candado es del TOKEN, no del repo — medido.** Las alertas Dependabot del repo **funcionan**
-(`gh api repos/Gegolabs/vergis/dependabot/alerts` devuelve 4, todas `fixed`). Lo que falta es el
-permiso `Dependabot alerts: Read-only` en el PAT `renovate-vergis`, emitido con cinco permisos y sin
-ése. **Editar los permisos de un PAT fine-grained no cambia su valor**, así que el secret sigue
-sirviendo — no hay que re-pegar nada.
+**Qué hacer:**
 
-- **Dónde:** Settings → Developer Settings → Fine-grained tokens → `renovate-vergis` → Permissions →
-  agregar **Dependabot alerts: Read-only** → Update.
-- **Cómo se comprueba después:** correr el workflow y verificar que el WARN desaparece de la sección
-  «Repository Problems» del issue #169.
-- **Impacto de no hacerlo hoy: cero** — no hay alertas abiertas. El costo es ante el próximo CVE.
+1. En `renovate.json`, `postUpgradeTasks` que corra `npm install --package-lock-only --ignore-scripts`
+   con `fileFilters` sobre `package-lock.json`.
+2. En el workflow, permitir ese comando: **`allowedCommands` es opción *global-only* del
+   administrador del bot** (antes `allowedPostUpgradeCommands`) — se pasa por env al contenedor de
+   la acción. **La controlamos por ser self-hosted**; como GitHub App esto no se podría.
+3. Puede hacer falta `allowShellExecutorForPostUpgradeCommands` según cómo se exprese el comando.
+
+**Existencia verificada** en la documentación de Renovate; **NO verificado en este montaje**.
+
+**Criterio de éxito, declarado antes de medir: el lockfile del próximo PR de Renovate da 234.**
+Control: `main` da 234; las ramas de Renovate daban 156.
 
 ```bash
 export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 cd /Users/cesar/wworkspace/productos/vergis
 gh workflow run renovate.yml --ref main
-```
-
-## El defecto del lockfile — si alguien lo retoma
-
-**El síntoma, medido y reproducible:** el `package-lock.json` que Renovate regenera trae **156**
-referencias `@esbuild/`; `main` tiene **234**. `npm ci` exige correspondencia exacta árbol↔lock y
-aborta en 6-10 s con `Missing: @esbuild/…@0.28.2 from lock file`.
-
-**Cómo medirlo bien** (dos trampas ya pisadas, ver abajo):
-
-```bash
-# 1 · confirmar que la rama TOCA el lockfile — si no, no mide nada
+# medir — SIEMPRE confirmando primero que la rama toca el lockfile:
 gh api "repos/Gegolabs/vergis/compare/main...<rama>" -q '.files[].filename' | grep package-lock
-# 2 · contar por API, no por refs locales
 gh api "repos/Gegolabs/vergis/contents/package-lock.json?ref=<rama>" -q '.content' | base64 -d | grep -c '@esbuild/'
 ```
 
-**Criterio: 234 = resuelto · 156 = sigue roto.** Control: `main` da 234.
+**Es compensación, no cura, y conviene decirlo al registrarlo:** la causa sigue sin identificar. Si
+la divergencia de npm produce algo más allá de las optional deps de esbuild, esto lo enmascara —
+aunque no es peor que el workaround manual, solo automático.
 
-**Lo único sin medir:** qué npm usa Renovate. `LOG_LEVEL=debug` **no lo imprime** (comprobado);
-haría falta `trace`, que hoy no está en las opciones del `workflow_dispatch` del workflow.
+⚠️ Ojo con `prHourlyLimit` (2/hora, de `config:recommended`): si no aparece rama nueva, no es que
+falle — está limitado. El dashboard #169 lo dice en «Rate-Limited» y tiene casillas `unlimit-branch`.
 
-**Workaround vigente, y es aceptable:** rehacerle el lockfile a mano al PR que se quiera mergear —
-`npm install --package-lock-only --ignore-scripts` produce 234. Es lo que se hizo para las dos CVEs
-(PR #173), y funciona.
+## Después: issue #161 — la plataforma observa sus propias cargas
 
-## Terreno ya recorrido — cuatro caminos cerrados y dos trampas
+Es el frente con un usuario esperando del otro lado.
 
-- **`constraints.npm >= 10` + `engines.npm >= 10` — REFUTADO.** Aplicado y medido con las ramas
-  regeneradas: siguieron en 156. Se deja puesto porque es correcto e inocuo, pero no resuelve.
+**El incidente que lo funda** (instancia Grupo Hijuelas, 2026-08-07/11): un usuario subió cinco
+archivos, el job de conversión abortó, y la causa quedó escrita en un log interno que **nadie leyó
+durante cuatro días** — hasta que reclamó. La plataforma tuvo toda la información desde el principio;
+no tuvo a nadie mirándola.
+
+**Lo que hace bueno al issue, y hay que preservar al diseñar:**
+
+- **La señal central es barata y universal**: la zona de aterrizaje de un slot es zona de paso, así
+  que **un archivo que envejece ahí *es* una carga que no completó** — sin importar dominio ni
+  formato. No hace falta entender el contenido.
+- **Distinguir «sin novedad» de «no pude medir»** es requisito explícito, no adorno: en ese mismo
+  incidente un listado del almacenamiento devolvió **vacío-con-éxito** por un problema de permisos, y
+  esa lectura habría concluido «el usuario nunca subió nada».
+- **No pide reintentos ni auto-reparación**: detectar y avisar; decidir es de las personas.
+
+Relacionado: **#162** es la otra mitad del ciclo (que el fallo llegue al usuario con la causa, y el
+contrato `_logs/` que el error ya promete). Conviene mirarlos juntos aunque se construyan aparte.
+
+## Terreno ya recorrido — no reintentar
+
+- **`constraints.npm >= 10` + `engines.npm >= 10` — REFUTADO.** Medido con las ramas regeneradas:
+  siguieron en 156. Se deja puesto por correcto e inocuo, pero no resuelve.
 - **`binarySource=install` — REFUTADO.** Medido sobre las ramas recreadas de #171/#172, que sí tocan
-  el lockfile: 156. Retirado del workflow para no dejar una variable sin justificación.
-- **Borrar ramas de Renovate para forzar regeneración — nunca más.** Cierra el PR de forma
-  irreversible (no se puede reabrir sin la rama) y Renovate lo lee como rechazo. Costó los PRs #167
-  y #168.
-- **Comentarios en `renovate.json` con claves inventadas — nunca.** Una clave fuera del esquema
-  (`_comentario_x`) invalida el archivo entero y Renovate **detiene todos los PRs** hasta que se
-  corrija (pasó: issue #170, 40 minutos de parálisis). Los comentarios van en `description`, que
-  acepta un array de strings. **El modo de falla es feo porque no se cae al escribirlo**: falla en el
-  bot, asincrónico, y se manifiesta como «no pasa nada».
-- **Trampa 1 — `renovate/pin-dependencies` no es instrumento**: da 234, pero no toca
-  `package-lock.json` (solo workflows y Dockerfiles). Hereda el de `main`. Casi se publica como
-  validación.
-- **Trampa 2 — `git show origin/<rama>:archivo` dio lecturas rancias tras un rebase.** Usar la API.
+  el lockfile: 156. Ya retirado del workflow.
+- **Borrar ramas de Renovate para forzar regeneración — nunca.** Cierra el PR de forma irreversible
+  y Renovate lo lee como rechazo. Costó los PRs #167 y #168.
+- **Claves inventadas en `renovate.json` — nunca.** Una clave fuera del esquema invalida el archivo
+  y Renovate **detiene todos los PRs** (pasó: #170, 40 min de parálisis, y dejó sin efecto el propio
+  flag que el comentario documentaba). Los comentarios van en `description`, que acepta array.
+- **Trampa de medición 1:** una rama que **no toca `package-lock.json`** hereda el de `main` y da 234
+  — no mide nada. Confirmar siempre con `compare` antes de creerle.
+- **Trampa de medición 2:** `git show origin/<rama>:archivo` dio lecturas rancias tras un rebase.
+  Usar la API de contenidos.
+- **Trampa de medición 3:** ausencia de un WARN en el log **no** prueba que el permiso funcione —
+  puede que el bot abortara antes de llegar a comprobarlo (pasó con la config inválida). Exigir
+  señal **positiva**: `No vulnerability alerts found`, no «no dijo nada».
 
 ## Lo demás abierto (pendiente, no residuo)
 
-En `TODO.md` y `PENDINGS.md`. De César: la revisión legal de `CONTRIBUTING.draft.md` —renombrarlo
-**es** publicarlo—, la marca, y el mapa de identidad (#159 / `P-22`, 44 personas pierden acceso).
-Sin tocar: **#161**, **#162** (observabilidad de cargas) y **#163**/**#164**/**#165** (los tres de
-autorización que abrió el lab; **#163**, control por columna, acaba de ganar peso: la doctrina de
-terreno ancho sellada allá declara como su único límite que no existe).
+En `TODO.md` y `PENDINGS.md`. De César: revisión legal de `CONTRIBUTING.draft.md` —renombrarlo **es**
+publicarlo—, la marca, y el mapa de identidad (#159 / `P-22`, 44 personas pierden acceso). Sin tocar:
+**#162** y **#163**/**#164**/**#165** (los tres de autorización del lab; **#163**, control por
+columna, ganó peso: la doctrina de terreno ancho sellada allá declara como único límite que no
+existe).
 
-<!-- /ww:next · 2026-08-11 · HEAD d0e5277 -->
+<!-- /ww:next · 2026-08-12 · HEAD cfdae2b -->
