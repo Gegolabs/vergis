@@ -44,11 +44,11 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 ## Código / CI
 
 - **Los PRs de Renovate nacen con el CI en rojo: su regeneración del lockfile pierde entradas** —
-  medido en su primera corrida (2026-08-12): el `package-lock.json` de `renovate/npm-ajv-vulnerability`
+  medido en su primera corrida (2026-08-11): el `package-lock.json` de `renovate/npm-ajv-vulnerability`
   trae **156 referencias `@esbuild/` contra las 234 de `main`** (y 12 vs 16 de `openharmony`), así que
   `npm ci` —que exige correspondencia exacta árbol↔lock— aborta en 6-10 s con `Missing:
   @esbuild/…@0.28.2 from lock file`. Afecta a **todo** PR futuro de Renovate, no solo a estos dos.
-  **Experimento corrido (2026-08-12), con resultado parcial:** (1) regenerado el lockfile de esa
+  **Experimento corrido (2026-08-11), con resultado parcial:** (1) regenerado el lockfile de esa
   rama en un worktree con el npm del repo (10.9.8) vuelve a **234**, con `ajv` en 8.20.0 y
   `found 0 vulnerabilities` ⇒ **el defecto no es del repo, es del lado de Renovate**; (2) su log en
   debug mostraba `extractedConstraints: {"node":">=22","npm":">=7"}` — infiere el mínimo del
@@ -58,7 +58,7 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   ⇒ **La hipótesis del constraint es INSUFICIENTE.** Medido bien: las dos ramas SÍ se regeneraron
   (`Branch updated`, HEADs nuevos, verificado por API contra el repo, no por refs locales) y el
   conteo siguió en 156. El fix se deja puesto (correcto e inocuo) pero **no resolvió**.
-  **Estado exacto al cerrar (2026-08-12 03:1x):**
+  **Estado exacto al cerrar (2026-08-11 23:1x):**
   - `RENOVATE_BINARY_SOURCE: install` **aplicado en el workflow, pero SIN PROBAR**: desde entonces
     ninguna rama que toque el lockfile se ha regenerado, así que el experimento **no ha corrido**.
     ⚠️ Casi se da por validado con `renovate/pin-dependencies` (234 refs) — pero esa rama **no toca
@@ -74,22 +74,23 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
     PR cerrado como rechazo. Recuperación en curso: `recreateWhen: "always"` **TEMPORAL** en
     `renovate.json`. **QUITARLO en cuanto los dos PRs vuelvan** — si se queda, resucita cualquier PR
     que César cierre a propósito.
-  - No se midió qué npm usa Renovate: el `debug` no lo imprime, haría falta `trace`. `reg 2026-08-12`
+  - No se midió qué npm usa Renovate: el `debug` no lo imprime, haría falta `trace`. `reg 2026-08-11`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
   La instancia A.R.B.O.L. usa el theme `arbol`, así que no la afecta. `reg 2026-08-06`
+
 ## Práctica / entorno (fuera del árbol de Vergis)
 
 - **`~/evals-finaliza/` no está bajo control de versiones** — ahí viven la clave, los 3 reportes
   del A/B, los 2 veredictos y el reporte de bug de esta sesión. Perderlos borraría la evidencia del
   experimento. Decidir: `git init` local (sin remoto basta) o declarar en el arnés que es scratch
   desechable. `reg 2026-08-07`
-- **`dotclaude` con cambios sin sellar de otras sesiones** — *revisado el 2026-08-10, y el diff es
-  SANO*: `settings.json` gana un hook `Stop` que llama `hooks/sync-cmux-title.sh` (el script existe,
-  ejecutable, del 08-08) y reubica la clave `model` sin cambiar su valor (el `/model` reescribe el
-  archivo); `WATCH.md`+`WATCH-logs.md` traen la **ocurrencia 7 de W-01** completa (rebase ajeno en
-  el worktree de Cibeles, hoy); `commands/label.md` borrado; `personas/alida-…` de la sesión nuncio.
-  **NO se selló a propósito**: son cambios de sesiones que pueden seguir vivas, y commitear el
-  estado parcial de otro actor es exactamente el fenómeno W-01 que el propio diff está registrando.
-  Lo que queda es que cada sesión selle lo suyo. `reg 2026-08-07 · act 2026-08-10`
+- **`dotclaude` con cambios sin sellar de otras sesiones** — *revisado el 2026-08-10 (diff SANO) y
+  **encogido el 2026-08-11***: las sesiones dueñas ya sellaron lo suyo — `WATCH.md`/`WATCH-logs.md`
+  están commiteados (con **la ocurrencia 8 de W-01** que registró esta sesión; el contador va en
+  **12**, las 9-12 son de otras). **Quedan solo dos**: `settings.json` (hook `Stop` a
+  `hooks/sync-cmux-title.sh` —el script existe, ejecutable, del 08-08— y la clave `model` reubicada
+  sin cambiar de valor, que es el `/model` reescribiendo el archivo) y `commands/label.md` borrado.
+  **NO se sellan a propósito**: no son de esta sesión, y commitear el estado parcial de otro actor
+  es el fenómeno W-01 que el propio diff registra. `reg 2026-08-07 · act 2026-08-11`
