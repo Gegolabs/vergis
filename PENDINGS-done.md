@@ -6,6 +6,21 @@ cerrar.
 
 ## Cerradas con veredicto
 
+- **`osvVulnerabilityAlerts` no operaba: al PAT le faltaba el permiso `Dependabot alerts`**
+  (reg 2026-08-11, detectado por la sesión `arbol`). **Cerrado 2026-08-11 23:45:** César agregó
+  `Dependabot alerts: Read-only` al PAT `renovate-vergis` — sin regenerarlo, porque editar los
+  permisos de un fine-grained **no cambia su valor**.
+  **Verificado por diferencial, con su factor de confusión identificado:** las corridas de 03:25 y
+  03:32 UTC traían `WARN: Cannot access vulnerability alerts`; la de 03:45, con el permiso puesto,
+  **no**. Las de 03:04 y 03:06 también daban cero, pero eso era **engañoso** — la config estaba
+  inválida y Renovate abortaba antes de llegar a la comprobación; contarlas como éxito habría sido
+  leer un instrumento que no medía.
+  *El lever inicial que se propuso —«Settings → Code security»— era el equivocado: el repo es público
+  y sus alertas ya funcionaban (4, todas `fixed`, leídas por API). El candado era del token.*
+  ⚠️ **Residuo cosmético:** el Dependency Dashboard (#169) sigue mostrando el problema en
+  «Repository Problems» — su cuerpo no se reescribe desde las 03:06 UTC. Es caché del bot, no estado
+  real; se corrige solo en la próxima corrida que cambie su contenido.
+
 - **El delta sin desplegar / PROD en 0.14.0** (reg 2026-08-07, act 08-10).
   **Cerrado 2026-08-11 22:21:** desplegado **0.15.0** a `vm-vergis` con ventana aprobada por César.
   8/8 PIs en 200 con pie `Vergis v0.15.0`, `healthz ok:true phase:serving pis:{8,8}`, sin regresión.
