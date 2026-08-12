@@ -5,35 +5,47 @@ eslabón y ahí se topó con un bloqueo que solo César puede levantar** — no 
 lockfile, es un permiso del PAT. Árbol limpio salvo lo de esta sesión; un solo PR abierto (#166, del
 lab, esperando ventana de César).
 
-## Lo primero: por qué Renovate solo procesa UNA rama por corrida
+## Lo primero: mergear el PR #174 (es tuyo, y destraba todo lo demás)
 
-De ~19 ramas candidatas procesa **solo la primera** (`renovate/pin-dependencies`), imprime
-*«Repository has changed during renovation - aborting»* y corta. **Nunca llega a ninguna rama npm** —
-y por eso el último eslabón del lockfile no se pudo verificar. Es **PREEXISTENTE**: la corrida
-`31591828225` (11:26 UTC, sobre `bc0402b`, antes de tocar nada) ya lo traía.
+**https://github.com/Gegolabs/vergis/pull/174 — CI verde (`test` pass, `review` pass), MERGEABLE /
+CLEAN.** Es la rama `renovate/pin-dependencies` abierta a mano.
 
-**La causa NO está identificada, y conviene no repetir el error que ya se cometió hoy con esto.**
-Lo único medido es la secuencia, limpia, en la corrida `31599885826`:
+**Por qué a mano:** cada corrida aborta con `repository-changed` **inmediatamente después de escribir
+esa rama, antes de llegar a crear el PR**. Marcar la casilla `unlimit-branch` del dashboard no basta
+— medido en la corrida `31601603402`.
 
+**Por qué importa:** esa rama tiene bloqueado al bot entero. De ~19 candidatas procesa **solo esa** y
+corta, así que **nunca alcanza ninguna rama npm** — y por eso el `postUpgradeTasks` del lockfile no
+se pudo verificar end-to-end. Además la rama **oscila**: una corrida le quita los pins a los
+workflows y la siguiente se los repone (trees `caf064a…` vs `86d4516…` entre dos corridas
+consecutivas **sin que `main` se moviera**).
+
+**Dos cosas del PR quedaron para tu ojo, escritas en su cuerpo:** (1) pinea **nuestra propia imagen**
+`ghcr.io/gegolabs/vergis:latest` a un digest en `deploy/compose.reference.yml`, lo que congela lo que
+ese archivo comunica — si la referencia debe seguir el tag móvil, se saca antes de mergear;
+(2) `actions/dependency-review-action@v4` queda sin pinear (tiene su propio update a v5).
+Los digests **no se dieron por buenos porque los escribiera el bot**: tres se verificaron contra la
+API de GitHub.
+
+**Y el merge es el experimento decisivo.** Justo después:
+
+```bash
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+cd /Users/cesar/wworkspace/productos/vergis
+gh workflow run renovate.yml --ref main -f logLevel=info
 ```
-INFO: Branch updated (branch=renovate/pin-dependencies)  commitSha 9468d33…
-INFO: Repository has changed during renovation - aborting
-```
 
-La propia escritura de Renovate a esa rama **precede** al abort. Por qué eso cuenta como «el
-repositorio cambió» **no está medido**.
+- **Si la corrida alcanza ramas npm** ⇒ queda demostrado que era esa rama la que bloqueaba, y se
+  cierra el último eslabón del lockfile en la misma corrida (medir con el bloque de más abajo).
+- **Si vuelve a abortar en la primera rama que toque** ⇒ la hipótesis se cae, el problema es más
+  general que `pin-dependencies`, y hay que atacar la causa de fondo. **Decirlo, no maquillarlo.**
 
-⚠️ **Ya se publicó una causa falsa para esto y se retiró el mismo día.** Se afirmó que era el **403
-al publicar commit status**, porque en tres corridas aparecía pegado al abort. **La corrida
-`31599885826` lo refutó: abortó igual con CERO 403.** El 403 es otro síntoma del mismo paso. Fue
-ascender un patrón sospechoso a mecanismo sin medir el eslabón — y la afirmación alcanzó a mandar a
-César a tocar el PAT antes de caerse. **No repetir: acá hace falta una corrida que salga distinta si
-la hipótesis es falsa.**
+**La causa de fondo del abort sigue SIN identificar.** El PR la esquiva, no la explica.
 
-**Hipótesis falsable, sin correr:** `pin-dependencies` se actualiza en cada corrida (digests + rebase
-contra un `main` que avanzó), así que sería el hecho de escribirla lo que corta. **Predicción: si esa
-rama se mergea o se cierra, la corrida debería continuar hacia las ramas npm.** Es el experimento más
-barato disponible y es el próximo paso natural.
+⚠️ **Ya se publicó una causa falsa para esto hoy y se retiró.** Se afirmó que era el 403 al publicar
+commit status, porque en tres corridas aparecía pegado al abort. La corrida `31599885826` lo refutó:
+abortó igual con **cero** 403. Fue ascender un patrón sospechoso a mecanismo sin medir el eslabón.
+**No repetir: hace falta una corrida que salga distinta si la hipótesis es falsa.**
 
 ## Aparte, y ya no como causa: el PAT no puede publicar commit statuses
 
