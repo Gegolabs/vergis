@@ -43,6 +43,16 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **Los PRs de Renovate nacen con el CI en rojo: su regeneración del lockfile pierde entradas** —
+  medido en su primera corrida (2026-08-12): el `package-lock.json` de `renovate/npm-ajv-vulnerability`
+  trae **156 referencias `@esbuild/` contra las 234 de `main`** (y 12 vs 16 de `openharmony`), así que
+  `npm ci` —que exige correspondencia exacta árbol↔lock— aborta en 6-10 s con `Missing:
+  @esbuild/…@0.28.2 from lock file`. Afecta a **todo** PR futuro de Renovate, no solo a estos dos.
+  **La causa NO está medida**: que sea la versión de npm del entorno de Renovate, o su resolución de
+  optional deps por plataforma, es hipótesis — el experimento barato que la decidiría es regenerar
+  el lockfile de esa rama con el npm del repo y comparar el conteo. Parchear una rama a mano NO
+  cierra esto: cerraría un PR y dejaría la causa viva. `reg 2026-08-12`
+
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
   La instancia A.R.B.O.L. usa el theme `arbol`, así que no la afecta. `reg 2026-08-06`
