@@ -5,32 +5,62 @@ eslabón y ahí se topó con un bloqueo que solo César puede levantar** — no 
 lockfile, es un permiso del PAT. Árbol limpio salvo lo de esta sesión; un solo PR abierto (#166, del
 lab, esperando ventana de César).
 
-## Lo primero: destrabar el PAT (2 minutos de César, y nadie más puede)
+## Lo primero: por qué Renovate solo procesa UNA rama por corrida
 
-`POST /repos/Gegolabs/vergis/statuses/<sha>` devuelve **403 «Resource not accessible by personal
-access token»**. Renovate lo traduce a `repository-changed`, imprime *«Repository has changed during
-renovation - aborting»* y **corta la corrida entera**: de ~19 ramas candidatas procesa **solo la
-primera** (`renovate/pin-dependencies`) y nunca llega a ninguna rama npm.
+De ~19 ramas candidatas procesa **solo la primera** (`renovate/pin-dependencies`), imprime
+*«Repository has changed during renovation - aborting»* y corta. **Nunca llega a ninguna rama npm** —
+y por eso el último eslabón del lockfile no se pudo verificar. Es **PREEXISTENTE**: la corrida
+`31591828225` (11:26 UTC, sobre `bc0402b`, antes de tocar nada) ya lo traía.
 
-**Qué hacer:** en https://github.com/settings/personal-access-tokens , sobre el PAT que vive en el
-secret `RENOVATE_TOKEN`, agregar el permiso **`Commit statuses: Read and write`**. El workflow
-documenta Contents · Pull requests · Workflows · Issues · Metadata — **falta Statuses**.
-(Alternativa, y es decisión suya, no se tomó: desactivar el check con `statusCheckNames`, al costo
-de perder el status visible del cooldown.)
+**La causa NO está identificada, y conviene no repetir el error que ya se cometió hoy con esto.**
+Lo único medido es la secuencia, limpia, en la corrida `31599885826`:
 
-**Dos cosas que hay que entender antes de tratarlo como trámite:**
+```
+INFO: Branch updated (branch=renovate/pin-dependencies)  commitSha 9468d33…
+INFO: Repository has changed during renovation - aborting
+```
 
-- **Es PREEXISTENTE, no lo rompió el trabajo de hoy.** La corrida `31591828225` (11:26 UTC, sobre
-  `bc0402b`, antes de tocar nada) ya traía el mismo 403 y el mismo abort. Se destapó persiguiendo
-  otra cosa.
-- **Lo grave no es el 403: es que el job sale VERDE.** El workflow declara por escrito la doctrina
-  fail-closed —«preferimos el rojo honesto; un control apagado tiene que verse, no degradarse en
-  silencio»— y este caso **la viola**. El control de supply chain corre a un quinceavo de su alcance
-  con cara de control vigente. **Vale la pena decidir aparte si el workflow debe detectar
-  `repository-changed` y ponerse rojo**, porque hoy no lo hace.
-- **Causa probable, NO medida:** el `minimumReleaseAge` de 14 días publica un commit status de
-  estabilidad — sería **el propio cooldown** el que dispara el POST que el token no puede hacer.
-  Es conjetura declarada, no mecanismo demostrado.
+La propia escritura de Renovate a esa rama **precede** al abort. Por qué eso cuenta como «el
+repositorio cambió» **no está medido**.
+
+⚠️ **Ya se publicó una causa falsa para esto y se retiró el mismo día.** Se afirmó que era el **403
+al publicar commit status**, porque en tres corridas aparecía pegado al abort. **La corrida
+`31599885826` lo refutó: abortó igual con CERO 403.** El 403 es otro síntoma del mismo paso. Fue
+ascender un patrón sospechoso a mecanismo sin medir el eslabón — y la afirmación alcanzó a mandar a
+César a tocar el PAT antes de caerse. **No repetir: acá hace falta una corrida que salga distinta si
+la hipótesis es falsa.**
+
+**Hipótesis falsable, sin correr:** `pin-dependencies` se actualiza en cada corrida (digests + rebase
+contra un `main` que avanzó), así que sería el hecho de escribirla lo que corta. **Predicción: si esa
+rama se mergea o se cierra, la corrida debería continuar hacia las ramas npm.** Es el experimento más
+barato disponible y es el próximo paso natural.
+
+## Aparte, y ya no como causa: el PAT no puede publicar commit statuses
+
+`POST /repos/Gegolabs/vergis/statuses/<sha>` ⇒ **403 «Resource not accessible by personal access
+token»**. **Vale arreglarlo igual** —Renovate no puede publicar el status del cooldown, que es
+evidencia visible del control— **pero no es lo que aborta la corrida**, y esa distinción es la
+corrección de arriba.
+
+**Qué hacer** (solo César puede): en https://github.com/settings/personal-access-tokens , sobre el
+PAT del secret `RENOVATE_TOKEN`, agregar **`Commit statuses: Read and write`**. El workflow documenta
+Contents · Pull requests · Workflows · Issues · Metadata — **falta Statuses**.
+
+## El fail-closed del workflow: decidido, y a medio construir
+
+César decidió que el workflow **debe ponerse rojo** cuando la corrida aborta: hoy declara la doctrina
+—«preferimos el rojo honesto; un control apagado tiene que verse»— y la viola, corriendo a un
+quinceavo de su alcance en verde.
+
+**Paso 1 hecho** (`09f1b9a`): el workflow instrumenta el resultado. **Mide, no bloquea.**
+**Y la medición ya descartó la vía obvia:** el `reportType` de Renovate **no sirve** — genera 45 KB
+con shape `{problems, repositories:{…{problems:[], branches:[], packageFiles}}}`, un inventario de
+dependencias, no un resultado. En una corrida que **sí abortó** no contiene `repository-changed` y
+`problems` viene vacío. **Un gate colgado de ahí habría dado verde siempre.**
+
+**Paso 2 pendiente:** encontrar la vía real. Candidata sin probar: `LOG_FILE` apuntando a `/tmp`
+—que el runner ve por el bind mount `/tmp:/tmp` que la acción ya hace— y grepear la frase del abort.
+Medir antes de bloquear, otra vez.
 
 ## Después: cerrar el último eslabón del lockfile (ya no debería costar)
 

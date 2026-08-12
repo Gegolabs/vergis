@@ -105,28 +105,51 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   el lockfile bueno en una rama npm suya. No se pudo llegar — ver el pendiente del 403 de `statuses`,
   que aborta la corrida antes de alcanzar ninguna rama npm. `reg 2026-08-11 · act 2026-08-12`
 
-- **🔥 El PAT de Renovate no puede escribir commit statuses, y eso ABORTA la corrida entera — con el
-  job en VERDE** — descubierto el 2026-08-12 persiguiendo lo anterior. Evidencia dura, idéntica en
-  tres corridas: `POST /repos/Gegolabs/vergis/statuses/<sha>` ⇒ **403 «Resource not accessible by
-  personal access token»**; Renovate lo traduce a `repository-changed`, imprime *«Repository has
-  changed during renovation - aborting»* y **corta**. Resultado medido: de ~19 ramas candidatas
-  procesa **solo la primera** (`renovate/pin-dependencies`) y nunca llega a las npm.
+- **🔥 Renovate ABORTA la corrida entera tras UNA rama, y el job sale VERDE** — descubierto el
+  2026-08-12. Evidencia, idéntica en cuatro corridas: de ~19 ramas candidatas procesa **solo la
+  primera** (`renovate/pin-dependencies`), imprime *«Repository has changed during renovation -
+  aborting»* y corta. **Nunca llega a ninguna rama npm.**
   **NO es regresión de esta sesión, es PREEXISTENTE**: la corrida `31591828225` (11:26, `bc0402b`,
-  antes de tocar nada) ya traía el mismo 403 y el mismo abort.
-  **Por qué es más grave que su síntoma:** el workflow declara por escrito la doctrina fail-closed
+  antes de tocar nada) ya lo traía.
+  **La causa NO está identificada.** Lo único medido es la secuencia, limpia y sin ruido, en la
+  corrida `31599885826`: `INFO: Branch updated (branch=renovate/pin-dependencies)` e inmediatamente
+  `INFO: Repository has changed during renovation - aborting`. Es decir, **la propia escritura de
+  Renovate a esa rama precede al abort**. Por qué eso cuenta como «el repositorio cambió» no está
+  medido — es observación, no mecanismo.
+  ⚠️ **CORRECCIÓN de lo que esta misma ficha afirmó horas antes.** Se publicó que la causa era el
+  **403 al publicar commit status**, porque en las tres primeras corridas el 403 aparecía pegado al
+  abort. **Es falso, y lo refutó la corrida `31599885826`: abortó igual con CERO 403.** El 403 es
+  otro síntoma del mismo paso (tras commitear, Renovate intenta poner el status y no puede), no la
+  causa. Se ascendió un patrón sospechoso a mecanismo sin medir el eslabón — **Norma 7 en su modo de
+  falla exacto**, y con el agravante de que la afirmación ya había mandado a César a tocar el PAT.
+  **Hipótesis NO verificada, y hay que tratarla como tal:** `pin-dependencies` se actualiza en cada
+  corrida (los digests y el rebase contra un `main` que avanzó), así que sería el hecho de escribirla
+  lo que corta. **Predicción falsable:** si esa rama deja de necesitar actualización (mergeada o
+  cerrada), la corrida debería continuar hacia las ramas npm. Sin correr.
+  **Por qué importa más que su síntoma:** el workflow declara por escrito la doctrina fail-closed
   —«preferimos el rojo honesto; un control apagado tiene que verse, no degradarse en silencio»— y
-  este caso **la viola**: el control corre a un quinceavo de su alcance y el job sale **verde**. Es
-  un control inerte con cara de control vigente, exactamente lo que el workflow existe para evitar.
-  **Causa probable, NO confirmada:** el `minimumReleaseAge` de 14 días publica un commit status de
-  estabilidad, así que **sería el propio cooldown el que dispara el POST que el token no puede
-  hacer**. Es conjetura: no está medida.
-  **Mismo linaje que el hallazgo del 2026-08-11 («el candado de las alertas es del TOKEN, no del
-  repo»): el permiso que falta no se ve en el repo, se ve en el PAT.**
-  **Requiere a César** — el PAT fine-grained solo lo edita su dueño: agregar **`Commit statuses:
-  Read and write`** en https://github.com/settings/personal-access-tokens (el workflow documenta
-  Contents · Pull requests · Workflows · Issues · Metadata, y **falta Statuses**). Alternativa sin
-  tocar el PAT, que es decisión suya y no se tomó: desactivar el check por `statusCheckNames`,
-  al costo de perder el status visible del cooldown. `reg 2026-08-12`
+  este caso **la viola**: el control corre a un quinceavo de su alcance con cara de vigente.
+  **Bloquea el último eslabón de verificación del `postUpgradeTasks`.** `reg 2026-08-12`
+
+- **El PAT de Renovate no puede publicar commit statuses (403)** — `POST /repos/Gegolabs/vergis/statuses/<sha>`
+  ⇒ **403 «Resource not accessible by personal access token»**, medido en las corridas `31596456516`,
+  `31598505556` y `31598761867`. **Es un defecto real y vale arreglarlo** —Renovate no puede publicar
+  el status del cooldown, que es evidencia visible del control— **pero NO es lo que aborta la corrida**
+  (ver la ficha anterior: hubo un abort sin ningún 403). Mismo linaje que el hallazgo del 2026-08-11
+  («el candado de las alertas es del TOKEN, no del repo»): el permiso que falta no se ve en el repo,
+  se ve en el PAT. **Requiere a César**, único que puede editarlo: agregar **`Commit statuses: Read
+  and write`** en https://github.com/settings/personal-access-tokens (el workflow documenta Contents ·
+  Pull requests · Workflows · Issues · Metadata, y **falta Statuses**). `reg 2026-08-12`
+
+- **El `reportType` de Renovate NO sirve para detectar el abort** — medido el 2026-08-12 antes de
+  colgarle un gate encima (corrida `31599885826`). El reporte se genera (45 KB) con shape
+  `{problems: [], repositories: {"Gegolabs/vergis": {problems: [], branches: [], packageFiles: {…}}}}`:
+  es un **inventario de dependencias**, no un resultado de corrida. En una corrida que **sí abortó**,
+  el reporte no contiene `repository-changed` y `problems` viene vacío. **Un gate colgado de ahí
+  habría dado verde siempre** — un control inerte con cara de control. Falta encontrar la vía real
+  (candidata sin probar: `LOG_FILE` a `/tmp`, que el runner ve por el bind mount `/tmp:/tmp`, y
+  grepear la frase del abort). `reg 2026-08-12`
+
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
