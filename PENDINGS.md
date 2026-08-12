@@ -6,19 +6,15 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Operación / despliegue
 
-- **El delta sin desplegar creció otra vez** — `main` va en `8ae8acf`: **82 commits / ~17 PRs desde
-  el deploy 0.14.0 del 2026-08-06**. Además de lo del 07 (`/contrato` #141, paralelización fabric
-  #140) y la tanda 005 del 08 (**guard de pertenencia de Miranda #142 — fix de seguridad**, delta
-  N2 #143, H0 de canales #144, preview RLS con roster #145, ADR-002 #146, rúbrica #147,
-  supply-chain D8 #148, Dockerfile-miranda #149, audit fix #150, **fase 1 de config recargable de
-  #138·2 #151**), lleva la **fase 2 completa de #107** (#152-#158: autoría de items, plantillas de
-  job, publicación, admin, wiring) y el lote mecánico del 10 (gate constant-time, gramática de
-  nombre unificada, desambiguación del watcher, actions v7, Renovate self-hosted). La instancia
-  A.R.B.O.L. corre 0.14.0. **Cuatro verificaciones esperan ese deploy** —son conjeturas declaradas,
-  no hechos—: el smoke del journal N2 (siembra en el 1º deploy, delta en el 2º — D6), la preview
-  impersonada contra motor vivo (#145), el eslabón `serve-rls → runSpec` con identidad del roster
-  (#145), y la entrega HTTP real por sink recargado (la línea del fan-out, #151).
-  `reg 2026-08-07 · act 2026-08-10`
+- **Dos conjeturas del 0.15.0 SIGUEN sin verificar, y el deploy no las tocó** — de las cuatro que
+  esperaban producción, el despliegue del 2026-08-11 saldó dos (#139·N2 siembra ✓, #151 reclasifica ✓)
+  y **las otras dos no, porque no dependían del deploy sino de condiciones que PROD no tiene**:
+  (a) **el eslabón `serve-rls → runSpec` con identidad del roster** (#145) — PROD no declara
+  `MIRANDA_PREVIEW_IDENTITIES`, así que la preview impersonada contra motor vivo no se ejercitó;
+  poblar el roster es decisión de instancia; (b) **la entrega HTTP real por un sink recargado**
+  (#151) — el mecanismo está demostrado por test, pero la línea del fan-out en producción sigue
+  siendo inspección, no medición. **Ninguna de las dos se vuelve verdadera por el hecho de que el
+  deploy saliera bien.** `reg 2026-08-11`
 - **La proyección guardada del contrato NO es estable justo tras el arranque** — medido en el deploy
   de 0.15.0 a PROD (2026-08-11 22:21). Dos lecturas del **mismo archivo y la misma única entrada**
   del journal dieron distinto: primero `watches: []`, `signals: []`, `projectionSha256 c61ab476…`;
