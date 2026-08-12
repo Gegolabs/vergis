@@ -96,4 +96,40 @@ jobs:
           # contra las 234 de `main` y `npm ci` aborta). Se MIDIÓ con ramas que sí tocan el
           # lockfile y siguió dando 156 ⇒ REFUTADO, igual que `constraints.npm`. Se retira para
           # no dejar una variable sin justificación. El defecto sigue abierto — ver PENDINGS.md.
+          # Reporte de resultado, para el gate fail-closed del step siguiente. La accion monta
+          # /tmp:/tmp en el contenedor, asi que el runner puede leer lo que Renovate escribe aca.
+          # `reportType` es EXPERIMENTAL y su shape no esta documentado: por eso el step de abajo
+          # hoy MIDE y no bloquea. Se vuelve gate cuando el shape este medido — ver PENDINGS.md.
+          RENOVATE_REPORT_TYPE: file
+          RENOVATE_REPORT_PATH: /tmp/renovate-report.json
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+
+      # MIDIENDO, TODAVIA NO BLOQUEA. El objetivo es cerrar el hueco que se destapo el 2026-08-12:
+      # Renovate puede ABORTAR a mitad —`repository-changed`, p. ej. por un 403 al publicar commit
+      # status— procesando UNA sola rama de ~19, y el job sale VERDE igual. Eso contradice la
+      # doctrina fail-closed que este workflow declara arriba: un control corriendo a un quinceavo
+      # de su alcance con cara de vigente es exactamente lo que queremos que se vea.
+      #
+      # No se convierte en gate antes de medir el shape del reporte: colgar un `exit 1` de un
+      # formato experimental supuesto produce falsos rojos permanentes, que erosionan la senal que
+      # el gate existe para dar.
+      - name: Resultado de la corrida (fail-closed en construccion)
+        if: always()
+        run: |
+          R=/tmp/renovate-report.json
+          if [ ! -f "$R" ]; then
+            echo "::warning::No se genero $R. NO se pudo medir el resultado de la corrida"
+            echo "  (distinto de «la corrida estuvo bien»: es «no pude medir»)."
+            exit 0
+          fi
+          echo "Tamano: $(wc -c < "$R") bytes"
+          echo "--- claves de primer nivel ---"
+          jq -r 'if type=="object" then keys[] else type end' "$R" 2>/dev/null || echo "(no es JSON parseable por jq)"
+          echo "--- reporte completo (recortado a 4000 chars) ---"
+          head -c 4000 "$R"; echo
+          echo "--- deteccion de abort ---"
+          if grep -q 'repository-changed' "$R"; then
+            echo "::warning::La corrida ABORTO con repository-changed — procesa solo parte de las ramas."
+          else
+            echo "Sin repository-changed en el reporte."
+          fi
