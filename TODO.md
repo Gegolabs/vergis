@@ -48,8 +48,12 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
 - [x] **Habilitar Renovate** — **RESUELTO 2026-08-10 por otra vía** (D-11): en vez de instalar la
   GitHub App (consentimiento OAuth del owner, no automatizable), corre **self-hosted** en el propio
   CI (`.github/workflows/renovate.yml`), usando el mismo `renovate.json` sin traducir nada.
-  **Falta un acto humano de un minuto**: crear el PAT y guardarlo como secret `RENOVATE_TOKEN`
-  (Settings → Secrets and variables → Actions). Hasta entonces el workflow falla en rojo a
-  propósito — el cooldown de supply chain del ADR-001 NO está activo y tiene que verse
+  **COMPLETADO 2026-08-11**: César emitió el PAT fine-grained (`renovate-vergis`, owner Gegolabs,
+  solo `Gegolabs/vergis`, 5 permisos, expira **2027-08-12**) y lo guardó como secret
+  `RENOVATE_TOKEN`. Renovate corre verde, tiene su Dependency Dashboard (#169) y **el cooldown de
+  supply chain del ADR-001 está ACTIVO**. Su primera pasada abrió 2 PRs de seguridad. *Queda un
+  defecto vivo, encasillado en `PENDINGS.md`: los PRs que abre nacen con el CI en rojo por su
+  regeneración del lockfile.* ⏰ **El PAT vence el 2027-08-12** — ese día el workflow falla en rojo,
+  que es el comportamiento buscado
 - [x] **Redesplegar la VM** — **HECHO 2026-07-13**: PROD corre 0.6.0 (tren 0.4.0→0.5.0→0.6.0 en un día, cada release ensayado en el QA `vm-vergis-qa` antes de PROD); verificación estándar 6/6 PIs
 - [x] **Verificar render de charts con vega 6 en un PI real** — **HECHO 2026-07-13**: los 6 PIs (incl. dashboards con charts) rinden 200 con contenido en PROD 0.6.0
