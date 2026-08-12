@@ -84,12 +84,9 @@ jobs:
           # Sin config en el repo, ABORTA. No queremos una corrida con defaults silenciosos:
           # los defaults NO traen el cooldown de 14 días, que es la razón de ser de esto.
           RENOVATE_REQUIRE_CONFIG: 'required'
-          # Instalar dinámicamente las herramientas (npm) en vez de usar las de la imagen.
-          # MEDIDO (2026-08-12): con la imagen, el lockfile que Renovate regenera trae 156
-          # referencias `@esbuild/` contra las 234 de `main` — pierde optional deps por
-          # plataforma y `npm ci` aborta en el CI de cada PR suyo. Declarar
-          # `constraints.npm >= 10` NO bastó: el rebase de las dos ramas siguió dando 156,
-          # porque sin instalación dinámica los constraints no eligen binario. Con `install`,
-          # containerbase (ya presente en la imagen) instala el npm que el constraint pide.
-          RENOVATE_BINARY_SOURCE: install
+          # NOTA (2026-08-11): aquí vivió `RENOVATE_BINARY_SOURCE: install`, puesto como
+          # hipótesis para el defecto del lockfile (Renovate regenera con 156 refs `@esbuild/`
+          # contra las 234 de `main` y `npm ci` aborta). Se MIDIÓ con ramas que sí tocan el
+          # lockfile y siguió dando 156 ⇒ REFUTADO, igual que `constraints.npm`. Se retira para
+          # no dejar una variable sin justificación. El defecto sigue abierto — ver PENDINGS.md.
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
