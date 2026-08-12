@@ -1,86 +1,80 @@
 # NEXT — Vergis
 
-Renovate quedó **operando** (corridas verdes, Dependency Dashboard en el issue #169) y su primera
-pasada abrió dos PRs de seguridad. Pero **todo PR suyo nace con el CI en rojo**: el `package-lock.json`
-que él regenera pierde entradas de plataforma y `npm ci` aborta. La causa está localizada del lado de
-Renovate y medida; el arreglo está aplicado pero **sin probar**. Además hay un desperfecto que causé
-yo y hay que revertir: los dos PRs de seguridad están cerrados porque les borré la rama.
+PROD corre **0.15.0** y está sano (8/8 PIs, `healthz ok:true`). Renovate opera con su config válida,
+las dos CVEs ya están aplicadas, y **no queda ningún frente a medio ejecutar**.
 
-PROD corre **0.15.0** desde el 2026-08-11 22:21 y está sano (8/8 PIs, `healthz ok:true`). Eso no
-depende de nada de lo de abajo.
+Lo que sigue abierto es un **defecto conocido con dos hipótesis ya refutadas**, y no bloquea nada
+urgente: los PRs que Renovate abre nacen con el CI en rojo porque su regeneración del
+`package-lock.json` pierde entradas de plataforma. Mergear uno suyo exige rehacerle el lockfile a
+mano; el cooldown de supply chain —la razón de ser de tenerlo— sí funciona.
 
 ## Próximo paso
 
-**Correr Renovate y medir el lockfile de `renovate/typescript-5.x`.** Es el experimento que decide si
-`RENOVATE_BINARY_SOURCE: install` arregla el defecto, y con él se destraba que los PRs de Renovate
-sean mergeables.
+**Habilitar el permiso de alertas de vulnerabilidad — es de César y son dos clics.**
 
-**Contexto para arrancar en frío:**
+El dashboard (issue #169) avisa `WARN: Cannot access vulnerability alerts`. Sin ese permiso,
+`osvVulnerabilityAlerts: true` **no tiene de dónde leer**, y esa clave es la mitad del diseño del
+ADR-001: la que permite que un CVE urgente **se salte el cooldown de 14 días**. Hoy el cooldown está
+protegiendo, pero la excepción que lo hace seguro no.
 
-- La casilla `unlimit-branch=renovate/typescript-5.x` **ya quedó marcada** en el dashboard (issue
-  #169). Esa rama sí toca `package-lock.json`, que es lo que la vuelve un instrumento válido.
-- No corrió todavía por **`prHourlyLimit` de `config:recommended` (2 PRs/hora)**, agotado la noche
-  del 11. Basta esperar a la hora siguiente.
+- **Dónde:** `Gegolabs/vergis` → Settings → **Code security**.
+- **Cómo se comprueba después:** correr el workflow y verificar que el WARN desaparece del #169.
 
 ```bash
 export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 cd /Users/cesar/wworkspace/productos/vergis
 gh workflow run renovate.yml --ref main
-# esperar a que termine, luego MEDIR (por API, no por refs locales — ver trampas):
-gh api "repos/Gegolabs/vergis/contents/package-lock.json?ref=renovate/typescript-5.x" \
-  -q '.content' | base64 -d | grep -c '@esbuild/'
 ```
 
-- **Criterio de éxito, declarado antes de medir: `234` valida el fix · `156` lo refuta.** El control
-  es `main`, que da 234.
-- Antes de creerle a cualquier rama, verificar que **toca el lockfile**:
-  `gh api "repos/Gegolabs/vergis/compare/main...<rama>" -q '.files[].filename'`.
+## El defecto del lockfile — si alguien lo retoma
 
-## Reponer los dos PRs de seguridad — y desarmar la red
+**El síntoma, medido y reproducible:** el `package-lock.json` que Renovate regenera trae **156**
+referencias `@esbuild/`; `main` tiene **234**. `npm ci` exige correspondencia exacta árbol↔lock y
+aborta en 6-10 s con `Missing: @esbuild/…@0.28.2 from lock file`.
 
-**#167 (`ajv` → ^8.20.0) y #168 (`yaml` → ^2.9.0) están CLOSED y no se pueden reabrir**: les borré
-la rama y una rama borrada cierra el PR de forma irreversible. Renovate además lee un PR cerrado como
-rechazo y deja de reproponer esa actualización.
+**Cómo medirlo bien** (dos trampas ya pisadas, ver abajo):
 
-- La recuperación en curso es **`"recreateWhen": "always"` en `renovate.json`**, puesta el 11 y
-  **todavía sin efecto** (mismo límite horario).
-- 🔴 **Quitar `recreateWhen` —y su `_comentario_recreateWhen`— en cuanto los dos PRs vuelvan a
-  existir.** Si se queda, resucita cualquier PR que César cierre a propósito. El propio `renovate.json`
-  lleva la nota de que es temporal.
-- **Urgencia real: baja, y está medida.** El ReDoS de `ajv` (CVE-2025-69873) **no aplica**: exige
-  `$data: true` y el árbol instancia `new Ajv({ allErrors: true, strict: false })` sin un solo uso de
-  `$data`. El de `yaml` (CVE-2026-33532) hoy solo lo alcanza un operador — se parsea en
-  `miranda/publish.ts`, `miranda/forma.ts` e `instance-config.ts`, y `MIRANDA_SCOPE_GROUP` es un grupo
-  unipersonal. **Vigilar cuando Miranda abra su audiencia.**
+```bash
+# 1 · confirmar que la rama TOCA el lockfile — si no, no mide nada
+gh api "repos/Gegolabs/vergis/compare/main...<rama>" -q '.files[].filename' | grep package-lock
+# 2 · contar por API, no por refs locales
+gh api "repos/Gegolabs/vergis/contents/package-lock.json?ref=<rama>" -q '.content' | base64 -d | grep -c '@esbuild/'
+```
 
-## Si el experimento refuta el fix
+**Criterio: 234 = resuelto · 156 = sigue roto.** Control: `main` da 234.
 
-Siguiente lever **no verificado**: correr con `LOG_LEVEL=trace` para capturar qué npm usa Renovate —
-`debug` **no lo imprime** (comprobado). El workflow ya acepta `-f logLevel=debug`; `trace` habría que
-agregarlo a las opciones del `workflow_dispatch`.
+**Lo único sin medir:** qué npm usa Renovate. `LOG_LEVEL=debug` **no lo imprime** (comprobado);
+haría falta `trace`, que hoy no está en las opciones del `workflow_dispatch` del workflow.
 
-Salida de emergencia, **explícitamente un parche**: empujar a mano el lockfile correcto a cada rama
-(regenerado con `npm install --package-lock-only --ignore-scripts`, que produce 234). Cierra esos PRs
-pero deja la causa viva para el lunes siguiente, y Renovate deja de gestionar las ramas tocadas.
+**Workaround vigente, y es aceptable:** rehacerle el lockfile a mano al PR que se quiera mergear —
+`npm install --package-lock-only --ignore-scripts` produce 234. Es lo que se hizo para las dos CVEs
+(PR #173), y funciona.
 
-## Terreno ya recorrido
+## Terreno ya recorrido — cuatro caminos cerrados y dos trampas
 
-- **`constraints.npm >= 10` + `engines.npm >= 10` — insuficiente.** Aplicado (`81423d8`) y medido:
-  se forzó el rebase de las dos ramas por la casilla `rebase-all-open-prs`, las ramas **sí** se
-  regeneraron (`Branch updated`, HEADs nuevos) y el conteo siguió en **156**. Se deja puesto porque es
-  correcto e inocuo, pero **no resuelve**. No reintentar por ahí.
+- **`constraints.npm >= 10` + `engines.npm >= 10` — REFUTADO.** Aplicado y medido con las ramas
+  regeneradas: siguieron en 156. Se deja puesto porque es correcto e inocuo, pero no resuelve.
+- **`binarySource=install` — REFUTADO.** Medido sobre las ramas recreadas de #171/#172, que sí tocan
+  el lockfile: 156. Retirado del workflow para no dejar una variable sin justificación.
 - **Borrar ramas de Renovate para forzar regeneración — nunca más.** Cierra el PR de forma
-  irreversible y Renovate marca la actualización como rechazada. Es el origen del daño a revertir.
-- **`renovate/pin-dependencies` no sirve de instrumento.** Da 234, pero **no toca
-  `package-lock.json`** (solo workflows y Dockerfiles): hereda el de `main`. Casi se publica como
-  validación del fix.
-- **Medir lockfiles con `git show origin/<rama>:…` es poco fiable acá** — dio lecturas rancias tras
-  un rebase. Usar la API de contenidos.
+  irreversible (no se puede reabrir sin la rama) y Renovate lo lee como rechazo. Costó los PRs #167
+  y #168.
+- **Comentarios en `renovate.json` con claves inventadas — nunca.** Una clave fuera del esquema
+  (`_comentario_x`) invalida el archivo entero y Renovate **detiene todos los PRs** hasta que se
+  corrija (pasó: issue #170, 40 minutos de parálisis). Los comentarios van en `description`, que
+  acepta un array de strings. **El modo de falla es feo porque no se cae al escribirlo**: falla en el
+  bot, asincrónico, y se manifiesta como «no pasa nada».
+- **Trampa 1 — `renovate/pin-dependencies` no es instrumento**: da 234, pero no toca
+  `package-lock.json` (solo workflows y Dockerfiles). Hereda el de `main`. Casi se publica como
+  validación.
+- **Trampa 2 — `git show origin/<rama>:archivo` dio lecturas rancias tras un rebase.** Usar la API.
 
-## Lo demás que queda abierto (no es residuo, es pendiente)
+## Lo demás abierto (pendiente, no residuo)
 
-Vive en `TODO.md` y `PENDINGS.md`. Lo que pide acción de César: la revisión legal de
-`CONTRIBUTING.draft.md` (renombrarlo **es** publicarlo), la marca, y la decisión del mapa de
-identidad (#159 / `P-22`, 44 personas pierden acceso). Sin tocar: los issues **#161** y **#162**.
+En `TODO.md` y `PENDINGS.md`. De César: la revisión legal de `CONTRIBUTING.draft.md` —renombrarlo
+**es** publicarlo—, la marca, y el mapa de identidad (#159 / `P-22`, 44 personas pierden acceso).
+Sin tocar: **#161**, **#162** (observabilidad de cargas) y **#163**/**#164**/**#165** (los tres de
+autorización que abrió el lab; **#163**, control por columna, acaba de ganar peso: la doctrina de
+terreno ancho sellada allá declara como su único límite que no existe).
 
-<!-- /ww:next · 2026-08-11 · HEAD 6e679f9 -->
+<!-- /ww:next · 2026-08-11 · HEAD d0e5277 -->
