@@ -58,23 +58,25 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   ⇒ **La hipótesis del constraint es INSUFICIENTE.** Medido bien: las dos ramas SÍ se regeneraron
   (`Branch updated`, HEADs nuevos, verificado por API contra el repo, no por refs locales) y el
   conteo siguió en 156. El fix se deja puesto (correcto e inocuo) pero **no resolvió**.
-  **Estado exacto al cerrar (2026-08-11 23:1x):**
-  - `RENOVATE_BINARY_SOURCE: install` **aplicado en el workflow, pero SIN PROBAR**: desde entonces
-    ninguna rama que toque el lockfile se ha regenerado, así que el experimento **no ha corrido**.
-    ⚠️ Casi se da por validado con `renovate/pin-dependencies` (234 refs) — pero esa rama **no toca
-    `package-lock.json`** (solo workflows y Dockerfiles): su 234 es el de `main` heredado. Instrumento
-    que no mide lo que parece.
-  - **Por qué no corre: `prHourlyLimit` de `config:recommended` (2 PRs/hora), ya agotado.** El
-    dashboard #169 lo dice en su sección «Rate-Limited». Queda **armada la casilla
-    `unlimit-branch=renovate/typescript-5.x`**: la próxima corrida crea esa rama, que sí regenera
-    lockfile — **ahí se mide el experimento**. Esperado si el fix sirve: 234.
-  - 🔴 **DAÑO PROPIO A REVERTIR: `#167` y `#168` (los dos PRs de seguridad) están CERRADOS.** Se
-    borraron sus ramas a mano para forzar una regeneración desde cero, bajo el supuesto —**falso**—
-    de que era autorreparable: una rama borrada cierra el PR de forma irreversible y Renovate lee el
-    PR cerrado como rechazo. Recuperación en curso: `recreateWhen: "always"` **TEMPORAL** en
-    `renovate.json`. **QUITARLO en cuanto los dos PRs vuelvan** — si se queda, resucita cualquier PR
-    que César cierre a propósito.
-  - No se midió qué npm usa Renovate: el `debug` no lo imprime, haría falta `trace`. `reg 2026-08-11`
+  **Segunda hipótesis, también REFUTADA** (2026-08-11, tarde en la noche): `binarySource=install`,
+  para que Renovate instalara el npm del constraint en vez de usar el de su imagen. Medida sobre las
+  ramas **recreadas** de `#171`/`#172` —que **sí** tocan `package-lock.json`, verificado con
+  `compare`— siguieron dando **156** contra 234 del control. Se retiró del workflow para no dejar una
+  variable sin justificación. ⚠️ En el camino casi se valida con `renovate/pin-dependencies` (234
+  refs): esa rama **no toca el lockfile**, hereda el de `main` — instrumento que no mide lo que parece.
+  **Ambas hipótesis muertas. La causa sigue sin identificar.** Lo que queda sin medir: qué npm usa
+  Renovate — el `debug` no lo imprime, haría falta `trace`.
+  **Impacto hoy: acotado.** Las dos CVEs se aplicaron a mano (PR #173, mergeado) con el lockfile
+  regenerado por el npm del repo, así que no dependen de esto. Lo que sigue roto es que **todo PR
+  futuro de Renovate nace con el CI en rojo** y hay que rehacerle el lockfile a mano para mergearlo.
+  `reg 2026-08-11`
+
+- 🔴 **`osvVulnerabilityAlerts` NO está operando: falta el permiso de alertas de vulnerabilidad** —
+  el dashboard #169 avisa `WARN: Cannot access vulnerability alerts. Please ensure permissions have
+  been granted.` Sin eso, la excepción al cooldown de 14 días para vulnerabilidades **no tiene de
+  dónde leer**, que es justo la mitad del diseño del ADR-001 que protege ante un CVE urgente. Se
+  habilita en **Settings → Code security** del repo — configuración de la organización, acción de
+  César. Detectado por la sesión `arbol` del lab. `reg 2026-08-11`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
