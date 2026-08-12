@@ -17,9 +17,15 @@ cerrar.
   leer un instrumento que no medía.
   *El lever inicial que se propuso —«Settings → Code security»— era el equivocado: el repo es público
   y sus alertas ya funcionaban (4, todas `fixed`, leídas por API). El candado era del token.*
-  ⚠️ **Residuo cosmético:** el Dependency Dashboard (#169) sigue mostrando el problema en
-  «Repository Problems» — su cuerpo no se reescribe desde las 03:06 UTC. Es caché del bot, no estado
-  real; se corrige solo en la próxima corrida que cambie su contenido.
+  **Prueba positiva (2026-08-12 11:26 UTC):** el log ahora dice `fetchVulnerabilities() -
+  osvVulnerabilityAlerts=true` y `No vulnerability alerts found` — o sea que **distingue «medí y
+  salió cero» de «no pude medir»**, que es la propiedad exigible a un control de seguridad. Antes
+  decía `Cannot access`.
+  **Residuo cosmético, resuelto a mano:** el Dependency Dashboard (#169) siguió mostrando el problema
+  pese a **cuatro corridas** posteriores; el log muestra que Renovate actualiza su caché del issue
+  sin reescribir el cuerpo, y **no se identificó la condición que dispara la reescritura**. Se retiró
+  la sección a mano el 2026-08-12 11:44, con comentario en el issue dejando el rastro. Renovate la
+  repone si vuelve a haber un problema real — la edición no desactiva nada.
 
 - **El delta sin desplegar / PROD en 0.14.0** (reg 2026-08-07, act 08-10).
   **Cerrado 2026-08-11 22:21:** desplegado **0.15.0** a `vm-vergis` con ventana aprobada por César.
