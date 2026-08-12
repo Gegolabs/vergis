@@ -45,8 +45,24 @@ jobs:
         run: |
           if [ -z "$RENOVATE_TOKEN" ]; then
             echo "::error::Falta el secret RENOVATE_TOKEN. El cooldown de supply chain del ADR-001 NO está activo."
-            echo "Crear un PAT (fine-grained) sobre este repo con permisos: Contents=RW, Pull requests=RW, Metadata=R;"
-            echo "guardarlo como secret RENOVATE_TOKEN en Settings → Secrets and variables → Actions."
+            echo ""
+            echo "Emitir un PAT fine-grained en https://github.com/settings/personal-access-tokens/new"
+            echo "  · Resource owner: Gegolabs   (NO tu usuario: el repo es de la org)"
+            echo "  · Repository access: Only select repositories -> Gegolabs/vergis"
+            echo "  · Permissions (Repository):"
+            echo "      Contents ......... Read and write   (empujar las ramas de update)"
+            echo "      Pull requests .... Read and write   (abrir los PRs)"
+            echo "      Workflows ........ Read and write   (OBLIGATORIO acá: 'helpers:pinGitHubActionDigests'"
+            echo "                                          de renovate.json edita .github/workflows/*)"
+            echo "      Issues ........... Read and write   (OBLIGATORIO acá: 'config:recommended' abre el"
+            echo "                                          Dependency Dashboard, que es un issue)"
+            echo "      Metadata ......... Read-only        (se activa solo, es obligatorio)"
+            echo ""
+            echo "Guardarlo en Settings -> Secrets and variables -> Actions -> New repository secret,"
+            echo "con nombre exacto RENOVATE_TOKEN."
+            echo ""
+            echo "Nota: el PAT expira. El día que expire, este workflow vuelve a fallar acá — que es"
+            echo "el comportamiento buscado: el cooldown apagado tiene que verse, no degradarse en silencio."
             exit 1
           fi
 
