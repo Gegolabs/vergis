@@ -8,7 +8,9 @@
   "minimumReleaseAge": "14 days",
   "description": [
     "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
-    "`postUpgradeTasks` COMPENSA —no cura— el defecto por el que los PRs de Renovate nacen con el CI en rojo: su lockfile trae 156 refs `@esbuild/` contra las 234 de `main`, y `npm ci` aborta. Regenerar el lockfile después del upgrade lo repara. MEDIDO el 2026-08-12 en `linux/amd64` con node 22 / npm 10.9.8 —el entorno del runner— sobre el árbol exacto de la rama `renovate/npm-ajv-vulnerability`: 156 antes, 234 después, preservando el bump (ajv 8.20.0). `executionMode: branch` lo corre una vez por rama, no una por upgrade.",
+    "`postUpgradeTasks` COMPENSA —no cura— el defecto por el que los PRs de Renovate nacen con el CI en rojo: su lockfile trae 156 refs `@esbuild/` contra las 234 de `main`, y `npm ci` aborta. Regenerar el lockfile despues del upgrade lo repara. MEDIDO el 2026-08-12 DENTRO de la imagen real del bot (`ghcr.io/renovatebot/renovate:43`, node 22.22.3 / npm 10.9.8) sobre el arbol exacto de la rama `renovate/npm-ajv-vulnerability`, que es la que reproduce el defecto: 156 antes, 234 despues, preservando el bump (ajv 8.20.0).",
+    "`installTools` NO es adorno: la imagen del bot trae `node` en `/usr/bin/node` pero NO trae `npm`, y sin esto el comando muere con `spawn npm ENOENT` y el unhandledRejection TUMBA LA CORRIDA ENTERA — o sea, apaga el control de supply chain, no solo el arreglo. Medido el 2026-08-12 (corrida 31596456516). `install-tool npm` solo tampoco sirve: falla con «parent tool not installed: node». Instalar `node` por containerbase trae npm 10.9.8 consigo, que es justamente el npm con el que se midieron las 234.",
+    "La version de `installTools` va PINEADA y exacta a proposito: containerbase rechaza los rangos («tool version not supported» con `^22.0.0` y con `>=22`, medido el 2026-08-12) — y el `renovate-config-validator` los acepta igual, porque valida forma, no semantica. Un rango aca pasaria el gate y moriria en la corrida. Al subir el node del proyecto, subir tambien esta version.",
     "La CAUSA del defecto sigue sin identificar, y esta medición la acota: no es que npm pode las optional deps, porque el MISMO comando en el MISMO entorno produce 234. Renovate regenera el lockfile por otra vía. Si la divergencia produjera algo más allá de las optional deps de esbuild, esto lo enmascararía — no es peor que el workaround manual, solo automático.",
     "`constraints.npm` acota el npm con que Renovate regenera el lockfile. NO resolvió el defecto: se midió y quedó refutado, igual que `binarySource=install`. Se deja porque es correcto e inocuo.",
     "El comando de `postUpgradeTasks` NO corre si el administrador del bot no lo permite: `allowedCommands` es opción global-only (antes `allowedPostUpgradeCommands`) y se pasa por env en `.github/workflows/renovate.yml`. Lo podemos hacer por ser self-hosted; como GitHub App no se podría.",
@@ -19,16 +21,27 @@
     "npm": ">=10"
   },
   "rangeStrategy": "bump",
-  "postUpgradeTasks": {
-    "commands": [
-      "npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
-    ],
-    "fileFilters": [
-      "package-lock.json"
-    ],
-    "executionMode": "branch"
-  },
   "labels": [
     "dependencies"
+  ],
+  "packageRules": [
+    {
+      "description": "Solo los updates del manager npm regeneran el lockfile. Acotarlo importa: en una rama puramente de github-actions o docker el comando no tiene nada que hacer, y cada ejecucion de mas es superficie donde el control de supply chain puede caerse por una razon ajena (ver el ENOENT del 2026-08-12). Menos superficie, control mas robusto.",
+      "matchManagers": [
+        "npm"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+        ],
+        "fileFilters": [
+          "package-lock.json"
+        ],
+        "installTools": {
+          "node": "22.22.3"
+        },
+        "executionMode": "branch"
+      }
+    }
   ]
 }
