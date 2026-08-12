@@ -2,9 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "docker:pinDigests"],
   "minimumReleaseAge": "14 days",
-  "description": "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
+  "description": [
+    "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
+    "`constraints.npm` acota el npm con que Renovate regenera el lockfile: sin él infiere `>=7` del lockfileVersion y produce un lockfile con menos optional deps por plataforma que el que valida el CI (medido 2026-08-11: 156 refs @esbuild/ contra 234 de main). NOTA: por sí solo NO resolvió — ver PENDINGS.md.",
+    "TEMPORAL 2026-08-11 — `recreateWhen: always`: se borraron a mano las ramas de los dos PRs de seguridad (#167, #168) para forzar una regeneración desde cero, y eso los cerró de forma irreversible (una rama borrada no se puede reabrir). Renovate lee un PR cerrado como rechazo y deja de reproponer la actualización. QUITAR `recreateWhen` en cuanto los dos PRs vuelvan a existir: si se queda, resucita cualquier PR que César cierre a propósito.",
+    "Los comentarios van ACÁ, en `description`, que es una clave válida del esquema. Una clave inventada (p. ej. `_comentario_x`) invalida el archivo entero y Renovate DETIENE todos los PRs hasta que se corrija — ocurrió el 2026-08-11, issue #170."
+  ],
   "osvVulnerabilityAlerts": true,
-  "_comentario_recreateWhen": "TEMPORAL 2026-08-12 — se borraron a mano las ramas de los dos PRs de seguridad para forzar una regeneración desde cero, y eso los cerró de forma irreversible (una rama borrada no se puede reabrir). Renovate lee un PR cerrado como rechazo y deja de reproponer la actualización. `always` lo revierte. QUITAR en cuanto los dos PRs vuelvan a existir: si se queda, resucita cualquier PR que César cierre a propósito.",
   "recreateWhen": "always",
   "constraints": {
     "npm": ">=10"
