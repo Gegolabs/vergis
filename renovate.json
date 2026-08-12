@@ -4,6 +4,8 @@
   "minimumReleaseAge": "14 days",
   "description": "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
   "osvVulnerabilityAlerts": true,
+  "_comentario_recreateWhen": "TEMPORAL 2026-08-12 — se borraron a mano las ramas de los dos PRs de seguridad para forzar una regeneración desde cero, y eso los cerró de forma irreversible (una rama borrada no se puede reabrir). Renovate lee un PR cerrado como rechazo y deja de reproponer la actualización. `always` lo revierte. QUITAR en cuanto los dos PRs vuelvan a existir: si se queda, resucita cualquier PR que César cierre a propósito.",
+  "recreateWhen": "always",
   "constraints": {
     "npm": ">=10"
   },
