@@ -5,58 +5,63 @@ eslabón y ahí se topó con un bloqueo que solo César puede levantar** — no 
 lockfile, es un permiso del PAT. Árbol limpio salvo lo de esta sesión; un solo PR abierto (#166, del
 lab, esperando ventana de César).
 
-## Lo primero: mergear el PR #174 (es tuyo, y destraba todo lo demás)
+## Lo primero: el permiso del PAT — es lo único que bloquea todo
 
-**https://github.com/Gegolabs/vergis/pull/174 — CI verde (`test` pass, `review` pass), MERGEABLE /
-CLEAN.** Es la rama `renovate/pin-dependencies` abierta a mano.
+**`Commit statuses: Read and write`** sobre el PAT del secret `RENOVATE_TOKEN`, en
+https://github.com/settings/personal-access-tokens . El workflow documenta Contents · Pull requests ·
+Workflows · Issues · Metadata — **falta Statuses**. Solo César puede editarlo.
 
-**Por qué a mano:** cada corrida aborta con `repository-changed` **inmediatamente después de escribir
-esa rama, antes de llegar a crear el PR**. Marcar la casilla `unlimit-branch` del dashboard no basta
-— medido en la corrida `31601603402`.
+**La cadena causal la escribe el propio Renovate**, en el mismo milisegundo (corrida `31623814773`):
 
-**Por qué importa:** esa rama tiene bloqueado al bot entero. De ~19 candidatas procesa **solo esa** y
-corta, así que **nunca alcanza ninguna rama npm** — y por eso el `postUpgradeTasks` del lockfile no
-se pudo verificar end-to-end. Además la rama **oscila**: una corrida le quita los pins a los
-workflows y la siguiente se los repone (trees `caf064a…` vs `86d4516…` entre dos corridas
-consecutivas **sin que `main` se moviera**).
+```
+DEBUG: POST /repos/Gegolabs/vergis/statuses/4d53aa6… = ERR_NON_2XX      17:41:46.887
+DEBUG: Caught error setting branch status - aborting (branch=…)          17:41:46.888
+       403 «Resource not accessible by personal access token»
+DEBUG: Passing repository-changed error up (branch=…)                    17:41:46.892
+ INFO: Repository has changed during renovation - aborting
+```
 
-**Dos cosas del PR quedaron para tu ojo, escritas en su cuerpo:** (1) pinea **nuestra propia imagen**
-`ghcr.io/gegolabs/vergis:latest` a un digest en `deploy/compose.reference.yml`, lo que congela lo que
-ese archivo comunica — si la referencia debe seguir el tag móvil, se saca antes de mergear;
-(2) `actions/dependency-review-action@v4` queda sin pinear (tiene su propio update a v5).
-Los digests **no se dieron por buenos porque los escribiera el bot**: tres se verificaron contra la
-API de GitHub.
+**Efecto, medido en 9 corridas:** Renovate escribe **exactamente una rama** y corta; las demás (20 en
+la última) solo las evalúa. **Nunca alcanza una rama npm** — por eso el `postUpgradeTasks` del
+lockfile sigue sin verificarse end-to-end. Es **PREEXISTENTE** (ya estaba en `31591828225`, antes de
+tocar nada) y **viola la doctrina fail-closed** del propio workflow: el control corre a una fracción
+de su alcance, en verde.
 
-**Y el merge es el experimento decisivo.** Justo después:
+⚠️ **Este punto se afirmó, se «corrigió» y se re-afirmó el mismo día. Vale la pena leer por qué antes
+de tocarlo:** primero se publicó por correlación sin medir el eslabón; después se declaró refutado
+porque una corrida abortó con **cero** 403 — **y esa refutación era inválida: el conteo se hizo sobre
+logs en `info`, que no imprimen ese DEBUG**. El 403 aparece en las 3 corridas `debug` y en ninguna de
+las 5 `info`, mientras el abort ocurre en las 8. **El contador medía el nivel de log, no el
+fenómeno.** La lección que queda no es sobre el 403: **un instrumento que no distingue «no ocurrió»
+de «no lo registré» fabrica refutaciones tan falsas como las afirmaciones que pretende arreglar.**
+
+**Falta la confirmación por intervención** — la cadena está demostrada en el log, pero la prueba es
+dar el permiso y ver desaparecer el abort. Justo después:
 
 ```bash
 export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 cd /Users/cesar/wworkspace/productos/vergis
-gh workflow run renovate.yml --ref main -f logLevel=info
+gh workflow run renovate.yml --ref main -f logLevel=debug
 ```
 
-- **Si la corrida alcanza ramas npm** ⇒ queda demostrado que era esa rama la que bloqueaba, y se
-  cierra el último eslabón del lockfile en la misma corrida (medir con el bloque de más abajo).
-- **Si vuelve a abortar en la primera rama que toque** ⇒ la hipótesis se cae, el problema es más
-  general que `pin-dependencies`, y hay que atacar la causa de fondo. **Decirlo, no maquillarlo.**
+Si el abort desaparece y la corrida alcanza ramas npm, **se cierra el último eslabón del lockfile en
+la misma corrida** — medir con el bloque de más abajo (criterio: **234**).
 
-**La causa de fondo del abort sigue SIN identificar.** El PR la esquiva, no la explica.
+## Ya refutado, no reintentar
 
-⚠️ **Ya se publicó una causa falsa para esto hoy y se retiró.** Se afirmó que era el 403 al publicar
-commit status, porque en tres corridas aparecía pegado al abort. La corrida `31599885826` lo refutó:
-abortó igual con **cero** 403. Fue ascender un patrón sospechoso a mecanismo sin medir el eslabón.
-**No repetir: hace falta una corrida que salga distinta si la hipótesis es falsa.**
+- **«`pin-dependencies` bloqueaba el tablero» — REFUTADO por su propio merge** (#174, `9b4b112`). La
+  corrida siguiente abortó igual, tras una rama **nueva**. Esa rama no tenía nada de especial: el
+  abort ocurre tras escribir la primera, sea cual sea. El merge sirvió para eso.
+- **Marcar la casilla `unlimit-branch` del dashboard no destraba nada**: el abort ocurre **antes** de
+  que Renovate cree el PR (medido en `31601603402`).
 
-## Aparte, y ya no como causa: el PAT no puede publicar commit statuses
+## Efecto colateral del merge, para decidir
 
-`POST /repos/Gegolabs/vergis/statuses/<sha>` ⇒ **403 «Resource not accessible by personal access
-token»**. **Vale arreglarlo igual** —Renovate no puede publicar el status del cooldown, que es
-evidencia visible del control— **pero no es lo que aborta la corrida**, y esa distinción es la
-corrección de arriba.
-
-**Qué hacer** (solo César puede): en https://github.com/settings/personal-access-tokens , sobre el
-PAT del secret `RENOVATE_TOKEN`, agregar **`Commit statuses: Read and write`**. El workflow documenta
-Contents · Pull requests · Workflows · Issues · Metadata — **falta Statuses**.
+`deploy/compose.reference.yml` ahora fija `ghcr.io/gegolabs/vergis:latest@sha256:…`, así que **cada
+build de `main` publica un digest nuevo y Renovate mantiene `renovate/ghcr.io-gegolabs-vergis-latest`
+viva para siempre**. Estaba señalado en el cuerpo del PR antes de mergear. No causa el abort, pero
+garantiza churn perpetuo del bot sobre una imagen que es nuestra. **Decidir:** quitar el pin (si la
+referencia debe seguir el tag móvil) o ignorar ese paquete en `renovate.json` (si debe quedar fija).
 
 ## El fail-closed del workflow: decidido, y a medio construir
 

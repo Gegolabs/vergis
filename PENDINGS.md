@@ -105,60 +105,54 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   el lockfile bueno en una rama npm suya. No se pudo llegar — ver el pendiente del 403 de `statuses`,
   que aborta la corrida antes de alcanzar ninguna rama npm. `reg 2026-08-11 · act 2026-08-12`
 
-- **🔥 Renovate ABORTA la corrida entera tras UNA rama, y el job sale VERDE** — descubierto el
-  2026-08-12. Evidencia, idéntica en cuatro corridas: de ~19 ramas candidatas procesa **solo la
-  primera** (`renovate/pin-dependencies`), imprime *«Repository has changed during renovation -
-  aborting»* y corta. **Nunca llega a ninguna rama npm.**
-  **NO es regresión de esta sesión, es PREEXISTENTE**: la corrida `31591828225` (11:26, `bc0402b`,
-  antes de tocar nada) ya lo traía.
-  **La causa NO está identificada.** Lo único medido es la secuencia, limpia y sin ruido, en la
-  corrida `31599885826`: `INFO: Branch updated (branch=renovate/pin-dependencies)` e inmediatamente
-  `INFO: Repository has changed during renovation - aborting`. Es decir, **la propia escritura de
-  Renovate a esa rama precede al abort**. Por qué eso cuenta como «el repositorio cambió» no está
-  medido — es observación, no mecanismo.
-  ⚠️ **CORRECCIÓN de lo que esta misma ficha afirmó horas antes.** Se publicó que la causa era el
-  **403 al publicar commit status**, porque en las tres primeras corridas el 403 aparecía pegado al
-  abort. **Es falso, y lo refutó la corrida `31599885826`: abortó igual con CERO 403.** El 403 es
-  otro síntoma del mismo paso (tras commitear, Renovate intenta poner el status y no puede), no la
-  causa. Se ascendió un patrón sospechoso a mecanismo sin medir el eslabón — **Norma 7 en su modo de
-  falla exacto**, y con el agravante de que la afirmación ya había mandado a César a tocar el PAT.
-  **Hipótesis NO verificada, y hay que tratarla como tal:** `pin-dependencies` se actualiza en cada
-  corrida (los digests y el rebase contra un `main` que avanzó), así que sería el hecho de escribirla
-  lo que corta. **Predicción falsable:** si esa rama deja de necesitar actualización (mergeada o
-  cerrada), la corrida debería continuar hacia las ramas npm. Sin correr.
-  **Por qué importa más que su síntoma:** el workflow declara por escrito la doctrina fail-closed
-  —«preferimos el rojo honesto; un control apagado tiene que verse, no degradarse en silencio»— y
-  este caso **la viola**: el control corre a un quinceavo de su alcance con cara de vigente.
-  **Bloquea el último eslabón de verificación del `postUpgradeTasks`.**
-  **EXPERIMENTO CORRIDO (2026-08-12) — la hipótesis no se pudo probar, y en el intento apareció algo
-  peor.** Se corrieron dos corridas seguidas **sin empujar nada entre medio** (`31600283903` y
-  `31600458840`, HEAD congelado en `2164479`), para ver si la segunda —sin nada que rebasar— pasaba
-  de largo. **No se llegó a la condición: la rama se reescribe en TODA corrida aunque `main` no se
-  mueva**, y ambas abortaron tras ella. Lo que sí quedó medido, y es un hallazgo nuevo:
-  **`pin-dependencies` OSCILA entre dos contenidos en corridas alternas.** Los trees de los dos
-  commits consecutivos difieren (`caf064a…` vs `86d4516…`) y el diff entre ellos muestra que la
-  corrida A dejó los workflows **SIN** los pins (`actions/checkout@v7`) y la B **se los volvió a
-  poner** (`actions/checkout@3d3c42e5… # v7`). Cada corrida deshace lo que hizo la anterior, escribe,
-  y aborta. **Es un bucle: Renovate nunca avanzará más allá de esta rama mientras siga así.**
-  **La causa sigue SIN identificar** — y ya se falló una vez por apurar una. Candidata plausible y
-  **no medida**: los `403` de rate limit anónimo de DockerHub que aparecen en los logs al listar tags
-  de `node`/`python` dejarían resoluciones incompletas que la corrida siguiente completa. **Conjetura,
-  no mecanismo.**
-  **Salida práctica, y es decisión de César** (por eso no se tomó): sacar esa rama del camino —crear
-  su PR y mergearlo, ya que el pinning por digest es deseable y está en el ADR-001— o deshabilitar
-  temporalmente los presets de pinning. Cualquiera de las dos debería destrabar el resto del tablero,
-  **y es a la vez el experimento decisivo** que la hipótesis pide.
+- **🔥 El 403 al publicar commit status ABORTA la corrida entera de Renovate — y el job sale VERDE**
+  — 2026-08-12. **Cadena causal escrita por el propio Renovate**, en el mismo milisegundo (corrida
+  `31623814773`, `debug`):
+  ```
+  DEBUG: POST /repos/Gegolabs/vergis/statuses/4d53aa6… = ERR_NON_2XX      17:41:46.887
+  DEBUG: Caught error setting branch status - aborting (branch=…)          17:41:46.888
+         403 «Resource not accessible by personal access token»
+  DEBUG: Passing repository-changed error up (branch=…)                    17:41:46.892
+   INFO: Repository has changed during renovation - aborting
+  ```
+  **Efecto medido en 9 corridas:** Renovate escribe **exactamente una rama** y corta. Las demás
+  (20 en la última) solo las evalúa. **Nunca alcanza una rama npm**, así que el `postUpgradeTasks`
+  del lockfile no se puede verificar end-to-end.
+  **PREEXISTENTE**: la corrida `31591828225` (11:26, `bc0402b`, antes de tocar nada) ya lo traía.
+  **Viola la doctrina fail-closed que el workflow declara**: control corriendo a una fracción de su
+  alcance, en verde.
+  ⚠️ **Historial de esta ficha — dos errores propios, y el segundo fue corregir bien lo que estaba
+  bien.** (1) Se publicó el 403 como causa por correlación, sin medir el eslabón. (2) Se «corrigió»
+  declarándolo refutado porque una corrida abortó con **cero** 403 — **y esa refutación era inválida:
+  el conteo se hizo sobre logs en `info`, que NO imprimen ese DEBUG.** El cruce lo dejó desnudo: el
+  403 aparece en las **3** corridas `debug` y en **ninguna** de las 5 `info`, mientras el abort
+  ocurre en las **8**. El contador medía el nivel de log, no el fenómeno. **La lección no es «el 403
+  era la causa»: es que un instrumento que no distingue "no ocurrió" de "no lo registré" fabrica
+  refutaciones tan falsas como las afirmaciones que pretende arreglar** — el corolario de la Norma 7
+  sobre instrumentos, aplicado a una refutación.
+  **Lo que falta para cerrarlo del todo:** la confirmación por intervención — dar el permiso y ver
+  que el abort desaparece. La cadena está demostrada en el log; la intervención es la prueba.
+  **Requiere a César**, único que puede editar el PAT: agregar **`Commit statuses: Read and write`**
+  en https://github.com/settings/personal-access-tokens , sobre el PAT del secret `RENOVATE_TOKEN`
+  (el workflow documenta Contents · Pull requests · Workflows · Issues · Metadata — **falta
+  Statuses**). Mismo linaje que «el candado de las alertas es del TOKEN, no del repo» (2026-08-11).
   `reg 2026-08-12`
 
-- **El PAT de Renovate no puede publicar commit statuses (403)** — `POST /repos/Gegolabs/vergis/statuses/<sha>`
-  ⇒ **403 «Resource not accessible by personal access token»**, medido en las corridas `31596456516`,
-  `31598505556` y `31598761867`. **Es un defecto real y vale arreglarlo** —Renovate no puede publicar
-  el status del cooldown, que es evidencia visible del control— **pero NO es lo que aborta la corrida**
-  (ver la ficha anterior: hubo un abort sin ningún 403). Mismo linaje que el hallazgo del 2026-08-11
-  («el candado de las alertas es del TOKEN, no del repo»): el permiso que falta no se ve en el repo,
-  se ve en el PAT. **Requiere a César**, único que puede editarlo: agregar **`Commit statuses: Read
-  and write`** en https://github.com/settings/personal-access-tokens (el workflow documenta Contents ·
-  Pull requests · Workflows · Issues · Metadata, y **falta Statuses**). `reg 2026-08-12`
+- **Pinear nuestra propia imagen creó una fuente permanente de churn** — consecuencia del merge de
+  #174, y estaba señalada en su cuerpo antes de mergear. `deploy/compose.reference.yml` ahora fija
+  `ghcr.io/gegolabs/vergis:latest@sha256:…`, así que **cada build de `main` publica un digest nuevo y
+  Renovate abre/actualiza `renovate/ghcr.io-gegolabs-vergis-latest`**. Hoy esa rama encabeza la cola
+  y es la que se lleva el único intento de escritura antes del abort. **No es la causa del abort**
+  (el patrón es idéntico con cualquier rama), pero garantiza trabajo perpetuo del bot sobre una
+  imagen que es nuestra. **Decidir:** si la referencia debe seguir el tag móvil, quitar ese pin;
+  si debe quedar fija, ignorar ese paquete en `renovate.json`. `reg 2026-08-12`
+
+- **La hipótesis de que `pin-dependencies` bloqueaba el tablero — REFUTADA por el merge** (2026-08-12).
+  Se mergeó (#174) y la corrida siguiente (`31623564782`) **abortó igual**, ahora tras
+  `renovate/ghcr.io-gegolabs-vergis-latest`. Esa rama no tenía nada de especial: **el abort ocurre
+  tras escribir la primera rama, sea cual sea.** El merge sirvió: era el experimento que la refutaba.
+  `reg 2026-08-12`
+
 
 - **El `reportType` de Renovate NO sirve para detectar el abort** — medido el 2026-08-12 antes de
   colgarle un gate encima (corrida `31599885826`). El reporte se genera (45 KB) con shape
