@@ -1,7 +1,8 @@
 // #94 · Rótulo del valor sobre cada punto de un `series` (línea) — la contraparte de #80.
 // El texto viaja PRE-COMPUTADO server-side (`__label`, Vega solo pinta), adelgazado por
-// `seriesLabelStride` cuando los puntos no dan el ancho, y en dos carriles verticales alternados
-// por serie (pares arriba, impares abajo) para que dos líneas cercanas no fundan sus rótulos.
+// `seriesLabelIndices` cuando los puntos no dan el ancho, y repartido en carriles verticales por
+// `seriesLanes` según qué punto va por encima de cuál. La anti-colisión se verifica en
+// `chart-series-lane-collision.test.ts`; acá se verifica el contenido de los rótulos.
 import { describe, expect, it } from 'vitest'
 import { renderHtmlPiece, seriesLabelStride, vtFormat, type ResolvedNode } from '@vergis/capabilities'
 

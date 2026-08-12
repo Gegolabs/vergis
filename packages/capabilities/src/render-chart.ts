@@ -551,17 +551,80 @@ export function seriesLabelStride(nPoints: number, texts: string[], plotWidthPx:
 }
 
 /**
+ * Qué puntos de una línea llevan rótulo. Parte del paso `stride` (cada k-ésimo, `seriesLabelStride`)
+ * y AGREGA siempre el último, que es el valor que el lector busca en un acumulado. Ese agregado es el
+ * que hay que cuidar: el último punto no cae en la grilla del paso, así que puede quedar a UN paso
+ * del anterior rotulado —la mitad del aire que el paso garantiza— y fundirse con él. Cuando eso pasa
+ * gana el último y se retira el vecino: es preferible perder un rótulo intermedio a publicar dos
+ * ilegibles, y el retirado se lee igual en la tabla de detalle.
+ */
+export function seriesLabelIndices(nPoints: number, texts: string[], plotWidthPx: number): number[] {
+  if (nPoints <= 0) return []
+  const stride = seriesLabelStride(nPoints, texts, plotWidthPx)
+  const step = plotWidthPx / nPoints
+  const widest = Math.max(...texts.map(labelWidthPx), 0) + LABEL_GAP_PX
+  const last = nPoints - 1
+  const idx = new Set<number>()
+  for (let i = 0; i < nPoints; i += stride) idx.add(i)
+  idx.add(last)
+  for (const i of [...idx]) if (i !== last && (last - i) * step < widest) idx.delete(i)
+  return [...idx].sort((a, b) => a - b)
+}
+
+/**
+ * Separación del rótulo de un punto de línea respecto de su punto, en px. Es mayor que la de las
+ * barras (`LABEL_DY_PX`) porque el punto tiene radio y la línea lo cruza: el rótulo pegado quedaría
+ * sobre el trazo.
+ */
+const SERIES_LABEL_DY_PX = LABEL_DY_PX + 3
+
+/**
+ * Cuánto baja cada carril inferior respecto del anterior, en px. Una mancha de tinta más su aire:
+ * es lo que hace DEMOSTRABLE la separación entre dos rótulos consecutivos hacia abajo (ver
+ * `seriesLanes`).
+ */
+const SERIES_LANE_DROP_PX = LABEL_INK_H_PX + LABEL_GAP_PX
+
+/**
+ * Reparte entre carriles los rótulos de las N series que caen sobre el MISMO punto del eje x
+ * (#94 bis). Recibe la posición vertical predicha de cada punto (px desde el techo del plot, la que
+ * da `markTopPx`) en el orden de las series, y devuelve el carril de cada una: `0` = el rótulo va
+ * ARRIBA de su punto; `k ≥ 1` = va ABAJO, `k − 1` escalones más abajo.
+ *
+ * La regla es ordenar por posición y repartir de arriba hacia abajo: al punto MÁS ALTO se le pone el
+ * rótulo encima y a todos los demás debajo, en el orden en que aparecen. Y esa ordenación es
+ * justamente lo que vuelve demostrable la anti-colisión, porque hace no-negativas las diferencias:
+ *
+ * - carril 0 contra carril 1 — sus líneas base distan `(y₁ − y₀) + 2·dy`, y como `y₁ ≥ y₀` por el
+ *   orden, la distancia es al menos `2·dy = 14 px > 10,5` de tinta: nunca se funden.
+ * - carril k contra k+1 — distan `(y_{k+1} − y_k) + salto ≥ salto`, y el salto es tinta + aire.
+ *
+ * Es el mismo hallazgo que obligó a descartar la paridad en las barras (#97): un desplazamiento fijo
+ * se CANCELA contra el desnivel de las marcas. Repartir por índice de serie —lo que hacía este chart
+ * hasta ahora— es el peor caso de eso: con dos series manda el rótulo de la serie 0 hacia arriba y el
+ * de la serie 1 hacia abajo *sin mirar cuál va por encima*, así que cuando la serie 1 es la de arriba
+ * —el caso corriente de un acumulado «Base vs Actual», donde Actual supera a Base— los dos rótulos
+ * caminan uno HACIA el otro y se funden en cuanto las curvas se acercan a menos de 35 px.
+ */
+export function seriesLanes(topsPx: number[]): number[] {
+  const orden = topsPx.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y || a.i - b.i)
+  const lanes = new Array<number>(topsPx.length).fill(0)
+  orden.forEach((p, rank) => { lanes[p.i] = rank })
+  return lanes
+}
+
+/**
  * `series` — líneas de N series sobre un eje. Vega-Lite con datos LARGOS pre-computados server-side
  * (una fila por punto y serie) + `color` por serie; el eje x es ORDINAL en el orden de llegada de las
  * filas (`sort: null` — el SQL manda, NO se re-ordena alfabético). Marca de línea con puntos, leyenda
  * abajo, paleta del theme. Mismo LRU.
  *
  * Rótulos de valor sobre los puntos (#94, contraparte de #80): texto pre-computado (`__label`, Vega
- * solo pinta), adelgazado por `seriesLabelStride` cuando los puntos no dan el ancho, y en DOS
- * carriles verticales alternados por serie (pares arriba del punto, impares abajo) para que el caso
- * típico de dos líneas cercanas (Base vs Actual) no funda sus rótulos. La anti-colisión es decisión
- * del motor y NO se declara por spec. El dominio Y gana holgura arriba y abajo para que ningún
- * rótulo se corte contra el borde del plot.
+ * solo pinta), adelgazado por `seriesLabelStride` cuando los puntos no dan el ancho, y repartido en
+ * carriles verticales por `seriesLanes` — al punto más alto de cada mes le va el rótulo encima y a
+ * los de abajo debajo, en escalones — para que dos líneas cercanas (el caso Base vs Actual) no fundan
+ * sus rótulos. La anti-colisión es decisión del motor y NO se declara por spec. El dominio Y gana
+ * holgura arriba y abajo para que ningún rótulo se corte contra el borde del plot.
  */
 export async function renderSeries(
   node: ResolvedNode,
@@ -578,9 +641,15 @@ export async function renderSeries(
   const nums: number[] = []
   const texts: string[] = []
   for (const r of rows) for (const s of series) { const v = Number(r[s.field]); nums.push(v); texts.push(Number.isFinite(v) ? vtFormat(v, fmt) : '') }
-  const stride = seriesLabelStride(rows.length, texts, 640)
+  const shown = new Set(seriesLabelIndices(rows.length, texts, 640))
+  const colors = seriesColors(tokens, Math.max(1, series.length))
+  const domain = labelledDomain(nums, 0.12)
   const values: Record<string, unknown>[] = []
   rows.forEach((r, i) => {
+    // El carril NO sale del índice de la serie: sale de qué punto va por encima de cuál en ESTE mes
+    // (`seriesLanes`). Sin dominio no hay posición predecible → se conserva el reparto por índice.
+    const tops = series.map((s) => (domain ? markTopPx(Number(r[s.field]), domain, 240) : 0))
+    const lanes = domain ? seriesLanes(tops) : series.map((_, si) => si)
     series.forEach((s, si) => {
       const v = Number(r[s.field])
       values.push({
@@ -588,26 +657,24 @@ export async function renderSeries(
         serie: s.label,
         valor: v,
         [LABEL_FIELD]: Number.isFinite(v) ? vtFormat(v, fmt) : '',
-        [LABEL_LANE_FIELD]: si % 2,
-        __show: i % stride === 0 || i === rows.length - 1 ? 1 : 0,
+        [LABEL_LANE_FIELD]: lanes[si],
+        __show: shown.has(i) ? 1 : 0,
       })
     })
   })
-  const colors = seriesColors(tokens, Math.max(1, series.length))
-  const domain = labelledDomain(nums, 0.12)
-  const pointLabel = (lane: 0 | 1) => ({
+  const pointLabel = (lane: number) => ({
     transform: [{ filter: `datum.__show === 1 && datum.${LABEL_LANE_FIELD} === ${lane}` }],
     mark: {
       type: 'text',
       align: 'center',
       baseline: lane === 0 ? 'bottom' : 'top',
-      dy: lane === 0 ? -(LABEL_DY_PX + 3) : LABEL_DY_PX + 3,
+      dy: lane === 0 ? -SERIES_LABEL_DY_PX : SERIES_LABEL_DY_PX + (lane - 1) * SERIES_LANE_DROP_PX,
       fontSize: LABEL_FONT_PX,
       color: tokens.chartText,
     } as const,
     encoding: { text: { field: LABEL_FIELD, type: 'nominal' as const } },
   })
-  const labelLayersSeries = [pointLabel(0), ...(series.length > 1 ? [pointLabel(1)] : [])]
+  const labelLayersSeries = Array.from({ length: Math.max(1, series.length) }, (_, k) => pointLabel(k))
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
