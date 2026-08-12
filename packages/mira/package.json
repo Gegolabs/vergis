@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "@vergis/botler": "*",
-    "ajv": "^8.17.1",
+    "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "yaml": "^2.6.1"
+    "yaml": "^2.9.0"
   }
 }
