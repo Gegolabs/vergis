@@ -71,12 +71,19 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   futuro de Renovate nace con el CI en rojo** y hay que rehacerle el lockfile a mano para mergearlo.
   `reg 2026-08-11`
 
-- 🔴 **`osvVulnerabilityAlerts` NO está operando: falta el permiso de alertas de vulnerabilidad** —
-  el dashboard #169 avisa `WARN: Cannot access vulnerability alerts. Please ensure permissions have
-  been granted.` Sin eso, la excepción al cooldown de 14 días para vulnerabilidades **no tiene de
-  dónde leer**, que es justo la mitad del diseño del ADR-001 que protege ante un CVE urgente. Se
-  habilita en **Settings → Code security** del repo — configuración de la organización, acción de
-  César. Detectado por la sesión `arbol` del lab. `reg 2026-08-11`
+- 🔴 **`osvVulnerabilityAlerts` NO está operando: al PAT le falta el permiso `Dependabot alerts`** —
+  el dashboard #169 avisa `WARN: Cannot access vulnerability alerts`. Sin eso, la excepción al
+  cooldown de 14 días **no tiene de dónde leer**, que es la mitad del diseño del ADR-001: la que
+  protege ante un CVE urgente.
+  **El candado NO es del repo, es del token — medido, no supuesto.** El repo es público y sus
+  alertas Dependabot **funcionan**: `gh api repos/Gegolabs/vergis/dependabot/alerts` devuelve 4
+  (nanoid ×2, postcss ×2, **todas `fixed`** — son las que cerró el PR #150). Lo que falta es el
+  permiso **`Dependabot alerts: Read-only`** en el PAT fine-grained `renovate-vergis`, que se emitió
+  con cinco permisos y sin ése. *(La primera versión de esta ficha decía «Settings → Code security»,
+  siguiendo la sugerencia del reporte: **era el lever equivocado** y se corrigió al medirlo.)*
+  **Editar los permisos de un PAT fine-grained NO cambia su valor** ⇒ el secret del repo sigue
+  sirviendo, no hay que re-pegar nada. **Impacto hoy: cero alertas abiertas**, así que no se está
+  perdiendo nada — el costo es ante el próximo CVE. Acción de César. `reg 2026-08-11`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.

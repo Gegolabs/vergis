@@ -17,8 +17,17 @@ El dashboard (issue #169) avisa `WARN: Cannot access vulnerability alerts`. Sin 
 ADR-001: la que permite que un CVE urgente **se salte el cooldown de 14 días**. Hoy el cooldown está
 protegiendo, pero la excepción que lo hace seguro no.
 
-- **Dónde:** `Gegolabs/vergis` → Settings → **Code security**.
-- **Cómo se comprueba después:** correr el workflow y verificar que el WARN desaparece del #169.
+**El candado es del TOKEN, no del repo — medido.** Las alertas Dependabot del repo **funcionan**
+(`gh api repos/Gegolabs/vergis/dependabot/alerts` devuelve 4, todas `fixed`). Lo que falta es el
+permiso `Dependabot alerts: Read-only` en el PAT `renovate-vergis`, emitido con cinco permisos y sin
+ése. **Editar los permisos de un PAT fine-grained no cambia su valor**, así que el secret sigue
+sirviendo — no hay que re-pegar nada.
+
+- **Dónde:** Settings → Developer Settings → Fine-grained tokens → `renovate-vergis` → Permissions →
+  agregar **Dependabot alerts: Read-only** → Update.
+- **Cómo se comprueba después:** correr el workflow y verificar que el WARN desaparece de la sección
+  «Repository Problems» del issue #169.
+- **Impacto de no hacerlo hoy: cero** — no hay alertas abiertas. El costo es ante el próximo CVE.
 
 ```bash
 export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
