@@ -66,13 +66,13 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Versión elegida aplicando el cooldown de 14 días del propio `renovate.json` (2026-08-10):
       # v46.2.2/v46.2.1/v46.2.0 tenían 1/8/13 días publicadas. v46.1.21 (2026-07-27) es la más
       # reciente que cumple. Predicar con el ejemplo: el arnés del cooldown no se salta el cooldown.
       - name: Renovate
-        uses: renovatebot/github-action@v46.1.21
+        uses: renovatebot/github-action@1a96852b0384df1837619d04c60b2d10d1f9ff08 # v46.1.21
         env:
           # El token del PAT: Renovate abre los PRs con esta identidad.
           RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}

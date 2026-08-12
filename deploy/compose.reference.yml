@@ -15,7 +15,7 @@
 # VERGIS_CONFIG_CHECK = strict (default) | warn | off.
 services:
   vergis:
-    image: ghcr.io/gegolabs/vergis:latest
+    image: ghcr.io/gegolabs/vergis:latest@sha256:e23bd3cd93f4d9e335d8acf5bd932b30bb02bdfa4289f5853e72ffe4b44a894d
     restart: unless-stopped
     # Secretos de la instancia (NUNCA en git): VERGIS_CONNECTIONS (Service Principal → Fabric),
     # VERGIS_ADMIN_SEED (admins semilla), VERGIS_INDEX_TITLE/LOGO (branding). En un archivo gitignored.
@@ -122,7 +122,7 @@ services:
   # SSO delante del motor: reenvía el email del usuario autenticado como X-Forwarded-Email. Genérico
   # (aquí oauth2-proxy con un IdP OIDC); reemplaza issuer/client por los de tu tenant. Secretos en env_file.
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561
     restart: unless-stopped
     depends_on: [vergis]
     env_file: [oauth2.env]                  # OAUTH2_PROXY_CLIENT_SECRET + COOKIE_SECRET
@@ -140,7 +140,7 @@ services:
 
   # Terminación TLS / reverse-proxy público. Genérico (Caddy); cualquier proxy con TLS sirve.
   caddy:
-    image: caddy:2
+    image: caddy:2@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     restart: unless-stopped
     depends_on: [oauth2-proxy]
     ports: ["80:80", "443:443"]
