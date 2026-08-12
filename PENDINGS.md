@@ -82,7 +82,51 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   **NO verificado en este montaje**. Criterio de éxito, declarado antes de medir: el lockfile del
   próximo PR de Renovate da **234**. Es compensación, no cura: la causa sigue sin identificar y si
   la divergencia produce algo más allá de las optional deps de esbuild, esto lo enmascara — aunque
-  no es peor que el workaround manual, solo automático. `reg 2026-08-11 · act 2026-08-12`
+  no es peor que el workaround manual, solo automático.
+  **IMPLEMENTADO Y MEDIDO (2026-08-12)** — commits `3bae7a1` y `b884960`. Lo verificado con señal
+  **positiva**, no con ausencia de error: (1) **`allowedCommands` SÍ abre la puerta en este montaje**
+  — el log de la corrida `31596456516` muestra la opción parseada dentro del contenedor y el comando
+  ejecutado con sus `spawnargs` exactos; eso era el supuesto grande y **queda cerrado**. (2) **El
+  comando repara el lockfile**: medido DENTRO de la imagen real del bot
+  (`ghcr.io/renovatebot/renovate:43` + `install-tool node 22.22.3` ⇒ npm 10.9.8), sobre el árbol
+  exacto de `renovate/npm-ajv-vulnerability`: **156 → 234**, con el bump preservado (ajv 8.20.0).
+  **Lo que la medición además ACOTA sobre la causa** (sin identificarla): **no es que npm pode las
+  optional deps** — el MISMO comando en el MISMO entorno produce 234. Renovate regenera el lockfile
+  por otra vía. Eso mata una tercera hipótesis antes de que costara una corrida.
+  **Dos trampas que costaron una corrida roja y quedan escritas en `renovate.json`:** (a) la imagen
+  del bot trae `node` pero **NO trae `npm`** — sin `installTools` el comando muere con
+  `spawn npm ENOENT` y el `unhandledRejection` **TUMBA LA CORRIDA ENTERA**, o sea apaga el control de
+  supply chain, no solo el arreglo (`install-tool npm` solo tampoco sirve: «parent tool not installed:
+  node»); (b) **`installTools` es un OBJETO, no el array que dice la doc pública**, y su versión debe
+  ir **exacta** — containerbase rechaza `^22.0.0` y `>=22` con «tool version not supported», **y el
+  `renovate-config-validator` los acepta igual**. De ahí la lección transversal: **el validador
+  verifica FORMA, no SEMÁNTICA** — pasar el gate no es prueba de que la corrida sobreviva.
+  **El último eslabón NO está verificado y está BLOQUEADO**: falta ver a Renovate aplicar y commitear
+  el lockfile bueno en una rama npm suya. No se pudo llegar — ver el pendiente del 403 de `statuses`,
+  que aborta la corrida antes de alcanzar ninguna rama npm. `reg 2026-08-11 · act 2026-08-12`
+
+- **🔥 El PAT de Renovate no puede escribir commit statuses, y eso ABORTA la corrida entera — con el
+  job en VERDE** — descubierto el 2026-08-12 persiguiendo lo anterior. Evidencia dura, idéntica en
+  tres corridas: `POST /repos/Gegolabs/vergis/statuses/<sha>` ⇒ **403 «Resource not accessible by
+  personal access token»**; Renovate lo traduce a `repository-changed`, imprime *«Repository has
+  changed during renovation - aborting»* y **corta**. Resultado medido: de ~19 ramas candidatas
+  procesa **solo la primera** (`renovate/pin-dependencies`) y nunca llega a las npm.
+  **NO es regresión de esta sesión, es PREEXISTENTE**: la corrida `31591828225` (11:26, `bc0402b`,
+  antes de tocar nada) ya traía el mismo 403 y el mismo abort.
+  **Por qué es más grave que su síntoma:** el workflow declara por escrito la doctrina fail-closed
+  —«preferimos el rojo honesto; un control apagado tiene que verse, no degradarse en silencio»— y
+  este caso **la viola**: el control corre a un quinceavo de su alcance y el job sale **verde**. Es
+  un control inerte con cara de control vigente, exactamente lo que el workflow existe para evitar.
+  **Causa probable, NO confirmada:** el `minimumReleaseAge` de 14 días publica un commit status de
+  estabilidad, así que **sería el propio cooldown el que dispara el POST que el token no puede
+  hacer**. Es conjetura: no está medida.
+  **Mismo linaje que el hallazgo del 2026-08-11 («el candado de las alertas es del TOKEN, no del
+  repo»): el permiso que falta no se ve en el repo, se ve en el PAT.**
+  **Requiere a César** — el PAT fine-grained solo lo edita su dueño: agregar **`Commit statuses:
+  Read and write`** en https://github.com/settings/personal-access-tokens (el workflow documenta
+  Contents · Pull requests · Workflows · Issues · Metadata, y **falta Statuses**). Alternativa sin
+  tocar el PAT, que es decisión suya y no se tomó: desactivar el check por `statusCheckNames`,
+  al costo de perder el status visible del cooldown. `reg 2026-08-12`
 
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
