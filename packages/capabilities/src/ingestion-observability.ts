@@ -97,16 +97,29 @@ export function freshnessAlerts(
 /**
  * Transición de estado de alertas: qué NOTIFICAR (nueva o cambió de razón) y qué se RECUPERÓ, dado el
  * estado previo. Evita re-notificar lo que ya estaba avisado (el push solo dispara en transiciones).
+ *
+ * GENÉRICA sobre la razón (`R`) y sobre la alerta (`A`) porque el dedup por transición no es de
+ * frescura: es del PATRÓN de lazo, y la vigilancia del intake (#161) lo necesita con sus propias
+ * razones (`SlotAlertReason`, en `intake-observability.ts`) y su propia clave (`slotId`). La firma
+ * cerrada a `Record<string,'failed'|'missed'>` + `ProcessAlert[]` no typechequeaba con ellas.
+ *
+ * COMPATIBLE HACIA ATRÁS: `keyOf` es opcional y su default lee `processId`, así que los llamadores
+ * de frescura siguen escribiéndose igual y siguen infiriendo `ProcessAlert[]` / `'failed'|'missed'`.
+ * El default hace un cast porque el sistema de tipos no puede expresar «si `A` tiene `processId`»;
+ * el cast es SEGURO para todo llamador que no pase `keyOf` — quien no tiene `processId` está
+ * obligado por el propio uso a pasarlo (una clave `undefined` colapsaría todas las alertas en una
+ * sola entrada, y el test de la vigilancia lo cubre).
  */
-export function diffAlertState(
-  prev: Record<string, 'failed' | 'missed'>,
-  current: ProcessAlert[],
-): { notify: ProcessAlert[]; recovered: string[]; next: Record<string, 'failed' | 'missed'> } {
-  const next: Record<string, 'failed' | 'missed'> = {}
-  const notify: ProcessAlert[] = []
+export function diffAlertState<R extends string, A extends { reason: R }>(
+  prev: Record<string, R>,
+  current: A[],
+  keyOf: (a: A) => string = (a) => (a as unknown as { processId: string }).processId,
+): { notify: A[]; recovered: string[]; next: Record<string, R> } {
+  const next: Record<string, R> = {}
+  const notify: A[] = []
   for (const a of current) {
-    next[a.processId] = a.reason
-    if (prev[a.processId] !== a.reason) notify.push(a)
+    next[keyOf(a)] = a.reason
+    if (prev[keyOf(a)] !== a.reason) notify.push(a)
   }
   const recovered = Object.keys(prev).filter((pid) => !(pid in next))
   return { notify, recovered, next }

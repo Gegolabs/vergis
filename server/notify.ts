@@ -11,7 +11,15 @@
  * El reporte periódico (#102) REUSA este puerto componiendo sus propios `Notification`.
  */
 import { readFileSync } from 'node:fs'
-import { requireRootKey, type ProcessHealth } from '@vergis/capabilities'
+import {
+  requireRootKey,
+  SIN_MEDIDA_TICKS,
+  type ArchivoVarado,
+  type MedidaCalidad,
+  type ProcessHealth,
+  type RunRecord,
+  type SlotAlertReason,
+} from '@vergis/capabilities'
 import { sendSmtp, type MailMessage, type SmtpConnectConfig } from './smtp'
 
 export type NotificationSeverity = 'warning' | 'ok' | 'info'
@@ -377,4 +385,114 @@ export function fmtDur(seconds: number): string {
   if (seconds > 5_400) return `${Math.round(seconds / 3_600)} h`
   if (seconds > 90) return `${Math.round(seconds / 60)} min`
   return `${Math.round(seconds)} s`
+}
+
+// ── Composición de avisos de la VIGILANCIA DEL INTAKE (#161) — PURA, el lazo la invoca ───────────
+/**
+ * Contexto de un aviso del vigilante de cargas. Espejo de `FreshnessAlertContext`: el lazo trae todo
+ * lo que el operador necesita para actuar (dominio, slot, evidencia y enlaces profundos) y esta
+ * función solo REDACTA — no lee nada.
+ *
+ * La `medida` viaja SIEMPRE en el aviso, no solo en la superficie: el operador tiene que poder
+ * distinguir «está roto» de «no lo pude mirar» sin abrir la consola. Es el requisito central de #161.
+ */
+export interface IntakeAlertContext {
+  slotId: string
+  slotLabel: string
+  /** Dominio ENLAZABLE: id/label solo si el slot lo declara Y está declarado en domains.yaml. */
+  domainId?: string
+  domainLabel?: string
+  reason: SlotAlertReason
+  medida: MedidaCalidad
+  /** `varados`: los archivos que excedieron la edad, con la suya. */
+  varados?: ArchivoVarado[]
+  /** `contradice-registro`: los archivos que el registro esperaba ver y el listado no trajo. */
+  esperados?: string[]
+  /** `corrida-fallida` / `corrida-colgada`: la corrida en cuestión (base del enlace profundo). */
+  run?: RunRecord
+  /** Error de la lectura que falló (toda alerta emitida sobre lo último conocido lo lleva). */
+  lastError?: string
+  /** VERGIS_PUBLIC_URL normalizada (sin slash final). */
+  baseUrl: string
+}
+
+/** Titular por razón. Sin jerga del motor: qué pasó, en una línea. */
+const DESENLACE_INTAKE: Record<SlotAlertReason, string> = {
+  varados: 'hay archivos sin procesar en la zona de aterrizaje',
+  'corrida-fallida': 'la conversión falló',
+  'corrida-colgada': 'la conversión no termina',
+  'sin-medida': 'el vigilante no puede medir',
+  'contradice-registro': 'el listado contradice el registro de cargas',
+}
+
+/** Cómo se rotula la calidad de la medida en el cuerpo. `fresca` no se rotula: es lo normal, y decirlo
+ *  en cada aviso sería ruido que se aprende a saltar. */
+const MEDIDA_LINEA: Record<MedidaCalidad, string | null> = {
+  fresca: null,
+  'ultima-conocida': 'medida: LO ÚLTIMO CONOCIDO — la lectura de este tick falló; lo de abajo sale de la proyección, no del estado de ahora',
+  'contradice-registro': 'medida: DESMENTIDA — el listado llegó sin error pero contradice lo que la plataforma registró',
+  ninguna: 'medida: NINGUNA — este slot nunca se ha podido medir',
+}
+
+const hrefCargas = (baseUrl: string, domainId: string): string => `${baseUrl}/admin/dominio/${domainId}/cargas`
+
+export function composeIntakeAlert(ctx: IntakeAlertContext): Notification {
+  const lines: string[] = []
+  const rotulo = MEDIDA_LINEA[ctx.medida]
+  if (rotulo) lines.push(rotulo)
+  if (ctx.lastError) lines.push(`error de la lectura: ${ctx.lastError}`)
+  if (ctx.reason === 'sin-medida')
+    lines.push(`el vigilante lleva ${SIN_MEDIDA_TICKS} ticks o más sin poder observar este slot: lo que muestre la consola es lo último conocido, no el estado de ahora`)
+  for (const v of ctx.varados ?? []) lines.push(`varado: ${v.file} (en el landing hace ${fmtDur(v.ageMinutes * 60)})`)
+  if (ctx.esperados?.length) {
+    lines.push(`el registro de cargas esperaba en el landing: ${ctx.esperados.join(', ')}`)
+    // La alerta afirma la CONTRADICCIÓN, jamás su causa (permisos, borrado a mano, path mal
+    // configurado): eso lo diagnostica una persona, y nombrar una causa no medida sería inventarla.
+    lines.push('el listado no trajo ninguno de ellos — NO se concluye «landing vacío»: hay que averiguar por qué')
+  }
+  if (ctx.run) {
+    lines.push(`última corrida: ${ctx.run.status}, iniciada ${ctx.run.startedAt}`)
+    // El motivo es el que declaró el MOTOR (`failureReason`). El motivo POR ARCHIVO que el job escribe
+    // en su log vive en el contrato `_logs/` y lo resuelve el resolver de #162: acá no se lee ningún
+    // log — un lazo que abre archivos por cada corrida fallida paga I/O en cada vuelta.
+    if (ctx.run.error) lines.push(`motivo del motor: ${ctx.run.error}`)
+  }
+  if (ctx.domainId == null) lines.push(SIN_ENLACES)
+
+  const links: NotificationLink[] = []
+  if (ctx.domainId != null) {
+    if (ctx.run?.startedAt)
+      links.push({
+        label: 'Ver corrida',
+        url: `${ctx.baseUrl}/admin/dominio/${ctx.domainId}/corrida?slot=${encodeURIComponent(ctx.slotId)}&started=${encodeURIComponent(ctx.run.startedAt)}`,
+      })
+    links.push({ label: 'Cargas del dominio', url: hrefCargas(ctx.baseUrl, ctx.domainId) })
+  }
+
+  return {
+    severity: 'warning',
+    title: `Cargas — ${ctx.domainLabel ?? SIN_DOMINIO} · ${ctx.slotLabel}: ${DESENLACE_INTAKE[ctx.reason]}`,
+    lines,
+    links,
+    data: {
+      event: 'intake-alert',
+      slotId: ctx.slotId,
+      reason: ctx.reason,
+      medida: ctx.medida,
+      varados: (ctx.varados ?? []).map((v) => ({ file: v.file, ageMinutes: v.ageMinutes })),
+      esperados: ctx.esperados ?? [],
+      lastError: ctx.lastError ?? null,
+      domainId: ctx.domainId ?? null,
+    },
+  }
+}
+
+export function composeIntakeRecovery(ctx: { slotId: string; slotLabel: string; domainId?: string; domainLabel?: string; baseUrl: string }): Notification {
+  return {
+    severity: 'ok',
+    title: `Cargas — ${ctx.domainLabel ?? SIN_DOMINIO} · ${ctx.slotLabel}: recuperado`,
+    lines: ctx.domainId == null ? [SIN_ENLACES] : [],
+    links: ctx.domainId == null ? [] : [{ label: 'Cargas del dominio', url: hrefCargas(ctx.baseUrl, ctx.domainId) }],
+    data: { event: 'intake-recovery', slotId: ctx.slotId, domainId: ctx.domainId ?? null },
+  }
 }

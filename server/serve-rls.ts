@@ -110,6 +110,9 @@ import {
   createAsOfProvider,
   deriveRevertPlan,
   executeRevertPlan,
+  DEFAULT_INTAKE_WATCH_MS,
+  type OneLakeListing,
+  type RetiroRegistrado,
   type RevertRef,
   type PiAsOf,
   type GroupSeed,
@@ -131,6 +134,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
+import { createIntakeLoop, summarizeIntakeWatch, type IntakeLoopDeps } from './intake-loop'
 import { createSinks, fanout, forEvent, type Notification, type ReportSchedule } from './notify'
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
@@ -972,7 +976,23 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Ejecutor de INGESTA: write a OneLake (staging) + run-now del pipeline + lectura de estado de las
     // corridas (jobs/instances). Usa las creds del SP de una conexión (VERGIS_INTAKE_SP, o la única si
     // hay una sola) — token AAD para storage/Fabric REST, no para SQL. Sin slots o sin conexiones, no se ofrece.
-    const fabricWiring = ((): { runner?: IntakeRunner; status?: (slot: IntakeSlot) => Promise<RunRecord[]>; logOf?: (slot: IntakeSlot) => Promise<string | null>; cargas?: CargasOps; backfill?: (slot: IntakeSlot) => void; engine?: IngestionEngineClient; runLogs?: RunLogsOps; tokens?: TokenSource; tokensRef?: string } => {
+    const fabricWiring = ((): {
+      runner?: IntakeRunner
+      status?: (slot: IntakeSlot) => Promise<RunRecord[]>
+      logOf?: (slot: IntakeSlot) => Promise<string | null>
+      cargas?: CargasOps
+      backfill?: (slot: IntakeSlot) => void
+      engine?: IngestionEngineClient
+      runLogs?: RunLogsOps
+      tokens?: TokenSource
+      tokensRef?: string
+      /** Lecturas del vigilante del intake (#161): landing, corridas del trigger y retiros. */
+      watch?: {
+        landing: (slot: IntakeSlot) => Promise<OneLakeListing>
+        runs: (slot: IntakeSlot) => Promise<RunRecord[]>
+        retiros: (slot: IntakeSlot) => Promise<RetiroRegistrado[]>
+      }
+    } => {
       if (!connections) return {}
       const refs = Object.keys(connections)
       const ref = process.env['VERGIS_INTAKE_SP'] ?? (refs.length === 1 ? refs[0] : undefined)
@@ -1066,6 +1086,33 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       return {
         runner: { put: (t, f, b, sc) => onelake.put(t, f, b, sc), runNow: (tr, t) => jobs.runNow(tr, t) },
         backfill,
+        // ── Lecturas del VIGILANTE del intake (issue #161) ──────────────────────────────────────
+        // Van acá porque necesitan el reader y el jobStatus del SP, que viven en este bloque. Son las
+        // ÚNICAS lecturas del lazo: el render nunca las usa (lee la proyección).
+        watch: {
+          // `listOrAbsent`, no `list`: para el vigilante, «el directorio del landing no existe» con
+          // cargas registradas es una CONTRADICCIÓN, no un landing vacío (§3.3).
+          landing: (slot: IntakeSlot) => reader.listOrAbsent(slot.target, slot.target.path),
+          runs: (slot: IntakeSlot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 10),
+          // Retiros manuales (§3.3): el audit log del nodo es file-only (`retain:false`, verificado en
+          // `AppendOnlyLog`) — no es consultable en proceso. La evidencia consultable del retiro es el
+          // respaldo que la propia acción escribe: `_retirado/<epochMs>-<archivo>` (verificado en la
+          // op `retire` de la consola). El prefijo ES el instante del retiro; sin él no se puede fechar
+          // el respaldo contra la carga, así que la entrada se descarta en vez de inventarle una fecha.
+          retiros: async (slot: IntakeSlot): Promise<RetiroRegistrado[]> => {
+            const listado = await reader.listOrAbsent(slot.target, `${parentDir(slot.target.path)}/_retirado`)
+            if (listado.kind === 'absent') return []
+            const out: RetiroRegistrado[] = []
+            for (const e of listado.entries) {
+              if (e.isDirectory) continue
+              const base = e.path.replace(/^.*\//, '')
+              const m = /^(\d{10,})-(.+)$/.exec(base)
+              if (!m) continue
+              out.push({ filename: m[2]!, at: new Date(Number(m[1])).toISOString() })
+            }
+            return out
+          },
+        },
         status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
         // Log de la última conversión del slot (issue #55): lo escribe el proceso en el landing;
         // Frescura lo expone para reconfirmar una carga sin acceso a Fabric. null = sin log.
@@ -1274,6 +1321,44 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
       )
     }
+    // Lazo de VIGILANCIA DEL INTAKE (#161): observa el landing y las corridas del trigger de cada
+    // slot → proyección local; alerta al operador con dedup por transición. Hermano del de frescura,
+    // no fase suya: otra unidad observada (el slot), otras fuentes (almacenamiento + motor, con modos
+    // de falla independientes) y sin reconciliación (por requisito: detectar y avisar).
+    //
+    // Se cablea con `fabricWiring.watch`, que existe con el SP del intake resuelto — el motor NO es
+    // requisito: sin `engine` la parte de corridas se omite y la del landing vigila igual.
+    const intakeWatchMs = Number(contract.env('VERGIS_INTAKE_WATCH_MS') ?? DEFAULT_INTAKE_WATCH_MS)
+    if (fabricWiring.watch && intakeWatchMs > 0) {
+      const watch = fabricWiring.watch
+      const deps: IntakeLoopDeps = {
+        slots: () => intakeSlots,
+        landing: watch.landing,
+        // Control positivo (§3.3): la plataforma predice el landing con lo que ELLA MISMA registró al
+        // subir. Solo las cargas VIVIDAS y aceptadas: una rechazada nunca aterrizó, y una fila `retro`
+        // es un archivo ya archivado en `_processed/` que el indexado retroactivo dedujo.
+        uploads: async (slotId) =>
+          (await govStore.listUploads(slotId, 200)).filter((r) => r.origen === 'upload' && r.ok).map((r) => ({ filename: r.filename, uploadedAt: r.uploadedAt, ok: r.ok })),
+        retiros: watch.retiros,
+        store: govStore,
+        // Fan-out INCONDICIONAL al arreglo VIVO de destinos, igual que el lazo de frescura: un destino
+        // que aparece en caliente empieza a recibir sin reconstruir el lazo. Con cero destinos es no-op.
+        notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
+        domains: domainsCfg,
+        log: (l) => console.log(`[vergis-rls] ${l}`),
+      }
+      if (fabricWiring.engine) deps.runs = watch.runs
+      const loop = createIntakeLoop(deps, { publicUrl: INSTANCE_CFG.publicUrl, pollMs: intakeWatchMs })
+      setInterval(() => void loop.tick(), intakeWatchMs).unref?.()
+      setTimeout(() => void loop.tick(), 20_000).unref?.() // primer tick tras el bootstrap
+      console.log(
+        `[vergis-rls] vigilancia de cargas activa (cada ${Math.round(intakeWatchMs / 60_000)} min · ` +
+          `${fabricWiring.engine ? 'landing + corridas' : 'solo landing: sin motor cableado'} · ` +
+          `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
+      )
+    } else if (intakeSlots.length) {
+      console.log(`[vergis-rls] vigilancia de cargas apagada (${intakeWatchMs > 0 ? 'sin SP de intake' : 'VERGIS_INTAKE_WATCH_MS=0'})`)
+    }
     // Reporte periódico de lo ejecutado (issue #102): latido incondicional — se envía SIEMPRE a la
     // hora configurada, con novedades o sin ellas. Un día sin correo = señal de problema, por diseño.
     // Independiente del lazo de frescura y del motor.
@@ -1353,6 +1438,18 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       runLogs: fabricWiring.runLogs,
       signoutRd: SIGNOUT_RD || undefined,
       piCount: discover().length,
+      // Tile «Cargas» del dashboard (#161·§6.1): resumen del vigilante desde la PROYECCIÓN — el
+      // request path no lista OneLake. Sin vigilante cableado no se ofrece: un tile que diga «0 en
+      // alerta» donde nadie está mirando sería la mentira exacta que el issue combate.
+      intakeWatch: fabricWiring.watch
+        ? async (domainIds: string[]) =>
+            summarizeIntakeWatch(
+              intakeSlots.filter((s) => domainIds.includes(s.domain ?? '')),
+              await govStore.listSlotSnapshots(),
+              intakeWatchMs,
+              Date.now(),
+            )
+        : undefined,
       groupStore: govStore,
       settingStore: govStore,
       onWrite: connections
