@@ -262,6 +262,10 @@ export interface AdminDeps {
   pauseProcess?: (processId: string, paused: boolean, by: string) => Promise<void>
   /** Nº de PIs servidos (para el tile del dashboard). Opcional. */
   piCount?: number
+  /** Resumen de la vigilancia del intake (#161) para el tile «Cargas» del dashboard, acotado a los
+   *  dominios que el usuario gestiona. Lee SOLO la proyección — nunca OneLake en el request path.
+   *  Opcional: sin él (instancia sin vigilante) el dashboard queda idéntico a como estaba. */
+  intakeWatch?: (domainIds: string[]) => Promise<{ vigilados: number; enAlerta: number; sinMedir: number }>
   /** Settings de plataforma (título del catálogo, etc.). Opcional. */
   settingStore?: PlatformSettingStore
   /** Identidad del consumidor desde las cabeceras del gate. */
@@ -891,6 +895,23 @@ async function dashboard(deps: AdminDeps, nav: Chrome, email: string, isAdmin: b
   const tiles: string[] = [tile(manageable.length, 'Dominios')]
   if (deps.piCount != null) tiles.push(tile(deps.piCount, 'PIs'))
   tiles.push(tile(nslots, nslots === 1 ? 'Slot ingesta' : 'Slots ingesta'))
+  // Tile del VIGILANTE de cargas (#161·§6.1). Distingue lo que el requisito exige distinguir: «en
+  // alerta» (se midió y algo está mal) de «sin medir» (no se pudo mirar) — un vigilante que confunde
+  // «no hay» con «no veo» es peor que ninguno. Un fallo del resumen no tumba el dashboard.
+  if (deps.intakeWatch && nslots) {
+    try {
+      const w = await deps.intakeWatch(manageable.map((d) => d.id))
+      if (w.vigilados) {
+        const detalle = [`${w.vigilados} vigilado${w.vigilados === 1 ? '' : 's'}`]
+        if (w.enAlerta) detalle.push(`${w.enAlerta} en alerta`)
+        if (w.sinMedir) detalle.push(`${w.sinMedir} sin medir`)
+        const n = w.enAlerta ? `⚠️ ${w.enAlerta}` : w.sinMedir ? `👁 ${w.sinMedir}` : '✓'
+        tiles.push(tile(n, `Cargas · ${detalle.join(' · ')}`, w.enAlerta > 0 || w.sinMedir > 0))
+      }
+    } catch {
+      /* no-fatal */
+    }
+  }
   if (isAdmin && deps.ingestionMap) {
     try {
       const map = await deps.ingestionMap()
