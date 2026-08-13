@@ -1809,17 +1809,27 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
   const engineIds = new Set<string>(
     deps.sourceRegistry ? (await deps.sourceRegistry().catch(() => ({ processes: [] as ProcessRow[] }))).processes.map((p) => p.engine?.itemId ?? '').filter(Boolean) : [],
   )
-  const data: SlotCargas[] = await Promise.all(slots.map(async (slot) => ({
-    slot,
-    runs: await ops.runs(slot, 20).catch(() => 'error' as const),
-    history: await ops.history(slot, 30).catch(() => 'error' as const),
-    log: await ops.log(slot).catch(() => null),
-    landing: await ops.landing(slot).catch(() => 'error' as const),
-    archived: await ops.archived(slot).catch(() => 'error' as const),
-    // #63 · tolerante como los demás: sin registro de reversiones la Actividad simplemente no las muestra.
-    reverts: ops.reverts ? await ops.reverts(slot, 30).catch(() => []) : [],
-    procesoRegistrado: !slot.trigger || engineIds.size === 0 || engineIds.has(slot.trigger.processRef),
-  })))
+  const data: SlotCargas[] = await Promise.all(slots.map(async (slot) => {
+    const sc: SlotCargas = {
+      slot,
+      runs: await ops.runs(slot, 20).catch(() => 'error' as const),
+      history: await ops.history(slot, 30).catch(() => 'error' as const),
+      log: await ops.log(slot).catch(() => null),
+      landing: await ops.landing(slot).catch(() => 'error' as const),
+      archived: await ops.archived(slot).catch(() => 'error' as const),
+      // #63 · tolerante como los demás: sin registro de reversiones la Actividad simplemente no las muestra.
+      reverts: ops.reverts ? await ops.reverts(slot, 30).catch(() => []) : [],
+      procesoRegistrado: !slot.trigger || engineIds.size === 0 || engineIds.has(slot.trigger.processRef),
+    }
+    // #161 · el veredicto del vigilante (de su PROYECCIÓN: acá no se mide nada). Tolerante como los
+    // demás y por la misma razón: la consola de cargas sigue sirviendo aunque la vigilancia no esté
+    // — y sin `vigilancia` la página renderiza exactamente la de antes del vigilante.
+    if (ops.vigilancia) {
+      const v = await ops.vigilancia(slot).catch(() => null)
+      if (v) sc.vigilancia = v
+    }
+    return sc
+  }))
   const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
   // #99 · «Ver log» por corrida, solo si la instancia cableó el acceso a los logs (sin él: cero cambio).
   const runLogHrefOf = deps.runLogs

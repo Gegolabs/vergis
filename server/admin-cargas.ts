@@ -95,6 +95,14 @@ export interface CargasOps {
   // ── «Revertir esta carga» (issue #63): dos fases, plan sellado por hash ──
   /** Reversiones ya registradas del slot, recientes primero (alimentan la fila ↩️ del timeline). */
   reverts?(slot: IntakeSlot, limit: number): Promise<IntakeRevertRow[]>
+  /**
+   * #161 · lo que el vigilante sabe del slot, LEÍDO DE SU PROYECCIÓN. Ausente = instancia sin
+   * vigilante cableado (o con el lazo apagado): la página es la de siempre, sin banner ni marcas.
+   *
+   * El wiring que la implementa NO lista OneLake ni consulta el motor: esta op existe para traer el
+   * veredicto ya medido por el lazo, no para medir en el request path.
+   */
+  vigilancia?(slot: IntakeSlot): Promise<SlotVigilancia | null>
   /** Deriva el plan de compensación SIN mutar nada: qué le pasa a cada clave de la carga. */
   revertPlan?(slot: IntakeSlot, ref: { uploadId?: number; archivedPath?: string }): Promise<RevertPlan>
   /** Ejecuta el plan CONFIRMADO. `ok:false` = el estado del slot cambió: devuelve el plan fresco. */

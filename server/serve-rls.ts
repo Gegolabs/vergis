@@ -111,6 +111,9 @@ import {
   deriveRevertPlan,
   executeRevertPlan,
   DEFAULT_INTAKE_WATCH_MS,
+  INTAKE_WATCH_STATE_KEY,
+  parseIntakeWatchState,
+  type SlotAlertReason,
   type OneLakeEntry,
   type OneLakeListing,
   type RetiroRegistrado,
@@ -135,7 +138,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
-import { createIntakeLoop, summarizeIntakeWatch, type IntakeLoopDeps } from './intake-loop'
+import { createIntakeLoop, slotVigilanciaDeProyeccion, summarizeIntakeWatch, type IntakeLoopDeps } from './intake-loop'
 import { createSinks, fanout, forEvent, type Notification, type ReportSchedule } from './notify'
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
@@ -1447,6 +1450,39 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         },
       }
     })()
+    // Superficies de vigilancia en la consola de Cargas (#161·§6.1 · issue #161 punto 2): el render
+    // de H6 recibe acá los datos que le faltaban. La op lee SOLO la proyección persistida del
+    // vigilante (`listSlotSnapshots`) y el veredicto que el lazo dejó en `platform_setting` — dos
+    // lecturas del store de gobierno local: el request path no lista OneLake ni consulta el motor,
+    // igual que el tile del dashboard de más abajo.
+    //
+    // Se ofrece solo con el lazo EFECTIVAMENTE corriendo (`watch` cableado y `pollMs > 0`), que es la
+    // misma condición del `if` que lo instala: con el vigilante apagado la proyección es un recuerdo
+    // que nadie refresca, y la consola tiene que renderizar exactamente la página de siempre.
+    const cargasOps: CargasOps | undefined =
+      fabricWiring.cargas && fabricWiring.watch && intakeWatchMs > 0
+        ? {
+            ...fabricWiring.cargas,
+            vigilancia: async (slot: IntakeSlot) => {
+              // Fail-safe (mismo criterio que el parser de #161): estado ilegible ⇒ sin razón del
+              // lazo, no sin vigilancia. Se pierde el matiz de la contradicción, no el banner.
+              const [snapshots, razones] = await Promise.all([
+                govStore.listSlotSnapshots(),
+                govStore
+                  .getSetting(INTAKE_WATCH_STATE_KEY)
+                  .then((raw) => parseIntakeWatchState(raw))
+                  .catch(() => ({}) as Record<string, SlotAlertReason>),
+              ])
+              return slotVigilanciaDeProyeccion(
+                slot,
+                snapshots.find((s) => s.slotId === slot.id),
+                intakeWatchMs,
+                Date.now(),
+                razones[slot.id],
+              )
+            },
+          }
+        : fabricWiring.cargas
     admin = createAdmin({
       entities,
       mdStore,
@@ -1457,7 +1493,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       intake: fabricWiring.runner,
       intakeStatus: fabricWiring.status,
       intakeLog: fabricWiring.logOf,
-      cargas: fabricWiring.cargas,
+      cargas: cargasOps,
       // Registro de cargas (issue #62): dedup por contenido, pre-check y el indexado retroactivo.
       intakeUploads: govStore,
       intakeBackfill: fabricWiring.backfill,

@@ -56,9 +56,10 @@ import {
   type SlotProjection,
   type SlotWatchConfig,
   type SlotWatchInput,
+  type SlotWatchSnapshot,
   type CargaRegistrada,
 } from '@vergis/capabilities'
-import { diagnosticoDeFalla } from './admin-cargas'
+import { diagnosticoDeFalla, type SlotVigilancia } from './admin-cargas'
 import { composeCargaUserNotice, composeIntakeAlert, composeIntakeRecovery, type IntakeAlertContext, type Notification } from './notify'
 
 export interface IntakeLoopConfig {
@@ -578,4 +579,77 @@ export function summarizeIntakeWatch(
     if (classifySlot(input, config, nowMs).alertas.some((a) => a.reason !== 'sin-medida')) enAlerta++
   }
   return { vigilados, enAlerta, sinMedir }
+}
+
+/**
+ * El veredicto del vigilante sobre UN slot para la consola de Cargas (#161·§6.1) — PURA, sin I/O:
+ * se clasifica sobre la PROYECCIÓN, igual que el tile del dashboard. El request path no lista
+ * OneLake ni consulta el motor (invariante de #105 heredada por §3.5), así que lo que la página
+ * afirma es lo que el lazo midió y no una medición propia hecha al vuelo.
+ *
+ * La observación se RECONSTRUYE desde el snapshot con el mismo criterio de `summarizeIntakeWatch`:
+ * último intento fallido, proyección fría o proyección más vieja que `3 × poll` ⇒ se clasifica como
+ * observación FALLIDA (sobre lo último conocido), que es lo que el lazo habría hecho. Sin ese corte
+ * por antigüedad, un lazo detenido dejaría la página diciendo «al día» sobre un recuerdo. [El texto
+ * del banner de `'ultima-conocida'` habla del «último intento»; con la proyección solo añeja —lazo
+ * caído, o los primeros segundos tras un reinicio— no hubo tal intento reciente. La afirmación que
+ * importa (lo que se ve NO es de ahora) sí es verdadera; la del intento es imprecisa en ese caso.]
+ *
+ * Lo que NO se puede saber desde acá, y por qué no se inventa:
+ *  · `esperados` (§3.3) exige el control positivo, y uno de sus insumos —los retiros— sale de listar
+ *    `_retirado/` en el almacenamiento: prohibido en el request path. Por eso la CONTRADICCIÓN se
+ *    toma del veredicto que el lazo persistió (`intake.watch_state`, lectura local del store de
+ *    gobierno) y se muestra sin nombrar archivos: el banner de #161 ya contempla la lista vacía.
+ *    Solo se adopta si esta reconstrucción dio `'fresca'` — con la medida ya degradada manda lo más
+ *    reciente, que es la degradación.
+ *  · `corridasSinLog` (#162·§5) exige correlacionar las corridas terminadas con el listado de
+ *    `_logs/`: otra lectura del almacenamiento, y la proyección de la vigilancia no guarda ese
+ *    conteo. Queda SIN LLENAR a propósito — con el campo ausente `avisoContratoLogs` no muestra
+ *    nada. Llenarlo pide persistir el conteo en la proyección: trabajo del lazo, no de este cableado.
+ */
+export function slotVigilanciaDeProyeccion(
+  slot: IntakeSlot,
+  snapshot: SlotWatchSnapshot | undefined,
+  pollMs: number,
+  nowMs: number,
+  razonDelLazo?: SlotAlertReason,
+): SlotVigilancia | null {
+  const config = intakeWatchConfig(slot, pollMs)
+  if (!config) return null // el slot no se vigila ⇒ la página no muestra banner
+  const observedAt = snapshot?.observedAt ?? null
+  const stale = pollMs <= 0 || observedAt == null || nowMs - Date.parse(observedAt) > 3 * pollMs
+  const ciego = stale || snapshot?.lastError != null
+  const obs: SlotObservation = { slotId: slot.id, observedAt: observedAt ?? '' }
+  if (ciego) {
+    // Este texto NO se muestra: el `lastError` de la superficie sale del snapshot (el error REAL del
+    // lazo) o queda ausente. Acá solo marca la observación como fallida para `classifySlot`.
+    obs.error = snapshot?.lastError ?? 'sin observación reciente'
+  } else {
+    obs.landing = snapshot?.landing ?? []
+    if (snapshot?.runs.length) obs.runs = snapshot.runs
+  }
+  const input: SlotWatchInput = { slotId: slot.id, obs }
+  if (snapshot) {
+    const proj: SlotProjection = { landing: snapshot.landing, runs: snapshot.runs }
+    if (snapshot.observedAt != null) proj.observedAt = snapshot.observedAt
+    if (snapshot.firstAttemptAt != null) proj.firstAttemptAt = snapshot.firstAttemptAt
+    input.projection = proj
+  }
+  const { medida, alertas } = classifySlot(input, config, nowMs)
+  const v: SlotVigilancia = { medida }
+  if (observedAt != null) v.observedAt = observedAt
+  if (snapshot?.lastError != null) {
+    v.lastError = snapshot.lastError
+    if (snapshot.lastErrorAt != null) v.lastErrorAt = snapshot.lastErrorAt
+  }
+  const varados = alertas.find((a) => a.reason === 'varados')?.varados
+  if (varados?.length) v.varados = varados
+  // Un listado desmentido no sostiene NINGUNA conclusión derivada de él (invariante 2): con la
+  // contradicción vigente `classifySlot` no habría clasificado el landing, así que los varados de
+  // esta reconstrucción se descartan en vez de mostrarse bajo el banner que los desautoriza.
+  if (razonDelLazo === 'contradice-registro' && medida === 'fresca') {
+    v.medida = 'contradice-registro'
+    delete v.varados
+  }
+  return v
 }
