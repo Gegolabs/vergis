@@ -9,7 +9,8 @@ import {
   type RetiroRegistrado,
   type RunRecord,
 } from '@vergis/capabilities'
-import { createIntakeLoop, summarizeIntakeWatch, type IntakeLoopDeps } from '../server/intake-loop'
+import { createIntakeLoop, summarizeIntakeWatch, slotVigilanciaDeProyeccion, type IntakeLoopDeps } from '../server/intake-loop'
+import { avisoContratoLogs, CORRIDAS_SIN_LOG_AVISO } from '../server/admin-cargas'
 import type { Notification } from '../server/notify'
 
 /**
@@ -391,5 +392,173 @@ describe('intake-loop · el criterio del issue #161', () => {
     expect(s?.runs[0]?.status).toBe('Failed')
     expect(s?.landing.map((e) => e.path)).toEqual(['Files/intake/saldos/saldos.xlsx'])
     expect(JSON.parse((await a.store.getSetting(INTAKE_WATCH_STATE_KEY)) ?? '{}')).toEqual({ saldos: 'corrida-fallida' })
+  })
+})
+
+// ─── El contrato `_logs/` medido por el lazo (#162·§5 · diseño 009·H1) ──────────────────────────
+
+/**
+ * Arnés PROPIO de la medida del contrato `_logs/`: el de arriba no cablea `runLogs`, y cablearlo ahí
+ * cambiaría el terreno de los tests que ya existen.
+ *
+ * Lo que estos tests ponen en riesgo es el EMPALME completo —medición en el tick → columna de la
+ * proyección → `SlotVigilancia` → aviso en la página—, que es exactamente el eslabón que faltaba: el
+ * aviso estaba implementado y testeado, y nunca aparecía porque nadie le pasaba el dato.
+ */
+interface ArnesLogs {
+  store: SqliteGovernanceStore
+  logs: string[]
+  runs: { records: RunRecord[] }
+  /** `_logs/`: entradas del directorio, contador de LISTADOS (el spy del reuso) y falla inyectable. */
+  runLogs: { entries: OneLakeEntry[]; listados: number; error: string | null }
+  /** Falla inyectable del listado del landing: vuelve FALLIDA la observación entera del slot. */
+  landing: { error: string | null }
+  loop: { tick(): Promise<void> }
+}
+
+async function armarLogs(opts: { slot?: IntakeSlot; conRunLogs?: boolean; conMotor?: boolean; store?: SqliteGovernanceStore } = {}): Promise<ArnesLogs> {
+  const store = opts.store ?? (await SqliteGovernanceStore.open(null, {}))
+  const logs: string[] = []
+  const runs = { records: [] as RunRecord[] }
+  const runLogs: ArnesLogs['runLogs'] = { entries: [], listados: 0, error: null }
+  const landing = { error: null as string | null }
+  const slot = opts.slot ?? slotDe()
+  const deps: IntakeLoopDeps = {
+    slots: () => [slot],
+    landing: async (): Promise<OneLakeListing> => {
+      if (landing.error) throw new Error(landing.error)
+      return { kind: 'ok', entries: [] }
+    },
+    store,
+    domains: DOMINIOS,
+    log: (l) => void logs.push(l),
+    now: () => T0,
+  }
+  if (opts.conMotor !== false) deps.runs = async () => runs.records
+  if (opts.conRunLogs !== false)
+    deps.runLogs = {
+      list: async () => {
+        runLogs.listados++
+        if (runLogs.error) throw new Error(runLogs.error)
+        return runLogs.entries
+      },
+      read: async () => null,
+    }
+  return { store, logs, runs, runLogs, landing, loop: createIntakeLoop(deps, { publicUrl: PUBLIC_URL, pollMs: POLL_MS }) }
+}
+
+/** N corridas terminadas, la más reciente primero, ninguna con log en `_logs/`. */
+const corridasFallidas = (n: number): RunRecord[] =>
+  Array.from({ length: n }, (_, i) => ({
+    startedAt: new Date(T0 - (i + 1) * 30 * 60_000).toISOString(),
+    endedAt: new Date(T0 - ((i + 1) * 30 - 1) * 60_000).toISOString(),
+    status: 'Failed' as const,
+  }))
+
+const snapDe = async (a: ArnesLogs, slotId = 'saldos') => (await a.store.listSlotSnapshots()).find((s) => s.slotId === slotId)
+
+describe('intake-loop · contrato `_logs/` (#162·§5): de la medición al aviso', () => {
+  it('EMPALME · 3 corridas terminadas sin log ⇒ snapshot, vigilancia y AVISO en la página', async () => {
+    const a = await armarLogs()
+    a.runs.records = corridasFallidas(CORRIDAS_SIN_LOG_AVISO)
+    await a.loop.tick()
+
+    // 1 · la medición llegó a la proyección
+    const snap = await snapDe(a)
+    expect(snap?.corridasSinLog).toBe(CORRIDAS_SIN_LOG_AVISO)
+    // 2 · la proyección llega a la vigilancia que consume la consola
+    const v = slotVigilanciaDeProyeccion(slotDe(), snap, POLL_MS, T0)
+    expect(v?.corridasSinLog).toBe(CORRIDAS_SIN_LOG_AVISO)
+    // 3 · y la vigilancia produce el aviso REAL de la página (no `''`, que es lo que devolvía siempre)
+    const html = avisoContratoLogs(slotDe(), v ?? undefined)
+    expect(html).toContain('no cumple el contrato')
+    expect(html).toContain('Files/code/_logs')
+  })
+
+  it('bajo el umbral el aviso NO aparece (el conteo se mide igual: una vez es accidente)', async () => {
+    const a = await armarLogs()
+    a.runs.records = corridasFallidas(CORRIDAS_SIN_LOG_AVISO - 1)
+    await a.loop.tick()
+    const v = slotVigilanciaDeProyeccion(slotDe(), await snapDe(a), POLL_MS, T0)
+    expect(v?.corridasSinLog).toBe(CORRIDAS_SIN_LOG_AVISO - 1)
+    expect(avisoContratoLogs(slotDe(), v ?? undefined)).toBe('')
+  })
+
+  it('el RESOLVER reusa el listado del tick: UN solo listado de `_logs/` por slot y vuelta', async () => {
+    const a = await armarLogs()
+    a.runs.records = corridasFallidas(1)
+    // Con una carga pendiente el RESOLVER también necesita `_logs/`; sin caché serían dos listados.
+    await a.store.recordUpload({
+      slotId: 'saldos',
+      filename: 'saldos.xlsx',
+      sha256: 'a'.repeat(64),
+      bytes: 1024,
+      uploadedBy: 'ana@cliente.cl',
+      uploadedAt: new Date(T0 - 60 * 60_000).toISOString(),
+      ok: true,
+      triggered: true,
+      origen: 'upload',
+    })
+    await a.loop.tick()
+    expect(a.runLogs.listados).toBe(1)
+  })
+
+  it('un slot con `log: false` no se acusa: el conteo queda en null y el aviso no aparece', async () => {
+    const a = await armarLogs({ slot: slotDe({ log: false }) })
+    a.runs.records = corridasFallidas(5)
+    await a.loop.tick()
+    expect(a.runLogs.listados).toBe(0) // ni se lista: el slot declaró que no escribe logs por corrida
+    const snap = await snapDe(a)
+    expect(snap?.corridasSinLog).toBeUndefined()
+    expect(avisoContratoLogs(slotDe({ log: false }), slotVigilanciaDeProyeccion(slotDe({ log: false }), snap, POLL_MS, T0) ?? undefined)).toBe('')
+  })
+
+  it('sin corridas que medir (land-only o motor no cableado) el conteo es null', async () => {
+    const { trigger: _t, ...sinTrigger } = slotDe()
+    const a = await armarLogs({ slot: sinTrigger as IntakeSlot })
+    await a.loop.tick()
+    expect((await snapDe(a))?.corridasSinLog).toBeUndefined()
+
+    const b = await armarLogs({ conMotor: false })
+    b.runs.records = corridasFallidas(4)
+    await b.loop.tick()
+    expect((await snapDe(b))?.corridasSinLog).toBeUndefined()
+  })
+
+  it('`null` LIMPIA un conteo previo cuando el slot deja de aplicar (el aviso se apaga)', async () => {
+    const a = await armarLogs()
+    a.runs.records = corridasFallidas(4)
+    await a.loop.tick()
+    expect((await snapDe(a))?.corridasSinLog).toBe(4)
+    // MISMO store, slot re-declarado con `log: false` (hot-reload): la acusación previa se retira.
+    const b = await armarLogs({ slot: slotDe({ log: false }), store: a.store })
+    await b.loop.tick()
+    expect((await snapDe(b))?.corridasSinLog).toBeUndefined()
+  })
+
+  it('si el listado de `_logs/` FALLA no se pisa lo persistido: no medir no es medir cero', async () => {
+    const a = await armarLogs()
+    a.runs.records = corridasFallidas(4)
+    await a.loop.tick()
+    expect((await snapDe(a))?.corridasSinLog).toBe(4)
+
+    a.runLogs.error = 'onelake: 403 al listar _logs/'
+    await a.loop.tick()
+    expect((await snapDe(a))?.corridasSinLog).toBe(4) // lo último conocido, no 0
+    expect(a.logs.some((l) => l.includes('no se pudo medir el contrato _logs/'))).toBe(true)
+  })
+
+  it('una observación FALLIDA del slot no toca el conteo, y ni siquiera intenta medirlo', async () => {
+    const a = await armarLogs()
+    a.runs.records = corridasFallidas(3)
+    await a.loop.tick()
+    const listados = a.runLogs.listados
+
+    a.landing.error = 'onelake: 403 forbidden'
+    await a.loop.tick()
+    const snap = await snapDe(a)
+    expect(snap?.lastError).toBe('onelake: 403 forbidden')
+    expect(snap?.corridasSinLog).toBe(3) // intacto: el slot no se midió en absoluto
+    expect(a.runLogs.listados).toBe(listados) // no se paga un listado por un slot que no se pudo observar
   })
 })

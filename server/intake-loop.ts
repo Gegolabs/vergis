@@ -39,6 +39,8 @@ import {
   parseIntakeWatchState,
   parseRunFileOutcomes,
   resolveRunLog,
+  contarCorridasSinLog,
+  slotRunLogsDir,
   diffAlertState,
   type CargaDesenlace,
   type IntakeDesenlaceStore,
@@ -144,6 +146,15 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
 
       // ── Fase 1 · observar ────────────────────────────────────────────────────────────────────
       const lote: SlotObservation[] = await Promise.all(vigilados.map((s) => observar(s)))
+      // Medida del contrato `_logs/` (#162·§5) ANTES del persist: así el conteo viaja en el MISMO
+      // lote que el resto del snapshot y la consola nunca ve una proyección a medio actualizar.
+      // El listado que esto paga se cachea por tick y lo reusa la fase RESOLVER (abajo): sin la
+      // caché, un slot con cargas pendientes listaría `_logs/` dos veces por vuelta.
+      const logsDelTick = new Map<string, OneLakeEntry[]>()
+      for (const slot of vigilados) {
+        const obs = lote.find((o) => o.slotId === slot.id)
+        if (obs) await medirContratoLogs(slot, obs, logsDelTick)
+      }
       await deps.store.recordSlotObservations(lote)
       const fallidas = lote.filter((o) => o.error != null)
       for (const o of fallidas) deps.log(`intake-loop: no se pudo observar '${o.slotId}' — ${o.error}`)
@@ -154,7 +165,7 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       // acá. Sacarlo del tick (o paralelizarlo) rompe ese supuesto y obliga a arreglar el store.
       for (const slot of vigilados) {
         const obs = lote.find((o) => o.slotId === slot.id)
-        if (obs) await resolverSlot(slot, obs, nowMs)
+        if (obs) await resolverSlot(slot, obs, nowMs, logsDelTick)
       }
 
       // ── Fase 3 · alertar ─────────────────────────────────────────────────────────────────────
@@ -228,6 +239,37 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
   }
 
   /**
+   * Medida del cumplimiento del contrato `_logs/` de UN slot (#162·§5, diseño 009·§2.3.b): cuántas
+   * corridas terminadas consecutivas no dejaron log correlacionable.
+   *
+   * Se mide ACÁ y no en la fase RESOLVER porque el resolver solo lista `_logs/` cuando hay cargas sin
+   * desenlace (`if (!pendientes.length) return`), y el slot incumplidor llega rápido al estado sin
+   * pendientes —sus cargas caen a `sin-informe` y dejan de estarlo—: un conteo colgado de ahí se
+   * congelaría justo en el slot que el aviso existe para delatar. (Verificado en el código, no
+   * supuesto: es la hipótesis que el diseño 009·§2.2 desmintió.)
+   *
+   * Escribe `obs.corridasSinLog` con las tres semánticas de `SlotObservation`: número medido, `null`
+   * cuando el conteo NO APLICA (el slot no tiene corridas que medir, o declaró `log: false`, o el
+   * motor / `_logs/` no están cableados) y ausente cuando no se pudo medir. El listado leído se deja
+   * en `cache` para que el RESOLVER del mismo tick no lo vuelva a pedir.
+   */
+  async function medirContratoLogs(slot: IntakeSlot, obs: SlotObservation, cache: Map<string, OneLakeEntry[]>): Promise<void> {
+    if (obs.error != null) return // no se midió el slot: el conteo previo sigue siendo lo último conocido
+    if (!deps.runLogs || obs.runs == null || slotRunLogsDir(slot) == null) {
+      obs.corridasSinLog = null
+      return
+    }
+    try {
+      const entries = await deps.runLogs.list(slot)
+      cache.set(slot.id, entries)
+      obs.corridasSinLog = contarCorridasSinLog(obs.runs, entries)
+    } catch (e) {
+      // No medir NO es medir cero: el campo queda ausente y lo persistido no se toca.
+      deps.log(`intake-loop: no se pudo medir el contrato _logs/ de '${slot.id}' — ${msg(e)}`)
+    }
+  }
+
+  /**
    * Control positivo de §3.3: qué archivos DEBERÍA traer el listado según el registro de cargas.
    *
    * Solo se computa cuando este tick leyó las corridas del slot (`obs.runs` presente). Sin ellas no
@@ -265,12 +307,12 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
    * Solo resuelve sobre observación FRESCA: si este tick no pudo medir el landing, no hay con qué
    * afirmar «sigue ahí» ni «ya no está», y ambas son premisas de un desenlace.
    */
-  async function resolverSlot(slot: IntakeSlot, obs: SlotObservation, nowMs: number): Promise<void> {
+  async function resolverSlot(slot: IntakeSlot, obs: SlotObservation, nowMs: number, cache: Map<string, OneLakeEntry[]>): Promise<void> {
     if (obs.error != null || obs.landing == null) return
     try {
       const pendientes = await deps.store.listUploadsSinDesenlace(slot.id, RESOLVER_LOTE)
       if (!pendientes.length) return // el caso normal: cero I/O de logs cuando no hay nada que resolver
-      const corridas = await corridasConLog(slot, obs.runs ?? [])
+      const corridas = await corridasConLog(slot, obs.runs ?? [], cache.get(slot.id))
       const maxAgeMinutes = watchConfigDe(slot)?.maxAgeMinutes
       for (const carga of pendientes) {
         const r = resolveDesenlaceDeCarga(carga, corridas, obs.landing, nowMs, maxAgeMinutes)
@@ -292,9 +334,11 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
 
   /** Las corridas con la resolución de SU log (#99) y su texto. Sin la dependencia de logs el kind es
    *  `'no-medido'`: la ausencia del instrumento no se reporta como ausencia de log. */
-  async function corridasConLog(slot: IntakeSlot, runs: RunRecord[]): Promise<CorridaConLog[]> {
+  async function corridasConLog(slot: IntakeSlot, runs: RunRecord[], preListadas?: OneLakeEntry[]): Promise<CorridaConLog[]> {
     if (!deps.runLogs || !runs.length) return runs.map((run) => ({ run, log: 'no-medido' as const, texto: null }))
-    const entries = await deps.runLogs.list(slot) // si lanza, el slot entero queda sin resolver (arriba)
+    // `preListadas`: el listado que la medida del contrato `_logs/` ya pagó en ESTE tick. Es el mismo
+    // directorio y el mismo instante — reusarlo evita el segundo listado, no cambia lo que se lee.
+    const entries = preListadas ?? (await deps.runLogs.list(slot)) // si lanza, el slot queda sin resolver (arriba)
     const out: CorridaConLog[] = []
     for (const run of runs) {
       const res = resolveRunLog(run, entries)
@@ -603,9 +647,11 @@ export function summarizeIntakeWatch(
  *    Solo se adopta si esta reconstrucción dio `'fresca'` — con la medida ya degradada manda lo más
  *    reciente, que es la degradación.
  *  · `corridasSinLog` (#162·§5) exige correlacionar las corridas terminadas con el listado de
- *    `_logs/`: otra lectura del almacenamiento, y la proyección de la vigilancia no guarda ese
- *    conteo. Queda SIN LLENAR a propósito — con el campo ausente `avisoContratoLogs` no muestra
- *    nada. Llenarlo pide persistir el conteo en la proyección: trabajo del lazo, no de este cableado.
+ *    `_logs/`, otra lectura del almacenamiento — así que NO se computa acá: se COPIA del snapshot,
+ *    donde el lazo lo dejó al medirlo en su tick (diseño 009·§2.3). Ausente en el snapshot = el conteo
+ *    no aplica al slot o nunca se pudo medir, y con el campo ausente `avisoContratoLogs` no muestra
+ *    nada. Se copia también con la medida degradada (`ultima-conocida`): es una métrica de conducta
+ *    lenta —tres corridas seguidas— y el banner de la medida ya rotula la añejez de lo que se ve.
  */
 export function slotVigilanciaDeProyeccion(
   slot: IntakeSlot,
@@ -642,6 +688,7 @@ export function slotVigilanciaDeProyeccion(
     v.lastError = snapshot.lastError
     if (snapshot.lastErrorAt != null) v.lastErrorAt = snapshot.lastErrorAt
   }
+  if (snapshot?.corridasSinLog != null) v.corridasSinLog = snapshot.corridasSinLog
   const varados = alertas.find((a) => a.reason === 'varados')?.varados
   if (varados?.length) v.varados = varados
   // Un listado desmentido no sostiene NINGUNA conclusión derivada de él (invariante 2): con la

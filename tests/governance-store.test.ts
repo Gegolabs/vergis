@@ -656,6 +656,63 @@ describe('GovernanceStore · proyección de la vigilancia del intake (#161·§3.
   })
 })
 
+describe('GovernanceStore · conteo del contrato `_logs/` en la proyección (#162·§5)', () => {
+  const snapOf = async (g: SqliteGovernanceStore, slotId: string) =>
+    (await g.listSlotSnapshots()).find((s) => s.slotId === slotId)
+  const obsOk = (over: Record<string, unknown> = {}) => ({ slotId: 'saldos', observedAt: '2026-08-13T10:00:00Z', landing: [], runs: [], ...over })
+
+  it('persiste el conteo medido y lo sirve en el snapshot', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([obsOk({ corridasSinLog: 3 })])
+    expect((await snapOf(g, 'saldos'))?.corridasSinLog).toBe(3)
+    await g.close()
+  })
+
+  it('CRITERIO · el campo AUSENTE no pisa lo persistido (no medir no es medir cero)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([obsOk({ corridasSinLog: 3 })])
+    // Tick siguiente: el listado de `_logs/` falló, así que el lazo no manda el campo.
+    await g.recordSlotObservations([obsOk({ observedAt: '2026-08-13T10:10:00Z' })])
+    expect((await snapOf(g, 'saldos'))?.corridasSinLog).toBe(3)
+    await g.close()
+  })
+
+  it('`null` LIMPIA el valor: el conteo dejó de aplicar a este slot (log:false, sin trigger)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([obsOk({ corridasSinLog: 3 })])
+    await g.recordSlotObservations([obsOk({ observedAt: '2026-08-13T10:10:00Z', corridasSinLog: null })])
+    expect((await snapOf(g, 'saldos'))?.corridasSinLog).toBeUndefined()
+    await g.close()
+  })
+
+  it('una observación con ERROR no lo toca, igual que al resto del snapshot', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([obsOk({ corridasSinLog: 3 })])
+    await g.recordSlotObservations([{ slotId: 'saldos', observedAt: '2026-08-13T10:10:00Z', error: 'listar falló (403)', corridasSinLog: 99 }])
+    expect((await snapOf(g, 'saldos'))?.corridasSinLog).toBe(3)
+    await g.close()
+  })
+
+  it('una DB creada SIN la columna migra por ensureColumns y no pierde su proyección', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-watch-mig-')), 'governance.sqlite')
+    // Esquema anterior a este frente: `intake_watch_state` sin `corridas_sin_log`, con una fila viva.
+    const db = await openSqliteDb(file)
+    db.run(`CREATE TABLE intake_watch_state (slot_id TEXT PRIMARY KEY, observed_at TEXT, first_attempt_at TEXT, last_error TEXT, last_error_at TEXT);`)
+    db.run(`INSERT INTO intake_watch_state (slot_id, observed_at, first_attempt_at) VALUES ('saldos','2026-08-13T09:00:00Z','2026-08-13T08:00:00Z')`)
+    persistSqliteDb(db, file)
+    db.close()
+
+    // Sin el ALTER idempotente, tanto el SELECT del snapshot como el UPDATE del conteo lanzarían:
+    // que estas dos operaciones funcionen ES la prueba de que la columna se agregó.
+    const g = await SqliteGovernanceStore.open(file, {})
+    const antes = (await snapOf(g, 'saldos'))!
+    expect([antes.observedAt, antes.firstAttemptAt, antes.corridasSinLog]).toEqual(['2026-08-13T09:00:00Z', '2026-08-13T08:00:00Z', undefined])
+    await g.recordSlotObservations([obsOk({ observedAt: '2026-08-13T10:00:00Z', corridasSinLog: 4 })])
+    expect((await snapOf(g, 'saldos'))?.corridasSinLog).toBe(4)
+    await g.close()
+  })
+})
+
 describe('GovernanceStore · desenlace por carga (#162·§3.4)', () => {
   it('listUploadsSinDesenlace: pendientes del slot, antiguas primero, sin rechazadas ni retro', async () => {
     const g = await SqliteGovernanceStore.open(null, {})

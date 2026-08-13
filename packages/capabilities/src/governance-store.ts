@@ -429,6 +429,17 @@ export interface SlotWatchSnapshot {
   /** Error del intento MÁS RECIENTE si falló; null si el último intento salió bien. */
   lastError: string | null
   lastErrorAt: string | null
+  /**
+   * #162·§5 · último conteo de corridas terminadas consecutivas sin log correlacionable que el lazo
+   * midió para este slot. La consola lo lee de acá — medirlo en el request path exigiría listar
+   * `_logs/`, que es justo lo que la proyección existe para evitar.
+   *
+   * La clave va AUSENTE cuando la columna es NULL («no medido» / «no aplica a este slot»), en vez de
+   * viajar como `null`: `undefined` es el valor con el que el consumidor ya no muestra el aviso, y
+   * emitir la clave siempre cambiaría la forma del snapshot para todos los lectores existentes.
+   * [Discrepancia declarada con §2.3.c del diseño 009, que la pide como `number | null`.]
+   */
+  corridasSinLog?: number
 }
 
 /** Retención de corridas proyectadas POR SLOT. Mismo número que la de procesos (#105): la razón es
@@ -454,6 +465,10 @@ export interface IntakeWatchStore {
    *
    * En una observación exitosa, `landing`/`runs` AUSENTES no vacían nada: «no medí las corridas»
    * (slot land-only) no es «no hay corridas». Vaciar exige un listado presente y vacío.
+   *
+   * `corridasSinLog` sigue la MISMA disciplina con un valor extra: número escribe, `null` limpia (el
+   * conteo no aplica a ese slot) y ausente no toca lo persistido. En una observación con ERROR no se
+   * toca nunca, igual que el resto del snapshot.
    */
   recordSlotObservations(obs: SlotObservation[]): Promise<void>
   /** Snapshots de TODOS los slots con estado o proyección. `runsPerSlot` default 10. */
@@ -689,8 +704,13 @@ const INTAKE_WATCH_STATE_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_state (
   observed_at TEXT,
   first_attempt_at TEXT,
   last_error TEXT,
-  last_error_at TEXT
+  last_error_at TEXT,
+  corridas_sin_log INTEGER
 );`
+/** Columnas del estado agregadas DESPUÉS de #161: una DB creada por la versión anterior ya tiene la
+ *  tabla, así que el CREATE de arriba no la toca — el ALTER las agrega sin pérdida (SQLite rellena
+ *  con NULL, que ES el estado «no medido»). */
+const INTAKE_WATCH_STATE_COLS = ['corridas_sin_log INTEGER']
 const INTAKE_WATCH_LANDING_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_landing (
   slot_id TEXT NOT NULL,
   path TEXT NOT NULL,
@@ -835,6 +855,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INGESTION_RUN_DDL)
     db.run(INGESTION_PROCESS_STATE_DDL)
     db.run(INTAKE_WATCH_STATE_DDL)
+    ensureColumns(db, 'intake_watch_state', INTAKE_WATCH_STATE_COLS)
     db.run(INTAKE_WATCH_LANDING_DDL)
     db.run(INTAKE_WATCH_RUN_DDL)
     // #107 fase 2: ledger append-only de publicaciones de jobs. Sus ops viven en `job-publication.ts`
@@ -1803,6 +1824,13 @@ export class SqliteGovernanceStore implements GovernanceStore {
            first_attempt_at=COALESCE(intake_watch_state.first_attempt_at, excluded.first_attempt_at)`,
         [sid, o.observedAt, o.observedAt],
       )
+      // El conteo del contrato `_logs/` (#162·§5) se escribe APARTE del upsert de estado porque su
+      // regla es distinta: `undefined` significa «este tick no lo midió» y no debe pisar lo último
+      // conocido, mientras que el upsert de arriba sí sella observed_at en cada medida buena.
+      if (o.corridasSinLog !== undefined) {
+        const n = o.corridasSinLog == null ? null : Math.max(0, Math.trunc(o.corridasSinLog))
+        this.db.run(`UPDATE intake_watch_state SET corridas_sin_log = ? WHERE slot_id = ?`, [n, sid])
+      }
     }
     // UN persist por lote, como la proyección de ingestión: cada persist vuelca el ARCHIVO COMPLETO.
     this.persist()
@@ -1810,13 +1838,14 @@ export class SqliteGovernanceStore implements GovernanceStore {
 
   async listSlotSnapshots(opts?: { runsPerSlot?: number }): Promise<SlotWatchSnapshot[]> {
     const top = Math.max(0, Math.trunc(opts?.runsPerSlot ?? 10))
-    const state = new Map<string, { observedAt: string | null; firstAttemptAt: string | null; lastError: string | null; lastErrorAt: string | null }>()
-    for (const r of selectAll(this.db, `SELECT slot_id, observed_at, first_attempt_at, last_error, last_error_at FROM intake_watch_state`)) {
+    const state = new Map<string, { observedAt: string | null; firstAttemptAt: string | null; lastError: string | null; lastErrorAt: string | null; corridasSinLog: number | null }>()
+    for (const r of selectAll(this.db, `SELECT slot_id, observed_at, first_attempt_at, last_error, last_error_at, corridas_sin_log FROM intake_watch_state`)) {
       state.set(String(r['slot_id']), {
         observedAt: r['observed_at'] == null ? null : String(r['observed_at']),
         firstAttemptAt: r['first_attempt_at'] == null ? null : String(r['first_attempt_at']),
         lastError: r['last_error'] == null ? null : String(r['last_error']),
         lastErrorAt: r['last_error_at'] == null ? null : String(r['last_error_at']),
+        corridasSinLog: r['corridas_sin_log'] == null ? null : Number(r['corridas_sin_log']),
       })
     }
     // Fail-safe (calcado de `listRunSnapshots`): un slot con datos proyectados pero sin fila de
@@ -1848,7 +1877,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
         rs.free()
       }
       const s = state.get(sid)
-      out.push({
+      const snap: SlotWatchSnapshot = {
         slotId: sid,
         landing,
         runs,
@@ -1856,7 +1885,10 @@ export class SqliteGovernanceStore implements GovernanceStore {
         firstAttemptAt: s?.firstAttemptAt ?? null,
         lastError: s?.lastError ?? null,
         lastErrorAt: s?.lastErrorAt ?? null,
-      })
+      }
+      // NULL en la columna = no medido / no aplica: la clave no viaja (ver `SlotWatchSnapshot`).
+      if (s?.corridasSinLog != null) snap.corridasSinLog = s.corridasSinLog
+      out.push(snap)
     }
     return out
   }

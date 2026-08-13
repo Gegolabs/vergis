@@ -5,6 +5,7 @@ import {
   runLogFileName,
   parseRunLogTimestamp,
   resolveRunLog,
+  contarCorridasSinLog,
   redactSecrets,
   parseRunFileOutcomes,
   type OneLakeEntry,
@@ -219,5 +220,67 @@ describe('run-logs · la gramática convive con el titular de la corrida (sin re
 
   it('diagnosticoDeFalla sigue devolviendo el titular DE LA CORRIDA, no el del último archivo', () => {
     expect(diagnosticoDeFalla(LOG_INCIDENTE)).toBe('✖ ABORTADO: archivo sin filas de datos (1 filas)')
+  })
+})
+
+/**
+ * `contarCorridasSinLog` (#162·§5, diseño 009·§2.3.a): el insumo del aviso de incumplimiento del
+ * contrato `_logs/`. Lo que estos tests ponen en riesgo es la ACUSACIÓN: contar de más señala a un
+ * job que sí escribe, y contar de menos deja el incumplimiento invisible, que es el bug que #162
+ * existe para cerrar.
+ */
+describe('run-logs · conteo de corridas sin log (#162·§5)', () => {
+  const T0 = Date.parse('2026-08-13T12:00:00.000Z')
+  /** Una corrida que arrancó `minutosAtras` antes de T0 y duró un minuto. */
+  const run = (minutosAtras: number, status: RunRecord['status'] = 'Failed'): RunRecord => {
+    const startedAt = new Date(T0 - minutosAtras * 60_000).toISOString()
+    return { startedAt, status, endedAt: new Date(T0 - (minutosAtras - 1) * 60_000).toISOString() }
+  }
+  /** El log que el contrato exige para esa corrida (lo que la vuelve `match`). */
+  const logDe = (r: RunRecord): OneLakeEntry => ({
+    path: `Files/code/_logs/${runLogFileName(r.startedAt)}`,
+    isDirectory: false,
+    size: 2048,
+    lastModified: r.startedAt,
+  })
+
+  it('cuenta las consecutivas desde la más reciente y CORTA en el primer match', () => {
+    // [sin-log, sin-log, match, sin-log] — recientes primero ⇒ 2, NO 3: la cuarta corrida también
+    // quedó sin log, pero ya no es «reciente» — entre medio el job cumplió, y esa es la diferencia
+    // entre acusar una conducta y sumar todo el historial.
+    const runs = [run(10), run(20), run(30), run(40)]
+    // El log viejísimo (T0−500 min) existe para que la corrida más antigua resuelva 'sin-log' y no
+    // 'purgado': sin él, el corte lo daría la purga y este test no vigilaría el corte por 'match'.
+    expect(contarCorridasSinLog(runs, [logDe(runs[2]!), logDe(run(500))])).toBe(2)
+  })
+
+  it('el orden lo impone la función: el mismo lote barajado da el mismo conteo', () => {
+    const runs = [run(10), run(20), run(30), run(40)]
+    const entries = [logDe(runs[2]!)]
+    expect(contarCorridasSinLog([runs[3]!, runs[0]!, runs[2]!, runs[1]!], entries)).toBe(2)
+  })
+
+  it("'purgado' CORTA sin acusar: la ausencia de medida no es evidencia de falta", () => {
+    // [sin-log, purgado, purgado] ⇒ 1. El único log retenido (T0−30 min) no calza la ventana de
+    // ninguna corrida: para la más reciente es DEMASIADO VIEJO (no se puede alegar purga, así que es
+    // incumplimiento), y para las dos anteriores es POSTERIOR a su ventana — de ellas no se puede
+    // afirmar que no escribieron, y el conteo se corta ahí en vez de engordar.
+    const runs = [run(10), run(60), run(120)]
+    expect(contarCorridasSinLog(runs, [logDe(run(30))])).toBe(1)
+  })
+
+  it('Cancelled y Deduped no cuentan ni cortan: el contrato del escritor no las cubre', () => {
+    const runs = [run(10, 'Cancelled'), run(20), run(30, 'Deduped'), run(40)]
+    expect(contarCorridasSinLog(runs, [])).toBe(2)
+  })
+
+  it('sin corridas terminadas el conteo es 0 (no hay a quién acusar)', () => {
+    expect(contarCorridasSinLog([], [])).toBe(0)
+    expect(contarCorridasSinLog([run(5, 'InProgress'), run(15, 'NotStarted')], [])).toBe(0)
+  })
+
+  it('todas con su log ⇒ 0, aunque el directorio traiga ruido ajeno', () => {
+    const runs = [run(10), run(20, 'Completed')]
+    expect(contarCorridasSinLog(runs, [logDe(runs[0]!), logDe(runs[1]!), entry('Files/code/_logs/notas.txt')])).toBe(0)
   })
 })
