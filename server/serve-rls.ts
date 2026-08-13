@@ -111,6 +111,7 @@ import {
   deriveRevertPlan,
   executeRevertPlan,
   DEFAULT_INTAKE_WATCH_MS,
+  type OneLakeEntry,
   type OneLakeListing,
   type RetiroRegistrado,
   type RevertRef,
@@ -926,6 +927,9 @@ if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTA
 // ESTA referencia y la iteran a call-time — la recarga los repuebla por splice, sin re-cablear nada.
 const alertSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'alerts'))
 const reportSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'reports'))
+/** Destinos del aviso a quien SUBIÓ un archivo (#162·§6.3). Sin ninguno suscrito, el resolver del
+ *  lazo persiste y muestra el desenlace igual: el registro no depende del canal. */
+const cargasSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'cargas-usuario'))
 /** ¿La instancia tiene bloque de gobierno? Gatea el reporte — y su invariante se RE-verifica en cada
  *  recarga del slice notify (D5 de #138·2): `report:` no puede aparecer donde no hay qué reportar. */
 const HAS_GOV_BLOCK = !!(process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length)
@@ -986,11 +990,13 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       runLogs?: RunLogsOps
       tokens?: TokenSource
       tokensRef?: string
-      /** Lecturas del vigilante del intake (#161): landing, corridas del trigger y retiros. */
+      /** Lecturas del vigilante del intake (#161/#162): landing, corridas del trigger, retiros y los
+       *  logs por corrida (de donde el resolver saca el motivo por archivo). */
       watch?: {
         landing: (slot: IntakeSlot) => Promise<OneLakeListing>
         runs: (slot: IntakeSlot) => Promise<RunRecord[]>
         retiros: (slot: IntakeSlot) => Promise<RetiroRegistrado[]>
+        runLogs: { list: (slot: IntakeSlot) => Promise<OneLakeEntry[]>; read: (slot: IntakeSlot, path: string) => Promise<string | null> }
       }
     } => {
       if (!connections) return {}
@@ -1112,6 +1118,17 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             }
             return out
           },
+          // Logs POR CORRIDA del slot (#99), insumo del RESOLVER (#162): de ahí sale el motivo que el
+          // job declaró por archivo. `slotRunLogsDir` es null con `log: false`, que es una DECLARACIÓN
+          // del slot: ese slot no escribe logs por corrida, así que una corrida fallida suya de verdad
+          // no reporta causa y su desenlace honesto es `sin-informe` (no es ceguera de la plataforma).
+          runLogs: {
+            list: (slot: IntakeSlot) => {
+              const dir = slotRunLogsDir(slot)
+              return dir ? reader.list(slot.target, dir) : Promise.resolve([])
+            },
+            read: (slot: IntakeSlot, path: string) => reader.read(slot.target, path),
+          },
         },
         status: (slot) => jobStatus.listInstances(slot.trigger?.workspaceId ?? slot.target.workspaceId, slot.trigger!.processRef, 5),
         // Log de la última conversión del slot (issue #55): lo escribe el proceso en el landing;
@@ -1141,6 +1158,12 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               for (const r of rows.filter((x) => x.origen === 'upload').slice(0, limit)) {
                 // El `id` es el ancla de «Revertir esta carga» (#63): sin él la fila no ofrece el botón.
                 const ev: IntakeUploadEvent = { id: r.id, ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
+                // Desenlace resuelto por el lazo (#162): la columna de la Actividad lo lee de acá.
+                // Se copia TAL CUAL — el motivo ausente se queda ausente: la celda dice que el job no
+                // lo declaró, y rellenarlo en el camino sería fabricar la causa que #162 evita.
+                if (r.desenlace != null) ev.desenlace = r.desenlace
+                if (r.desenlaceMotivo != null) ev.desenlaceMotivo = r.desenlaceMotivo
+                if (r.desenlaceRunStartedAt != null) ev.desenlaceRunStartedAt = r.desenlaceRunStartedAt
                 // `dup_of` apunta por construcción a la carga original del contenido, que es
                 // exactamente la que `findUploadBySha` resuelve (la más antigua ok=1 con ese sha).
                 if (r.dupOfId != null) {
@@ -1340,10 +1363,14 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         uploads: async (slotId) =>
           (await govStore.listUploads(slotId, 200)).filter((r) => r.origen === 'upload' && r.ok).map((r) => ({ filename: r.filename, uploadedAt: r.uploadedAt, ok: r.ok })),
         retiros: watch.retiros,
+        runLogs: watch.runLogs,
         store: govStore,
         // Fan-out INCONDICIONAL al arreglo VIVO de destinos, igual que el lazo de frescura: un destino
         // que aparece en caliente empieza a recibir sin reconstruir el lazo. Con cero destinos es no-op.
         notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
+        // Aviso a QUIEN SUBIÓ (#162): otro flujo, otros destinos, mismo puerto. Arreglo VIVO también.
+        // El destinatario individual lo resuelve el sink de email sustituyendo `$uploader`.
+        notifyUploader: (n: Notification) => fanout(cargasSinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
         domains: domainsCfg,
         log: (l) => console.log(`[vergis-rls] ${l}`),
       }
@@ -1907,11 +1934,13 @@ function reloadInstanceSlices(reason: string): void {
       // de tocar los arreglos vivos es lo que convierte ese throw en «se conserva lo vigente».
       const nextAlerts = createSinks(forEvent(next, 'alerts'))
       const nextReports = createSinks(forEvent(next, 'reports'))
+      const nextCargas = createSinks(forEvent(next, 'cargas-usuario'))
       alertSinks.splice(0, alertSinks.length, ...nextAlerts)
       reportSinks.splice(0, reportSinks.length, ...nextReports)
+      cargasSinks.splice(0, cargasSinks.length, ...nextCargas)
       liveReportSchedule = next.report ?? null
       console.log(
-        `[hot-reload] avisos (${reason}): ${alertSinks.length} destino(s) de alerta · ${reportSinks.length} de reporte · ` +
+        `[hot-reload] avisos (${reason}): ${alertSinks.length} destino(s) de alerta · ${reportSinks.length} de reporte · ${cargasSinks.length} de cargas-usuario · ` +
           `reporte ${liveReportSchedule ? `${liveReportSchedule.every} a las ${liveReportSchedule.at}` : 'apagado'}`,
       )
       contract.record({ reason, ok: true }, [{ source: 'notify', path: NOTIFY_PATH }])

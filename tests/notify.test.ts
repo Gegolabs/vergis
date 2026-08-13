@@ -364,3 +364,65 @@ describe('notify · destino email-smtp', () => {
     ).toBe(`${base.title}\n\nperíodo: x → y\nCorrieron bien (3):\n\nFuentes e ingestas: https://x/admin/sources\nLog — Cargas: https://x/log\n`)
   })
 })
+
+describe("notify · flujo 'cargas-usuario' y el token $uploader (#162·§6.3)", () => {
+  const emailCargas = {
+    id: 'aviso-usuario',
+    type: 'email-smtp',
+    events: ['cargas-usuario'],
+    smtp: { host: 'smtp.relay.cl', port: 587 },
+    from: 'Mira <mira@x.cl>',
+    to: ['$uploader'],
+  }
+
+  it('el destino email con $uploader parsea, y el token convive con copias operativas', () => {
+    const cfg = parseNotifyConfig({ destinations: [emailCargas] })
+    expect((cfg.destinations[0] as { to: string[] }).to).toEqual(['$uploader'])
+    expect((parseNotifyConfig({ destinations: [{ ...emailCargas, to: ['$uploader', 'ops@x.cl'] }] }).destinations[0] as { to: string[] }).to).toEqual(['$uploader', 'ops@x.cl'])
+  })
+
+  it('suscripción a cargas-usuario SIN $uploader rompe el boot nombrando el destino', () => {
+    expect(() => parseNotifyConfig({ destinations: [{ ...emailCargas, to: ['ops@x.cl'] }] })).toThrow(
+      /destino 'aviso-usuario' se suscribe a 'cargas-usuario' pero su to no incluye \$uploader/,
+    )
+  })
+
+  it('$uploader declarado por un destino que NO se suscribe al flujo también rompe el boot', () => {
+    expect(() => parseNotifyConfig({ destinations: [{ ...emailCargas, events: ['alerts'] }] })).toThrow(
+      /destino 'aviso-usuario' declara \$uploader en su to pero no se suscribe a 'cargas-usuario'/,
+    )
+  })
+
+  it('un slack-webhook suscrito a cargas-usuario rompe el boot: un canal compartido no es una persona', () => {
+    expect(() => parseNotifyConfig({ destinations: [{ id: 'ops-slack', type: 'slack-webhook', url: 'https://hooks.slack.com/x', events: ['cargas-usuario'] }] })).toThrow(
+      /destino 'ops-slack' se suscribe a 'cargas-usuario', que va dirigido a UNA persona/,
+    )
+  })
+
+  it('un webhook genérico SÍ puede suscribirse: el JSON lleva uploadedBy y el puente externo decide', () => {
+    const cfg = parseNotifyConfig({ destinations: [{ id: 'puente', type: 'webhook', url: 'https://interno/hook', events: ['cargas-usuario'] }] })
+    expect(forEvent(cfg, 'cargas-usuario').destinations.map((d) => d.id)).toEqual(['puente'])
+    expect(forEvent(cfg, 'alerts').destinations).toEqual([])
+  })
+
+  it('el sink de email sustituye $uploader por el uploadedBy DEL AVISO, conservando las copias', async () => {
+    const cfg = parseNotifyConfig({ destinations: [{ ...emailCargas, to: ['$uploader', 'ops@x.cl'] }] })
+    const capt: { to: string[] }[] = []
+    const sinks = createSinks(cfg, undefined, async (_c, m) => void capt.push({ to: m.to }))
+    const aviso: Notification = { severity: 'warning', title: 'Tu archivo «x.xlsx» no pudo procesarse', lines: [], links: [], data: { uploadedBy: 'ana@cliente.cl' } }
+    await sinks[0]!.send(aviso)
+    expect(capt[0]!.to).toEqual(['ana@cliente.cl', 'ops@x.cl'])
+  })
+
+  it('un aviso sin uploadedBy no se manda a las copias: LANZA, y el fan-out lo loguea sin tumbar el tick', async () => {
+    const cfg = parseNotifyConfig({ destinations: [{ ...emailCargas, to: ['$uploader', 'ops@x.cl'] }] })
+    const capt: unknown[] = []
+    const sinks = createSinks(cfg, undefined, async (_c, m) => void capt.push(m))
+    const aviso: Notification = { severity: 'warning', title: 'x', lines: [], links: [], data: {} }
+    await expect(sinks[0]!.send(aviso)).rejects.toThrow(/no trae uploadedBy con forma de dirección/)
+    const logs: string[] = []
+    await fanout(sinks, aviso, (l) => void logs.push(l))
+    expect(capt).toEqual([])
+    expect(logs[0]).toContain('uploadedBy')
+  })
+})
