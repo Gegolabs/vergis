@@ -21,6 +21,27 @@
  *     CONTRADICCIÓN — nunca su causa (permisos, borrado a mano, path mal configurado: eso lo
  *     diagnostica una persona).
  *
+ *     El control positivo tiene DOS formas, y la diferencia es qué necesita cada una para no mentir:
+ *
+ *     · **Por-archivo** (`expected`) — exige un CORTE: la última corrida `Completed`, que archivó a
+ *       `_processed/` lo que procesó. Sin corte toda carga histórica se «esperaría» para siempre y
+ *       el primer drenaje legítimo fabricaría una contradicción falsa. Por eso solo corre en slots
+ *       con corridas observadas.
+ *     · **Del DIRECTORIO** (`registro.cargasVividas` + `obs.landingAbsent`) — no necesita corte, y
+ *       por eso cubre también al slot land-only: un consumidor consume ARCHIVOS, no directorios, así
+ *       que «el directorio no existe» (404) con cargas que esta plataforma escribió ahí contradice
+ *       lo que ella sabe de sí misma, con o sin corridas. Es la lente rota del incidente fundante
+ *       (`list` aplanaba 404 → `[]` y la lectura «exitosa» concluía que el usuario no subió nada).
+ *
+ *     **PÉRDIDA ACEPTADA Y DOCUMENTADA (diseño 009·§4.3), para que nadie la redescubra como
+ *     sorpresa ni la «arregle» sin volver a pensarla:** en un slot LAND-ONLY, un `200` con lista
+ *     vacía sobre un directorio que SÍ existe NO produce contradicción. Ese estado es
+ *     indistinguible de «el consumidor externo drenó todo», y distinguirlos exigiría un evento de
+ *     consumo observable que hoy no existe (ningún actor lo escribe). Ahí esa clase del incidente de
+ *     #161 sigue siendo posible; lo que cubre a esos slots es lo que no depende del ritmo de nadie:
+ *     `'sin-medida'`, el control del directorio y el opt-in de edad (`watch.max_age_minutes`). Hay
+ *     un test que FIJA esta decisión (`tests/intake-observability.test.ts`).
+ *
  * Fuera de alcance por requisito de #161: reintentos y auto-reparación (detectar y avisar; decidir
  * es de las personas) y validación semántica del contenido (es del job de cada dominio — la señal
  * de edad no necesita entender el archivo, y esa es justo la propiedad que la hace universal).
@@ -62,6 +83,16 @@ export interface SlotObservation {
   runs?: RunRecord[]
   /** El intento FALLÓ: qué lectura y por qué. Presente ⇒ `landing`/`runs` ausentes o parciales. */
   error?: string
+  /**
+   * El directorio del landing NO EXISTE (`listOrAbsent` → `absent`, o sea 404), distinguido de
+   * «existe y está vacío» desde #161. NO es un error de lectura: la lectura respondió. Se observa
+   * junto a `landing: []` —la proyección sigue registrando listado vacío— y el veredicto viaja por
+   * la clasificación, no por la proyección.
+   *
+   * Solo `true` o ausente: «no está ausente» ya lo dice el campo faltante, y un `false` explícito
+   * invitaría a confundir «existe» con «no lo pude saber».
+   */
+  landingAbsent?: true
   /**
    * #162·§5 · corridas TERMINADAS consecutivas sin log correlacionable en `_logs/`, medidas en ESTE
    * tick (`contarCorridasSinLog`). Es medida del lazo, no clasificación: viaja a la proyección para
@@ -128,6 +159,11 @@ export interface SlotAlert {
   varados?: ArchivoVarado[]
   /** `contradice-registro`: los archivos que el registro esperaba y el listado no trae. */
   esperados?: string[]
+  /** `contradice-registro` por el DIRECTORIO: el landing no existe y la plataforma escribió ahí. */
+  landingAusente?: true
+  /** ISO de la última carga vivida registrada del slot — la evidencia de que la plataforma escribió
+   *  en ese directorio. Acompaña a `landingAusente`; ausente si el registro no trajo fecha usable. */
+  ultimaCargaAt?: string
   /** `corrida-fallida` / `corrida-colgada`: la corrida en cuestión. */
   run?: RunRecord
   /** `sin-medida` (y cualquier alerta emitida sobre lo último conocido): el error de la lectura. */
@@ -178,6 +214,15 @@ export interface SlotWatchInput {
    *  `expectedInLanding`. Vacío/ausente = el registro no predice nada, y entonces un listado vacío
    *  no contradice a nadie. */
   expected?: string[]
+  /**
+   * Lo que la plataforma sabe de su propia escritura en el landing, SIN pretender saber qué archivos
+   * siguen ahí. Insumo del control del DIRECTORIO (diseño 009·§4.2), el único que no necesita corte.
+   *
+   * `cargasVividas` = cuántas cargas ok registró el slot (#62). Con 0 no se acusa nada: un slot
+   * recién declarado no tiene directorio hasta el primer `put`, y alertarlo sería una acusación
+   * gratuita contra el estado normal de un slot virgen.
+   */
+  registro?: { cargasVividas: number; ultimaCargaAt?: string }
 }
 
 /** Orden de severidad. Primero lo que invalida la medida: si no se puede confiar en lo que se ve,
@@ -265,9 +310,10 @@ export function expectedInLanding(
  * El orden de las decisiones ES la lógica:
  *  1. Si la observación falló, la fuente pasa a ser la proyección — y si no hay proyección, el
  *     landing NO se clasifica (invariante 1: `[]` no es un hecho, es la ausencia de uno).
- *  2. Si la observación salió «bien» pero el registro predice archivos que el listado no trae, la
- *     medida es `'contradice-registro'` y el landing TAMPOCO se clasifica (invariante 2: sobre un
- *     listado desmentido no se concluye ni «vacío» ni «varado»).
+ *  2. Si la observación salió «bien» pero contradice lo que la plataforma sabe de sí misma —el
+ *     registro predice archivos que el listado no trae, O el directorio del landing no existe
+ *     teniendo cargas vividas—, la medida es `'contradice-registro'` y el landing TAMPOCO se
+ *     clasifica (invariante 2: sobre un listado desmentido no se concluye ni «vacío» ni «varado»).
  *  3. Recién ahí se buscan varados sobre el listado, y corridas fallidas/colgadas sobre el
  *     historial. Las corridas vienen de OTRA fuente (el motor) con modos de falla independientes:
  *     un listado desmentido no las invalida, y por eso se clasifican igual.
@@ -295,15 +341,40 @@ export function classifySlot(input: SlotWatchInput, config: SlotWatchConfig, now
     landing = datos(obs.landing ?? [])
     runs = obs.runs
     const esperados = (input.expected ?? []).filter((f) => f.length > 0)
-    if (esperados.length > 0) {
-      const vistos = new Set(landing.map((e) => baseName(e.path)))
-      // «Sin NINGUNO de los predichos» (§3.3): con alguno presente el listado es creíble y las
-      // ausencias tienen explicaciones ordinarias (una corrida en curso archivó parte del lote).
-      if (!esperados.some((f) => vistos.has(f))) {
-        medida = 'contradice-registro'
-        landing = null
-        alertas.push({ slotId, reason: 'contradice-registro', medida, esperados })
+    const vistos = new Set(landing.map((e) => baseName(e.path)))
+    // (a) Control POR-ARCHIVO. «Sin NINGUNO de los predichos» (§3.3): con alguno presente el listado
+    // es creíble y las ausencias tienen explicaciones ordinarias (una corrida en curso archivó parte
+    // del lote).
+    const faltanTodos = esperados.length > 0 && !esperados.some((f) => vistos.has(f))
+    // (b) Control del DIRECTORIO (diseño 009·§4.2): el landing respondió 404 y la plataforma tiene
+    // registradas cargas ok en ese mismo directorio. `cargasVividas ≥ 1` es lo que separa el control
+    // de una acusación gratuita: el slot virgen (cero cargas) NO tiene directorio todavía.
+    //
+    // CONJETURA C6, GATE DE DESPLIEGUE, todavía SIN MEDIR contra OneLake real: que drenar TODOS los
+    // archivos de un landing deje el directorio EXISTENTE (`listOrAbsent` → `ok` vacío, no `absent`).
+    // Se asume por la semántica de ADLS Gen2 con namespace jerárquico —los directorios son objetos
+    // explícitos— y está acotado por este lado: NINGÚN camino de Vergis borra el directorio (el
+    // retiro y la reversión hacen `remove` del ARCHIVO, verificado en `intake-onelake.ts:206` e
+    // `intake-revert.ts:211–240`), así que el riesgo vivo es el job/consumidor externo y la
+    // semántica del propio OneLake. Experimento falsador: vaciar por completo el landing de un slot
+    // real y consultar `listOrAbsent` — debe dar `ok` con lista vacía. Si diera `absent`, este
+    // control fabricaría una contradicción tras cada drenaje total y SE RETIRA (es el mismo ruido
+    // que §4.1 evita); el control por-archivo y `sin-medida` quedan intactos.
+    const cargasVividas = input.registro?.cargasVividas ?? 0
+    const directorioAusente = obs.landingAbsent === true && cargasVividas >= 1
+    if (faltanTodos || directorioAusente) {
+      medida = 'contradice-registro'
+      // Invariante 2: sobre un listado desmentido no se concluye ni «vacío» ni «varado».
+      landing = null
+      // UNA sola alerta aunque las dos evidencias apliquen: el estado persistido por slot es UNA
+      // razón, y partirla en dos avisos contaría dos problemas donde hay uno.
+      const a: SlotAlert = { slotId, reason: 'contradice-registro', medida }
+      if (faltanTodos) a.esperados = esperados
+      if (directorioAusente) {
+        a.landingAusente = true
+        if (input.registro?.ultimaCargaAt) a.ultimaCargaAt = input.registro.ultimaCargaAt
       }
+      alertas.push(a)
     }
   }
 

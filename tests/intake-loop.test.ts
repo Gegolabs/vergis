@@ -328,6 +328,93 @@ describe('intake-loop · control positivo contra el vacío-con-éxito', () => {
   })
 })
 
+/**
+ * EMPALME capabilities ↔ lazo ↔ aviso del control del DIRECTORIO (diseño 009·§4.2), de punta a punta
+ * con fakes: `listOrAbsent` responde `absent` → `observar()` marca `landingAbsent` → el lazo lee el
+ * registro de cargas para un slot SIN corridas → `classifySlot` contradice → `composeIntakeAlert`
+ * redacta la evidencia → el sink fake la recibe. Es el cableado que en el frente anterior no era de
+ * nadie; acá tiene dueño y este bloque es su prueba.
+ */
+describe('intake-loop · control del DIRECTORIO en slots land-only (009·§4.2)', () => {
+  const hace = (min: number): string => new Date(T0 - min * 60_000).toISOString()
+
+  it('land-only + directorio ausente + carga vivida ⇒ UNA alerta con la fecha de la última carga y sin causa afirmada', async () => {
+    const a = await armar({ conMotor: false })
+    a.registro.cargas = [
+      { filename: 'vieja.csv', uploadedAt: hace(600), ok: true },
+      { filename: 'ultima.csv', uploadedAt: hace(120), ok: true },
+    ]
+    a.landing.listing = { kind: 'absent' }
+    await a.loop.tick()
+
+    expect(a.alerts).toHaveLength(1)
+    expect(a.alerts[0]!.data['reason']).toBe('contradice-registro')
+    expect(a.alerts[0]!.data['landingAusente']).toBe(true)
+    expect(a.alerts[0]!.data['ultimaCargaAt']).toBe(hace(120))
+    const cuerpo = a.alerts[0]!.lines.join('\n')
+    expect(cuerpo).toContain('el directorio del landing NO EXISTE')
+    expect(cuerpo).toContain(hace(120))
+    // La alerta afirma la contradicción, JAMÁS su causa (doctrina del frente).
+    expect(cuerpo).not.toMatch(/permiso|borrad|path mal/i)
+    // Sin corridas no hay control por-archivo: la alerta no nombra esperados (§4.1, decisión ratificada).
+    expect(a.alerts[0]!.data['esperados']).toEqual([])
+
+    // Dedup por transición: el mismo estado en el tick siguiente no vuelve a avisar.
+    a.clock.ms = T0 + POLL_MS
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+  })
+
+  it('CONTROL NEGATIVO — slot virgen (cero cargas) con directorio ausente: cero alertas', async () => {
+    const a = await armar({ conMotor: false })
+    a.registro.cargas = []
+    a.landing.listing = { kind: 'absent' }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(0)
+  })
+
+  it('CONTROL NEGATIVO — cargas RECHAZADAS (ok=false) no prueban escritura: directorio ausente no alerta', async () => {
+    const a = await armar({ conMotor: false })
+    a.registro.cargas = [{ filename: 'rechazada.csv', uploadedAt: hace(30), ok: false }]
+    a.landing.listing = { kind: 'absent' }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(0)
+  })
+
+  it('CONTROL NEGATIVO QUE FIJA LA DECISIÓN DE §4.3 — land-only con listado ok y VACÍO sobre directorio existente: cero alertas, pérdida aceptada', async () => {
+    // El slot land-only cuyo directorio EXISTE y responde 200 con lista vacía queda sin control, a
+    // propósito (diseño 009·§4.1/§4.3): ese estado es indistinguible de «el consumidor externo drenó
+    // todo» y no hay evento de consumo observable que los separe. Si este test se pone rojo es porque
+    // alguien cerró esa laguna: hay que volver al diseño antes de dejar pasar la primera alerta falsa.
+    const a = await armar({ conMotor: false })
+    a.registro.cargas = [{ filename: 'drenada.csv', uploadedAt: hace(120), ok: true }]
+    a.landing.listing = { kind: 'ok', entries: [] }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(0)
+  })
+
+  it('el retiro que NO se pudo saber apaga el control por-archivo, no el del directorio', async () => {
+    const a = await armar({ conMotor: false })
+    a.registro.cargas = [{ filename: 'f.csv', uploadedAt: hace(30), ok: true }]
+    a.registro.retiros = null
+    a.landing.listing = { kind: 'absent' }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+    expect(a.alerts[0]!.data['landingAusente']).toBe(true)
+  })
+
+  it('slot CON corridas: el directorio ausente y los esperados viajan en UNA sola alerta', async () => {
+    const a = await armar()
+    a.registro.cargas = [{ filename: 'f.xlsx', uploadedAt: hace(10), ok: true }]
+    a.runs.records = [{ startedAt: hace(60), endedAt: hace(59), status: 'Completed' }]
+    a.landing.listing = { kind: 'absent' }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+    expect(a.alerts[0]!.data['esperados']).toEqual(['f.xlsx'])
+    expect(a.alerts[0]!.data['landingAusente']).toBe(true)
+  })
+})
+
 describe('summarizeIntakeWatch · el tile del dashboard', () => {
   const snaps = async (a: Arnes) => await a.store.listSlotSnapshots()
 
