@@ -8,17 +8,15 @@
   "minimumReleaseAge": "14 days",
   "description": [
     "Cooldown de supply chain: ninguna versión se adopta con menos de 14 días publicada (los compromisos de paquetes npm se detectan típicamente en horas/días). Las alertas de vulnerabilidad sí pueden saltarse el cooldown (osvVulnerabilityAlerts).",
-    "`postUpgradeTasks` COMPENSA —no cura— el defecto por el que los PRs de Renovate nacen con el CI en rojo: su lockfile trae 156 refs `@esbuild/` contra las 234 de `main`, y `npm ci` aborta. Regenerar el lockfile despues del upgrade lo repara. MEDIDO el 2026-08-12 DENTRO de la imagen real del bot (`ghcr.io/renovatebot/renovate:43`, node 22.22.3 / npm 10.9.8) sobre el arbol exacto de la rama `renovate/npm-ajv-vulnerability`, que es la que reproduce el defecto: 156 antes, 234 despues, preservando el bump (ajv 8.20.0).",
-    "`installTools` NO es adorno: la imagen del bot trae `node` en `/usr/bin/node` pero NO trae `npm`, y sin esto el comando muere con `spawn npm ENOENT` y el unhandledRejection TUMBA LA CORRIDA ENTERA — o sea, apaga el control de supply chain, no solo el arreglo. Medido el 2026-08-12 (corrida 31596456516). `install-tool npm` solo tampoco sirve: falla con «parent tool not installed: node». Instalar `node` por containerbase trae npm 10.9.8 consigo, que es justamente el npm con el que se midieron las 234.",
-    "La version de `installTools` va PINEADA y exacta a proposito: containerbase rechaza los rangos («tool version not supported» con `^22.0.0` y con `>=22`, medido el 2026-08-12) — y el `renovate-config-validator` los acepta igual, porque valida forma, no semantica. Un rango aca pasaria el gate y moriria en la corrida. Al subir el node del proyecto, subir tambien esta version.",
-    "La CAUSA del defecto sigue sin identificar, y esta medición la acota: no es que npm pode las optional deps, porque el MISMO comando en el MISMO entorno produce 234. Renovate regenera el lockfile por otra vía. Si la divergencia produjera algo más allá de las optional deps de esbuild, esto lo enmascararía — no es peor que el workaround manual, solo automático.",
-    "`constraints.npm` acota el npm con que Renovate regenera el lockfile. NO resolvió el defecto: se midió y quedó refutado, igual que `binarySource=install`. Se deja porque es correcto e inocuo.",
-    "El comando de `postUpgradeTasks` NO corre si el administrador del bot no lo permite: `allowedCommands` es opción global-only (antes `allowedPostUpgradeCommands`) y se pasa por env en `.github/workflows/renovate.yml`. Lo podemos hacer por ser self-hosted; como GitHub App no se podría.",
-    "Los comentarios van ACÁ, en `description`, que es clave válida del esquema y acepta un array. Una clave inventada (p. ej. `_comentario_x`) invalida el archivo entero y Renovate DETIENE todos los PRs hasta que se corrija — ocurrió el 2026-08-11 (issue #170) y dejó sin efecto el propio flag que el comentario documentaba."
+    "`constraints.npm` fija el npm con que Renovate regenera el lockfile, y es LA CURA del defecto que hacía nacer en rojo todos sus PRs: su lockfile traía 156 referencias `@esbuild/` contra las 234 de `main`, y `npm ci` —que exige correspondencia exacta árbol↔lock— abortaba. AISLADO el 2026-08-13 con control limpio (mismo árbol, mismo comando, misma imagen, misma plataforma; solo cambia el npm): **npm 10.9.8 ⇒ 234 · npm 12.0.2 ⇒ 156**. npm 12 poda las optional deps de otras plataformas; 10.9.8 no.",
+    "Por qué el `>=10` anterior NO servía y se dio por «refutado» durante días: `>=10` PERMITE npm 12, que es justo la versión que rompe. El constraint era correcto en intención y estaba mal expresado — Renovate instalaba `npm 12.0.2` (visible en el log de la corrida 31719085575: `install-tool npm 12.0.2`), y ninguna medición local lo reprodujo porque todas se hicieron con el npm del repo, 10.9.8.",
+    "El `postUpgradeTasks` que compensaba esto se RETIRÓ al curar la causa. Corría de verdad (`Executed post-upgrade task`, corrida 31719085575) pero era inútil: Renovate lo ejecutaba con el mismo npm 12 que producía el defecto, así que regeneraba 156 otra vez. Con la causa curada, una compensación que enmascara es deuda, no red de seguridad.",
+    "Los comentarios van ACÁ, en `description`, que es clave válida del esquema y acepta un array. Una clave inventada (p. ej. `_comentario_x`) invalida el archivo entero y Renovate DETIENE todos los PRs hasta que se corrija — ocurrió el 2026-08-11 (issue #170) y dejó sin efecto el propio flag que el comentario documentaba.",
+    "El `renovate-config-validator` verifica FORMA, no SEMÁNTICA: acepta valores que la corrida rechaza (p. ej. rangos en `installTools`, «tool version not supported»). Correrlo antes de commitear es obligatorio —atajó dos errores el 2026-08-12— pero pasarlo NO es prueba de que la corrida sobreviva."
   ],
   "osvVulnerabilityAlerts": true,
   "constraints": {
-    "npm": ">=10"
+    "npm": "^10.9.8"
   },
   "rangeStrategy": "bump",
   "labels": [
@@ -26,22 +24,11 @@
   ],
   "packageRules": [
     {
-      "description": "Solo los updates del manager npm regeneran el lockfile. Acotarlo importa: en una rama puramente de github-actions o docker el comando no tiene nada que hacer, y cada ejecucion de mas es superficie donde el control de supply chain puede caerse por una razon ajena (ver el ENOENT del 2026-08-12). Menos superficie, control mas robusto.",
-      "matchManagers": [
+      "description": "CANDADO, no preferencia: Renovate tiene pendiente «update npm tool constraint to v12» y mergearlo volveria a romper todos sus lockfiles. `allowedVersions` lo bloquea en la fuente, sin depender de que alguien recuerde rechazarlo.",
+      "matchPackageNames": [
         "npm"
       ],
-      "postUpgradeTasks": {
-        "commands": [
-          "npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
-        ],
-        "fileFilters": [
-          "package-lock.json"
-        ],
-        "installTools": {
-          "node": "22.22.3"
-        },
-        "executionMode": "branch"
-      }
+      "allowedVersions": "<11"
     }
   ]
 }
