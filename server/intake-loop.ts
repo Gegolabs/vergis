@@ -19,7 +19,10 @@
  *  3 ALERTAR  — dedup por transición, calcado del precedente verificado de `freshness-loop.ts`:
  *               hidratación del estado en el PRIMER TICK (no en el boot), persistencia SOLO en
  *               transición, parser fail-safe (`parseIntakeWatchState`). El aviso se COMPONE
- *               (`composeIntakeAlert`, #100) y sale por el puerto: el lazo NO conoce el canal.
+ *               (`composeIntakeAlert`, #100) y sale por el puerto: el lazo NO conoce el canal. El slot
+ *               que declara `watch: false` sale del estado SIN aviso de recuperación
+ *               (`retirarOptOut`): no sanó — lo callaron, y decir lo contrario entrena a desconfiar
+ *               de los «recuperado» verdaderos.
  *
  * La regla que este lazo existe para sostener: **un vigilante que confunde «no hay» con «no veo» es
  * peor que ninguno**. Por eso `'sin-medida'` sale por el MISMO canal que las demás alertas —no es un
@@ -142,6 +145,10 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       const nowIso = new Date(nowMs).toISOString()
       const slots = deps.slots()
       const vigilados = slots.filter((s) => watchConfigDe(s) != null)
+      // ANTES del corte por «cero vigilados»: el opt-out del ÚLTIMO slot vigilado es justamente el
+      // caso que dejaría su clave huérfana en el estado persistido, para emitir el «recuperado» falso
+      // más tarde, cuando algún slot vuelva a vigilarse.
+      await retirarOptOut(slots)
       if (!vigilados.length) return
 
       // ── Fase 1 · observar ────────────────────────────────────────────────────────────────────
@@ -411,6 +418,57 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
     return ctx
   }
 
+  /**
+   * Retiro SILENCIOSO del estado de alertas de los slots que declararon `watch: false` (diseño
+   * 009·§3.3), antes de cualquier diff de este tick.
+   *
+   * Sin esto el opt-out se leería como sanación: el slot sale de `vigilados`, deja de producir
+   * alertas, y `diffAlertState` —que decide la recuperación por AUSENCIA de la clave en el conjunto
+   * nuevo— emitiría `composeIntakeRecovery` por un problema que nadie resolvió. Un «recuperado» falso
+   * enseña a desconfiar de los verdaderos, que es exactamente lo que este frente combate.
+   *
+   * El slot AUSENTE de la config conserva la recuperación por ausencia (conducta vigente): acá solo
+   * se retiran los slots que están declarados Y declararon `watch: false`. La distinción es
+   * deliberada — quien borra el slot no dijo nada sobre su vigilancia; quien escribe `watch: false`
+   * sí, y dijo «no me vigiles», no «ya está sano».
+   *
+   * Se persiste solo si algo cambió, con el mismo criterio de transición del resto de la fase.
+   */
+  async function retirarOptOut(slots: IntakeSlot[]): Promise<void> {
+    // Sin `notify` la fase 3 está apagada entera: no se computa ni se persiste estado de alertas
+    // (invariante vigente), así que tampoco hay estado que retirar.
+    if (!deps.notify) return
+    const optOut = slots.filter((s) => s.watch === false)
+    if (!optOut.length) return
+    try {
+      if (!hydrated) {
+        alertState = parseIntakeWatchState(await deps.store.getSetting(INTAKE_WATCH_STATE_KEY))
+        hydrated = true
+      }
+      const next = { ...alertState }
+      let cambio = false
+      for (const s of optOut) {
+        if (s.id in next) {
+          delete next[s.id]
+          cambio = true
+        }
+      }
+      if (!cambio) return
+      // En memoria PRIMERO: si la escritura falla, el diff de este mismo tick tiene que ver el estado
+      // ya sin la clave —o emitiría el «recuperado» falso que esta función existe para evitar—. Una
+      // escritura fallida deja la clave vieja en el store hasta la próxima transición que se persista
+      // (o hasta el próximo arranque, donde esta misma función la retira sobre el estado hidratado):
+      // en ningún caso vuelve a la memoria del lazo vivo.
+      alertState = next
+      await deps.store.setSetting(INTAKE_WATCH_STATE_KEY, JSON.stringify(next), 'intake-watch')
+      deps.log(`intake-loop: ${optOut.map((s) => `'${s.id}'`).join(', ')} salió(eron) de la vigilancia (watch: false) — estado de alertas retirado sin aviso`)
+    } catch (e) {
+      // Un store que no responde no debe costar la observación del tick: se dice y se sigue. La fase 3
+      // volverá a intentar la hidratación y fallará ahí igual que antes de este frente.
+      deps.log(`intake-loop: no se pudo retirar el estado de alertas del opt-out — ${msg(e)}`)
+    }
+  }
+
   /** Umbrales del slot (§4.1). `null` = el slot NO se vigila. */
   function watchConfigDe(slot: IntakeSlot): SlotWatchConfig | null {
     return intakeWatchConfig(slot, pollMs)
@@ -547,19 +605,37 @@ const base = (p: string): string => String(p ?? '').replace(/^.*[/\\]/, '')
  * Umbrales de vigilancia de un slot (§4.1 del diseño), PURA y exportada para el tile del dashboard y
  * los tests.
  *
+ * Sin bloque `watch:` declarado (el caso de todo YAML previo a #161) los umbrales son los defaults
+ * del producto, sin cambio alguno:
+ *
  * - Slot con `trigger`: vigilado por edad con el default (la carga dispara la conversión, así que
  *   minutos después el landing debe drenar).
  * - Slot land-only: se vigila igual (la medida misma —`sin-medida`— no depende del ritmo de nadie),
  *   pero SIN edad máxima: el consumidor externo tiene su propio ritmo, que el producto no conoce, y
  *   un default inventado fabricaría varados falsos.
  *
- * [El bloque declarativo `watch:` por slot (§4.1: `max_age_minutes`, `max_run_minutes`, `watch:
- * false`) NO está implementado: `IntakeSlot` no lo declara y su parse no vive en este hito. Hasta que
- * exista, los umbrales son los defaults del producto y no hay opt-out por slot.]
+ * Con el bloque `watch:` declarado (§3.2 del diseño 009; el parse vive en `intake.ts`):
+ *
+ * - `watch: false` ⇒ `null`: el slot NO se vigila, y como TODO el tick se construye sobre esta
+ *   función (`vigilados`), el opt-out es total — sin observación, sin proyección refrescada, sin
+ *   control positivo, sin conteo del contrato `_logs/` y sin resolver de desenlaces (#162). Es la
+ *   decisión del diseño 009·§3.3, no un efecto colateral: el slot lento se declara con un
+ *   `max_age_minutes` alto, que conserva todo lo demás.
+ * - mapa ⇒ lo declarado SUSTITUYE al default, clave por clave; lo no declarado cae al default. Un
+ *   slot land-only que declara `max_age_minutes` gana la señal de varados que el default no le da
+ *   (el opt-in de edad de §4.1 del diseño 008).
+ *
+ * `maxRunMinutes` no declarado queda AUSENTE en vez de escrito con su default: quien lo consume
+ * (`classifySlot`) ya aplica `?? DEFAULT_MAX_RUN_MINUTES`, así que escribirlo acá sería copiar el
+ * default en dos lugares. Verificado en `intake-observability.ts` (`config.maxRunMinutes ??
+ * DEFAULT_MAX_RUN_MINUTES`), no supuesto.
  */
 export function intakeWatchConfig(slot: IntakeSlot, pollMs: number): SlotWatchConfig | null {
+  if (slot.watch === false) return null
   const cfg: SlotWatchConfig = { pollMs }
-  if (slot.trigger) cfg.maxAgeMinutes = DEFAULT_MAX_AGE_MINUTES
+  const maxAgeMinutes = slot.watch?.maxAgeMinutes ?? (slot.trigger ? DEFAULT_MAX_AGE_MINUTES : undefined)
+  if (maxAgeMinutes != null) cfg.maxAgeMinutes = maxAgeMinutes
+  if (slot.watch?.maxRunMinutes != null) cfg.maxRunMinutes = slot.watch.maxRunMinutes
   return cfg
 }
 

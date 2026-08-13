@@ -562,3 +562,191 @@ describe('intake-loop · contrato `_logs/` (#162·§5): de la medición al aviso
     expect(a.runLogs.listados).toBe(listados) // no se paga un listado por un slot que no se pudo observar
   })
 })
+
+// ─── El bloque `watch:` consumido por el lazo (#161 · diseño 009·H3) ────────────────────────────
+
+/**
+ * EMPALME H2 ↔ lazo: el parse de `intake.ts` produce `slot.watch` y NADIE lo consumía. Estos tests
+ * cruzan el empalme entero —de la declaración del slot a la conducta del tick y a lo que la consola
+ * ve— porque el modo de falla que este frente ya pagó una vez es justamente el cableado que cumple
+ * los dos contratos por separado y no se prueba en ninguna parte.
+ *
+ * La declaración entra por el arreglo VIVO de `slots()` (hot-reload, #50): los tests mutan el arreglo
+ * entre ticks, que es exactamente lo que hace un `slots.yaml` recargado en caliente.
+ */
+const estadoPersistido = async (a: Arnes): Promise<Record<string, string>> =>
+  JSON.parse((await a.store.getSetting(INTAKE_WATCH_STATE_KEY)) ?? '{}') as Record<string, string>
+
+describe('intake-loop · `watch:` declarado por slot', () => {
+  it('`watch: false` saca al slot del lazo COMPLETO: ni se observa, ni cuenta en el tile, ni tiene banner', async () => {
+    const a = await armar({ slots: [slotDe({ watch: false })] })
+    a.landing.listing = { kind: 'ok', entries: [archivo('atascado.xlsx', 300)] }
+    await a.loop.tick()
+
+    expect(a.landing.llamadas).toBe(0) // no se observa: el listado del landing jamás se pide
+    expect(await snap(a)).toBeUndefined() // no hay proyección que refrescar
+    expect(a.alerts).toHaveLength(0)
+    expect(summarizeIntakeWatch([slotDe({ watch: false })], await a.store.listSlotSnapshots(), POLL_MS, T0)).toEqual({
+      vigilados: 0,
+      enAlerta: 0,
+      sinMedir: 0,
+    })
+    // La consola vuelve a la página pre-#161 para ese slot: sin banner de vigilancia.
+    expect(slotVigilanciaDeProyeccion(slotDe({ watch: false }), undefined, POLL_MS, T0)).toBeNull()
+  })
+
+  it('`watch: false` apaga TAMBIÉN el resolver de desenlaces (#162): la misma carga se resuelve al re-optar-in', async () => {
+    const slots = [slotDe({ watch: false })]
+    const a = await armar({ slots })
+    const subidoA = new Date(T0 - 60 * 60_000).toISOString()
+    await a.store.recordUpload({
+      slotId: 'saldos',
+      filename: 'saldos.xlsx',
+      sha256: 'b'.repeat(64),
+      bytes: 1024,
+      uploadedBy: 'ana@cliente.cl',
+      uploadedAt: subidoA,
+      ok: true,
+      triggered: true,
+      origen: 'upload',
+    })
+    // Insumo suficiente para un desenlace: corrida completada DESPUÉS de la carga y archivo ya
+    // drenado del landing ⇒ `procesada` (contrato de ingesta #62/#63).
+    a.runs.records = [{ startedAt: new Date(T0 - 30 * 60_000).toISOString(), status: 'Completed' }]
+    a.landing.listing = { kind: 'ok', entries: [] }
+
+    await a.loop.tick()
+    expect(await a.store.listUploadsSinDesenlace('saldos', 10)).toHaveLength(1) // sigue sin desenlace
+
+    // Control positivo del test: el MISMO insumo, sin el opt-out, sí se resuelve. Sin esta mitad, el
+    // «no se resolvió» podría ser un insumo insuficiente y no el opt-out.
+    slots[0] = slotDe()
+    await a.loop.tick()
+    expect(await a.store.listUploadsSinDesenlace('saldos', 10)).toHaveLength(0)
+  })
+
+  it('el slot land-only gana la señal de varados declarando `max_age_minutes` (y sin declararla no la tiene)', async () => {
+    const { trigger: _t, ...landOnly } = slotDe()
+    const sinDeclarar = await armar({ slots: [landOnly as IntakeSlot] })
+    sinDeclarar.landing.listing = { kind: 'ok', entries: [archivo('viejo.xlsx', 600)] }
+    await sinDeclarar.loop.tick()
+    expect(sinDeclarar.alerts).toHaveLength(0) // conducta vigente: el ritmo del consumidor no se inventa
+
+    const declarado = await armar({ slots: [{ ...landOnly, watch: { maxAgeMinutes: 240 } } as IntakeSlot] })
+    declarado.landing.listing = { kind: 'ok', entries: [archivo('viejo.xlsx', 600)] }
+    await declarado.loop.tick()
+    expect(declarado.alerts).toHaveLength(1)
+    expect(declarado.alerts[0]!.data['reason']).toBe('varados')
+  })
+
+  it('el umbral declarado SUSTITUYE al default: con `max_age_minutes: 1440` un archivo de 3 h no alerta', async () => {
+    const a = await armar({ slots: [slotDe({ watch: { maxAgeMinutes: 1440 } })] })
+    a.landing.listing = { kind: 'ok', entries: [archivo('lento.xlsx', 180)] } // 3 h: pasado el default de 120
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(0)
+
+    // Y el umbral declarado SÍ corta donde dice: a las 25 h del aterrizaje, el mismo archivo alerta.
+    a.clock.ms = T0 + 25 * 60 * 60_000
+    await a.loop.tick()
+    expect(a.alerts.map((n) => n.data['reason'])).toEqual(['varados'])
+  })
+
+  it('`max_run_minutes` declarado sustituye al default de corrida colgada', async () => {
+    const colgada: RunRecord[] = [{ startedAt: new Date(T0 - 90 * 60_000).toISOString(), status: 'InProgress' }]
+
+    const conDefault = await armar()
+    conDefault.runs.records = colgada
+    await conDefault.loop.tick()
+    expect(conDefault.alerts.map((n) => n.data['reason'])).toEqual(['corrida-colgada']) // default de 60 min
+
+    const declarado = await armar({ slots: [slotDe({ watch: { maxRunMinutes: 240 } })] })
+    declarado.runs.records = colgada
+    await declarado.loop.tick()
+    expect(declarado.alerts).toHaveLength(0)
+  })
+
+  it('un slot SIN `watch:` conserva exactamente la conducta vigente (default de edad)', async () => {
+    const a = await armar()
+    a.landing.listing = { kind: 'ok', entries: [archivo('atascado.xlsx', 300)] }
+    await a.loop.tick()
+    expect(a.alerts.map((n) => n.data['reason'])).toEqual(['varados'])
+  })
+})
+
+describe('intake-loop · opt-out EN CALIENTE: se retira sin «recuperado» falso', () => {
+  it('el slot que alerta y pasa a `watch: false` sale del estado en SILENCIO; el slot BORRADO sí se recupera', async () => {
+    // El tercer slot ('testigo') se queda vigilado y en alerta a propósito: mantiene la fase ALERTAR
+    // corriendo, para que el silencio de 'saldos' sea una decisión del diff y no el corte temprano
+    // por «cero vigilados» (ese caso lo cubre el test siguiente).
+    const slots = [slotDe(), slotDe({ id: 'otro', label: 'Otro slot' }), slotDe({ id: 'testigo', label: 'Testigo' })]
+    const a = await armar({ slots })
+    a.landing.listing = { kind: 'ok', entries: [archivo('atascado.xlsx', 300)] }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(3)
+    expect(await estadoPersistido(a)).toEqual({ saldos: 'varados', otro: 'varados', testigo: 'varados' })
+
+    // Hot-reload: 'saldos' opta por salir; 'otro' DESAPARECE de la config. Los dos dejan de alertar,
+    // y el lazo tiene que distinguirlos — a uno lo callaron, el otro ya no existe.
+    slots[0] = slotDe({ watch: false })
+    slots.splice(1, 1)
+    await a.loop.tick()
+
+    // UNA sola notificación nueva, y es la recuperación por AUSENCIA de 'otro': 'saldos' no emite nada.
+    expect(a.alerts).toHaveLength(4)
+    expect(a.alerts[3]!.data['event']).toBe('intake-recovery')
+    expect(a.alerts[3]!.data['slotId']).toBe('otro')
+    // La clave del opt-out se retiró y se persistió; la del testigo sigue, porque su alerta sigue.
+    expect(await estadoPersistido(a)).toEqual({ testigo: 'varados' })
+    // Y el opt-out es total: en el segundo tick solo se observó al testigo (3 llamadas en el primero).
+    expect(a.landing.llamadas).toBe(4)
+  })
+
+  it('re-optar-in con el problema vigente vuelve a alertar (es una transición nueva, no un eco)', async () => {
+    const slots = [slotDe()]
+    const a = await armar({ slots })
+    a.landing.listing = { kind: 'ok', entries: [archivo('atascado.xlsx', 300)] }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+
+    slots[0] = slotDe({ watch: false })
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1) // silencio total: ni alerta ni «recuperado»
+    expect(await estadoPersistido(a)).toEqual({})
+
+    slots[0] = slotDe()
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(2)
+    expect(a.alerts[1]!.severity).toBe('warning')
+    expect(a.alerts[1]!.data['reason']).toBe('varados')
+    expect(await estadoPersistido(a)).toEqual({ saldos: 'varados' })
+  })
+
+  it('el opt-out del ÚLTIMO slot vigilado también retira su clave (no queda huérfana para un eco futuro)', async () => {
+    const slots = [slotDe()]
+    const a = await armar({ slots })
+    a.landing.listing = { kind: 'ok', entries: [archivo('atascado.xlsx', 300)] }
+    await a.loop.tick()
+    expect(await estadoPersistido(a)).toEqual({ saldos: 'varados' })
+
+    // Con cero slots vigilados el tick corta temprano: el retiro tiene que ocurrir ANTES de ese corte.
+    slots[0] = slotDe({ watch: false })
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1)
+    expect(await estadoPersistido(a)).toEqual({})
+
+    // La prueba de que la clave no quedó huérfana: un slot NUEVO y sano no arrastra el eco del viejo.
+    slots.push(slotDe({ id: 'nuevo', label: 'Nuevo slot' }))
+    a.landing.listing = { kind: 'ok', entries: [] }
+    await a.loop.tick()
+    expect(a.alerts).toHaveLength(1) // ningún «recuperado» por 'saldos'
+  })
+
+  it('sin canal de aviso el opt-out no toca el estado persistido (la fase 3 está apagada entera)', async () => {
+    const slots = [slotDe()]
+    const a = await armar({ slots, alertas: false })
+    await a.loop.tick()
+    slots[0] = slotDe({ watch: false })
+    await expect(a.loop.tick()).resolves.toBeUndefined()
+    expect(await a.store.getSetting(INTAKE_WATCH_STATE_KEY)).toBeNull()
+  })
+})
