@@ -247,3 +247,115 @@ describe('#161 · lote y estado persistido', () => {
     expect(parseIntakeWatchState('{"oc":"sin-medida"}')).toEqual({ oc: 'sin-medida' })
   })
 })
+
+/**
+ * Control positivo del DIRECTORIO (diseño 009·§4.2) — el único que NO necesita corte, y por eso el
+ * único que cubre al slot land-only contra la lente rota tipo 404 (la ceguera del incidente fundante
+ * de #161: `list` aplanaba el 404 a `[]` y una lectura «exitosa» concluía que nadie subió nada).
+ *
+ * Los dos controles negativos de este bloque son su razón de ser: uno protege al slot virgen de una
+ * acusación gratuita, y el otro FIJA la pérdida que el diseño acepta a propósito.
+ */
+describe('#161/009·§4.2 · control positivo del DIRECTORIO del landing', () => {
+  const landOnly: SlotWatchConfig = {} // sin maxAgeMinutes ni corridas: el caso land-only puro
+
+  it('landing ABSENTE + cargas vividas registradas ⇒ contradice-registro, sin corridas de por medio', () => {
+    const r = classifySlot(
+      {
+        slotId: 'ext',
+        obs: { slotId: 'ext', observedAt: hace(0), landing: [], landingAbsent: true },
+        registro: { cargasVividas: 2, ultimaCargaAt: hace(45) },
+      },
+      landOnly,
+      NOW,
+    )
+    expect(r.medida).toBe('contradice-registro')
+    expect(r.alertas.map((a) => a.reason)).toEqual(['contradice-registro'])
+    expect(r.alertas[0]!.landingAusente).toBe(true)
+    expect(r.alertas[0]!.ultimaCargaAt).toBe(hace(45))
+    // La alerta NO nombra archivos esperados: sin corte no hay predicción por-archivo que defender.
+    expect(r.alertas[0]!.esperados).toBeUndefined()
+  })
+
+  it('CONTROL NEGATIVO — slot VIRGEN: directorio ausente + cero cargas vividas ⇒ medida fresca y cero alertas', () => {
+    // El primer `put` crea el directorio: antes de la primera carga, «no existe» es el estado NORMAL
+    // de un slot recién declarado. Alertarlo sería una acusación gratuita.
+    const r = classifySlot(
+      { slotId: 'ext', obs: { slotId: 'ext', observedAt: hace(0), landing: [], landingAbsent: true }, registro: { cargasVividas: 0 } },
+      landOnly,
+      NOW,
+    )
+    expect(r.medida).toBe('fresca')
+    expect(r.alertas).toEqual([])
+  })
+
+  it('CONTROL NEGATIVO QUE FIJA UNA DECISIÓN (009·§4.3) — land-only con 200-vacío sobre directorio EXISTENTE: NO contradice, y así debe quedar', () => {
+    // Esta laguna está ACEPTADA Y DOCUMENTADA, no olvidada: en land-only, un directorio que existe y
+    // responde con lista vacía es indistinguible de «el consumidor externo drenó todo», porque el
+    // drenaje lo hace un actor invisible para la plataforma y no existe evento de consumo observable.
+    // Las tres variantes de corte evaluadas (visto-una-vez, ritmo declarado, evento de consumo)
+    // fabrican alertas falsas o exigen un contrato nuevo con un tercero — diseño 009·§4.1.
+    //
+    // Este test existe para que ese silencio no se «arregle» por descuido: si mañana alguien hace que
+    // un listado vacío con cargas vividas contradiga, este test se pone rojo y obliga a volver al
+    // diseño antes de emitir la primera alerta falsa. NO se relaja: se discute y se decide de nuevo.
+    const r = classifySlot(
+      {
+        slotId: 'ext',
+        obs: { slotId: 'ext', observedAt: hace(0), landing: [] }, // ok y vacío: SIN `landingAbsent`
+        registro: { cargasVividas: 7, ultimaCargaAt: hace(90) },
+      },
+      landOnly,
+      NOW,
+    )
+    expect(r.medida).toBe('fresca')
+    expect(r.alertas).toEqual([])
+  })
+
+  it('sobre un directorio desmentido no se clasifica el landing (invariante 2): cero varados', () => {
+    // Insumo defensivo: un listado con archivos viejos junto a la marca de ausencia no puede sostener
+    // ninguna conclusión — el listado ya está desmentido.
+    const r = classifySlot(
+      {
+        slotId: 'oc',
+        obs: { slotId: 'oc', observedAt: hace(0), landing: [file('Files/intake/oc/viejo.xlsx', 900)], landingAbsent: true },
+        registro: { cargasVividas: 1, ultimaCargaAt: hace(120) },
+      },
+      CFG,
+      NOW,
+    )
+    expect(r.alertas.map((a) => a.reason)).toEqual(['contradice-registro'])
+    expect(r.alertas.some((a) => a.reason === 'varados')).toBe(false)
+  })
+
+  it('ausencia del directorio + esperados por-archivo ⇒ UNA sola alerta con las DOS evidencias', () => {
+    const r = classifySlot(
+      {
+        slotId: 'oc',
+        obs: { slotId: 'oc', observedAt: hace(0), landing: [], landingAbsent: true, runs: [] },
+        expected: ['f.xlsx'],
+        registro: { cargasVividas: 1, ultimaCargaAt: hace(30) },
+      },
+      CFG,
+      NOW,
+    )
+    expect(r.alertas).toHaveLength(1)
+    expect(r.alertas[0]!.esperados).toEqual(['f.xlsx'])
+    expect(r.alertas[0]!.landingAusente).toBe(true)
+  })
+
+  it('una lectura FALLIDA no dispara el control del directorio: no medir no es medir 404', () => {
+    const r = classifySlot(
+      {
+        slotId: 'ext',
+        obs: { slotId: 'ext', observedAt: hace(0), error: 'onelake: 500' },
+        projection: { observedAt: hace(5), landing: [] },
+        registro: { cargasVividas: 3 },
+      },
+      landOnly,
+      NOW,
+    )
+    expect(r.medida).toBe('ultima-conocida')
+    expect(r.alertas.some((a) => a.reason === 'contradice-registro')).toBe(false)
+  })
+})

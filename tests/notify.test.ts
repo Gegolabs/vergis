@@ -9,6 +9,7 @@ import {
   renderEmailText,
   composeFreshnessAlert,
   composeFreshnessRecovery,
+  composeIntakeAlert,
   fmtDur,
   type FetchLike,
   type Notification,
@@ -424,5 +425,40 @@ describe("notify · flujo 'cargas-usuario' y el token $uploader (#162·§6.3)", 
     await fanout(sinks, aviso, (l) => void logs.push(l))
     expect(capt).toEqual([])
     expect(logs[0]).toContain('uploadedBy')
+  })
+})
+
+describe('#161/009·§4.2 · el aviso del directorio ausente afirma el hecho, nunca la causa', () => {
+  const ctx = {
+    slotId: 'ext',
+    slotLabel: 'Extractos',
+    domainId: 'cartera',
+    domainLabel: 'Cartera',
+    reason: 'contradice-registro' as const,
+    medida: 'contradice-registro' as const,
+    baseUrl: BASE,
+  }
+
+  it('con landingAusente redacta el 404 y la última carga registrada; sin nombrar permisos, borrado ni path', () => {
+    const n = composeIntakeAlert({ ...ctx, landingAusente: true, ultimaCargaAt: '2026-08-13T09:00:00.000Z' })
+    const cuerpo = n.lines.join('\n')
+    expect(cuerpo).toContain('el directorio del landing NO EXISTE')
+    expect(cuerpo).toContain('2026-08-13T09:00:00.000Z')
+    expect(cuerpo).toContain('NO se concluye «nadie subió nada»')
+    // La doctrina del frente: se afirma la contradicción observada, jamás su causa.
+    expect(cuerpo).not.toMatch(/permiso|borrado|path mal configurado/i)
+    expect(n.data['landingAusente']).toBe(true)
+  })
+
+  it('sin fecha usable la línea se emite igual: la evidencia es la carga, no su reloj', () => {
+    const n = composeIntakeAlert({ ...ctx, landingAusente: true })
+    expect(n.lines.some((l) => l.includes('el directorio del landing NO EXISTE'))).toBe(true)
+    expect(n.data['ultimaCargaAt']).toBeNull()
+  })
+
+  it('una contradicción por-archivo NO inventa la línea del directorio', () => {
+    const n = composeIntakeAlert({ ...ctx, esperados: ['f.xlsx'] })
+    expect(n.lines.some((l) => l.includes('directorio del landing'))).toBe(false)
+    expect(n.data['landingAusente']).toBe(false)
   })
 })

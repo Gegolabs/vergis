@@ -457,6 +457,11 @@ export interface IntakeAlertContext {
   varados?: ArchivoVarado[]
   /** `contradice-registro`: los archivos que el registro esperaba ver y el listado no trajo. */
   esperados?: string[]
+  /** `contradice-registro` por el DIRECTORIO (diseño 009·§4.2): el landing respondió que NO EXISTE
+   *  y la plataforma tiene registradas cargas ok en él. */
+  landingAusente?: true
+  /** ISO de la última carga vivida registrada, evidencia de la escritura propia. */
+  ultimaCargaAt?: string
   /** `corrida-fallida` / `corrida-colgada`: la corrida en cuestión (base del enlace profundo). */
   run?: RunRecord
   /** Error de la lectura que falló (toda alerta emitida sobre lo último conocido lo lleva). */
@@ -493,6 +498,17 @@ export function composeIntakeAlert(ctx: IntakeAlertContext): Notification {
   if (ctx.reason === 'sin-medida')
     lines.push(`el vigilante lleva ${SIN_MEDIDA_TICKS} ticks o más sin poder observar este slot: lo que muestre la consola es lo último conocido, no el estado de ahora`)
   for (const v of ctx.varados ?? []) lines.push(`varado: ${v.file} (en el landing hace ${fmtDur(v.ageMinutes * 60)})`)
+  if (ctx.landingAusente) {
+    // Solo HECHOS observados: el 404 de ahora y las cargas que esta plataforma registró haber puesto
+    // ahí. La causa (permisos del directorio, borrado, path reconfigurado) NO se nombra: la
+    // plataforma no la sabe, y nombrar una causa no medida sería inventarla.
+    lines.push(
+      ctx.ultimaCargaAt
+        ? `el directorio del landing NO EXISTE, y la plataforma registró cargas suyas en él (la última: ${ctx.ultimaCargaAt})`
+        : 'el directorio del landing NO EXISTE, y la plataforma registró cargas suyas en él',
+    )
+    lines.push('NO se concluye «nadie subió nada»: lo que se contradice es el registro de la propia plataforma — hay que averiguar por qué')
+  }
   if (ctx.esperados?.length) {
     lines.push(`el registro de cargas esperaba en el landing: ${ctx.esperados.join(', ')}`)
     // La alerta afirma la CONTRADICCIÓN, jamás su causa (permisos, borrado a mano, path mal
@@ -530,6 +546,8 @@ export function composeIntakeAlert(ctx: IntakeAlertContext): Notification {
       medida: ctx.medida,
       varados: (ctx.varados ?? []).map((v) => ({ file: v.file, ageMinutes: v.ageMinutes })),
       esperados: ctx.esperados ?? [],
+      landingAusente: ctx.landingAusente === true,
+      ultimaCargaAt: ctx.ultimaCargaAt ?? null,
       lastError: ctx.lastError ?? null,
       domainId: ctx.domainId ?? null,
     },

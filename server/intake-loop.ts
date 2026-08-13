@@ -199,8 +199,9 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
             const input: SlotWatchInput = { slotId: obs.slotId, obs }
             const proj = proyeccion.get(obs.slotId)
             if (proj) input.projection = proj
-            const esperados = await controlPositivo(slot, obs)
-            if (esperados.length) input.expected = esperados
+            const { expected, registro } = await insumosDelRegistro(slot, obs)
+            if (expected.length) input.expected = expected
+            if (registro) input.registro = registro
             return { input, config: watchConfigDe(slot)! }
           }),
         )
@@ -235,9 +236,11 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
         slot.trigger && deps.runs ? deps.runs(slot) : Promise.resolve(undefined),
       ])
       // `absent` (el directorio del landing NO existe) se observa como listado VACÍO, no como error:
-      // no hubo fallo de lectura. El caso peligroso —que el registro prediga archivos ahí— lo atrapa
-      // el control positivo, que lo clasifica como contradicción y no como «landing vacío».
+      // no hubo fallo de lectura. Pero se MARCA (`landingAbsent`), porque «no existe» y «existe
+      // vacío» no son el mismo hecho: con cargas vividas registradas, el 404 contradice lo que la
+      // plataforma escribió ella misma, y ese control no necesita corridas (diseño 009·§4.2).
       const obs: SlotObservation = { slotId: slot.id, observedAt, landing: listing.kind === 'ok' ? listing.entries : [] }
+      if (listing.kind === 'absent') obs.landingAbsent = true
       if (runs) obs.runs = runs
       return obs
     } catch (e) {
@@ -277,30 +280,65 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
   }
 
   /**
-   * Control positivo de §3.3: qué archivos DEBERÍA traer el listado según el registro de cargas.
+   * Los DOS insumos que el registro de cargas (#62) le da al control positivo, en UNA sola lectura
+   * por slot y por tick.
    *
-   * Solo se computa cuando este tick leyó las corridas del slot (`obs.runs` presente). Sin ellas no
-   * hay CORTE —la última corrida `Completed`, que archivó a `_processed/` lo procesado— y entonces
-   * toda carga histórica seguiría «esperándose» para siempre: el primer drenaje legítimo produciría
-   * una contradicción falsa. Vale para el slot land-only y para la instancia sin motor cableado.
-   * [Es una restricción de ESTE hito sobre §3.3 del diseño, que pide el control también en land-only;
-   * sin corte no existe predicción defendible, y una alerta falsa de «lente rota» es exactamente el
-   * ruido que #161 quiere evitar.]
+   * `expected` — control POR-ARCHIVO (§3.3): qué archivos debería traer el listado. Solo se computa
+   * cuando este tick leyó las corridas del slot (`obs.runs` presente), porque sin ellas no hay CORTE
+   * —la última corrida `Completed`, que archivó a `_processed/` lo procesado— y toda carga histórica
+   * seguiría «esperándose» para siempre: el primer drenaje legítimo produciría una contradicción
+   * falsa. Es la DECISIÓN DE DISEÑO del frente (009·§4.1), no una restricción de la implementación:
+   * se evaluaron tres cortes alternativos para land-only —visto-una-vez, ritmo declarado
+   * (`max_age_minutes`), evento de consumo— y los tres fabrican alertas falsas o exigen un contrato
+   * nuevo con un actor externo. En land-only el drenaje está en manos de un actor invisible para la
+   * plataforma: sin evento observable de consumo no hay predicción defendible sobre la PRESENCIA de
+   * archivos.
+   *
+   * `registro` — control del DIRECTORIO (009·§4.2): cuántas cargas ok vivió el slot y cuándo fue la
+   * última. Este SÍ se computa para todo slot con observación fresca, con corridas o sin ellas: no
+   * predice qué archivos hay (nadie puede), solo que la plataforma escribió en ese directorio — y un
+   * consumidor consume archivos, no directorios.
+   *
+   * CONJETURA C8, acotada desde el código y no saldada: `deps.uploads` trae un TOPE de filas (el
+   * wiring de instancia pide 200, `serve-rls.ts:1366`) sobre `listUploads`, que ordena
+   * `uploaded_at DESC, id DESC` (verificado, `governance-store.ts:1514–1518`). O sea: el predicado
+   * `cargasVividas ≥ 1` solo se equivoca si las 200 filas MÁS RECIENTES del slot fueran todas
+   * rechazadas o `retro`, con cargas ok más viejas fuera del tope. El modo de falla es un FALSO
+   * NEGATIVO —el control calla— y nunca una alerta falsa. Medirlo exige datos de instancia, no de
+   * este repo: queda como gate de despliegue.
    */
-  async function controlPositivo(slot: IntakeSlot, obs: SlotObservation): Promise<string[]> {
-    if (obs.error != null || obs.runs == null || !deps.uploads) return []
+  async function insumosDelRegistro(slot: IntakeSlot, obs: SlotObservation): Promise<InsumosRegistro> {
+    if (obs.error != null || !deps.uploads) return { expected: [] }
     try {
       const cargas = await deps.uploads(slot.id)
-      if (!cargas.length) return []
+      // `ok = false` es una subida RECHAZADA: nunca aterrizó, así que no prueba escritura alguna en
+      // el directorio. (El wiring de instancia ya filtra `origen === 'upload' && ok`; se vuelve a
+      // filtrar acá porque el contrato de `deps.uploads` es el tipo, no ese wiring.)
+      const vividas = cargas.filter((c) => c?.ok)
+      const out: InsumosRegistro = { expected: [] }
+      if (vividas.length) {
+        const registro: { cargasVividas: number; ultimaCargaAt?: string } = { cargasVividas: vividas.length }
+        const ultima = vividas
+          .filter((c) => Number.isFinite(Date.parse(c.uploadedAt)))
+          .reduce<CargaRegistrada | null>((max, c) => (max == null || Date.parse(c.uploadedAt) > Date.parse(max.uploadedAt) ? c : max), null)
+        // La fecha se copia TAL CUAL vino del registro; sin fecha parseable el campo queda ausente
+        // (la contradicción se sostiene igual: la evidencia es la carga, no su reloj).
+        if (ultima) registro.ultimaCargaAt = ultima.uploadedAt
+        out.registro = registro
+      }
+      if (obs.runs == null || !cargas.length) return out
       // `null` = no se pudo saber qué se retiró. Sin ese descuento la predicción incluiría archivos
-      // que un humano sacó a propósito: apagar el control es preferible a acusar una contradicción
-      // que no existe.
+      // que un humano sacó a propósito: apagar el control POR-ARCHIVO es preferible a acusar una
+      // contradicción que no existe. No apaga el del directorio: retirar un archivo del landing es
+      // un `remove` de ESE path (verificado, `intake-onelake.ts:206` — DELETE sobre el archivo), que
+      // no borra el directorio.
       const retiros = deps.retiros ? await deps.retiros(slot) : []
-      if (retiros == null) return []
-      return expectedInLanding(cargas, obs.runs, retiros)
+      if (retiros == null) return out
+      out.expected = expectedInLanding(cargas, obs.runs, retiros)
+      return out
     } catch (e) {
       deps.log(`intake-loop: control positivo de '${slot.id}' no disponible — ${msg(e)}`)
-      return []
+      return { expected: [] }
     }
   }
 
@@ -394,6 +432,8 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
     const out: Evidencia = { reason: a.reason, medida: a.medida }
     if (a.varados) out.varados = a.varados
     if (a.esperados) out.esperados = a.esperados
+    if (a.landingAusente) out.landingAusente = true
+    if (a.ultimaCargaAt != null) out.ultimaCargaAt = a.ultimaCargaAt
     if (a.run) out.run = a.run
     if (a.lastError != null) out.lastError = a.lastError
     return out
@@ -478,7 +518,15 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
 }
 
 /** Lo que la alerta clasificada aporta al aviso compuesto. */
-type Evidencia = Pick<IntakeAlertContext, 'reason' | 'medida' | 'varados' | 'esperados' | 'run' | 'lastError'>
+type Evidencia = Pick<IntakeAlertContext, 'reason' | 'medida' | 'varados' | 'esperados' | 'landingAusente' | 'ultimaCargaAt' | 'run' | 'lastError'>
+
+/** Los dos insumos que el registro de cargas le da a la clasificación de un slot. */
+interface InsumosRegistro {
+  /** Control por-archivo (§3.3): vacío = no se computó o el registro no predice nada. */
+  expected: string[]
+  /** Control del directorio (009·§4.2): ausente = el slot no tiene cargas vividas registradas. */
+  registro?: { cargasVividas: number; ultimaCargaAt?: string }
+}
 
 /** Cargas sin desenlace que se intentan resolver por slot y por vuelta. No es una política: es el
  *  tope del lote de una vuelta — lo que no entra, entra en la siguiente. */
