@@ -13,6 +13,30 @@
  * el script arranca DESPUÉS del startTimeUtc del job instance y escribe ANTES de (o apenas tras)
  * su endTimeUtc — los márgenes absorben cola/boot/skew. [Los márgenes contra motor vivo: gate
  * manual del despliegue; sin confirmar aún.]
+ *
+ * GRAMÁTICA POR-ARCHIVO (issue #162, lado escritor). Lo de arriba hace que el log EXISTA y sea
+ * atribuible a una corrida; esto hace que su causa sea atribuible a un ARCHIVO. Por cada archivo
+ * de datos que la corrida encontró en el landing, el log lleva EXACTAMENTE UNA línea de desenlace,
+ * con el prefijo de canal `[intake]` y el marcador de la familia ya normativa (`✖`, `⚠`, `✔`):
+ *
+ *     [intake] ✔ procesado: <archivo>
+ *     [intake] ⚠ saltado: <archivo> — <motivo>
+ *     [intake] ✖ fallido: <archivo> — <motivo>
+ *
+ * El `<archivo>` es el basename tal como aterrizó. El `<motivo>` es UNA línea, autocontenida y en
+ * términos del dato — qué se esperaba y qué se encontró («ancho inesperado: 28 columnas (se
+ * esperaban 48)») —, sin jerga del motor ni stack traces: el resto del log sigue siendo libre y es
+ * donde eso vive. El motivo llega TEXTUAL al usuario que subió el archivo, así que la legibilidad
+ * es obligación del escritor: el producto no parafrasea ni fabrica causas que nadie declaró.
+ *
+ * ORDEN: las líneas de desenlace van ANTES de la línea de cierre del aborto (`✖ ABORTADO` /
+ * `✖ ERROR no controlado`), que sigue siendo la ÚLTIMA `✖` del log — así el titular de la corrida
+ * (`diagnosticoDeFalla`, que se queda con la última `✖`) sigue siendo el de la corrida y no el del
+ * último archivo. Es un requisito del escritor, no una preferencia de estilo.
+ *
+ * Un log sin estas líneas sigue siendo válido: el producto degrada al desenlace por corrida y DICE
+ * que el job no declaró desenlace por archivo. El contrato completo, citable a la instancia que
+ * escribe los jobs, vive en `docs/contrato-ingesta-logs.md`.
  */
 import type { OneLakeEntry } from './intake-onelake'
 import type { RunRecord } from './ingestion-observability'
@@ -113,4 +137,68 @@ const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.-]+/g
 export function redactSecrets(text: string): string {
   if (!text) return text
   return text.replace(JWT_RE, REDACTADO).replace(PAR_RE, (_m, k: string, sep: string) => `${k}${sep}${REDACTADO}`)
+}
+
+/** Desenlace que el job declaró para UN archivo del landing (gramática por-archivo, issue #162). */
+export type FileOutcome = {
+  /** Basename tal como el job lo nombró (si escribió un path, se toma el basename). */
+  file: string
+  outcome: 'procesado' | 'saltado' | 'fallido'
+  /** Motivo textual del job. Ausente si el job no lo declaró — la ausencia se dice, no se rellena. */
+  motivo?: string
+}
+
+/** Marcador ↔ palabra: el par tiene que calzar. Un `✔ fallido:` no es del contrato, es ruido. */
+const OUTCOME_POR_MARCADOR: Record<string, FileOutcome['outcome']> = {
+  '✔': 'procesado',
+  '⚠': 'saltado',
+  '✖': 'fallido',
+}
+
+/** `<marcador> <palabra>: <resto>`, ya sin prefijos de canal. El selector de variación es opcional:
+ *  el emisor que use la forma emoji del marcador (⚠️) lo escribe detrás. */
+const OUTCOME_RE = /^(✔|⚠|✖)️?\s+(procesado|saltado|fallido)\s*:\s*(.+)$/
+
+/** Separador archivo↔motivo: raya (U+2014). El corte es en la PRIMERA — el motivo puede traer más. */
+const SEP_MOTIVO = '—'
+
+/**
+ * Desenlaces por archivo declarados en el texto de un log de corrida — PURO, sin IO.
+ *
+ * Reglas, todas por el mismo principio: una línea que no calza la gramática NO EXISTE (jamás se
+ * adivina un desenlace a partir de texto libre — fabricar causas es el defecto que este contrato
+ * existe para cerrar).
+ *
+ * - Prefijos de canal adicionales se toleran y se descartan (`[ingest] [intake] ✔ …`), igual que en
+ *   `diagnosticoDeFalla` de `admin-cargas.ts`; el `[intake]` del contrato es uno de ellos.
+ * - El par marcador↔palabra debe calzar, y la palabra va en minúsculas exactas.
+ * - `saltado`/`fallido` sin motivo SÍ cuentan: el desenlace es un hecho observado y perderlo sería
+ *   peor que reportarlo sin causa — queda con `motivo` ausente, y quien lo presente dice que el job
+ *   no lo declaró. En `procesado` el motivo no es parte de la gramática y se ignora si aparece.
+ * - Dos líneas para el mismo archivo: gana la ÚLTIMA (un reintento dentro de la misma corrida
+ *   declara su resultado final); el orden de salida es el de la primera aparición de cada archivo.
+ * - El motivo se devuelve TEXTUAL: pasa por `redactSecrets` al RENDERIZAR, no acá — un parser que
+ *   redacta impide comparar con la fuente.
+ */
+export function parseRunFileOutcomes(logText: string): FileOutcome[] {
+  if (!logText) return []
+  const orden: string[] = []
+  const porArchivo = new Map<string, FileOutcome>()
+  for (const raw of String(logText).split('\n')) {
+    const linea = raw.replace(/^\s*(?:\[[^\]]*\]\s*)*/, '').trim()
+    const m = OUTCOME_RE.exec(linea)
+    if (!m) continue
+    const [, marcador, palabra, resto] = m as unknown as string[]
+    const outcome = OUTCOME_POR_MARCADOR[marcador!]
+    if (!outcome || outcome !== palabra) continue
+    const corte = resto!.indexOf(SEP_MOTIVO)
+    const file = (corte >= 0 ? resto!.slice(0, corte) : resto!).trim().replace(/^.*[/\\]/, '')
+    if (!file) continue
+    const motivo = corte >= 0 ? resto!.slice(corte + SEP_MOTIVO.length).trim() : ''
+    const fo: FileOutcome = { file, outcome }
+    if (motivo && outcome !== 'procesado') fo.motivo = motivo
+    if (!porArchivo.has(file)) orden.push(file)
+    porArchivo.set(file, fo)
+  }
+  return orden.map((f) => porArchivo.get(f)!)
 }

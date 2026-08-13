@@ -6,9 +6,11 @@ import {
   parseRunLogTimestamp,
   resolveRunLog,
   redactSecrets,
+  parseRunFileOutcomes,
   type OneLakeEntry,
   type RunRecord,
 } from '@vergis/capabilities'
+import { diagnosticoDeFalla } from '../server/admin-cargas'
 
 const entry = (path: string, size = 100): OneLakeEntry => ({ path, isDirectory: false, size, lastModified: '2026-08-06T10:00:00.000Z' })
 
@@ -133,5 +135,89 @@ describe('run-logs · redactSecrets (D9)', () => {
   it('NO toca conteos ni texto normal del log', () => {
     const log = "DELETE fct_saldos WHERE semana='W28': 7580 filas\nINSERT: 7626 filas\n✖ ABORTADO: archivo sin filas de datos"
     expect(redactSecrets(log)).toBe(log)
+  })
+})
+
+// ─── Gramática por-archivo del contrato `_logs/` (issue #162) ──────────────
+describe('run-logs · parseRunFileOutcomes (gramática por-archivo, #162)', () => {
+  it('parsea las tres formas, con y sin prefijos de canal extra', () => {
+    const log = [
+      '[intake] ✔ procesado: cartera_2026W28.xlsx',
+      '[ingest] [intake] ⚠ saltado: temporal.xlsx — hoja «Resumen» sin datos',
+      '✖ fallido: ancho_malo.xlsx — ancho inesperado: 28 columnas (se esperaban 48)',
+    ].join('\n')
+    expect(parseRunFileOutcomes(log)).toEqual([
+      { file: 'cartera_2026W28.xlsx', outcome: 'procesado' },
+      { file: 'temporal.xlsx', outcome: 'saltado', motivo: 'hoja «Resumen» sin datos' },
+      { file: 'ancho_malo.xlsx', outcome: 'fallido', motivo: 'ancho inesperado: 28 columnas (se esperaban 48)' },
+    ])
+  })
+
+  it('línea que no calza la gramática NO existe: texto libre, par marcador↔palabra cruzado, case', () => {
+    const log = [
+      '[ingest] ▶ inicio',
+      'procesando cartera.xlsx…',
+      '[intake] ✔ fallido: cruzado.xlsx — el marcador no calza con la palabra',
+      '[intake] ✖ FALLIDO: mayusculas.xlsx — la palabra va en minúsculas',
+      '[intake] ✖ fallido:   — sin nombre de archivo',
+      '[intake] ✖ ABORTADO: archivo sin filas de datos (1 filas)',
+    ].join('\n')
+    expect(parseRunFileOutcomes(log)).toEqual([])
+  })
+
+  it('el motivo puede traer más rayas: el corte es en la primera', () => {
+    const log = '[intake] ✖ fallido: x.xlsx — ancho inesperado — 28 columnas — se esperaban 48'
+    expect(parseRunFileOutcomes(log)).toEqual([
+      { file: 'x.xlsx', outcome: 'fallido', motivo: 'ancho inesperado — 28 columnas — se esperaban 48' },
+    ])
+  })
+
+  it('tolera el marcador en forma emoji, toma el basename si vino con path, y no exige motivo', () => {
+    const log = [
+      '[intake] ⚠️ saltado: Files/landing/cartera/viejo.xlsx — ya cargado en una corrida anterior',
+      '[intake] ✖ fallido: mudo.xlsx',
+    ].join('\n')
+    expect(parseRunFileOutcomes(log)).toEqual([
+      { file: 'viejo.xlsx', outcome: 'saltado', motivo: 'ya cargado en una corrida anterior' },
+      { file: 'mudo.xlsx', outcome: 'fallido' },
+    ])
+  })
+
+  it('dos líneas del mismo archivo: gana la última; el orden es el de la primera aparición', () => {
+    const log = [
+      '[intake] ✖ fallido: a.xlsx — timeout al abrir',
+      '[intake] ✔ procesado: b.xlsx',
+      '[intake] ✔ procesado: a.xlsx',
+    ].join('\n')
+    expect(parseRunFileOutcomes(log)).toEqual([
+      { file: 'a.xlsx', outcome: 'procesado' },
+      { file: 'b.xlsx', outcome: 'procesado' },
+    ])
+  })
+
+  it('log vacío o sin gramática ⇒ [] (el producto degrada al desenlace por corrida)', () => {
+    expect(parseRunFileOutcomes('')).toEqual([])
+    expect(parseRunFileOutcomes('[ingest] ▶ inicio\n[ingest] ✔ DONE commit: 10 filas')).toEqual([])
+  })
+})
+
+describe('run-logs · la gramática convive con el titular de la corrida (sin regresión de #85)', () => {
+  /** El log del incidente de #162: líneas por archivo ANTES del cierre del aborto, como manda el contrato. */
+  const LOG_INCIDENTE = [
+    '[ingest] ▶ inicio',
+    '[intake] ✔ procesado: cartera_2026W27.xlsx',
+    '[intake] ✖ fallido: cartera_2026W28.xlsx — ancho inesperado: 28 columnas (se esperaban 48)',
+    '[ingest] ✖ ABORTADO: archivo sin filas de datos (1 filas)',
+  ].join('\n')
+
+  it('los desenlaces por archivo salen completos', () => {
+    expect(parseRunFileOutcomes(LOG_INCIDENTE)).toEqual([
+      { file: 'cartera_2026W27.xlsx', outcome: 'procesado' },
+      { file: 'cartera_2026W28.xlsx', outcome: 'fallido', motivo: 'ancho inesperado: 28 columnas (se esperaban 48)' },
+    ])
+  })
+
+  it('diagnosticoDeFalla sigue devolviendo el titular DE LA CORRIDA, no el del último archivo', () => {
+    expect(diagnosticoDeFalla(LOG_INCIDENTE)).toBe('✖ ABORTADO: archivo sin filas de datos (1 filas)')
   })
 })
