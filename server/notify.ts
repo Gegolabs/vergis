@@ -12,9 +12,11 @@
  */
 import { readFileSync } from 'node:fs'
 import {
+  redactSecrets,
   requireRootKey,
   SIN_MEDIDA_TICKS,
   type ArchivoVarado,
+  type CargaDesenlace,
   type MedidaCalidad,
   type ProcessHealth,
   type RunRecord,
@@ -51,7 +53,16 @@ export type NotifyDestinationType = 'slack-webhook' | 'webhook' | 'email-smtp'
  * A qué FLUJO se suscribe un destino (issue #102). El routing por tipo de mensaje vive en la CONFIG
  * y se aplica en el WIRING (`forEvent`): el `Notification` sigue sin saber por dónde sale.
  */
-export type NotifyEvent = 'alerts' | 'reports'
+export type NotifyEvent = 'alerts' | 'reports' | 'cargas-usuario'
+
+/**
+ * Token del destinatario en el `to` de un destino email suscrito a `'cargas-usuario'` (#162·§6.3):
+ * el wiring lo sustituye, POR AVISO, por el email de quien subió el archivo (`data.uploadedBy`). Las
+ * direcciones literales que acompañen al token quedan como copia operativa.
+ *
+ * Existe porque el destinatario de este flujo NO es declarable en la config: cambia con cada carga.
+ */
+export const UPLOADER_TOKEN = '$uploader'
 
 export interface WebhookDestination {
   id: string
@@ -103,7 +114,7 @@ export interface NotifyConfig {
 }
 
 const TIPOS: NotifyDestinationType[] = ['slack-webhook', 'webhook', 'email-smtp']
-const EVENTOS: NotifyEvent[] = ['alerts', 'reports']
+const EVENTOS: NotifyEvent[] = ['alerts', 'reports', 'cargas-usuario']
 const TLS_MODOS = ['starttls', 'implicit', 'none'] as const
 const WEEKDAYS: ReportWeekday[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 
@@ -141,6 +152,24 @@ export function parseNotifyConfig(doc: unknown): NotifyConfig {
   if (report && !suscritos.length) throw new Error("notify: report declarado pero ningún destino se suscribe a 'reports'.")
   if (!report && suscritos.length) throw new Error(`notify: el destino '${suscritos[0]!.id}' se suscribe a 'reports' pero no hay bloque report.`)
 
+  // Validación cruzada del flujo al USUARIO (#162·§6.3), fail-closed en el BOOT y no en el envío: el
+  // destinatario de este flujo es individual y se resuelve por aviso, así que una config que no lo
+  // permite se descubriría recién la noche que a alguien le falla una carga y el correo no sale.
+  for (const d of destinations) {
+    const suscrito = d.events.includes('cargas-usuario')
+    // Un canal COMPARTIDO no es «el usuario»: mandar ahí el aviso personal lo publica al equipo entero.
+    if (suscrito && d.type === 'slack-webhook')
+      throw new Error(`notify: el destino '${d.id}' se suscribe a 'cargas-usuario', que va dirigido a UNA persona; un canal Slack compartido no es un destinatario individual (usa email-smtp con ${UPLOADER_TOKEN}, o webhook).`)
+    if (d.type !== 'email-smtp') continue
+    const conToken = d.to.includes(UPLOADER_TOKEN)
+    if (suscrito && !conToken)
+      throw new Error(`notify: el destino '${d.id}' se suscribe a 'cargas-usuario' pero su to no incluye ${UPLOADER_TOKEN} (el aviso es para quien subió el archivo, y su dirección no se declara en la config).`)
+    // El token sin la suscripción es la contradicción simétrica: un destino que promete resolver al
+    // uploader y jamás recibe un aviso que lo traiga. Se rompe con nombre, no se ignora.
+    if (!suscrito && conToken)
+      throw new Error(`notify: el destino '${d.id}' declara ${UPLOADER_TOKEN} en su to pero no se suscribe a 'cargas-usuario'; ningún otro flujo sabe a quién resolverlo.`)
+  }
+
   return report ? { destinations, report } : { destinations }
 }
 
@@ -170,7 +199,11 @@ function parseEmail(o: Record<string, unknown>, id: string): { smtp: EmailSmtpDe
   const from = String(o['from'] ?? '').trim()
   if (!from) throw new Error(`notify: destino '${id}' sin from.`)
   const to = Array.isArray(o['to']) ? o['to'].map((t) => String(t).trim()).filter(Boolean) : []
-  if (!to.length || to.some((t) => !t.includes('@'))) throw new Error(`notify: destino '${id}' con to inválido (lista no vacía de direcciones con '@').`)
+  // El token `$uploader` (#162·§6.3) es una entrada legítima del `to`: no es una dirección, es la
+  // promesa de resolver una por aviso. Que el destino esté suscrito al flujo que la trae se valida
+  // cruzado en `parseNotifyConfig` — acá solo se admite la forma.
+  if (!to.length || to.some((t) => t !== UPLOADER_TOKEN && !t.includes('@')))
+    throw new Error(`notify: destino '${id}' con to inválido (lista no vacía de direcciones con '@', o el token ${UPLOADER_TOKEN}).`)
   const smtp: EmailSmtpDecl = { host, port, tls: tls as EmailSmtpDecl['tls'], authMethod: authMethod as 'plain' | 'login' }
   if (caFile) smtp.caFile = caFile
   if (user) smtp.user = user
@@ -248,7 +281,7 @@ export function createSinks(cfg: NotifyConfig, fetchImpl?: FetchLike, sendMail?:
       return {
         id: d.id,
         send: async (n) => {
-          await enviar(smtpCfg, { from: d.from, to: d.to, subject: renderEmailSubject(n), text: renderEmailText(n) })
+          await enviar(smtpCfg, { from: d.from, to: resolveTo(d.to, n, d.id), subject: renderEmailSubject(n), text: renderEmailText(n) })
         },
       }
     }
@@ -260,6 +293,22 @@ export function createSinks(cfg: NotifyConfig, fetchImpl?: FetchLike, sendMail?:
       },
     }
   })
+}
+
+/**
+ * Destinatarios efectivos de UN aviso: sustituye `$uploader` por `data.uploadedBy` (#162·§6.3).
+ *
+ * LANZA si el token está y el aviso no trae un `uploadedBy` con forma de dirección. Es defensa en
+ * profundidad, no la compuerta: el lazo ya no compone el aviso cuando el uploader no parsea como
+ * email (se loguea y el desenlace se persiste igual). Lanzar es lo correcto igual: `fanout` lo
+ * loguea con el id del destino, y la alternativa —mandarlo solo a las copias operativas— entregaría
+ * a terceros un mensaje escrito para su dueño.
+ */
+export function resolveTo(to: string[], n: Notification, destinoId: string): string[] {
+  if (!to.includes(UPLOADER_TOKEN)) return to
+  const quien = typeof n.data['uploadedBy'] === 'string' ? (n.data['uploadedBy'] as string).trim() : ''
+  if (!quien.includes('@')) throw new Error(`destino '${destinoId}': el aviso no trae uploadedBy con forma de dirección (${quien ? `'${quien}'` : 'ausente'}) y su to declara ${UPLOADER_TOKEN}.`)
+  return to.map((t) => (t === UPLOADER_TOKEN ? quien : t))
 }
 
 /** Subject del email: `⚠ ` + title si el aviso es warning; el title tal cual si no. */
@@ -494,5 +543,114 @@ export function composeIntakeRecovery(ctx: { slotId: string; slotLabel: string; 
     lines: ctx.domainId == null ? [SIN_ENLACES] : [],
     links: ctx.domainId == null ? [] : [{ label: 'Cargas del dominio', url: hrefCargas(ctx.baseUrl, ctx.domainId) }],
     data: { event: 'intake-recovery', slotId: ctx.slotId, domainId: ctx.domainId ?? null },
+  }
+}
+
+// ── Aviso al USUARIO que subió el archivo (#162·§6.2) — PURO, el resolver del lazo lo invoca ─────
+/**
+ * Contexto del aviso a quien subió. Todo lo que trae es lo que ESA persona necesita para actuar: qué
+ * archivo, qué pasó con él y qué puede hacer ahora.
+ *
+ * Lo que NO trae, y es la mitad del punto: ids del motor, rutas de almacenamiento ni estados internos
+ * (`state=[dead]`). Ese detalle es del operador y sale por el flujo `'alerts'`.
+ */
+export interface CargaUserNoticeContext {
+  /** Basename tal como lo subió. */
+  filename: string
+  /** Solo los desenlaces que se avisan. `procesada` no notifica (anti-ruido, §6.2). */
+  desenlace: Exclude<CargaDesenlace, 'procesada'>
+  /** Motivo POR ARCHIVO declarado por el job (gramática `_logs/`). Ausente = el job no lo declaró. */
+  motivo?: string
+  /** Titular de la corrida (última `✖` del log) cuando el job NO declaró motivo por archivo — se
+   *  presenta rotulado como lo que es: lo que informó la conversión, no la causa de ESTE archivo. */
+  titular?: string
+  /** Dirección de quien subió: el sink de email la sustituye en `$uploader`. */
+  uploadedBy: string
+  uploadedAt: string
+  /** Edad del archivo en el landing, en minutos. Solo la usa `varada`. */
+  ageMinutes?: number
+  slotId: string
+  slotLabel: string
+  uploadId?: number
+  domainId?: string
+  domainLabel?: string
+  /** VERGIS_PUBLIC_URL normalizada (sin slash final). */
+  baseUrl: string
+}
+
+/** Fecha legible por una persona, en UTC explícito: `2026-08-13 11:30 UTC`. El ISO crudo es del
+ *  operador. Una fecha que no parsea se devuelve tal cual: inventarle una sería peor que mostrarla fea. */
+export function fmtFechaUsuario(iso: string): string {
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return iso
+  return `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`
+}
+
+const AVISADO_OPERADOR = 'El operador de la plataforma ya fue avisado, con el detalle técnico.'
+const REINTENTAR = 'Cuando lo corrijas, puedes volver a subirlo desde la consola de Cargas.'
+
+/**
+ * Redacta el aviso al usuario. El marco lo pone la plataforma; el MOTIVO llega TEXTUAL del job — el
+ * producto no parafrasea (parafrasear es fabricar causas, requisito duro 4 del diseño) y tampoco
+ * rellena: cuando no hay motivo, lo que se dice es que no lo hay.
+ *
+ * El motivo pasa por `redactSecrets` porque lo escribe un job de terreno: un log puede traer una
+ * cadena de conexión, y nadie necesita recibirla por correo para leer «ancho inesperado».
+ */
+export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notification {
+  const archivo = `«${ctx.filename}»`
+  const motivo = ctx.motivo ? redactSecrets(ctx.motivo) : undefined
+  const titular = ctx.titular ? redactSecrets(ctx.titular) : undefined
+  const lines: string[] = []
+  let title: string
+
+  if (ctx.desenlace === 'fallida') {
+    title = `Tu archivo ${archivo} no pudo procesarse`
+    if (motivo) lines.push(`Motivo: ${motivo}`)
+    else {
+      lines.push('La conversión falló y no declaró un motivo para este archivo en particular.')
+      if (titular) lines.push(`Lo que informó la conversión: ${titular}`)
+    }
+    lines.push(REINTENTAR)
+  } else if (ctx.desenlace === 'saltada') {
+    title = `Tu archivo ${archivo} no se procesó: la conversión lo omitió`
+    lines.push(motivo ? `Motivo: ${motivo}` : 'La conversión lo omitió sin declarar un motivo.')
+    // Un archivo omitido no siempre es un archivo malo (un corte ya cargado, por ejemplo): pedirle
+    // que «lo corrija» sería mandarlo a arreglar algo que puede estar bien.
+    lines.push('Si esperabas que se procesara, avísale al equipo de la plataforma.')
+  } else if (ctx.desenlace === 'sin-informe') {
+    // El caso que este flujo existe para no maquillar: hubo una conversión, terminó mal y no dijo por
+    // qué. Decirlo es lo único honesto — la plataforma NO tiene la causa y no la va a inventar.
+    title = `Tu archivo ${archivo} no se procesó y el proceso no reportó la causa`
+    lines.push('La conversión terminó sin informar qué pasó con tu archivo, así que no podemos decirte el motivo: sería inventarlo.')
+    lines.push(AVISADO_OPERADOR)
+  } else {
+    title = `Tu archivo ${archivo} sigue sin procesarse`
+    lines.push(
+      ctx.ageMinutes != null
+        ? `Lo recibimos hace ${fmtDur(ctx.ageMinutes * 60)} y ninguna conversión lo ha tomado todavía.`
+        : 'Lo recibimos y ninguna conversión lo ha tomado todavía.',
+    )
+    lines.push(`${AVISADO_OPERADOR} No hace falta que lo vuelvas a subir.`)
+  }
+  lines.push(`Archivo recibido el ${fmtFechaUsuario(ctx.uploadedAt)} · ${ctx.slotLabel}`)
+
+  return {
+    severity: 'warning',
+    title,
+    lines,
+    links: ctx.domainId != null ? [{ label: 'Ver mis cargas', url: hrefCargas(ctx.baseUrl, ctx.domainId) }] : [],
+    data: {
+      event: 'carga-usuario',
+      // El sink de email lo sustituye en `$uploader`; el webhook genérico lo reenvía tal cual para que
+      // el puente externo decida por dónde le llega a esa persona.
+      uploadedBy: ctx.uploadedBy,
+      desenlace: ctx.desenlace,
+      filename: ctx.filename,
+      motivo: ctx.motivo ?? null,
+      slotId: ctx.slotId,
+      uploadId: ctx.uploadId ?? null,
+      domainId: ctx.domainId ?? null,
+    },
   }
 }

@@ -5,12 +5,18 @@
  * —listado del landing— y el MOTOR —corridas del trigger—), y no hay reconciliación: por requisito
  * de #161 el lazo detecta y avisa; decidir es de las personas.
  *
- * DOS fases por tick (la tercera, RESOLVER, llega con #162 entre medio):
+ * TRES fases por tick:
  *  1 OBSERVAR — por slot: listado del landing + corridas del trigger, y se escribe la proyección
  *               (`IntakeWatchStore`). La observación de un slot es ATÓMICA: si cualquiera de las dos
  *               lecturas falla, se registra el ERROR y lo último conocido queda intacto. Fallar en
  *               medir es un ESTADO, no un vacío.
- *  2 ALERTAR  — dedup por transición, calcado del precedente verificado de `freshness-loop.ts`:
+ *  2 RESOLVER — (#162) por cada carga registrada SIN desenlace: se correlaciona con las corridas
+ *               (`resolveRunLog`) y con lo que el job declaró por archivo en su log
+ *               (`parseRunFileOutcomes`), se PERSISTE el desenlace (una vez, no se recalcula) y se
+ *               avisa a quien subió (`composeCargaUserNotice`) por el flujo `'cargas-usuario'`. Solo
+ *               se resuelve sobre observación FRESCA: resolver sobre la proyección sería declarar un
+ *               desenlace con datos que este tick no pudo confirmar.
+ *  3 ALERTAR  — dedup por transición, calcado del precedente verificado de `freshness-loop.ts`:
  *               hidratación del estado en el PRIMER TICK (no en el boot), persistencia SOLO en
  *               transición, parser fail-safe (`parseIntakeWatchState`). El aviso se COMPONE
  *               (`composeIntakeAlert`, #100) y sale por el puerto: el lazo NO conoce el canal.
@@ -29,9 +35,15 @@ import {
   classifySlot,
   expectedInLanding,
   intakeAlerts,
+  isSidecarName,
   parseIntakeWatchState,
+  parseRunFileOutcomes,
+  resolveRunLog,
   diffAlertState,
+  type CargaDesenlace,
+  type IntakeDesenlaceStore,
   type IntakeSlot,
+  type IntakeUploadRow,
   type IntakeWatchStore,
   type OneLakeEntry,
   type OneLakeListing,
@@ -46,7 +58,8 @@ import {
   type SlotWatchInput,
   type CargaRegistrada,
 } from '@vergis/capabilities'
-import { composeIntakeAlert, composeIntakeRecovery, type IntakeAlertContext, type Notification } from './notify'
+import { diagnosticoDeFalla } from './admin-cargas'
+import { composeCargaUserNotice, composeIntakeAlert, composeIntakeRecovery, type IntakeAlertContext, type Notification } from './notify'
 
 export interface IntakeLoopConfig {
   /** URL pública ya normalizada sin slash final: base de los enlaces profundos del aviso. */
@@ -70,10 +83,25 @@ export interface IntakeLoopDeps {
   /** Retiros manuales del landing. `null` = NO SE PUDO SABER; entonces el control positivo se apaga
    *  para ese slot (una predicción que no descuenta los retiros fabrica contradicciones). */
   retiros?: (slot: IntakeSlot) => Promise<RetiroRegistrado[] | null>
-  store: IntakeWatchStore & PlatformSettingStore
+  store: IntakeWatchStore & PlatformSettingStore & IntakeDesenlaceStore
+  /**
+   * Logs POR CORRIDA del slot (contrato `_logs/`, #99). AUSENTE = el resolver no puede leer lo que el
+   * job declaró, y entonces NO concluye nada que dependa del log: un instrumento que no está no
+   * produce «no hay motivo», produce «no medí» — y `'sin-informe'` es una afirmación sobre el JOB, no
+   * sobre la instrumentación de la plataforma.
+   */
+  runLogs?: {
+    /** Entradas del directorio de logs del slot. Lanza si el almacenamiento no responde. */
+    list: (slot: IntakeSlot) => Promise<OneLakeEntry[]>
+    /** Contenido del log (cola), null si el archivo no existe. */
+    read: (slot: IntakeSlot, path: string) => Promise<string | null>
+  }
   /** Envío del aviso compuesto (#100) — el canal lo decide la config de instancia, no el lazo.
-   *  undefined = fase 2 apagada: ni computa ni persiste estado (la proyección se escribe igual). */
+   *  undefined = fase 3 apagada: ni computa ni persiste estado (la proyección se escribe igual). */
   notify?: (n: Notification) => Promise<void>
+  /** Envío del aviso a QUIEN SUBIÓ (flujo `'cargas-usuario'`, §6.3). undefined = sin destinos
+   *  suscritos: el desenlace se persiste y se consulta igual — el registro no depende del canal. */
+  notifyUploader?: (n: Notification) => Promise<void>
   /** Dominios DECLARADOS: solo ellos tienen página, y por tanto solo ellos aportan label y enlace. */
   domains: { id: string; label: string }[]
   log: (line: string) => void
@@ -119,7 +147,16 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       const fallidas = lote.filter((o) => o.error != null)
       for (const o of fallidas) deps.log(`intake-loop: no se pudo observar '${o.slotId}' — ${o.error}`)
 
-      // ── Fase 2 · alertar ─────────────────────────────────────────────────────────────────────
+      // ── Fase 2 · resolver el desenlace de cada carga (#162) ──────────────────────────────────
+      // DENTRO del mismo tick y bajo el mismo guard: `setUploadDesenlace` lee-y-escribe sin
+      // transacción apoyada en que el único escritor de esas columnas es este resolver, serializado
+      // acá. Sacarlo del tick (o paralelizarlo) rompe ese supuesto y obliga a arreglar el store.
+      for (const slot of vigilados) {
+        const obs = lote.find((o) => o.slotId === slot.id)
+        if (obs) await resolverSlot(slot, obs, nowMs)
+      }
+
+      // ── Fase 3 · alertar ─────────────────────────────────────────────────────────────────────
       let notificadas = 0
       if (deps.notify) {
         if (!hydrated) {
@@ -217,6 +254,89 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
     }
   }
 
+  /**
+   * Fase RESOLVER de UN slot (#162·§3.4): escribe el desenlace de las cargas que todavía no lo tienen
+   * y avisa a quien las subió.
+   *
+   * Nunca lanza hacia afuera: un slot cuyo `_logs/` no se puede listar deja sus cargas PENDIENTES —que
+   * es la verdad, no se midió— y no arrastra a los demás slots.
+   *
+   * Solo resuelve sobre observación FRESCA: si este tick no pudo medir el landing, no hay con qué
+   * afirmar «sigue ahí» ni «ya no está», y ambas son premisas de un desenlace.
+   */
+  async function resolverSlot(slot: IntakeSlot, obs: SlotObservation, nowMs: number): Promise<void> {
+    if (obs.error != null || obs.landing == null) return
+    try {
+      const pendientes = await deps.store.listUploadsSinDesenlace(slot.id, RESOLVER_LOTE)
+      if (!pendientes.length) return // el caso normal: cero I/O de logs cuando no hay nada que resolver
+      const corridas = await corridasConLog(slot, obs.runs ?? [])
+      const maxAgeMinutes = watchConfigDe(slot)?.maxAgeMinutes
+      for (const carga of pendientes) {
+        const r = resolveDesenlaceDeCarga(carga, corridas, obs.landing, nowMs, maxAgeMinutes)
+        if (!r) continue // todavía sin evidencia: se vuelve a intentar en el próximo tick
+        const input: { desenlace: CargaDesenlace; motivo?: string; runStartedAt?: string } = { desenlace: r.desenlace }
+        // El motivo que se PERSISTE es el que declaró el job POR ARCHIVO. El titular de la corrida no
+        // se guarda como motivo de la carga: es de la corrida, y confundirlos le atribuiría a este
+        // archivo una causa que se afirmó de todos.
+        if (r.motivo != null) input.motivo = r.motivo
+        if (r.runStartedAt != null) input.runStartedAt = r.runStartedAt
+        await deps.store.setUploadDesenlace(carga.id, input)
+        deps.log(`intake-loop: '${slot.id}' carga ${carga.id} (${carga.filename}) → ${r.desenlace}`)
+        await avisarUploader(slot, carga, r)
+      }
+    } catch (e) {
+      deps.log(`intake-loop: no se pudo resolver el desenlace en '${slot.id}' — ${msg(e)}`)
+    }
+  }
+
+  /** Las corridas con la resolución de SU log (#99) y su texto. Sin la dependencia de logs el kind es
+   *  `'no-medido'`: la ausencia del instrumento no se reporta como ausencia de log. */
+  async function corridasConLog(slot: IntakeSlot, runs: RunRecord[]): Promise<CorridaConLog[]> {
+    if (!deps.runLogs || !runs.length) return runs.map((run) => ({ run, log: 'no-medido' as const, texto: null }))
+    const entries = await deps.runLogs.list(slot) // si lanza, el slot entero queda sin resolver (arriba)
+    const out: CorridaConLog[] = []
+    for (const run of runs) {
+      const res = resolveRunLog(run, entries)
+      if (res.kind !== 'match') {
+        out.push({ run, log: res.kind, texto: null })
+        continue
+      }
+      // Un log ilegible NO es un log ausente: se marca no-medido y sus cargas quedan pendientes.
+      try {
+        const texto = await deps.runLogs.read(slot, res.entry.path)
+        out.push(texto == null ? { run, log: 'no-medido', texto: null } : { run, log: 'match', texto })
+      } catch (e) {
+        deps.log(`intake-loop: no se pudo leer el log de la corrida ${run.startedAt} de '${slot.id}' — ${msg(e)}`)
+        out.push({ run, log: 'no-medido', texto: null })
+      }
+    }
+    return out
+  }
+
+  /** Aviso a quien subió (§6.2). `procesada` y `saltada` NO notifican (anti-ruido del diseño). */
+  async function avisarUploader(slot: IntakeSlot, carga: IntakeUploadRow, r: ResolucionCarga): Promise<void> {
+    if (!deps.notifyUploader || !DESENLACES_QUE_AVISAN.includes(r.desenlace)) return
+    const quien = (carga.uploadedBy ?? '').trim()
+    // Sin dirección válida no se envía y se DICE: el desenlace ya quedó persistido y consultable en la
+    // consola, así que la información no se pierde — solo no sale por correo.
+    if (!quien.includes('@')) {
+      deps.log(`intake-loop: carga ${carga.id} de '${slot.id}' resuelta '${r.desenlace}' sin aviso — uploadedBy '${quien}' no es una dirección`)
+      return
+    }
+    const ctx: Parameters<typeof composeCargaUserNotice>[0] = {
+      filename: carga.filename,
+      desenlace: r.desenlace as Exclude<CargaDesenlace, 'procesada'>,
+      uploadedBy: quien,
+      uploadedAt: carga.uploadedAt,
+      uploadId: carga.id,
+      ...contextoDe(slot.id),
+    }
+    if (r.motivo != null) ctx.motivo = r.motivo
+    if (r.titular != null) ctx.titular = r.titular
+    if (r.ageMinutes != null) ctx.ageMinutes = r.ageMinutes
+    await deps.notifyUploader(composeCargaUserNotice(ctx))
+  }
+
   /** La evidencia del aviso, tal cual la trae la clasificación (sin re-computar nada). */
   function evidencia(a: SlotAlert): Evidencia {
     const out: Evidencia = { reason: a.reason, medida: a.medida }
@@ -256,6 +376,127 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
 
 /** Lo que la alerta clasificada aporta al aviso compuesto. */
 type Evidencia = Pick<IntakeAlertContext, 'reason' | 'medida' | 'varados' | 'esperados' | 'run' | 'lastError'>
+
+/** Cargas sin desenlace que se intentan resolver por slot y por vuelta. No es una política: es el
+ *  tope del lote de una vuelta — lo que no entra, entra en la siguiente. */
+const RESOLVER_LOTE = 200
+
+/** Los desenlaces que quien subió recibe por correo (§6.2). `procesada` y `saltada` NO: el archivo
+ *  que entró bien no genera correo, y el omitido se consulta en la consola. */
+const DESENLACES_QUE_AVISAN: CargaDesenlace[] = ['fallida', 'sin-informe', 'varada']
+
+/**
+ * Una corrida con la resolución de SU log (#99) y el texto leído.
+ *
+ * `'no-medido'` es un kind PROPIO de esta fase, y no uno de `RunLogResolution`: significa que la
+ * plataforma no pudo mirar el log (dependencia no cableada, contenido ausente, lectura fallida).
+ * Existe separado de `'sin-log'` porque confundirlos convertiría una ceguera de la plataforma en una
+ * afirmación sobre el job — exactamente el error que #162 existe para cerrar.
+ */
+export interface CorridaConLog {
+  run: RunRecord
+  log: 'match' | 'en-curso' | 'purgado' | 'sin-log' | 'no-medido'
+  texto: string | null
+}
+
+/** Lo que el resolver concluyó de UNA carga. `null` en vez de esto = todavía sin evidencia. */
+export interface ResolucionCarga {
+  desenlace: CargaDesenlace
+  /** Motivo POR ARCHIVO declarado por el job. Ausente = el job no lo declaró; jamás se rellena. */
+  motivo?: string
+  /** Titular de la corrida (última `✖` del log) cuando no hubo motivo por archivo. NO se persiste
+   *  como motivo de la carga: se presenta rotulado como lo que es. */
+  titular?: string
+  runStartedAt?: string
+  /** Edad en el landing, solo en `varada`. */
+  ageMinutes?: number
+}
+
+/**
+ * El desenlace de UNA carga a partir de las corridas que PUDIERON haberla tomado — PURA, sin I/O.
+ *
+ * Regla de cobertura: solo cuenta una corrida que arrancó DESPUÉS de que el archivo aterrizó. Sin
+ * margen: una corrida anterior no pudo verlo, y atribuirle su resultado sería fabricar una causa.
+ * [El diseño no fija margen; no dárselo es decisión de este hito. Si el reloj del motor va adelantado
+ * respecto del de Vergis, una corrida que sí tomó el archivo podría quedar fuera y la carga terminaría
+ * resuelta como `varada`. No verificado contra el motor vivo — misma familia que la conjetura C1.]
+ *
+ * Las corridas se recorren de la más ANTIGUA a la más nueva y GANA LA ÚLTIMA evidencia decisiva: si
+ * una corrida falló y una posterior lo procesó, el desenlace es el de la posterior. Una corrida EN
+ * CURSO detiene la resolución (devuelve `null`): su resultado todavía puede decidir, y un desenlace
+ * escrito no se recalcula.
+ *
+ * La degradación honesta (§5 del diseño), en orden de preferencia:
+ *  1. El job declaró el archivo en su log (gramática `_logs/`) ⇒ ese desenlace, con SU motivo.
+ *  2. El log existe pero no nombra este archivo, y la corrida falló ⇒ `fallida` sin motivo por
+ *     archivo, con el titular `✖` del log como contexto rotulado.
+ *  3. El log NO existe / se purgó y la corrida falló ⇒ `sin-informe`: el proceso no reportó la causa.
+ *     El `run.error` del MOTOR jamás se usa acá — si el job no la declaró, la plataforma no la
+ *     inventa, y el motivo del motor (`state=[dead]`) es justamente el que el usuario no puede usar.
+ *  4. Una corrida `Completed` cubrió la carga y el archivo YA NO está en el landing ⇒ `procesada`
+ *     (la evidencia es que la corrida lo archivó: contrato de ingesta #62/#63).
+ *  5. Nada de lo anterior y el archivo sigue en el landing excedido de edad ⇒ `varada`.
+ *
+ * Una corrida cuyo log NO SE PUDO MIRAR (`'no-medido'`) no aporta evidencia de falla: la carga queda
+ * pendiente. Sí puede aportar la de `procesada`, que no depende del log sino del landing.
+ */
+export function resolveDesenlaceDeCarga(
+  carga: { filename: string; uploadedAt: string },
+  corridas: CorridaConLog[],
+  landing: OneLakeEntry[],
+  nowMs: number,
+  maxAgeMinutes?: number,
+): ResolucionCarga | null {
+  const subido = Date.parse(carga.uploadedAt)
+  const archivo = base(carga.filename)
+  const enLanding = landing.find((e) => e && !e.isDirectory && !isSidecarName(e.path) && base(e.path) === archivo)
+  const cubren = corridas
+    .filter((c) => Number.isFinite(Date.parse(c.run.startedAt)) && (!Number.isFinite(subido) || Date.parse(c.run.startedAt) >= subido))
+    .sort((a, b) => Date.parse(a.run.startedAt) - Date.parse(b.run.startedAt))
+
+  let res: ResolucionCarga | null = null
+  let ultimaCompletada: string | undefined
+  for (const c of cubren) {
+    if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') return null
+    const declarado = c.texto ? parseRunFileOutcomes(c.texto).find((o) => o.file === archivo) : undefined
+    if (declarado) {
+      res = { desenlace: DESENLACE_POR_OUTCOME[declarado.outcome], runStartedAt: c.run.startedAt }
+      if (declarado.motivo != null) res.motivo = declarado.motivo
+      continue
+    }
+    if (c.run.status === 'Failed') {
+      if (c.log === 'match') {
+        res = { desenlace: 'fallida', runStartedAt: c.run.startedAt }
+        const titular = diagnosticoDeFalla(c.texto)
+        if (titular) res.titular = titular
+      } else if (c.log === 'sin-log' || c.log === 'purgado') {
+        res = { desenlace: 'sin-informe', runStartedAt: c.run.startedAt }
+      }
+      // `'no-medido'`: la plataforma no miró el log. No se concluye nada — la carga sigue pendiente.
+      continue
+    }
+    if (c.run.status === 'Completed') ultimaCompletada = c.run.startedAt
+  }
+
+  if (res) return res
+  // Sin desenlace declarado, la única evidencia de proceso que queda es que el archivo SALIÓ del
+  // landing tras una corrida completada — el contrato de ingesta dice que lo procesado se archiva.
+  if (ultimaCompletada && !enLanding) return { desenlace: 'procesada', runStartedAt: ultimaCompletada }
+  if (enLanding && maxAgeMinutes != null) {
+    const edad = (nowMs - Date.parse(enLanding.lastModified)) / 60_000
+    if (Number.isFinite(edad) && edad > maxAgeMinutes) return { desenlace: 'varada', ageMinutes: Math.round(edad) }
+  }
+  return null
+}
+
+const DESENLACE_POR_OUTCOME: Record<'procesado' | 'saltado' | 'fallido', CargaDesenlace> = {
+  procesado: 'procesada',
+  saltado: 'saltada',
+  fallido: 'fallida',
+}
+
+/** Basename de una ruta del Lakehouse: el registro guarda el nombre, el listado trae la ruta. */
+const base = (p: string): string => String(p ?? '').replace(/^.*[/\\]/, '')
 
 /**
  * Umbrales de vigilancia de un slot (§4.1 del diseño), PURA y exportada para el tile del dashboard y

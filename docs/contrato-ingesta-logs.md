@@ -140,9 +140,10 @@ partir de texto libre. En detalle:
 ## 4 · ¿Qué pasa si el job no cumple? — la degradación honesta
 
 La plataforma presenta lo que hay y nombra lo que falta. Jamás promete lo que nadie escribió. La
-tabla describe la **resolución de desenlaces y el aviso al usuario**, que se construyen sobre este
-contrato y **aún no están implementados** (issue #162, hitos posteriores a esta especificación); lo
-que ya existe hoy es el lado lector del log (§1) y el parser de la gramática (§3):
+**resolución de desenlaces y el aviso al usuario** se construyen sobre este contrato y corren dentro
+del lazo de vigilancia del intake (`server/intake-loop.ts`, fase RESOLVER): por cada carga registrada
+sin desenlace, la plataforma correlaciona la corrida, lee su log y escribe el desenlace **una sola
+vez** en el registro de cargas — donde la consola lo muestra y desde donde sale el correo:
 
 | El job… | La plataforma resuelve | Y le dice al usuario |
 |---|---|---|
@@ -151,7 +152,36 @@ que ya existe hoy es el lado lector del log (§1) y el parser de la gramática (
 | **murió sin escribir** el log | `sin-informe` | «el proceso terminó sin reportar la causa» — tal cual |
 
 La distinción entre las dos últimas filas es el punto entero del contrato: **una causa declarada por
-el job y una causa que nadie declaró no se parecen**, y la plataforma no las mezcla.
+el job y una causa que nadie declaró no se parecen**, y la plataforma no las mezcla. En particular, el
+motivo que el **motor** reporta de la corrida (`state=[dead]`, ids de instancia) **nunca** se usa para
+rellenar el desenlace de una carga: es del operador, y no describe a ningún archivo en particular.
+
+Dos casos más, por la misma disciplina: una corrida **en curso** deja la carga pendiente (su
+resultado todavía puede decidirla), y un log que la plataforma **no pudo mirar** —dependencia no
+cableada, lectura fallida— tampoco produce `sin-informe`: no medir no es un hallazgo sobre el job.
+
+### ¿Cómo se enciende el correo al que subió?
+
+El desenlace se persiste y se consulta **exista o no** el canal: el registro no depende del correo.
+Para que además salga un email, la instancia declara en `VERGIS_NOTIFY` un destino suscrito al flujo
+`cargas-usuario`:
+
+```yaml
+destinations:
+  - id: aviso-usuario
+    type: email-smtp
+    events: [cargas-usuario]
+    smtp: { host: smtp.relay.interno, port: 587 }
+    from: Mira <mira@ejemplo.cl>
+    to: ['$uploader', ops@ejemplo.cl]   # $uploader = quien subió el archivo; el resto, copia operativa
+```
+
+Reglas, todas verificadas en el arranque (config mala = boot roto con el nombre del destino, nunca un
+correo que no sale en silencio): un `email-smtp` suscrito **debe** traer `$uploader` en su `to`; el
+token sin la suscripción también rompe; un `slack-webhook` suscrito se **rechaza** (un canal
+compartido no es una persona); un `webhook` genérico sí puede suscribirse y recibe `uploadedBy` en el
+JSON para que el puente externo decida. Solo se avisa de `fallida`, `sin-informe` y `varada`:
+`procesada` y `saltada` se consultan en la consola, no llenan la bandeja de nadie.
 
 ## 5 · Obligaciones del job, en una lista
 
