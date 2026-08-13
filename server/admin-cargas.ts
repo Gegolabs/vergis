@@ -11,11 +11,18 @@
  *     — el rollback honesto: retirar + re-correr revierte pipelines por-clave; reactivar re-materializa.
  *   · RE-RUN: correr la conversión de nuevo (run-now del trigger).
  *   · COHERENCIA (#56): aviso ruidoso si el trigger del slot no está registrado como proceso.
+ *   · VIGILANCIA (#161/#162): banner del vigilante con la CALIDAD de la medida, marca de VARADO en el
+ *     landing, desenlace por carga en Actividad y aviso de incumplimiento del contrato `_logs/`.
  *
  * Este módulo es PURO (datos → HTML): el fetch de datos y los POST (CSRF + steward + audit) viven en
  * admin.ts / serve-rls. Helpers de render locales a propósito (evita ciclo de imports con admin.ts).
+ *
+ * Corolario para lo de #161/#162: acá NO se clasifica nada. La edad que vuelve VARADO a un archivo y
+ * la calidad de la medida las decide `classifySlot` (`intake-observability.ts`) en el lazo; esta
+ * página recibe el veredicto ya tomado (`SlotCargas.vigilancia`) y lo dibuja. Todos los campos nuevos
+ * son OPCIONALES: una instancia sin vigilante renderiza exactamente la página de antes.
  */
-import { escapeHtml, slotLogPath, isSidecarName, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult } from '@vergis/capabilities'
+import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace } from '@vergis/capabilities'
 
 /** Evento de carga del audit log (type=intake). */
 export interface IntakeUploadEvent {
@@ -31,6 +38,36 @@ export interface IntakeUploadEvent {
   sha256?: string
   /** Si el contenido es idéntico a una carga previa del slot: `<filename> · <ts>` de aquella. */
   dupOf?: string
+  /** #162 · desenlace resuelto de esta carga (columna del registro). Ausente = todavía pendiente. */
+  desenlace?: CargaDesenlace
+  /** #162 · motivo TEXTUAL que el job declaró en `_logs/`. Ausente = no lo declaró — no se rellena. */
+  desenlaceMotivo?: string
+  /** #162 · `startedAt` de la corrida que cubrió la carga: ancla del enlace a esa corrida. */
+  desenlaceRunStartedAt?: string
+}
+
+/**
+ * Lo que el vigilante del intake (#161) sabe de UN slot, ya clasificado por `classifySlot`.
+ *
+ * Existe para que el operador distinga «no hay novedad» de «no pude medir»: por eso `medida` es
+ * obligatoria acá y `SlotCargas.vigilancia` entera es opcional — sin vigilante no hay banner, no hay
+ * media verdad.
+ */
+export interface SlotVigilancia {
+  /** Calidad de la ÚLTIMA clasificación del lazo (§3.1 del diseño). */
+  medida: MedidaCalidad
+  /** ISO de la última observación EXITOSA. Ausente = jamás se midió bien (medida `'ninguna'`). */
+  observedAt?: string
+  /** Error del intento más reciente, si falló. */
+  lastError?: string
+  lastErrorAt?: string
+  /** Archivos varados con su edad, tal como los devolvió la clasificación. La página NO los deriva. */
+  varados?: ArchivoVarado[]
+  /** `'contradice-registro'`: basenames que el registro esperaba ver y el listado no trae (§3.3). */
+  esperados?: string[]
+  /** #162·§5 · corridas TERMINADAS consecutivas sin log correlacionable en `_logs/`. Alimenta el
+   *  aviso de incumplimiento del contrato; ausente = la instancia no mide esto. */
+  corridasSinLog?: number
 }
 
 /**
@@ -77,6 +114,9 @@ export interface SlotCargas {
   reverts?: IntakeRevertRow[]
   /** #56: ¿el processRef del trigger está registrado como proceso (con engine_ref)? */
   procesoRegistrado: boolean
+  /** #161: lo que el vigilante sabe del slot. Ausente = instancia sin vigilante cableado ⇒ la página
+   *  es la de siempre, sin banner ni marcas de varado (regresión cero por construcción). */
+  vigilancia?: SlotVigilancia
 }
 
 // ─── Helpers de render (locales: sin ciclo con admin.ts) ────────────────────
@@ -108,6 +148,111 @@ function kb(n: number): string {
   return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
 }
 const baseName = (p: string): string => p.split('/').pop() ?? p
+/** Edad en minutos → texto operativo. Los minutos los computó la clasificación; acá solo se leen. */
+function edad(minutes: number): string {
+  const m = Math.max(0, Math.floor(minutes))
+  if (m < 60) return `${m} min`
+  const h = Math.floor(m / 60)
+  return h < 48 ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${Math.floor(h / 24)}d ${h % 24}h`
+}
+/** Amarillo del aviso que no es error: el mismo de la marca de contenido duplicado del timeline. */
+const AVISO = 'color:var(--yellow,#d97706)'
+
+// ─── Vigilancia del intake (#161/#162) ──────────────────────────────────────
+
+/**
+ * Corridas terminadas consecutivas SIN log correlacionable a partir de las cuales el slot se declara
+ * incumpliendo el contrato `_logs/` (#162·§5, que pide «N corridas» sin fijar N).
+ *
+ * El 3 es decisión de este hito, no del diseño: es el mismo número que `SIN_MEDIDA_TICKS` (3× el
+ * poll, precedente del stale de frescura) y el criterio es el mismo — una vez es un accidente, tres
+ * seguidas es una conducta. Sin evidencia de campo sobre cuál es el N que no genera ruido; si el
+ * operador lo reporta, se ajusta acá.
+ */
+export const CORRIDAS_SIN_LOG_AVISO = 3
+
+/**
+ * El BANNER del vigilante: qué tan confiable es lo que la página muestra de este slot (#161·§6.1).
+ *
+ * La razón de ser de esta línea es que el operador distinga «no hay novedad» de «no pude medir». Por
+ * eso `'fresca'` es sobria (no hay nada que hacer) y solo las medidas que invalidan la vista gritan.
+ * `'contradice-registro'` afirma LA CONTRADICCIÓN y nunca su causa: la plataforma sabe que puso esos
+ * archivos ahí y el almacenamiento dice que no están — por qué (permisos, borrado a mano, path mal
+ * configurado) no lo sabe nadie desde acá, y escribirlo sería fabricar la causa.
+ */
+export function vigilanciaBanner(v: SlotVigilancia | undefined): string {
+  if (!v) return ''
+  const medido = v.observedAt ? ` <span class="sub">· medido ${when(v.observedAt)}</span>` : ''
+  const err = v.lastError ? `: ${escapeHtml(redactSecrets(v.lastError).slice(0, 300))}` : ''
+  switch (v.medida) {
+    case 'fresca':
+      return `<p class="sub">👁 Vigilancia del slot: al día${v.observedAt ? ` · medido ${when(v.observedAt)}` : ''}.</p>`
+    case 'ultima-conocida':
+      return `<p class="sub" style="${AVISO}">⚠ El vigilante no pudo medir este slot en su último intento${v.lastErrorAt ? ` (${when(v.lastErrorAt)})` : ''}${err}. Lo que la vigilancia afirma abajo viene de su última medida buena${v.observedAt ? ` (${when(v.observedAt)})` : ''}, no de ahora.</p>`
+    case 'contradice-registro': {
+      const lista = (v.esperados ?? []).map((f) => `<b>${escapeHtml(f)}</b>`).join(', ')
+      return `<p class="msg err">⚠ El listado del landing CONTRADICE el registro de cargas${medido}. La plataforma registra ${lista ? `${lista} como ${(v.esperados ?? []).length === 1 ? 'carga vigente' : 'cargas vigentes'} de este slot` : 'cargas vigentes de este slot'} y el listado no ${(v.esperados ?? []).length === 1 ? 'la trae' : 'trae ninguna'}. No se concluye que el landing esté vacío ni que esas cargas se hayan procesado — la causa de la discrepancia no se puede determinar desde acá.</p>`
+    }
+    case 'ninguna':
+      return `<p class="sub" style="${AVISO}">⚠ El vigilante todavía no ha logrado observar este slot: no hay medida sobre la que afirmar nada${err}.</p>`
+  }
+}
+
+/**
+ * Aviso de incumplimiento del contrato `_logs/` (#162·§5).
+ *
+ * El Producto no puede forzar al escritor de la instancia a escribir su log; puede volver el
+ * incumplimiento visible y ruidoso donde el operador ya mira — misma familia que el aviso de
+ * coherencia #56. Sin log por corrida no hay causa por archivo: los desenlaces caen a «sin informe»,
+ * que es la verdad, y esa verdad es cara.
+ */
+export function avisoContratoLogs(slot: IntakeSlot, v: SlotVigilancia | undefined): string {
+  const n = v?.corridasSinLog ?? 0
+  if (n < CORRIDAS_SIN_LOG_AVISO) return ''
+  const dir = slotRunLogsDir(slot)
+  return `<p class="msg err">⚠ Este slot no cumple el contrato <code>_logs/</code>: las últimas ${n} corridas terminadas no dejaron log correlacionable${dir ? ` en <code>${escapeHtml(dir)}</code>` : ''}. Sin log por corrida no hay causa por archivo: el desenlace de cada carga queda en «sin informe» y el usuario que subió no recibe motivo. Corregir el job para que escriba su log al terminar (<code>docs/contrato-ingesta-logs.md</code>).</p>`
+}
+
+/** Badge por desenlace (#162·§3.4). Familia visual de `badge(RunStatus)`: verde listo, rojo falla,
+ *  amarillo lo que quedó a medias. */
+const DESENLACE_BADGE: Record<CargaDesenlace, string> = {
+  procesada: '<b style="color:var(--accent)">✓ Procesada</b>',
+  saltada: `<b style="${AVISO}">⚠ Saltada</b>`,
+  fallida: '<b style="color:var(--err)">✕ Falló</b>',
+  'sin-informe': '<b style="color:var(--err)">✕ Sin informe</b>',
+  varada: `<b style="${AVISO}">⚠ Varada</b>`,
+}
+
+/** Texto propio de la plataforma cuando NO hay motivo del job: describe el estado, jamás la causa. */
+const SIN_INFORME_TEXTO = 'el proceso terminó sin reportar la causa'
+
+/**
+ * La celda DESENLACE de una carga (#162·§6.2).
+ *
+ * El motivo lo escribe un job de terreno: es texto no confiable que termina en HTML. Va escapado
+ * (`escapeHtml`) y redactado (`redactSecrets`) — un log puede traer una cadena de conexión, y el
+ * operador no tiene por qué recibirla en pantalla para leer «ancho inesperado: 28 columnas».
+ *
+ * El enlace a la corrida solo aparece si el `desenlace_run_started_at` calza con una corrida del
+ * historial que se está mostrando: se enlaza una corrida que existe, no una que se supone.
+ */
+export function desenlaceCelda(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRun?: (r: RunRecord) => string | null): string {
+  if (!h.desenlace) return ''
+  const badge = DESENLACE_BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace))
+  const crudo = h.desenlaceMotivo ?? (h.desenlace === 'sin-informe' ? SIN_INFORME_TEXTO : '')
+  const recortado = crudo.length > 300 ? crudo.slice(0, 300) + '…' : crudo
+  const motivo = recortado ? `<div class="sub">${escapeHtml(redactSecrets(recortado))}</div>` : ''
+  const corrida = h.desenlaceRunStartedAt && runs !== 'error' ? runs.find((r) => r.startedAt === h.desenlaceRunStartedAt) : undefined
+  const href = corrida ? hrefDeRun?.(corrida) ?? null : null
+  const link = href ? `<div><a class="sub" href="${escapeHtml(href)}">Ver corrida</a></div>` : ''
+  return `${badge}${motivo}${link}`
+}
+
+/** ¿Alguna carga del historial trae desenlace? Decide si la Actividad muestra la columna: sin
+ *  desenlaces la tabla es la de siempre, con las mismas columnas y los mismos colspan. */
+export function hayDesenlace(history: IntakeUploadEvent[] | 'error'): boolean {
+  return history !== 'error' && history.some((h) => !!h.desenlace)
+}
 
 /** Inicio de la última corrida COMPLETADA (frontera del residuo, #57). */
 export function lastCompletedStart(runs: RunRecord[] | 'error'): number | null {
@@ -162,16 +307,23 @@ export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
  *
  * `runLogHrefOf` (issue #99) da el destino del «Ver log» de CADA corrida (no solo la última). Ausente
  * (o devolviendo null) ⇒ ninguna fila enlaza: la instancia sin logs por corrida no cambia en nada.
+ *
+ * `conDesenlace` (issue #162) agrega la columna DESENLACE — la decide `hayDesenlace(history)`: con el
+ * registro sin resolver todavía, la tabla conserva sus cuatro columnas exactas de siempre.
  */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string, conDesenlace = false): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
+  // La columna extra va ANTES de la de acciones (que cierra la tabla). Vacía en las filas que no son
+  // cargas: el desenlace es de la carga — una corrida no tiene uno, y fingirlo sería inventar dato.
+  const vacia = conDesenlace ? '<td></td>' : ''
   if (history !== 'error') {
     for (const h of history) {
       // #63 · «Revertir esta carga» vive en la fila de la carga: es su unidad, no el archivo suelto.
       const accion = revertFormOf?.(h) ?? ''
+      const desenlace = conDesenlace ? `<td>${desenlaceCelda(h, runs, runLogHrefOf)}</td>` : ''
       items.push({
         ts: h.ts,
-        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td><td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}${accion ? ` ${accion}` : ''}</td>`,
+        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td>${desenlace}<td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}${accion ? ` ${accion}` : ''}</td>`,
       })
     }
   }
@@ -181,7 +333,7 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
     const detalle = r.resumen.map((c) => `<div class="sub">${escapeHtml(textoDeClave(c))}</div>`).join('')
     items.push({
       ts: r.at,
-      html: `<td>${when(r.at)}</td><td>↩️ Reversión</td><td>${escapeHtml(r.filename)} revertida <span class="sub">· ${escapeHtml(r.byUser)}</span>${detalle}${r.landingRetirado ? `<div class="sub">${escapeHtml(TEXTO_LANDING)}</div>` : ''}</td><td></td>`,
+      html: `<td>${when(r.at)}</td><td>↩️ Reversión</td><td>${escapeHtml(r.filename)} revertida <span class="sub">· ${escapeHtml(r.byUser)}</span>${detalle}${r.landingRetirado ? `<div class="sub">${escapeHtml(TEXTO_LANDING)}</div>` : ''}</td>${vacia}<td></td>`,
     })
   }
   if (runs !== 'error') {
@@ -197,7 +349,7 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
       const verLog = href ? ` <a class="sub" href="${escapeHtml(href)}">Ver log</a>` : ''
       items.push({
         ts: r.startedAt,
-        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${verLog}${motivo}</td><td></td>`,
+        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${verLog}${motivo}</td>${vacia}<td></td>`,
       })
     }
   }
@@ -269,6 +421,15 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     const lastDone = lastCompletedStart(sc.runs)
     const last = sc.runs !== 'error' && sc.runs.length ? sc.runs[0] : null
 
+    // #161 · lo que dice el vigilante de este slot: primero la calidad de la medida (¿se puede creer
+    // lo que sigue?), después los incumplimientos de contrato, después lo declarativo (#56).
+    const vig = sc.vigilancia
+    const varadosPorNombre = new Map((vig?.varados ?? []).map((v) => [v.file, v]))
+    const varadoDe = (name: string): ArchivoVarado | undefined => varadosPorNombre.get(name)
+    const medidaVieja = vig?.medida === 'ultima-conocida'
+    const vigilante = vigilanciaBanner(vig)
+    const avisoLogs = avisoContratoLogs(s, vig)
+
     // #56 · coherencia declarativa: trigger sin proceso registrado = sin observabilidad de entidad.
     const coherencia = s.trigger && !sc.procesoRegistrado
       ? `<p class="msg err">⚠ El trigger de este slot (<code>${escapeHtml(s.trigger.processRef)}</code>) no está registrado como proceso en <a href="/admin/sources">Fuentes</a> → la entidad no aparece en Frescura ni la vigila el monitor. Registrarlo en <code>sources.yaml</code>.</p>`
@@ -316,7 +477,17 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
       ? `<tr><td colspan="4" class="sub">No se pudo listar el landing (reintentá refrescando).</td></tr>`
       : sc.landing.filter((e) => !e.isDirectory && !isSidecarName(e.path)).map((e) => {
           const residuo = esResiduo(e, lastDone)
-          return `<tr${residuo ? ' style="color:var(--err)"' : ''}><td>${escapeHtml(baseName(e.path))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}${residuo ? ' <b>⚠ residuo</b><div class="sub">anterior a la última conversión: se RE-PROCESARÁ en la próxima corrida</div>' : ''}</td><td>${postForm(action, token, { slot: s.id, accion: 'retire', archivo: baseName(e.path) }, 'Retirar', `Retirar «${baseName(e.path)}» del landing (va a _retirado/, reversible). ¿Continuar?`)}</td></tr>`
+          // #161 · VARADO: nadie lo ha tomado a tiempo. Hermano del RESIDUO y distinto de él —
+          // residuo es «anterior a la última corrida completada», varado es «excedió su edad
+          // máxima» —, así que se marca aparte y en el amarillo de los avisos, no en el rojo del
+          // residuo. La edad viene de la clasificación (`ArchivoVarado.ageMinutes`): acá no se
+          // computa ninguna, y por eso la marca es fiel a lo que el vigilante midió aunque su
+          // última medida no sea de este instante (lo dice su banner).
+          const varado = varadoDe(baseName(e.path))
+          const marcaVarado = varado
+            ? ` <b style="${AVISO}">⚠ VARADO</b><div class="sub" style="${AVISO}">hace ${edad(varado.ageMinutes)} en el landing sin que ninguna corrida lo tomara${medidaVieja ? ' (según la última medida buena del vigilante)' : ''}</div>`
+            : ''
+          return `<tr${residuo ? ' style="color:var(--err)"' : ''}><td>${escapeHtml(baseName(e.path))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}${residuo ? ' <b>⚠ residuo</b><div class="sub">anterior a la última conversión: se RE-PROCESARÁ en la próxima corrida</div>' : ''}${marcaVarado}</td><td>${postForm(action, token, { slot: s.id, accion: 'retire', archivo: baseName(e.path) }, 'Retirar', `Retirar «${baseName(e.path)}» del landing (va a _retirado/, reversible). ¿Continuar?`)}</td></tr>`
         }).join('') || `<tr><td colspan="4" class="sub">Landing vacío — nada pendiente de procesar.</td></tr>`
 
     const archivedRows = sc.archived === 'error'
@@ -325,15 +496,20 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
           `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert-plan', archivo: e.path }, 'Revertir')}</td></tr>`,
         ).join('') || `<tr><td colspan="4" class="sub">Sin procesados archivados todavía.</td></tr>`
 
+    // #162 · la columna DESENLACE aparece cuando hay alguno resuelto (sin ellos: tabla intacta).
+    const conDesenlace = hayDesenlace(sc.history)
+    const thDesenlace = conDesenlace ? '<th>Desenlace</th>' : ''
+    const colsActividad = conDesenlace ? 5 : 4
+
     return `<h2>${escapeHtml(s.label)} <span class="sub c">${escapeHtml(s.id)}</span></h2>
-    ${coherencia}
+    ${vigilante}${avisoLogs}${coherencia}
     <p><b>Última conversión:</b> ${estado} ${rerun ? `<span style="margin-left:12px">${rerun}</span>` : ''}</p>
     ${logHtml}
     <h3 class="sub">Subir archivos</h3>
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
-    <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th><th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s)).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="4" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th>${thDesenlace}<th></th></tr></thead>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s), conDesenlace).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="${colsActividad}" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
