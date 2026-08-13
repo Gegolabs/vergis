@@ -43,100 +43,45 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **Los PRs de Renovate nacen con el CI en rojo: su regeneración del lockfile pierde entradas** —
-  medido en su primera corrida (2026-08-11): el `package-lock.json` de `renovate/npm-ajv-vulnerability`
-  trae **156 referencias `@esbuild/` contra las 234 de `main`** (y 12 vs 16 de `openharmony`), así que
-  `npm ci` —que exige correspondencia exacta árbol↔lock— aborta en 6-10 s con `Missing:
-  @esbuild/…@0.28.2 from lock file`. Afecta a **todo** PR futuro de Renovate, no solo a estos dos.
-  **Experimento corrido (2026-08-11), con resultado parcial:** (1) regenerado el lockfile de esa
-  rama en un worktree con el npm del repo (10.9.8) vuelve a **234**, con `ajv` en 8.20.0 y
-  `found 0 vulnerabilities` ⇒ **el defecto no es del repo, es del lado de Renovate**; (2) su log en
-  debug mostraba `extractedConstraints: {"node":">=22","npm":">=7"}` — infiere el mínimo del
-  `lockfileVersion` y queda libre de elegir npm; (3) **se cerró el rango** (`engines.npm >=10` +
-  `constraints.npm` explícito, commit `81423d8`) y se forzó el rebase de las dos ramas por la
-  casilla `rebase-all-open-prs` del dashboard… **y el lockfile siguió en 156.**
-  ⇒ **La hipótesis del constraint es INSUFICIENTE.** Medido bien: las dos ramas SÍ se regeneraron
-  (`Branch updated`, HEADs nuevos, verificado por API contra el repo, no por refs locales) y el
-  conteo siguió en 156. El fix se deja puesto (correcto e inocuo) pero **no resolvió**.
-  **Segunda hipótesis, también REFUTADA** (2026-08-11, tarde en la noche): `binarySource=install`,
-  para que Renovate instalara el npm del constraint en vez de usar el de su imagen. Medida sobre las
-  ramas **recreadas** de `#171`/`#172` —que **sí** tocan `package-lock.json`, verificado con
-  `compare`— siguieron dando **156** contra 234 del control. Se retiró del workflow para no dejar una
-  variable sin justificación. ⚠️ En el camino casi se valida con `renovate/pin-dependencies` (234
-  refs): esa rama **no toca el lockfile**, hereda el de `main` — instrumento que no mide lo que parece.
-  **Ambas hipótesis muertas. La causa sigue sin identificar.** Lo que queda sin medir: qué npm usa
-  Renovate — el `debug` no lo imprime, haría falta `trace`.
-  **Impacto hoy: acotado.** Las dos CVEs se aplicaron a mano (PR #173, mergeado) con el lockfile
-  regenerado por el npm del repo, así que no dependen de esto. Lo que sigue roto es que **todo PR
-  futuro de Renovate nace con el CI en rojo** y hay que rehacerle el lockfile a mano para mergearlo.
-  **Vía propuesta (2026-08-12) — COMPENSAR, no diagnosticar.** Perseguir la causa quemó dos
-  hipótesis sin resultado; el reencuadre es que la pregunta útil no es «¿cuál es la causa?» sino
-  «¿qué cuesta la fricción?». Y cuesta donde duele: si cada PR exige trabajo a mano, nadie mergea y
-  **el cooldown de 14 días se vuelve decorativo** — peor, la falla aterriza en el camino de
-  seguridad, donde un CVE que se saltó el cooldown como fue diseñado se queda en rojo esperando.
-  **Propuesta: `postUpgradeTasks` corriendo `npm install --package-lock-only` tras cada
-  actualización**, con el npm del repo — literalmente lo que hacemos a mano, automatizado. La
-  palanca **existe y la controlamos por ser self-hosted**: `allowedCommands` es opción *global-only*
-  del administrador del bot (antes `allowedPostUpgradeCommands`), y el administrador somos nosotros;
-  como GitHub App no se podría. **Verificado que la opción existe** (docs de Renovate);
-  **NO verificado en este montaje**. Criterio de éxito, declarado antes de medir: el lockfile del
-  próximo PR de Renovate da **234**. Es compensación, no cura: la causa sigue sin identificar y si
-  la divergencia produce algo más allá de las optional deps de esbuild, esto lo enmascara — aunque
-  no es peor que el workaround manual, solo automático.
-  **IMPLEMENTADO Y MEDIDO (2026-08-12)** — commits `3bae7a1` y `b884960`. Lo verificado con señal
-  **positiva**, no con ausencia de error: (1) **`allowedCommands` SÍ abre la puerta en este montaje**
-  — el log de la corrida `31596456516` muestra la opción parseada dentro del contenedor y el comando
-  ejecutado con sus `spawnargs` exactos; eso era el supuesto grande y **queda cerrado**. (2) **El
-  comando repara el lockfile**: medido DENTRO de la imagen real del bot
-  (`ghcr.io/renovatebot/renovate:43` + `install-tool node 22.22.3` ⇒ npm 10.9.8), sobre el árbol
-  exacto de `renovate/npm-ajv-vulnerability`: **156 → 234**, con el bump preservado (ajv 8.20.0).
-  **Lo que la medición además ACOTA sobre la causa** (sin identificarla): **no es que npm pode las
-  optional deps** — el MISMO comando en el MISMO entorno produce 234. Renovate regenera el lockfile
-  por otra vía. Eso mata una tercera hipótesis antes de que costara una corrida.
-  **Dos trampas que costaron una corrida roja y quedan escritas en `renovate.json`:** (a) la imagen
-  del bot trae `node` pero **NO trae `npm`** — sin `installTools` el comando muere con
-  `spawn npm ENOENT` y el `unhandledRejection` **TUMBA LA CORRIDA ENTERA**, o sea apaga el control de
-  supply chain, no solo el arreglo (`install-tool npm` solo tampoco sirve: «parent tool not installed:
-  node»); (b) **`installTools` es un OBJETO, no el array que dice la doc pública**, y su versión debe
-  ir **exacta** — containerbase rechaza `^22.0.0` y `>=22` con «tool version not supported», **y el
-  `renovate-config-validator` los acepta igual**. De ahí la lección transversal: **el validador
-  verifica FORMA, no SEMÁNTICA** — pasar el gate no es prueba de que la corrida sobreviva.
-  **El último eslabón NO está verificado y está BLOQUEADO**: falta ver a Renovate aplicar y commitear
-  el lockfile bueno en una rama npm suya. No se pudo llegar — ver el pendiente del 403 de `statuses`,
-  que aborta la corrida antes de alcanzar ninguna rama npm. `reg 2026-08-11 · act 2026-08-12`
+- **✅ RESUELTO (2026-08-13) — los PRs de Renovate nacían con el CI en rojo: era la VERSIÓN DE npm.**
+  Renovate regeneraba el lockfile con **npm 12.0.2**, que **poda las optional deps de otras
+  plataformas**: 156 referencias `@esbuild/` contra las 234 de `main`, y `npm ci` abortaba.
+  **Aislado con control limpio** —mismo árbol, mismo comando, misma imagen, misma plataforma, solo
+  cambia el npm—: **10.9.8 ⇒ 234 · 12.0.2 ⇒ 156**.
+  **Cura** (`d1cb166`): `constraints.npm` fijado a `^10.9.8`, más `allowedVersions: "<11"` como
+  **candado** —Renovate tenía pendiente «update npm tool constraint to v12», que habría vuelto a
+  romperlo todo—. **Verificado end-to-end**: la corrida `31719851935` instaló `npm 10.9.9`
+  (`"command": "install-tool npm 10.9.9"`), regeneró `renovate/typescript-5.x` y su lockfile pasó de
+  **156 → 234**; el **PR #177 nació VERDE** (`test` ✓ `review` ✓ `stability-days` ✓, MERGEABLE/CLEAN).
+  **Por qué costó tres días, y es la lección que sobrevive al caso:** `constraints.npm: ">=10"` se
+  dio por «refutado» dos veces **porque `>=10` PERMITE npm 12** — el constraint era correcto en
+  intención y estaba mal expresado. Y **ninguna medición local reprodujo jamás el defecto**, porque
+  todas se hicieron con el npm del repo (10.9.8): **el instrumento no cubría la variable que
+  importaba**, así que cada experimento «demostraba» que el lockfile estaba bien. También murió así
+  la afirmación del 2026-08-12 de que «no es que npm pode las optional deps» — se midió con un solo
+  npm. **Un experimento que no varía la variable sospechosa no la exonera: la ignora.**
+  El `postUpgradeTasks` que compensaba esto se **retiró** junto con su `RENOVATE_ALLOWED_COMMANDS`:
+  corría de verdad (`Executed post-upgrade task`) pero era inútil, porque Renovate lo ejecutaba con
+  el mismo npm 12 que causaba el defecto. Queda **verificado que la palanca funciona** en este
+  montaje por si alguna vez hace falta. `reg 2026-08-11 · resuelto 2026-08-13`
 
-- **🔥 El 403 al publicar commit status ABORTA la corrida entera de Renovate — y el job sale VERDE**
-  — 2026-08-12. **Cadena causal escrita por el propio Renovate**, en el mismo milisegundo (corrida
-  `31623814773`, `debug`):
-  ```
-  DEBUG: POST /repos/Gegolabs/vergis/statuses/4d53aa6… = ERR_NON_2XX      17:41:46.887
-  DEBUG: Caught error setting branch status - aborting (branch=…)          17:41:46.888
-         403 «Resource not accessible by personal access token»
-  DEBUG: Passing repository-changed error up (branch=…)                    17:41:46.892
-   INFO: Repository has changed during renovation - aborting
-  ```
-  **Efecto medido en 9 corridas:** Renovate escribe **exactamente una rama** y corta. Las demás
-  (20 en la última) solo las evalúa. **Nunca alcanza una rama npm**, así que el `postUpgradeTasks`
-  del lockfile no se puede verificar end-to-end.
-  **PREEXISTENTE**: la corrida `31591828225` (11:26, `bc0402b`, antes de tocar nada) ya lo traía.
-  **Viola la doctrina fail-closed que el workflow declara**: control corriendo a una fracción de su
-  alcance, en verde.
-  ⚠️ **Historial de esta ficha — dos errores propios, y el segundo fue corregir bien lo que estaba
-  bien.** (1) Se publicó el 403 como causa por correlación, sin medir el eslabón. (2) Se «corrigió»
-  declarándolo refutado porque una corrida abortó con **cero** 403 — **y esa refutación era inválida:
-  el conteo se hizo sobre logs en `info`, que NO imprimen ese DEBUG.** El cruce lo dejó desnudo: el
-  403 aparece en las **3** corridas `debug` y en **ninguna** de las 5 `info`, mientras el abort
-  ocurre en las **8**. El contador medía el nivel de log, no el fenómeno. **La lección no es «el 403
-  era la causa»: es que un instrumento que no distingue "no ocurrió" de "no lo registré" fabrica
-  refutaciones tan falsas como las afirmaciones que pretende arreglar** — el corolario de la Norma 7
-  sobre instrumentos, aplicado a una refutación.
-  **Lo que falta para cerrarlo del todo:** la confirmación por intervención — dar el permiso y ver
-  que el abort desaparece. La cadena está demostrada en el log; la intervención es la prueba.
-  **Requiere a César**, único que puede editar el PAT: agregar **`Commit statuses: Read and write`**
-  en https://github.com/settings/personal-access-tokens , sobre el PAT del secret `RENOVATE_TOKEN`
-  (el workflow documenta Contents · Pull requests · Workflows · Issues · Metadata — **falta
-  Statuses**). Mismo linaje que «el candado de las alertas es del TOKEN, no del repo» (2026-08-11).
-  `reg 2026-08-12`
+
+- **✅ RESUELTO (2026-08-13) — el 403 al publicar commit status abortaba la corrida entera de
+  Renovate, con el job en VERDE.** Cadena escrita por el propio Renovate en el mismo milisegundo:
+  `POST /statuses/… = ERR_NON_2XX` → `Caught error setting branch status - aborting` → `Passing
+  repository-changed error up` → `Repository has changed during renovation - aborting`. Efecto: de
+  ~20 ramas candidatas escribía **una** y cortaba; **nunca alcanzaba una rama npm**.
+  **Confirmado por intervención**: César agregó `Commit statuses: Read and write` al PAT, y la
+  corrida `31719085575` dio **cero 403, cero abort y tres PRs** (#175, #176, #177). Beneficio
+  colateral visible: el check `renovate/stability-days` ahora se publica («Updates have met minimum
+  release age requirement») — el cooldown pasó de invisible a evidencia en cada PR.
+  **Historial de esta ficha: se afirmó, se «corrigió» y se re-afirmó el mismo día.** La corrección
+  intermedia era la inválida: declaró refutado el 403 contando ocurrencias **en logs con
+  `LOG_LEVEL=info`, que no imprimen ese DEBUG** — el contador medía el nivel de log, no el fenómeno
+  (403 en las 3 corridas `debug`, en ninguna de las 5 `info`, abort en las 8). **Un instrumento que
+  no distingue «no ocurrió» de «no lo registré» fabrica refutaciones tan falsas como las
+  afirmaciones que pretende arreglar.** `reg 2026-08-12 · resuelto 2026-08-13`
+
 
 - **Pinear nuestra propia imagen creó una fuente permanente de churn** — consecuencia del merge de
   #174, y estaba señalada en su cuerpo antes de mergear. `deploy/compose.reference.yml` ahora fija
