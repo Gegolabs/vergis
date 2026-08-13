@@ -4,13 +4,22 @@ PROD corre **0.15.0** y está sano. **El frente de Renovate quedó CERRADO** el 
 identificada, curada y verificada end-to-end. Lo que queda son tres PRs esperando tu merge, dos
 decisiones chicas y el frente de fondo (#161).
 
-## Lo primero: tres PRs de Renovate esperando merge
+## Lo primero: UN PR para merge — los otros dos los está reteniendo el cooldown
 
-| PR | Rama | Qué es |
-|----|------|--------|
-| **#177** | `renovate/typescript-5.x` | `typescript ^5.9.3`. **Es la prueba viva de la cura**: su lockfile da **234** y nació VERDE (`test` ✓ `review` ✓ `stability-days` ✓). |
-| **#176** | `renovate/ghcr.io-gegolabs-vergis-latest` | Digest de **nuestra propia imagen**. Ver la decisión de abajo antes de mergear. |
-| **#175** | `renovate/caddy-2` | Digest de `caddy:2` en el compose de referencia. |
+| PR | Estado | Qué es |
+|----|--------|--------|
+| **#177** | **CLEAN — listo** | `typescript ^5.9.3`. **Es la prueba viva de la cura**: lockfile en **234**, nació VERDE (`test` ✓ `review` ✓ `stability-days` ✓). |
+| #176 | UNSTABLE — `stability-days` **pending** | Digest de **nuestra propia imagen**. El cooldown de 14 días lo está reteniendo. |
+| #175 | UNSTABLE — `stability-days` **pending** | Digest de `caddy:2`. Ídem. |
+
+**#176 y #175 NO se mergean: están retenidos por el cooldown de 14 días, funcionando exactamente
+como fue diseñado.** Es la primera vez que ese control es visible en un PR — antes el status ni se
+publicaba, por el 403 del PAT.
+
+⚠️ **Y #176 expone que el pin de nuestra propia imagen está mal planteado:** el cooldown de supply
+chain existe para que una versión envenenada de un TERCERO se despublique antes de que la toquemos.
+Aplicárselo a una imagen **que publicamos nosotros** no protege de nada y sí retiene 14 días una
+actualización propia. Refuerza la decisión de abajo.
 
 ## Lo que se cerró, y por qué no hay que volver a abrirlo
 
@@ -42,8 +51,8 @@ una compensación que enmascara es deuda. La palanca quedó **verificada** por s
    `ghcr.io/gegolabs/vergis:latest@sha256:…`, así que **cada build de `main` publica un digest nuevo y
    Renovate abre un PR** (hoy, #176). Vino con el merge de #174 y estaba advertido en su cuerpo.
    **Decidir:** quitar el pin (si la referencia debe seguir el tag móvil) o ignorar ese paquete en
-   `renovate.json` (si debe quedar fija). Tal como está, es churn perpetuo del bot sobre una imagen
-   nuestra.
+   `renovate.json` (si debe quedar fija). Tal como está es churn perpetuo del bot sobre una imagen
+   nuestra, **y encima le aplica un cooldown de 14 días pensado para código de terceros** (ver #176).
 2. **El fail-closed del workflow, paso 2.** Decidiste que el job debe ponerse **rojo** cuando Renovate
    aborta; hoy sale verde. El paso 1 (`09f1b9a`) instrumenta pero **no bloquea**, y la medición
    **descartó la vía obvia**: el `reportType` es un inventario de dependencias — en una corrida que
