@@ -2,7 +2,11 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, type IntakeUploadRow, type IntakeRevertRow, type ClaveAccion } from '@vergis/capabilities'
+import {
+  SqliteGovernanceStore, GovernanceConflict, AdminLockout, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION,
+  openSqliteDb, persistSqliteDb, selectAll,
+  type IntakeUploadRow, type IntakeRevertRow, type ClaveAccion, type OneLakeEntry,
+} from '@vergis/capabilities'
 
 describe('GovernanceStore · admins (consolidado)', () => {
   it('implementa AdminStore: semilla, alta, anti-lockout', async () => {
@@ -533,5 +537,207 @@ describe('GovernanceStore · reseed en caliente: la MISMA proyección del arranq
     expect((await g.listGroups()).map((x) => x.id)).toEqual(['analistas'])
     expect((await g.listMembers('analistas')).map((m) => m.email)).toEqual(['a@b.cl'])
     await g.close()
+  })
+})
+
+// ─── Vigilancia del intake: proyección por slot (#161) + desenlace por carga (#162) ────────
+const entry = (path: string, lastModified: string, size = 100): OneLakeEntry => ({ path, isDirectory: false, size, lastModified })
+
+describe('GovernanceStore · proyección de la vigilancia del intake (#161·§3.5)', () => {
+  const snapOf = async (g: SqliteGovernanceStore, slotId: string, runsPerSlot?: number) =>
+    (await g.listSlotSnapshots(runsPerSlot != null ? { runsPerSlot } : undefined)).find((s) => s.slotId === slotId)
+
+  it('una observación exitosa sella landing, corridas y observed_at (y siembra first_attempt_at)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([
+      {
+        slotId: 'saldos',
+        observedAt: '2026-08-13T10:00:00Z',
+        landing: [entry('Files/intake/saldos/a.xlsx', '2026-08-13T08:00:00Z')],
+        runs: [{ startedAt: '2026-08-13T09:00:00Z', status: 'Completed', endedAt: '2026-08-13T09:05:00Z' }],
+      },
+    ])
+    expect(await snapOf(g, 'saldos')).toEqual({
+      slotId: 'saldos',
+      landing: [entry('Files/intake/saldos/a.xlsx', '2026-08-13T08:00:00Z')],
+      runs: [{ startedAt: '2026-08-13T09:00:00Z', endedAt: '2026-08-13T09:05:00Z', status: 'Completed' }],
+      observedAt: '2026-08-13T10:00:00Z',
+      firstAttemptAt: '2026-08-13T10:00:00Z',
+      lastError: null,
+      lastErrorAt: null,
+    })
+    await g.close()
+  })
+
+  it('CRITERIO 1 · una observación con ERROR no pisa el snapshot previo: solo escribe last_error', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([
+      {
+        slotId: 'saldos',
+        observedAt: '2026-08-13T10:00:00Z',
+        landing: [entry('Files/intake/saldos/varado.xlsx', '2026-08-10T08:00:00Z')],
+        runs: [{ startedAt: '2026-08-13T09:00:00Z', status: 'Failed' }],
+      },
+    ])
+    await g.recordSlotObservations([{ slotId: 'saldos', observedAt: '2026-08-13T10:10:00Z', error: 'listar falló (403)' }])
+    const s = (await snapOf(g, 'saldos'))!
+    // Lo último conocido intacto: el varado sigue ahí (si se borrara, el vigilante clasificaría sobre
+    // la nada y el archivo varado dejaría de alertar justo cuando menos se ve).
+    expect(s.landing).toEqual([entry('Files/intake/saldos/varado.xlsx', '2026-08-10T08:00:00Z')])
+    expect(s.runs).toEqual([{ startedAt: '2026-08-13T09:00:00Z', status: 'Failed' }])
+    // `observed_at` NO avanza: es la última medida BUENA, y de ella cuelga la edad de la proyección.
+    expect(s.observedAt).toBe('2026-08-13T10:00:00Z')
+    expect(s.lastError).toBe('listar falló (403)')
+    expect(s.lastErrorAt).toBe('2026-08-13T10:10:00Z')
+    // Una medida buena posterior limpia el error.
+    await g.recordSlotObservations([{ slotId: 'saldos', observedAt: '2026-08-13T10:20:00Z', landing: [], runs: [] }])
+    const s2 = (await snapOf(g, 'saldos'))!
+    expect([s2.lastError, s2.lastErrorAt, s2.observedAt]).toEqual([null, null, '2026-08-13T10:20:00Z'])
+    await g.close()
+  })
+
+  it('un slot CIEGO desde el primer tick igual tiene first_attempt_at (baseline de sin-medida)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([{ slotId: 'oc', observedAt: '2026-08-13T10:00:00Z', error: 'timeout' }])
+    await g.recordSlotObservations([{ slotId: 'oc', observedAt: '2026-08-13T10:10:00Z', error: 'timeout' }])
+    const s = (await snapOf(g, 'oc'))!
+    expect(s).toMatchObject({ observedAt: null, firstAttemptAt: '2026-08-13T10:00:00Z', lastErrorAt: '2026-08-13T10:10:00Z' })
+    expect(s.landing).toEqual([])
+    await g.close()
+  })
+
+  it('CRITERIO 2 · upsert + retención del landing: lo que el listado no trae, DRENÓ', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([
+      { slotId: 'saldos', observedAt: '2026-08-13T10:00:00Z', landing: [entry('L/a.xlsx', '2026-08-13T08:00:00Z', 10), entry('L/b.xlsx', '2026-08-13T08:00:00Z')] },
+    ])
+    await g.recordSlotObservations([
+      { slotId: 'saldos', observedAt: '2026-08-13T10:10:00Z', landing: [entry('L/b.xlsx', '2026-08-13T09:30:00Z', 999), entry('L/c.xlsx', '2026-08-13T09:40:00Z')] },
+    ])
+    const s = (await snapOf(g, 'saldos'))!
+    expect(s.landing.map((e) => e.path)).toEqual(['L/b.xlsx', 'L/c.xlsx']) // 'a' drenó y ya no está
+    expect(s.landing[0]).toEqual(entry('L/b.xlsx', '2026-08-13T09:30:00Z', 999)) // 'b' actualizado
+    await g.close()
+  })
+
+  it('en una observación exitosa, landing/runs AUSENTES no vacían la proyección (land-only)', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([
+      { slotId: 'oc', observedAt: '2026-08-13T10:00:00Z', landing: [entry('L/x.xlsx', '2026-08-13T08:00:00Z')], runs: [{ startedAt: '2026-08-13T09:00:00Z', status: 'Completed' }] },
+    ])
+    // Slot land-only: se midió el landing, las corridas NI SE MIRARON — no es «no hay corridas».
+    await g.recordSlotObservations([{ slotId: 'oc', observedAt: '2026-08-13T10:10:00Z', landing: [entry('L/x.xlsx', '2026-08-13T08:00:00Z')] }])
+    expect((await snapOf(g, 'oc'))!.runs).toHaveLength(1)
+    await g.close()
+  })
+
+  it('poda las corridas del slot a INTAKE_WATCH_RUN_RETENTION y las sirve más reciente primero', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const runs = Array.from({ length: INTAKE_WATCH_RUN_RETENTION + 5 }, (_, i) => ({
+      startedAt: `2026-08-${String(1 + Math.floor(i / 24)).padStart(2, '0')}T${String(i % 24).padStart(2, '0')}:00:00Z`,
+      status: 'Completed' as const,
+    }))
+    await g.recordSlotObservations([{ slotId: 'saldos', observedAt: '2026-08-13T10:00:00Z', runs }])
+    expect((await snapOf(g, 'saldos', 1000))!.runs).toHaveLength(INTAKE_WATCH_RUN_RETENTION)
+    const top = (await snapOf(g, 'saldos', 3))!.runs
+    expect(top).toHaveLength(3)
+    expect(top[0]!.startedAt > top[1]!.startedAt).toBe(true)
+    await g.close()
+  })
+
+  it('la proyección sobrevive al reinicio (es la memoria que el lazo re-hidrata)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-watch-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, {})
+    await g1.recordSlotObservations([{ slotId: 'saldos', observedAt: '2026-08-13T10:00:00Z', landing: [entry('L/a.xlsx', '2026-08-13T08:00:00Z')], runs: [] }])
+    await g1.close()
+    const g2 = await SqliteGovernanceStore.open(file, {})
+    expect((await snapOf(g2, 'saldos'))!.landing).toEqual([entry('L/a.xlsx', '2026-08-13T08:00:00Z')])
+    await g2.close()
+  })
+})
+
+describe('GovernanceStore · desenlace por carga (#162·§3.4)', () => {
+  it('listUploadsSinDesenlace: pendientes del slot, antiguas primero, sin rechazadas ni retro', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const vieja = await g.recordUpload(upload({ filename: 'vieja.xlsx', uploadedAt: '2026-08-01T10:00:00Z' }))
+    const nueva = await g.recordUpload(upload({ filename: 'nueva.xlsx', sha256: SHA_B, uploadedAt: '2026-08-10T10:00:00Z' }))
+    await g.recordUpload(upload({ filename: 'rechazada.xlsx', uploadedAt: '2026-08-02T10:00:00Z', ok: false, error: 'vacío' }))
+    await g.recordUpload(upload({ filename: 'retro.xlsx', uploadedAt: '2026-08-03T10:00:00Z', origen: 'retro' }))
+    await g.recordUpload(upload({ slotId: 'otro', filename: 'ajena.xlsx', uploadedAt: '2026-08-04T10:00:00Z' }))
+    expect((await g.listUploadsSinDesenlace('saldos')).map((r) => r.id)).toEqual([vieja, nueva])
+    // Resuelta ⇒ sale de la cola (dedup natural del resolver: no se re-notifica lo ya resuelto).
+    await g.setUploadDesenlace(vieja, { desenlace: 'procesada', at: '2026-08-13T10:00:00Z' })
+    expect((await g.listUploadsSinDesenlace('saldos')).map((r) => r.id)).toEqual([nueva])
+    expect(await g.listUploadsSinDesenlace('saldos', 0)).toEqual([])
+    await g.close()
+  })
+
+  it('setUploadDesenlace persiste desenlace + motivo textual + corrida, y listUploads lo sirve', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-desenlace-')), 'governance.sqlite')
+    const g1 = await SqliteGovernanceStore.open(file, {})
+    const id = await g1.recordUpload(upload())
+    await g1.setUploadDesenlace(id, {
+      desenlace: 'fallida',
+      motivo: 'ancho inesperado: 28 columnas (se esperaban 48)',
+      runStartedAt: '2026-07-13T16:20:00Z',
+      at: '2026-07-13T16:30:00Z',
+    })
+    await g1.close()
+    const g2 = await SqliteGovernanceStore.open(file, {})
+    expect((await g2.listUploads('saldos', 10))[0]).toMatchObject({
+      id,
+      desenlace: 'fallida',
+      desenlaceMotivo: 'ancho inesperado: 28 columnas (se esperaban 48)',
+      desenlaceRunStartedAt: '2026-07-13T16:20:00Z',
+      desenlaceAt: '2026-07-13T16:30:00Z',
+    })
+    await g2.close()
+  })
+
+  it('CRITERIO 3 · un desenlace NO se sobrescribe: la segunda escritura lanza y el motivo original queda', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const id = await g.recordUpload(upload())
+    await g.setUploadDesenlace(id, { desenlace: 'sin-informe' })
+    await expect(g.setUploadDesenlace(id, { desenlace: 'procesada', motivo: 'otro' })).rejects.toBeInstanceOf(GovernanceConflict)
+    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'sin-informe' })
+    expect((await g.listUploads('saldos', 10))[0]!.desenlaceMotivo).toBeUndefined()
+    await expect(g.setUploadDesenlace(9999, { desenlace: 'procesada' })).rejects.toThrow(/No existe la carga/)
+    await g.close()
+  })
+
+  it('CRITERIO 4 · una db PRE-EXISTENTE sin las columnas nuevas migra sin pérdida de datos', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-migra-')), 'governance.sqlite')
+    // Se construye a mano el esquema VIEJO (el de #62, sin las columnas de desenlace) con datos.
+    const vieja = await openSqliteDb(file)
+    vieja.run(`CREATE TABLE intake_upload (
+      id INTEGER PRIMARY KEY, slot_id TEXT NOT NULL, filename TEXT NOT NULL, sha256 TEXT NOT NULL,
+      bytes INTEGER NOT NULL, uploaded_by TEXT, uploaded_at TEXT NOT NULL, ok INTEGER NOT NULL DEFAULT 1,
+      error TEXT, triggered INTEGER NOT NULL DEFAULT 0, origen TEXT NOT NULL DEFAULT 'upload', dup_of INTEGER
+    );`)
+    vieja.run(
+      `INSERT INTO intake_upload (id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of)
+       VALUES (1,'saldos','historica.xlsx',?,110760,'claudio@x.cl','2026-07-13T16:17:42Z',1,NULL,1,'upload',NULL)`,
+      [SHA_A],
+    )
+    expect(selectAll(vieja, `PRAGMA table_info(intake_upload)`).map((c) => String(c['name']))).not.toContain('desenlace')
+    persistSqliteDb(vieja, file)
+    vieja.close()
+    // Abrir el store migra: la fila histórica sigue entera y ya acepta desenlace.
+    const g = await SqliteGovernanceStore.open(file, {})
+    const filas = await g.listUploads('saldos', 10)
+    expect(filas).toHaveLength(1)
+    expect(filas[0]).toMatchObject({
+      id: 1, slotId: 'saldos', filename: 'historica.xlsx', sha256: SHA_A, bytes: 110760,
+      uploadedBy: 'claudio@x.cl', uploadedAt: '2026-07-13T16:17:42Z', ok: true, triggered: true, origen: 'upload',
+    })
+    expect(filas[0]!.desenlace).toBeUndefined() // NULL = pendiente, que es la verdad de una fila pre-#161
+    expect((await g.listUploadsSinDesenlace('saldos')).map((r) => r.id)).toEqual([1])
+    await g.setUploadDesenlace(1, { desenlace: 'varada' })
+    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'varada' })
+    // Y es idempotente: reabrir no vuelve a migrar ni pierde lo escrito.
+    await g.close()
+    const g2 = await SqliteGovernanceStore.open(file, {})
+    expect((await g2.listUploads('saldos', 10))[0]).toMatchObject({ filename: 'historica.xlsx', desenlace: 'varada' })
+    await g2.close()
   })
 })

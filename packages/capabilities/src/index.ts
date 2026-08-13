@@ -97,7 +97,7 @@ export type { IntakeSlot, IntakeMetaField, IntakeMetaOption, IntakeCatalog, Inta
 export { credentialProviderFor, resolveAuthMode, SCOPE_ONELAKE, SCOPE_FABRIC } from './aad-token'
 export type { CredentialProvider, TokenSource, AccessToken, AuthMode, CredentialSource, SqlAuth, CredentialProviderOpts } from './aad-token'
 export { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus } from './intake-onelake'
-export type { OneLakeIntake, OneLakeReader, OneLakeEntry, FabricJobs, FabricJobStatus } from './intake-onelake'
+export type { OneLakeIntake, OneLakeReader, OneLakeListingReader, OneLakeListing, OneLakeEntry, FabricJobs, FabricJobStatus } from './intake-onelake'
 export { deriveRevertPlan, executeRevertPlan, revertManifestName, buildRevertManifest } from './intake-revert'
 export type { RevertPlan, RevertDeps, RevertRef, RevertResult, ClaveAccion } from './intake-revert'
 export { createFabricScheduler, createFabricEngineClient } from './fabric-engine'
@@ -106,7 +106,7 @@ export { createFabricItemAuthoring, AuthoringError, AuthoringDenied, AuthoringCo
 export type { ItemAuthoringClient, ItemDeclaration, ItemDefinition, DefinitionPart } from './fabric-authoring'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
-export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION } from './governance-store'
+export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION } from './governance-store'
 export type {
   GovernanceStore,
   GroupStore,
@@ -125,6 +125,8 @@ export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } 
 export type { SourceRow, ProcessRow, EngineRef, ProcessLogsRef, SourceRegistryStore } from './governance-store'
 export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } from './governance-store'
 export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
+export type { IntakeDesenlaceStore, CargaDesenlace, CargaDesenlaceInput } from './governance-store'
+export type { IntakeWatchStore, SlotWatchSnapshot } from './governance-store'
 export type { IntakeRevertStore, IntakeRevertRow } from './governance-store'
 export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from './governance-store'
 export type { JobPublicationStore } from './governance-store'

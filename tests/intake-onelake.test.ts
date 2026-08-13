@@ -165,3 +165,37 @@ describe('intake-onelake · lectura (OneLakeReader)', () => {
     expect(out).not.toContain('INICIO')
   })
 })
+
+describe('intake-onelake · listado que distingue la AUSENCIA del vacío (#161·§3.3)', () => {
+  const target = { workspaceId: 'WS', lakehouseId: 'LH' }
+  const listFetch = (status: number, body: unknown) =>
+    (async () => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response) as unknown as typeof fetch
+  const PATHS = { paths: [{ name: 'LH/Files/intake/oc/a.xlsx', contentLength: '12', lastModified: 'Wed, 13 Aug 2026 08:00:00 GMT' }] }
+
+  it('listOrAbsent: 404 → absent; 200 vacío → ok con entries vacío (son estados DISTINTOS)', async () => {
+    const ausente = await createOneLakeReader(tokens, { fetch: listFetch(404, {}) }).listOrAbsent(target, 'Files/intake/oc')
+    expect(ausente).toEqual({ kind: 'absent' })
+    const vacio = await createOneLakeReader(tokens, { fetch: listFetch(200, { paths: [] }) }).listOrAbsent(target, 'Files/intake/oc')
+    expect(vacio).toEqual({ kind: 'ok', entries: [] })
+  })
+
+  it('listOrAbsent: 200 con entradas → ok, con el prefijo del lakehouse recortado y la fecha en ISO', async () => {
+    const r = await createOneLakeReader(tokens, { fetch: listFetch(200, PATHS) }).listOrAbsent(target, 'Files/intake/oc')
+    expect(r).toEqual({
+      kind: 'ok',
+      entries: [{ path: 'Files/intake/oc/a.xlsx', isDirectory: false, size: 12, lastModified: '2026-08-13T08:00:00.000Z' }],
+    })
+  })
+
+  it('listOrAbsent: un error HTTP sigue LANZANDO (no se aplana a absent: no medir es otro estado)', async () => {
+    await expect(createOneLakeReader(tokens, { fetch: listFetch(403, {}) }).listOrAbsent(target, 'Files/intake/oc')).rejects.toThrow(/listar.*403/)
+  })
+
+  it('list (firma existente) NO cambia: 404 y 200-vacío siguen dando ambos []', async () => {
+    expect(await createOneLakeReader(tokens, { fetch: listFetch(404, {}) }).list(target, 'Files/intake/oc')).toEqual([])
+    expect(await createOneLakeReader(tokens, { fetch: listFetch(200, { paths: [] }) }).list(target, 'Files/intake/oc')).toEqual([])
+    expect(await createOneLakeReader(tokens, { fetch: listFetch(200, PATHS) }).list(target, 'Files/intake/oc')).toEqual([
+      { path: 'Files/intake/oc/a.xlsx', isDirectory: false, size: 12, lastModified: '2026-08-13T08:00:00.000Z' },
+    ])
+  })
+})
