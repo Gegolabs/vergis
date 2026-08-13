@@ -10,6 +10,32 @@
  * Este módulo define SOLO el contrato y las funciones puras (parse/match/validate). El write físico a
  * OneLake y el disparo del pipeline viven en `intake-onelake.ts`; los slots concretos los declara la
  * INSTANCIA en `intake/slots.yaml`.
+ *
+ * ── El bloque `watch:` de un slot (issue #161) ──────────────────────────────────────────────────
+ *
+ * Declara la VIGILANCIA del slot. Es OPCIONAL: **ausente = los defaults del producto**, exactamente la
+ * conducta previa a su existencia (compatibilidad total con los YAML ya desplegados).
+ *
+ *     watch: false               # opt-out TOTAL de la vigilancia del slot
+ *     # — o —
+ *     watch:
+ *       max_age_minutes: 1440    # edad máxima en el landing (entero > 0)
+ *       max_run_minutes: 90      # corrida colgada (entero > 0; requiere `trigger`)
+ *
+ * **Qué apaga `watch: false`, con todas sus letras:** el slot sale del lazo COMPLETO — sin observación,
+ * sin proyección que se refresque, sin control positivo, sin conteo del contrato `_logs/` **y sin
+ * resolver de desenlaces (#162)**: sus cargas nuevas quedan sin desenlace y sin aviso al usuario, y la
+ * consola vuelve a la página pre-#161 para ese slot (sin banner de vigilancia). Es el opt-out del slot
+ * donde la vigilancia entera carece de sentido.
+ *
+ * **El slot legítimamente lento NO se apaga: se le sube el umbral.** `max_age_minutes` alto conserva
+ * todo lo demás (desenlaces, contradicciones, medida) y solo corre la línea de «varados». Un slot
+ * land-only sin `max_age_minutes` no emite jamás `varados` (el consumidor externo tiene su propio
+ * ritmo, que el producto no conoce); declararlo es su opt-in a esa señal.
+ *
+ * Fail-closed sin excepción: `watch: true`, el bloque vacío, una clave desconocida dentro del bloque,
+ * un valor no entero o ≤ 0, y `max_run_minutes` en un slot sin `trigger` **lanzan** — el chequeo de
+ * arranque los acusa y el hot-reload rechaza el swap conservando los slots vigentes.
  */
 
 import { requireRootKey } from './config-root'
@@ -147,6 +173,15 @@ export interface IntakeSlot {
    * dejando el dato materializado sería mentir).
    */
   revertDelete?: boolean
+  /**
+   * Vigilancia declarada del slot (issue #161, §4.1 de su diseño). **Ausente = defaults del producto**
+   * (conducta vigente, sin cambio). Tipado inline a propósito: nadie transporta este bloque suelto.
+   *
+   * - `false` — opt-out TOTAL del lazo de vigilancia (ver la cabecera del módulo: apaga también el
+   *   resolver de desenlaces de #162).
+   * - mapa — umbrales propios del slot; lo no declarado cae al default del producto.
+   */
+  watch?: false | { maxAgeMinutes?: number; maxRunMinutes?: number }
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
@@ -246,7 +281,62 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
     const meta = parseMeta(o['meta'], id, catalogs)
     if (meta.length) out.meta = meta
   }
+  // `!== undefined`, no `!= null`: `watch:` sin valor (null en YAML) es una declaración que no declara
+  // nada — se acusa, no se cae al default en silencio.
+  if (o['watch'] !== undefined) out.watch = parseWatch(o['watch'], id, out.trigger != null)
   return out
+}
+
+/** Claves admitidas dentro del bloque `watch` — el bloque nace ESTRICTO (ver `parseWatch`). */
+const WATCH_KEYS = new Set(['max_age_minutes', 'max_run_minutes'])
+
+/**
+ * Valida y normaliza el bloque `watch` de un slot (issue #161). Fail-closed en todas sus formas: una
+ * vigilancia mal declarada rompe el arranque (y el hot-reload rechaza el swap conservando los slots
+ * vigentes) en vez de caer en silencio a los defaults — un control que se apaga sin avisar es peor que
+ * no tenerlo.
+ *
+ * `watch: true` es error: no declara nada que el default no diga ya, y admitirlo crearía dos formas de
+ * escribir lo mismo. El mapa vacío también: una declaración que no declara nada es un typo, no una
+ * intención. Y la clave desconocida DENTRO del bloque es error aunque el nivel-slot tolere claves
+ * sobrantes por historia — el bloque nuevo no hereda esa deuda.
+ */
+function parseWatch(raw: unknown, slotId: string, tieneTrigger: boolean): false | { maxAgeMinutes?: number; maxRunMinutes?: number } {
+  const where = `intake: '${slotId}'.watch`
+  if (raw == null) throw new Error(`${where} está vacío (declara max_age_minutes y/o max_run_minutes, o 'watch: false' para el opt-out).`)
+  if (typeof raw === 'boolean') {
+    if (raw) throw new Error(`${where}: 'true' no declara nada (usa 'false' para el opt-out, o el mapa con max_age_minutes / max_run_minutes).`)
+    return false
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${where} debe ser 'false' o un mapa (max_age_minutes, max_run_minutes).`)
+  }
+  const o = raw as Record<string, unknown>
+  for (const k of Object.keys(o)) {
+    if (!WATCH_KEYS.has(k)) throw new Error(`${where}: clave desconocida '${k}' (esperadas: ${[...WATCH_KEYS].join(', ')}).`)
+  }
+  const out: { maxAgeMinutes?: number; maxRunMinutes?: number } = {}
+  if (o['max_age_minutes'] != null) out.maxAgeMinutes = enteroPositivo(o['max_age_minutes'], `${where}.max_age_minutes`)
+  if (o['max_run_minutes'] != null) {
+    // Coherencia declarativa (familia del aviso #56): un slot land-only no dispara corridas, así que un
+    // umbral de corrida colgada no mide nada. Se acusa al parsear, no se ignora al vigilar.
+    if (!tieneTrigger) throw new Error(`${where}.max_run_minutes requiere 'trigger' (un slot land-only no tiene corridas que medir).`)
+    out.maxRunMinutes = enteroPositivo(o['max_run_minutes'], `${where}.max_run_minutes`)
+  }
+  // Un mapa que no dejó ningún umbral: el mapa vacío (`watch: {}`) y el mapa cuyas claves venían todas
+  // en null (`max_age_minutes:` sin valor) caen los dos acá — declarar sin declarar nada es un typo.
+  if (!Object.keys(out).length) throw new Error(`${where} está vacío (declara max_age_minutes y/o max_run_minutes, o 'watch: false' para el opt-out).`)
+  return out
+}
+
+/**
+ * Entero positivo o error nombrando la clave — mismo registro de mensaje que `maxBytes`, pero SIN su
+ * coerción: acá el tipo se exige (`'30'` y `true` se acusan). El bloque `watch` nace estricto, igual
+ * que con sus claves desconocidas; `maxBytes` tolera la coerción por historia y no se toca.
+ */
+function enteroPositivo(v: unknown, where: string): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) throw new Error(`${where} debe ser un entero positivo.`)
+  return v
 }
 
 const META_TYPES = new Set<IntakeMetaType>(['string', 'number', 'enum', 'rut'])

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { parse as parseYaml } from 'yaml'
 import { parseIntakeConfig, matchSlot, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada, slotRunLogsDir } from '@vergis/capabilities'
 
 const SLOT = {
@@ -413,5 +414,169 @@ describe('intake · catálogo de opciones de la instancia (#109)', () => {
     // Los errores de #95 (nombre fuera de convención / token fuera del catálogo de tokens) siguen intactos.
     expect((validateMeta(slot, {}, 'Factura VH.xlsx') as { error: string }).error).toMatch(/no declara «Empresa \(receptor\)»/)
     expect((validateMeta(slot, {}, 'Listado EasyDoc ZZZ.xlsx') as { error: string }).error).toMatch(/no está en el catálogo de «Empresa \(receptor\)»/)
+  })
+})
+
+// ─── Vigilancia declarada por slot: el bloque `watch:` (issue #161) ──────────────────────────────
+
+const CON_WATCH = (watch: unknown, extra: Record<string, unknown> = {}) => ({
+  slots: [{ id: 'saldos', label: 'S', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/x' }, watch, ...extra }],
+})
+const CON_TRIGGER = { trigger: { processRef: 'pipe1' } }
+
+/**
+ * El YAML de compatibilidad: representativo del contrato completo —catálogo, slot con trigger + meta
+ * derivada + log + revert_delete, y slot land-only con `log: false`— y SIN una sola clave `watch:`.
+ * Su parse esperado se capturó ejecutando el código PREVIO a este frente (commit `8592bba`) y se
+ * congela acá: el test compara la ESTRUCTURA entera, no campo por campo, de modo que cualquier clave
+ * que el parse nuevo agregara a un YAML viejo lo pone rojo.
+ */
+const YAML_SIN_WATCH = `
+catalogs:
+  - id: empresas_gh
+    label: Empresas del grupo
+    options:
+      - value: '96835510-4'
+        label: Hijuelas S.A.
+      - OTRO
+slots:
+  - id: saldos_cartera
+    label: Antigüedad de saldos (Cartera)
+    description: Extracto semanal de cartera
+    domain: cartera
+    accept: 'Antigüedad de saldos *.xlsx'
+    maxBytes: 1048576
+    target:
+      workspaceId: ws1
+      lakehouseId: lh1
+      path: Files/intake/saldos/
+    trigger:
+      processRef: pipe1
+      workspaceId: ws2
+      jobType: Notebook
+    log: Files/code/conv.txt
+    revert_delete: true
+    meta:
+      - id: empresa_rut
+        label: Empresa (receptor)
+        type: enum
+        required: true
+        options_ref: empresas_gh
+        from_filename:
+          patterns:
+            - 'Listado EasyDoc {codigo}.xlsx'
+          catalog:
+            VH: '96835510-4'
+          verify_against: rut_receptor
+      - id: version
+        label: Versión
+        type: string
+  - id: consumo_externo
+    label: Consumo externo (land-only)
+    target:
+      workspaceId: ws1
+      lakehouseId: lh1
+      path: Files/intake/consumo
+    log: false
+`
+
+const PARSE_CONGELADO = [
+  {
+    id: 'saldos_cartera',
+    label: 'Antigüedad de saldos (Cartera)',
+    target: { workspaceId: 'ws1', lakehouseId: 'lh1', path: 'Files/intake/saldos' },
+    description: 'Extracto semanal de cartera',
+    domain: 'cartera',
+    accept: 'Antigüedad de saldos *.xlsx',
+    maxBytes: 1048576,
+    trigger: { processRef: 'pipe1', workspaceId: 'ws2', jobType: 'Notebook' },
+    log: 'Files/code/conv.txt',
+    revertDelete: true,
+    meta: [
+      {
+        id: 'empresa_rut',
+        label: 'Empresa (receptor)',
+        type: 'enum',
+        required: true,
+        options: [{ value: '96835510-4', label: 'Hijuelas S.A.' }, { value: 'OTRO', label: 'OTRO' }],
+        optionsRef: 'empresas_gh',
+        fromFilename: { patterns: ['Listado EasyDoc {codigo}.xlsx'], catalog: { VH: '96835510-4' }, verifyAgainst: 'rut_receptor' },
+      },
+      { id: 'version', label: 'Versión', type: 'string' },
+    ],
+  },
+  {
+    id: 'consumo_externo',
+    label: 'Consumo externo (land-only)',
+    target: { workspaceId: 'ws1', lakehouseId: 'lh1', path: 'Files/intake/consumo' },
+    log: false,
+  },
+]
+
+const CLAVES_CONGELADAS = [
+  ['id', 'label', 'target', 'description', 'domain', 'accept', 'maxBytes', 'trigger', 'log', 'revertDelete', 'meta'],
+  ['id', 'label', 'target', 'log'],
+]
+
+describe('intake · vigilancia declarada por slot (`watch:`, #161)', () => {
+  it('compatibilidad hacia atrás: un YAML sin `watch:` parsea ESTRUCTURALMENTE idéntico al contrato previo', () => {
+    const slots = parseIntakeConfig(parseYaml(YAML_SIN_WATCH))
+    // Igualdad estructural de TODO el resultado contra el parse congelado del código previo.
+    expect(slots).toEqual(PARSE_CONGELADO)
+    // `toEqual` ignora las claves cuyo valor es `undefined`: el juego de claves se compara aparte, para
+    // que un `watch: undefined` colado en el objeto tampoco pase inadvertido.
+    expect(slots.map((s) => Object.keys(s))).toEqual(CLAVES_CONGELADAS)
+    expect(slots.every((s) => !('watch' in s))).toBe(true)
+  })
+
+  it('`watch: false` es el opt-out declarado; el mapa admite una clave, la otra, o ambas', () => {
+    expect(parseIntakeConfig(CON_WATCH(false))[0].watch).toBe(false)
+    expect(parseIntakeConfig(CON_WATCH({ max_age_minutes: 1440 }))[0].watch).toEqual({ maxAgeMinutes: 1440 })
+    expect(parseIntakeConfig(CON_WATCH({ max_run_minutes: 90 }, CON_TRIGGER))[0].watch).toEqual({ maxRunMinutes: 90 })
+    expect(parseIntakeConfig(CON_WATCH({ max_age_minutes: 30, max_run_minutes: 90 }, CON_TRIGGER))[0].watch)
+      .toEqual({ maxAgeMinutes: 30, maxRunMinutes: 90 })
+  })
+
+  it('`watch: true` es error: no declara nada que el default no diga ya', () => {
+    expect(() => parseIntakeConfig(CON_WATCH(true)))
+      .toThrow(/intake: 'saldos'\.watch: 'true' no declara nada/)
+  })
+
+  it('fail-closed: bloque vacío · `watch:` sin valor · clave desconocida · forma que no es mapa ni booleano', () => {
+    expect(() => parseIntakeConfig(CON_WATCH({}))).toThrow(/intake: 'saldos'\.watch está vacío/)
+    expect(() => parseIntakeConfig(CON_WATCH(null))).toThrow(/intake: 'saldos'\.watch está vacío/)
+    expect(() => parseIntakeConfig(CON_WATCH({ max_age_minutes: null }))).toThrow(/intake: 'saldos'\.watch está vacío/)
+    expect(() => parseIntakeConfig(CON_WATCH({ maxAgeMinutes: 30 })))
+      .toThrow(/intake: 'saldos'\.watch: clave desconocida 'maxAgeMinutes' \(esperadas: max_age_minutes, max_run_minutes\)/)
+    expect(() => parseIntakeConfig(CON_WATCH({ max_age_minutes: 30, otra: 1 }))).toThrow(/clave desconocida 'otra'/)
+    for (const forma of ['false', 120, [30]]) {
+      expect(() => parseIntakeConfig(CON_WATCH(forma))).toThrow(/intake: 'saldos'\.watch debe ser 'false' o un mapa/)
+    }
+  })
+
+  it('los umbrales son enteros positivos: 0, negativo, decimal, texto y booleano se acusan nombrando la clave', () => {
+    for (const malo of [0, -5, 12.5, '30', true]) {
+      expect(() => parseIntakeConfig(CON_WATCH({ max_age_minutes: malo })))
+        .toThrow(/intake: 'saldos'\.watch\.max_age_minutes debe ser un entero positivo/)
+    }
+    expect(() => parseIntakeConfig(CON_WATCH({ max_run_minutes: 0 }, CON_TRIGGER)))
+      .toThrow(/intake: 'saldos'\.watch\.max_run_minutes debe ser un entero positivo/)
+  })
+
+  it('`max_run_minutes` en un slot sin `trigger` es error: no hay corridas que medir', () => {
+    expect(() => parseIntakeConfig(CON_WATCH({ max_run_minutes: 90 })))
+      .toThrow(/intake: 'saldos'\.watch\.max_run_minutes requiere 'trigger'/)
+    // Con trigger, la misma declaración es legítima: el control positivo del mismo mensaje.
+    expect(parseIntakeConfig(CON_WATCH({ max_run_minutes: 90 }, CON_TRIGGER))[0].watch).toEqual({ maxRunMinutes: 90 })
+  })
+
+  it('el error nombra siempre al slot que lo trae (mensaje accionable en un YAML de muchos slots)', () => {
+    const doc = {
+      slots: [
+        { id: 'bueno', label: 'B', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/a' }, watch: false },
+        { id: 'malo', label: 'M', target: { workspaceId: 'w', lakehouseId: 'l', path: 'Files/b' }, watch: { max_age_minutes: -1 } },
+      ],
+    }
+    expect(() => parseIntakeConfig(doc)).toThrow("intake: 'malo'.watch.max_age_minutes debe ser un entero positivo.")
   })
 })
