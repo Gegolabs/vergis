@@ -15,7 +15,7 @@
 # VERGIS_CONFIG_CHECK = strict (default) | warn | off.
 services:
   vergis:
-    image: ghcr.io/gegolabs/vergis:latest@sha256:e23bd3cd93f4d9e335d8acf5bd932b30bb02bdfa4289f5853e72ffe4b44a894d
+    image: ghcr.io/gegolabs/vergis:latest@sha256:7f186640e9a94f050952d27ef480a8a48a233ac453bdb7b9b4ed8c31a8db4cce
     restart: unless-stopped
     # Secretos de la instancia (NUNCA en git): VERGIS_CONNECTIONS (Service Principal → Fabric),
     # VERGIS_ADMIN_SEED (admins semilla), VERGIS_INDEX_TITLE/LOGO (branding). En un archivo gitignored.
