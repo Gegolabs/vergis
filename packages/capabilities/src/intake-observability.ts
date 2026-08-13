@@ -62,6 +62,20 @@ export interface SlotObservation {
   runs?: RunRecord[]
   /** El intento FALLÓ: qué lectura y por qué. Presente ⇒ `landing`/`runs` ausentes o parciales. */
   error?: string
+  /**
+   * #162·§5 · corridas TERMINADAS consecutivas sin log correlacionable en `_logs/`, medidas en ESTE
+   * tick (`contarCorridasSinLog`). Es medida del lazo, no clasificación: viaja a la proyección para
+   * que la consola pueda mostrar el aviso del contrato sin listar almacenamiento en el request path.
+   *
+   * TRES valores, y la diferencia importa:
+   *  · número — se midió: se persiste.
+   *  · `null` — NO APLICA a este slot (sin `trigger`, `log: false`, motor o `_logs/` no cableados):
+   *    limpia el valor persistido. Un slot que declaró `log: false` optó POR ESCRITO a no escribir
+   *    logs por corrida; acusarlo de incumplir sería ruido contra una declaración legítima.
+   *  · ausente — no se pudo medir (el listado de `_logs/` falló): NO se toca lo persistido, que pasa
+   *    a ser «lo último conocido». No medir no es medir cero.
+   */
+  corridasSinLog?: number | null
 }
 
 /** Calidad de la medida — viaja SIEMPRE junto al estado del slot, en la alerta y en la superficie:

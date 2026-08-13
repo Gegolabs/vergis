@@ -128,6 +128,41 @@ export function resolveRunLog(run: RunRecord, entries: OneLakeEntry[]): RunLogRe
   return { kind: 'sin-log' }
 }
 
+/** Corridas que el contrato del escritor SÍ cubre: el log se escribe al final de toda corrida que
+ *  llegó a correr (éxito o aborto). `Cancelled`/`Deduped` pueden no haber arrancado el script jamás
+ *  —contarlas como incumplimiento sería fabricar una acusación—, y `InProgress`/`NotStarted` aún no
+ *  terminaron. Las cuatro se SALTAN: ni cuentan ni cortan. */
+const TERMINADAS: ReadonlySet<string> = new Set(['Completed', 'Failed'])
+
+/**
+ * Corridas TERMINADAS consecutivas —desde la más reciente hacia atrás— cuya resolución de log es
+ * `'sin-log'` (#162·§5). El insumo del aviso de incumplimiento del contrato `_logs/`.
+ *
+ * Reglas, cada una con su porqué:
+ *  · **Cuenta solo `'sin-log'`.** `'match'` corta: la conducta reciente cumple. `'purgado'` TAMBIÉN
+ *    corta, y sin acusar: significa que el log más viejo retenido es posterior a la ventana de esa
+ *    corrida, así que no se puede afirmar que no se escribió — la ausencia de medida no es evidencia
+ *    de falta. `'en-curso'` no aplica a corridas terminadas (`resolveRunLog` solo lo devuelve para
+ *    `InProgress`/`NotStarted`, verificado arriba en este mismo archivo).
+ *  · **Consecutivas desde la más reciente**: es lo que distingue conducta de accidente, y es lo que
+ *    el aviso redacta («las últimas N corridas terminadas no dejaron log»).
+ *  · **El orden lo impone esta función**, no el llamador: las corridas se ordenan por `startedAt`
+ *    descendente antes de recorrer. Un arreglo que llegue en otro orden (o mezclado) daría un conteo
+ *    distinto, y eso sería una acusación que depende de quién llamó.
+ */
+export function contarCorridasSinLog(runs: RunRecord[], entries: OneLakeEntry[]): number {
+  const ordenadas = [...(runs ?? [])]
+    .filter((r): r is RunRecord => r != null)
+    .sort((a, b) => (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0))
+  let n = 0
+  for (const run of ordenadas) {
+    if (!TERMINADAS.has(run.status)) continue
+    if (resolveRunLog(run, entries ?? []).kind !== 'sin-log') break
+    n++
+  }
+  return n
+}
+
 const REDACTADO = '«…redactado…»'
 const CLAVES = 'client_secret|clientsecret|password|pwd|accountkey|sharedaccesskey|sas|secret|token'
 const PAR_RE = new RegExp(`\\b(${CLAVES})(\\s*["']?\\s*[=:]\\s*["']?)([^\\s;,"']+)`, 'gi')
