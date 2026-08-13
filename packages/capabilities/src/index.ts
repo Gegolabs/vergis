@@ -19,6 +19,8 @@ export {
   assignLanes,
   markTopPx,
   seriesLabelStride,
+  seriesLabelIndices,
+  seriesLanes,
 } from './render-chart'
 export type { TopNRank, LabelMode } from './render-chart'
 export { TABLE_SSR_MAX_ROWS, TABLE_PRINT_MAX_ROWS } from './render-table'
