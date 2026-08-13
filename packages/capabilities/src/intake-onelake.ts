@@ -93,6 +93,17 @@ export interface OneLakeEntry {
   lastModified: string
 }
 
+/**
+ * Resultado de un listado que NO aplana la ausencia del directorio (#161·§3.3).
+ *
+ * `list()` mapea 404 → `[]`, así que un `[]` significa a la vez «el directorio está vacío» y «el
+ * directorio no existe»: para la consola de cargas da igual (no hay nada que mostrar), pero para el
+ * vigilante del intake NO — «el landing no existe» con cargas registradas es una CONTRADICCIÓN, no
+ * un landing vacío. El error sigue lanzando en ambas variantes: fallar en medir ya es un estado
+ * propio (`SlotObservation.error`), y aplanarlo acá lo borraría.
+ */
+export type OneLakeListing = { kind: 'ok'; entries: OneLakeEntry[] } | { kind: 'absent' }
+
 /** Operaciones de ARCHIVOS del Lakehouse para la consola de cargas (#55/#57/#58): leer el log,
  * listar el landing, retirar/reactivar archivos (copy+remove — el rename DFS es quisquilloso). */
 export interface OneLakeReader {
@@ -108,7 +119,18 @@ export interface OneLakeReader {
   remove(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, path: string): Promise<void>
 }
 
-export function createOneLakeReader(tokens: TokenSource, opts: { fetch?: FetchLike } = {}): OneLakeReader {
+/**
+ * El listado que distingue la ausencia. Va en su PROPIA interfaz, no dentro de `OneLakeReader`:
+ * agregarlo allá obligaría a re-implementarlo a todo fake existente de la consola de cargas, que no
+ * lo necesita. `createOneLakeReader` devuelve las dos, y el vigilante del intake pide esta.
+ */
+export interface OneLakeListingReader {
+  /** Igual que `list`, pero distingue «el directorio no existe» (`absent`) de «está vacío»
+   *  (`{ kind: 'ok', entries: [] }`). Ver `OneLakeListing`. */
+  listOrAbsent(target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>, dir: string, opts?: { recursive?: boolean }): Promise<OneLakeListing>
+}
+
+export function createOneLakeReader(tokens: TokenSource, opts: { fetch?: FetchLike } = {}): OneLakeReader & OneLakeListingReader {
   const doFetch = opts.fetch ?? fetch
   const auth = async (): Promise<Record<string, string>> => ({ authorization: `Bearer ${(await tokens.getToken(SCOPE_ONELAKE)).token}` })
   const enc = (p: string): string => p.replace(/^\/+|\/+$/g, '').split('/').map(encodeURIComponent).join('/')
@@ -121,6 +143,30 @@ export function createOneLakeReader(tokens: TokenSource, opts: { fetch?: FetchLi
     if (res.status === 404) return null
     if (!res.ok) throw await dfsError('leer', res, url)
     return new Uint8Array(await res.arrayBuffer())
+  }
+
+  // Un solo camino de código para las dos variantes de listado: `list` es esta función con la
+  // ausencia aplanada a `[]`. Así la forma existente no puede divergir de la que distingue.
+  async function listOrAbsent(
+    target: Pick<IntakeTarget, 'workspaceId' | 'lakehouseId'>,
+    dir: string,
+    o: { recursive?: boolean } = {},
+  ): Promise<OneLakeListing> {
+    // ADLS list: el FILESYSTEM es el workspace; `directory` lleva el lakehouse como primer segmento.
+    const dirWithLh = `${target.lakehouseId}/${dir.replace(/^\/+|\/+$/g, '')}`
+    const url = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}?resource=filesystem&recursive=${o.recursive ? 'true' : 'false'}&directory=${encodeURIComponent(dirWithLh)}`
+    const res = await doFetch(url, { headers: await auth(), signal: AbortSignal.timeout(30_000) })
+    if (res.status === 404) return { kind: 'absent' }
+    if (!res.ok) throw await dfsError('listar', res, url)
+    const body = (await res.json().catch(() => ({}))) as { paths?: { name?: string; isDirectory?: string | boolean; contentLength?: string | number; lastModified?: string }[] }
+    const lhPrefix = `${target.lakehouseId}/`
+    const entries = (body.paths ?? []).map((p) => ({
+      path: (p.name ?? '').startsWith(lhPrefix) ? (p.name ?? '').slice(lhPrefix.length) : p.name ?? '',
+      isDirectory: p.isDirectory === true || p.isDirectory === 'true',
+      size: Number(p.contentLength ?? 0),
+      lastModified: p.lastModified ? new Date(p.lastModified).toISOString() : '',
+    }))
+    return { kind: 'ok', entries }
   }
 
   return {
@@ -136,21 +182,10 @@ export function createOneLakeReader(tokens: TokenSource, opts: { fetch?: FetchLi
     },
     readBytes,
     async list(target, dir, o = {}): Promise<OneLakeEntry[]> {
-      // ADLS list: el FILESYSTEM es el workspace; `directory` lleva el lakehouse como primer segmento.
-      const dirWithLh = `${target.lakehouseId}/${dir.replace(/^\/+|\/+$/g, '')}`
-      const url = `${ONELAKE_HOST}/${encodeURIComponent(target.workspaceId)}?resource=filesystem&recursive=${o.recursive ? 'true' : 'false'}&directory=${encodeURIComponent(dirWithLh)}`
-      const res = await doFetch(url, { headers: await auth(), signal: AbortSignal.timeout(30_000) })
-      if (res.status === 404) return []
-      if (!res.ok) throw await dfsError('listar', res, url)
-      const body = (await res.json().catch(() => ({}))) as { paths?: { name?: string; isDirectory?: string | boolean; contentLength?: string | number; lastModified?: string }[] }
-      const lhPrefix = `${target.lakehouseId}/`
-      return (body.paths ?? []).map((p) => ({
-        path: (p.name ?? '').startsWith(lhPrefix) ? (p.name ?? '').slice(lhPrefix.length) : p.name ?? '',
-        isDirectory: p.isDirectory === true || p.isDirectory === 'true',
-        size: Number(p.contentLength ?? 0),
-        lastModified: p.lastModified ? new Date(p.lastModified).toISOString() : '',
-      }))
+      const r = await listOrAbsent(target, dir, o)
+      return r.kind === 'ok' ? r.entries : []
     },
+    listOrAbsent,
     async copy(target, from, to): Promise<void> {
       const bytes = await readBytes(target, from)
       if (!bytes) throw new Error(`onelake-intake: copy — el origen '${from}' no existe.`)

@@ -30,6 +30,8 @@ import {
 } from './job-publication'
 import type { RunRecord, RunStatus } from './ingestion-observability'
 import type { ClaveAccion } from './intake-revert'
+import type { OneLakeEntry } from './intake-onelake'
+import type { SlotObservation } from './intake-observability'
 import {
   canTransition,
   isMirandaState,
@@ -266,6 +268,38 @@ export interface IntakeUploadRow {
   origen: 'upload' | 'retro'
   /** Id de la carga ORIGINAL cuando el contenido es idéntico a una previa del slot. */
   dupOfId?: number
+  /** Desenlace resuelto por el vigilante (#162). Ausente = todavía pendiente. */
+  desenlace?: CargaDesenlace
+  /** Motivo TEXTUAL declarado por el job (gramática `_logs/`). Ausente = el job no lo declaró — la
+   *  plataforma jamás fabrica una causa que nadie escribió (requisito duro 4 del diseño). */
+  desenlaceMotivo?: string
+  /** `startedAt` de la corrida que cubrió la carga (ancla al enlace profundo de la corrida, #99). */
+  desenlaceRunStartedAt?: string
+  /** ISO del instante en que el resolver escribió el desenlace. */
+  desenlaceAt?: string
+}
+
+/**
+ * Desenlace de UNA carga (#162·§3.4). Lo escribe SOLO el resolver del lazo de vigilancia, y una vez
+ * escrito no se recalcula: es un hecho observado, no un campo editable (corrección manual fuera de
+ * alcance por §9 del diseño — un resolver que se equivoca es un bug, no un dato a editar).
+ *
+ * La distinción entre `'fallida'` y `'sin-informe'` es el corazón de la honestidad del modelo:
+ * `'fallida'` TIENE motivo declarado por el job; `'sin-informe'` NO lo tiene y lo dice.
+ */
+export type CargaDesenlace =
+  | 'procesada'   // gramática `_logs/`: ✔ procesado, o corrida Completed que la archivó
+  | 'saltada'     // gramática `_logs/`: ⚠ saltado — con motivo
+  | 'fallida'     // gramática `_logs/`: ✖ fallido — con motivo; o corrida Failed que la cubre
+  | 'sin-informe' // la corrida que la cubría murió sin escribir log (`resolveRunLog` = 'sin-log')
+  | 'varada'      // el archivo excedió la edad máxima sin que ninguna corrida lo tomara
+
+/** Lo que el resolver escribe por carga. `at` default = ahora. */
+export interface CargaDesenlaceInput {
+  desenlace: CargaDesenlace
+  motivo?: string
+  runStartedAt?: string
+  at?: string
 }
 
 /** Registro consultable de las cargas del intake + la marca del indexado retroactivo por slot. */
@@ -279,6 +313,31 @@ export interface IntakeUploadStore {
   /** ¿El indexado retroactivo de `_processed/` del slot ya corrió? */
   intakeBackfillDone(slotId: string): Promise<boolean>
   markIntakeBackfillDone(slotId: string, files: number, errores: number): Promise<void>
+}
+
+/**
+ * El lado ESCRITOR del desenlace por carga (#162·§3.4). Interfaz aparte de `IntakeUploadStore`
+ * porque sus consumidores son distintos: la consola de cargas y la reversión (#63) solo leen el
+ * registro, y no deberían tener que implementar el resolver para seguir compilando.
+ */
+export interface IntakeDesenlaceStore {
+  /**
+   * Cargas del slot que el resolver todavía no resolvió, MÁS ANTIGUAS PRIMERO (el varado más viejo
+   * es el que más urge). `limit` acota el lote de una vuelta del lazo; no es una política.
+   *
+   * Quedan FUERA dos clases de fila que jamás podrán tener desenlace y, si entraran, volverían
+   * eternamente en cada tick: las rechazadas (`ok = 0`, que nunca aterrizaron — no hay archivo en
+   * el landing del que preguntar) y las del indexado retroactivo (`origen = 'retro'`, derivadas de
+   * `_processed/`: no son un evento vivido y no tienen quién sea notificado).
+   */
+  listUploadsSinDesenlace(slotId: string, limit?: number): Promise<IntakeUploadRow[]>
+  /**
+   * Escribe el desenlace de UNA carga. Lanza `GovernanceConflict` si la fila YA tiene desenlace: el
+   * desenlace se resuelve una vez y no se recalcula (§3.4), así que una segunda escritura es un bug
+   * del resolver — y un bug que pisa el motivo original en silencio es indistinguible de un dato
+   * bueno. Lanza `Error` si el id no existe.
+   */
+  setUploadDesenlace(id: number, d: CargaDesenlaceInput): Promise<void>
 }
 
 /**
@@ -352,6 +411,56 @@ export interface IngestionRunStore {
 }
 
 /**
+ * Lo último conocido de UN slot vigilado (#161·§3.5) — el contrato de lectura del lazo de intake y
+ * de la consola de Cargas. Mismas convenciones de `IngestionRunSnapshot`: `null` es «no hay dato»,
+ * y `observedAt` es la última observación EXITOSA (una fallida no lo mueve).
+ */
+export interface SlotWatchSnapshot {
+  slotId: string
+  /** Listado proyectado del landing, tal como lo dejó la última observación exitosa. */
+  landing: OneLakeEntry[]
+  /** Corridas conocidas del trigger, más reciente primero (hasta `runsPerSlot`). */
+  runs: RunRecord[]
+  /** ISO de la última observación EXITOSA. null = proyección fría (jamás se midió bien). */
+  observedAt: string | null
+  /** ISO del PRIMER intento sobre el slot (exitoso o no): baseline de `sin-medida` cuando nunca
+   *  hubo medida buena — sin él, un slot ciego desde el día uno no cruzaría jamás el umbral. */
+  firstAttemptAt: string | null
+  /** Error del intento MÁS RECIENTE si falló; null si el último intento salió bien. */
+  lastError: string | null
+  lastErrorAt: string | null
+}
+
+/** Retención de corridas proyectadas POR SLOT. Mismo número que la de procesos (#105): la razón es
+ *  la misma —el historial sirve para diagnosticar, no para archivar— y divergir sin motivo obligaría
+ *  a explicar la diferencia. */
+export const INTAKE_WATCH_RUN_RETENTION = 60
+
+/**
+ * Proyección de la vigilancia del intake por slot (#161·§3.5). Espejo de `IngestionRunStore`: el
+ * render JAMÁS lista OneLake en el request path — lee de acá.
+ */
+export interface IntakeWatchStore {
+  /**
+   * Escritura POR LOTE (un persist) de las observaciones de una vuelta del lazo.
+   *
+   * Éxito: reemplaza el landing proyectado del slot por el listado observado (el listado ES la
+   * verdad del landing en ese instante: un archivo que drenó tiene que DESAPARECER de la
+   * proyección, o seguiría alertando como varado para siempre), hace upsert de las corridas con
+   * poda a `INTAKE_WATCH_RUN_RETENTION`, y sella `observed_at` con `last_error` en NULL.
+   *
+   * Error: SOLO se escriben `last_error`/`last_error_at`. El snapshot previo queda intacto — un
+   * almacenamiento caído no puede fabricar «landing vacío» (invariante 1 de la vigilancia).
+   *
+   * En una observación exitosa, `landing`/`runs` AUSENTES no vacían nada: «no medí las corridas»
+   * (slot land-only) no es «no hay corridas». Vaciar exige un listado presente y vacío.
+   */
+  recordSlotObservations(obs: SlotObservation[]): Promise<void>
+  /** Snapshots de TODOS los slots con estado o proyección. `runsPerSlot` default 10. */
+  listSlotSnapshots(opts?: { runsPerSlot?: number }): Promise<SlotWatchSnapshot[]>
+}
+
+/**
  * Ledger APPEND-ONLY de publicaciones de jobs (#107 fase 2, D6). Las ops son PURAS y viven en
  * `job-publication.ts`; el store las expone porque es el dueño del `SqlDb` de gobierno —y de su
  * `persist()`: una escritura del ledger que no se vuelca al archivo se perdería en el próximo
@@ -381,8 +490,10 @@ export interface GovernanceStore
     PlatformSettingStore,
     MirandaStore,
     IntakeUploadStore,
+    IntakeDesenlaceStore,
     IntakeRevertStore,
     IngestionRunStore,
+    IntakeWatchStore,
     JobPublicationStore {
   close(): Promise<void>
 }
@@ -524,6 +635,12 @@ const INTAKE_UPLOAD_DDL = `CREATE TABLE IF NOT EXISTS intake_upload (
   origen TEXT NOT NULL DEFAULT 'upload',
   dup_of INTEGER
 );`
+// #162 · el DESENLACE de cada carga. Columnas y no tabla aparte: es un atributo de la carga (1:1,
+// escrito una sola vez), y una tabla anexa obligaría a un join en la consulta más caliente del
+// timeline. Nacen NULL —«pendiente»— y las llena SOLO el resolver del lazo.
+const INTAKE_UPLOAD_DESENLACE_COLS = ['desenlace TEXT', 'desenlace_motivo TEXT', 'desenlace_run_started_at TEXT', 'desenlace_at TEXT']
+// Índice de la consulta del resolver: por slot, las pendientes, más antiguas primero.
+const INTAKE_UPLOAD_IDX_DESENLACE = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sin_desenlace ON intake_upload (slot_id, desenlace, uploaded_at);`
 const INTAKE_UPLOAD_IDX_SHA = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sha ON intake_upload (slot_id, sha256);`
 const INTAKE_UPLOAD_IDX_TS = `CREATE INDEX IF NOT EXISTS idx_intake_upload_slot_ts ON intake_upload (slot_id, uploaded_at DESC);`
 // #63 · el registro de REVERSIONES. `by_user` (y no `by`) porque BY es palabra reservada del SQL.
@@ -560,6 +677,37 @@ const INGESTION_PROCESS_STATE_DDL = `CREATE TABLE IF NOT EXISTS ingestion_proces
   observed_at TEXT,
   last_error TEXT,
   last_error_at TEXT
+);`
+
+// ── Vigilancia del intake (issue #161): la proyección por slot, servible sin tocar OneLake ──
+// Tres tablas por la misma razón que la proyección de ingestión son dos: el ESTADO de la medida
+// (que sobrevive a un error) se escribe en cada vuelta, y los datos observados solo cuando hubo
+// medida. `intake_watch_landing` es un SET por slot: su PK es el path, porque en el landing el
+// nombre ES la identidad (una re-subida pisa el archivo anterior).
+const INTAKE_WATCH_STATE_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_state (
+  slot_id TEXT PRIMARY KEY,
+  observed_at TEXT,
+  first_attempt_at TEXT,
+  last_error TEXT,
+  last_error_at TEXT
+);`
+const INTAKE_WATCH_LANDING_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_landing (
+  slot_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  is_directory INTEGER NOT NULL DEFAULT 0,
+  size INTEGER NOT NULL DEFAULT 0,
+  last_modified TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (slot_id, path)
+);`
+// Misma identidad de corrida que `ingestion_run` (#105): (dueño, started_at). El motor no entrega
+// id de instancia, y `started_at` se guarda TAL CUAL para que el enlace al log de #99 calce.
+const INTAKE_WATCH_RUN_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_run (
+  slot_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  PRIMARY KEY (slot_id, started_at)
 );`
 
 export interface GovernanceSeed {
@@ -674,13 +822,21 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(MIRANDA_ARTIFACT_DDL)
     db.run(MIRANDA_SEQ_DDL)
     db.run(INTAKE_UPLOAD_DDL)
+    // Migración idempotente de las columnas de desenlace (#162): una db anterior a #161 ya tiene la
+    // tabla creada, así que el CREATE de arriba no la toca — el ALTER las agrega sin pérdida (SQLite
+    // rellena con NULL, que ES el estado «pendiente»).
+    ensureColumns(db, 'intake_upload', INTAKE_UPLOAD_DESENLACE_COLS)
     db.run(INTAKE_UPLOAD_IDX_SHA)
     db.run(INTAKE_UPLOAD_IDX_TS)
+    db.run(INTAKE_UPLOAD_IDX_DESENLACE)
     db.run(INTAKE_REVERT_DDL)
     db.run(INTAKE_REVERT_IDX)
     db.run(INTAKE_BACKFILL_DDL)
     db.run(INGESTION_RUN_DDL)
     db.run(INGESTION_PROCESS_STATE_DDL)
+    db.run(INTAKE_WATCH_STATE_DDL)
+    db.run(INTAKE_WATCH_LANDING_DDL)
+    db.run(INTAKE_WATCH_RUN_DDL)
     // #107 fase 2: ledger append-only de publicaciones de jobs. Sus ops viven en `job-publication.ts`
     // (puras sobre SqlDb, patrón admin-roles); acá solo nace la tabla, en el mismo db de gobierno.
     ensureJobPublicationTable(db)
@@ -1281,10 +1437,16 @@ export class SqliteGovernanceStore implements GovernanceStore {
     if (r['uploaded_by'] != null) row.uploadedBy = String(r['uploaded_by'])
     if (r['error'] != null) row.error = String(r['error'])
     if (r['dup_of'] != null) row.dupOfId = Number(r['dup_of'])
+    // El desenlace se lee tal cual está en la fila: solo el resolver lo escribe, y un valor que no
+    // pertenezca al enum sería un dato corrupto — mentir sobre él sería peor que mostrarlo.
+    if (r['desenlace'] != null) row.desenlace = String(r['desenlace']) as CargaDesenlace
+    if (r['desenlace_motivo'] != null) row.desenlaceMotivo = String(r['desenlace_motivo'])
+    if (r['desenlace_run_started_at'] != null) row.desenlaceRunStartedAt = String(r['desenlace_run_started_at'])
+    if (r['desenlace_at'] != null) row.desenlaceAt = String(r['desenlace_at'])
     return row
   }
 
-  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of`
+  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of, desenlace, desenlace_motivo, desenlace_run_started_at, desenlace_at`
 
   async recordUpload(row: Omit<IntakeUploadRow, 'id'>): Promise<number> {
     this.db.run(
@@ -1353,6 +1515,37 @@ export class SqliteGovernanceStore implements GovernanceStore {
       `INSERT INTO intake_backfill (slot_id, done_at, files, errores) VALUES (?,?,?,?)
        ON CONFLICT(slot_id) DO UPDATE SET done_at=excluded.done_at, files=excluded.files, errores=excluded.errores`,
       [slotId.trim(), now(), Math.max(0, Math.trunc(files)), Math.max(0, Math.trunc(errores))],
+    )
+    this.persist()
+  }
+
+  // ── IntakeDesenlaceStore (el desenlace por carga, issue #162) ──
+  async listUploadsSinDesenlace(slotId: string, limit = 500): Promise<IntakeUploadRow[]> {
+    const stmt = this.db.prepare(
+      `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
+       WHERE slot_id = ? AND desenlace IS NULL AND ok = 1 AND origen = 'upload'
+       ORDER BY uploaded_at ASC, id ASC LIMIT ?`,
+    )
+    stmt.bind([slotId.trim(), Math.max(0, Math.trunc(limit))])
+    const out: IntakeUploadRow[] = []
+    while (stmt.step()) out.push(this.intakeUploadRow(stmt.getAsObject()))
+    stmt.free()
+    return out
+  }
+
+  async setUploadDesenlace(id: number, d: CargaDesenlaceInput): Promise<void> {
+    const stmt = this.db.prepare(`SELECT desenlace FROM intake_upload WHERE id = ?`)
+    stmt.bind([id])
+    const existe = stmt.step()
+    const previo = existe ? (stmt.getAsObject() as { desenlace?: string | null }).desenlace : null
+    stmt.free()
+    if (!existe) throw new Error(`No existe la carga ${id} en el registro.`)
+    // Lectura + escritura sin transacción: el db es de un solo proceso y el único escritor de estas
+    // columnas es el resolver del lazo, que corre serializado bajo su guard anti-solape (#161·§7/H4).
+    if (previo != null) throw new GovernanceConflict(`La carga ${id} ya tiene desenlace '${String(previo)}'; un desenlace no se recalcula.`)
+    this.db.run(
+      `UPDATE intake_upload SET desenlace = ?, desenlace_motivo = ?, desenlace_run_started_at = ?, desenlace_at = ? WHERE id = ?`,
+      [d.desenlace, d.motivo ?? null, d.runStartedAt ?? null, d.at || now(), id],
     )
     this.persist()
   }
@@ -1529,6 +1722,138 @@ export class SqliteGovernanceStore implements GovernanceStore {
         runs,
         scheduleSeconds: s?.scheduleSeconds ?? null,
         observedAt: s?.observedAt ?? null,
+        lastError: s?.lastError ?? null,
+        lastErrorAt: s?.lastErrorAt ?? null,
+      })
+    }
+    return out
+  }
+
+  // ── IntakeWatchStore (proyección de la vigilancia del intake por slot, issue #161) ──
+  /** Poda las corridas del slot a las `INTAKE_WATCH_RUN_RETENTION` más nuevas. Calca `pruneRuns`:
+   *  `started_at` es único por slot (parte de la PK), así que el corte no se lleva empates. */
+  private pruneSlotRuns(slotId: string): void {
+    const stmt = this.db.prepare(
+      `SELECT started_at FROM intake_watch_run WHERE slot_id = ? ORDER BY started_at DESC LIMIT 1 OFFSET ?`,
+    )
+    stmt.bind([slotId, INTAKE_WATCH_RUN_RETENTION - 1])
+    const cutoff = stmt.step() ? String((stmt.getAsObject() as { started_at: string }).started_at) : null
+    stmt.free()
+    if (cutoff != null) this.db.run(`DELETE FROM intake_watch_run WHERE slot_id = ? AND started_at < ?`, [slotId, cutoff])
+  }
+
+  async recordSlotObservations(obs: SlotObservation[]): Promise<void> {
+    if (!obs.length) return
+    for (const o of obs) {
+      const sid = o.slotId?.trim()
+      if (!sid) continue
+      if (o.error != null) {
+        // Falló: SOLO se marca el error. Landing, corridas y `observed_at` quedan intactos — la
+        // proyección sirve lo último conocido y jamás fabrica un vacío por un almacenamiento que no
+        // respondió. `first_attempt_at` sí se siembra: un slot ciego desde el primer tick necesita
+        // baseline para que `sin-medida` pueda cruzar su umbral alguna vez.
+        this.db.run(
+          `INSERT INTO intake_watch_state (slot_id, observed_at, first_attempt_at, last_error, last_error_at)
+           VALUES (?, NULL, ?, ?, ?)
+           ON CONFLICT(slot_id) DO UPDATE SET last_error=excluded.last_error, last_error_at=excluded.last_error_at,
+             first_attempt_at=COALESCE(intake_watch_state.first_attempt_at, excluded.first_attempt_at)`,
+          [sid, o.observedAt, o.error, o.observedAt],
+        )
+        continue
+      }
+      if (o.landing != null) {
+        // Reemplazo del SET: lo que el listado no trae, drenó. Un upsert sin borrado dejaría
+        // fantasmas alertando como varados para siempre. Sin tope de filas: recortar el landing
+        // proyectado escondería justo los archivos que la vigilancia existe para encontrar.
+        const vistos = new Set<string>()
+        for (const e of o.landing) {
+          if (!e?.path) continue
+          vistos.add(e.path)
+          this.db.run(
+            `INSERT INTO intake_watch_landing (slot_id, path, is_directory, size, last_modified) VALUES (?,?,?,?,?)
+             ON CONFLICT(slot_id, path) DO UPDATE SET is_directory=excluded.is_directory, size=excluded.size,
+               last_modified=excluded.last_modified`,
+            [sid, e.path, e.isDirectory ? 1 : 0, Math.max(0, Math.trunc(e.size ?? 0)), e.lastModified ?? ''],
+          )
+        }
+        const prev = this.db.prepare(`SELECT path FROM intake_watch_landing WHERE slot_id = ?`)
+        prev.bind([sid])
+        const proyectados: string[] = []
+        while (prev.step()) proyectados.push(String((prev.getAsObject() as { path: string }).path))
+        prev.free()
+        for (const p of proyectados) {
+          if (!vistos.has(p)) this.db.run(`DELETE FROM intake_watch_landing WHERE slot_id = ? AND path = ?`, [sid, p])
+        }
+      }
+      let escritas = 0
+      for (const r of o.runs ?? []) {
+        if (!r.startedAt) continue // sin clave posible: el motor no siempre entrega startTimeUtc
+        this.db.run(
+          `INSERT INTO intake_watch_run (slot_id, started_at, ended_at, status, error) VALUES (?,?,?,?,?)
+           ON CONFLICT(slot_id, started_at) DO UPDATE SET ended_at=excluded.ended_at, status=excluded.status, error=excluded.error`,
+          [sid, r.startedAt, r.endedAt ?? null, r.status, r.error ?? null],
+        )
+        escritas++
+      }
+      if (escritas) this.pruneSlotRuns(sid)
+      this.db.run(
+        `INSERT INTO intake_watch_state (slot_id, observed_at, first_attempt_at, last_error, last_error_at)
+         VALUES (?,?,?,NULL,NULL)
+         ON CONFLICT(slot_id) DO UPDATE SET observed_at=excluded.observed_at, last_error=NULL, last_error_at=NULL,
+           first_attempt_at=COALESCE(intake_watch_state.first_attempt_at, excluded.first_attempt_at)`,
+        [sid, o.observedAt, o.observedAt],
+      )
+    }
+    // UN persist por lote, como la proyección de ingestión: cada persist vuelca el ARCHIVO COMPLETO.
+    this.persist()
+  }
+
+  async listSlotSnapshots(opts?: { runsPerSlot?: number }): Promise<SlotWatchSnapshot[]> {
+    const top = Math.max(0, Math.trunc(opts?.runsPerSlot ?? 10))
+    const state = new Map<string, { observedAt: string | null; firstAttemptAt: string | null; lastError: string | null; lastErrorAt: string | null }>()
+    for (const r of selectAll(this.db, `SELECT slot_id, observed_at, first_attempt_at, last_error, last_error_at FROM intake_watch_state`)) {
+      state.set(String(r['slot_id']), {
+        observedAt: r['observed_at'] == null ? null : String(r['observed_at']),
+        firstAttemptAt: r['first_attempt_at'] == null ? null : String(r['first_attempt_at']),
+        lastError: r['last_error'] == null ? null : String(r['last_error']),
+        lastErrorAt: r['last_error_at'] == null ? null : String(r['last_error_at']),
+      })
+    }
+    // Fail-safe (calcado de `listRunSnapshots`): un slot con datos proyectados pero sin fila de
+    // estado sale como proyección fría en vez de desaparecer del listado.
+    const ids = new Set(state.keys())
+    for (const r of selectAll(this.db, `SELECT DISTINCT slot_id FROM intake_watch_landing`)) ids.add(String(r['slot_id']))
+    for (const r of selectAll(this.db, `SELECT DISTINCT slot_id FROM intake_watch_run`)) ids.add(String(r['slot_id']))
+    const out: SlotWatchSnapshot[] = []
+    for (const sid of [...ids].sort()) {
+      const landing: OneLakeEntry[] = []
+      const ls = this.db.prepare(`SELECT path, is_directory, size, last_modified FROM intake_watch_landing WHERE slot_id = ? ORDER BY path ASC`)
+      ls.bind([sid])
+      while (ls.step()) {
+        const r = ls.getAsObject() as { path: string; is_directory: number; size: number; last_modified: string }
+        landing.push({ path: String(r.path), isDirectory: Number(r.is_directory) !== 0, size: Number(r.size), lastModified: String(r.last_modified) })
+      }
+      ls.free()
+      const runs: RunRecord[] = []
+      if (top > 0) {
+        const rs = this.db.prepare(`SELECT started_at, ended_at, status, error FROM intake_watch_run WHERE slot_id = ? ORDER BY started_at DESC LIMIT ?`)
+        rs.bind([sid, top])
+        while (rs.step()) {
+          const r = rs.getAsObject() as { started_at: string; ended_at?: string | null; status: string; error?: string | null }
+          const run: RunRecord = { startedAt: String(r.started_at), status: String(r.status) as RunStatus }
+          if (r.ended_at != null) run.endedAt = String(r.ended_at)
+          if (r.error != null) run.error = String(r.error)
+          runs.push(run)
+        }
+        rs.free()
+      }
+      const s = state.get(sid)
+      out.push({
+        slotId: sid,
+        landing,
+        runs,
+        observedAt: s?.observedAt ?? null,
+        firstAttemptAt: s?.firstAttemptAt ?? null,
         lastError: s?.lastError ?? null,
         lastErrorAt: s?.lastErrorAt ?? null,
       })
