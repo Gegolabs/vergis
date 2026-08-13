@@ -43,24 +43,41 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **El aviso de incumplimiento del contrato `_logs/` está implementado y NO APARECE NUNCA** — frente
-  #161/#162, 2026-08-13. `avisoContratoLogs` está escrito y testeado en `admin-cargas.ts`, pero el
-  campo que lo dispara (`corridasSinLog`) **no se llena**: correlacionar las corridas terminadas
-  contra el listado de `_logs/` es lectura del almacenamiento, **prohibida en el request path** por
-  doctrina del repo (la misma que declara `freshness-loop`: el render lee solo la proyección), y la
-  proyección no guarda ese conteo. **Con el campo ausente la página no miente** —simplemente no
-  muestra el aviso—, pero la parte «se hace exigible» del punto 1 de #162 no se cumple. Arreglo:
-  que el lazo persista el conteo (columna o clave en `platform_setting`). `reg 2026-08-13`
-- **No hay umbrales de vigilancia por slot ni opt-out** — el `watch:` declarativo de §4.1 del diseño
-  `work/008` **no existe**: `IntakeSlot` no lo declara y su parse estaba asignado a un hito que no se
-  ejecutó. Hoy rigen los defaults (120 min de edad, 60 de corrida colgada) para **todos** los slots.
-  Un slot legítimamente lento producirá ruido y no hay cómo apagarlo salvo apagar el lazo entero.
-  `reg 2026-08-13`
-- **El control positivo se apaga en los slots sin corridas observadas** — decisión declarada del
-  ejecutor de H4, que **contradice §3.3 del diseño** (que lo pide también en land-only). Sin corridas
-  no hay corte —la última `Completed`— y toda carga histórica se «esperaría» para siempre, con lo que
-  la primera drenada legítima fabricaría una contradicción falsa. La decisión es correcta; lo que
-  queda es que **los slots land-only no tienen control positivo**. `reg 2026-08-13`
+- **✅ RESUELTO (2026-08-13) — el aviso de incumplimiento del contrato `_logs/` ya aparece.** El lazo
+  mide `corridasSinLog` por tick (con caché del listado compartida con el resolver, un solo listado
+  por vuelta) y lo persiste en `intake_watch_state.corridas_sin_log`; la consola lo lee de la
+  proyección. **La trampa que se evitó**: parecía que el conteo salía gratis de la fase RESOLVER, y
+  es falso —`resolverSlot` hace `if (!pendientes.length) return`—, con lo que **el conteo se habría
+  congelado justo en el slot incumplidor**, que resuelve todo como `sin-informe` y después no tiene
+  pendientes. El aviso habría callado exactamente donde hace falta. Commit `870fa69`.
+  **Dos límites declarados**: el conteo se congela si el listado falla tick tras tick (deliberado —
+  *no medir no es medir cero*—, y la consola lo muestra bajo el banner `ultima-conocida`); y **satura
+  en 10** porque el wiring pide 10 instancias al motor, así que el texto diría «las últimas 10»
+  cuando podrían ser más. `reg 2026-08-13 · resuelto 2026-08-13`
+- **✅ RESUELTO (2026-08-13) — hay umbrales de vigilancia por slot y opt-out.** Bloque `watch:`
+  fail-closed en la config del slot: `false` (opt-out total, incluido el resolver) o
+  `{max_age_minutes, max_run_minutes}`. Una declaración malformada **rompe el arranque nombrando el
+  slot**, no se degrada en silencio a los defaults. Commits `b839c78` (parse) y `76b51de` (el lazo lo
+  consume). **Lo delicado era el silencio al apagar**: al pasar a `watch: false` la clave se retira
+  del estado de alertas **sin emitir «recuperado»** — no sanó, lo callaron, y un aviso de
+  recuperación falso entrena a desconfiar de los verdaderos.
+  **Gate de despliegue pendiente (C7)**: comprobar que ningún `slots.yaml` de instancia traiga hoy
+  una clave `watch:` inerte que este parse empezaría a interpretar. Verificado que **este** repo no
+  tiene ningún YAML con `slots:`; los de instancia viven en el repo del lab. `reg 2026-08-13 · resuelto 2026-08-13`
+- **✅ RESUELTO PARCIAL, con la pérdida ACEPTADA y protegida (2026-08-13) — el control positivo en
+  slots land-only.** La decisión de no correr el control **por-archivo** sin corridas **se ratificó**
+  tras evaluar tres variantes de corte: todas fabrican alertas falsas o exigen un contrato externo
+  nuevo. Lo que sí se agregó, porque no necesita corte: **control positivo sobre el DIRECTORIO** —
+  `listOrAbsent` dice `absent` + ≥1 carga vivida ⇒ contradicción—, que cubre la lente rota tipo 404,
+  o sea la ceguera exacta del incidente fundante. Commit `52272db`.
+  **La pérdida residual —200-vacío sobre un directorio que sí existe, en land-only— queda ACEPTADA**,
+  y protegida por un test cuyo nombre lo dice: *«CONTROL NEGATIVO QUE FIJA UNA DECISIÓN — land-only
+  con 200-vacío sobre directorio EXISTENTE: NO contradice, y así debe quedar»*. Existe para que nadie
+  la «arregle» sin volver a pensar el problema.
+  **Gate de despliegue pendiente (C6)**: que drenar un landing real deje el directorio existente
+  (`listOrAbsent` ⇒ `ok` vacío, no `absent`). Acotado desde el código —ningún camino de Vergis borra
+  el directorio, solo hace `remove` del archivo—, pero la semántica de OneLake no se puede medir sin
+  terreno. **Si un landing vaciado devuelve `absent`, este control se retira.** `reg 2026-08-13 · resuelto 2026-08-13`
 - **Dos supuestos del frente #161/#162 sin verificar contra motor vivo** — (a) que un job que muere
   antes de arrancar aparezca como `Failed` en `jobs/instances`; (b) que la correlación carga↔corrida
   aguante el desfase de reloj del motor: **no lleva margen**, y con el reloj adelantado una corrida
