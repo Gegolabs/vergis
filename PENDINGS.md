@@ -43,6 +43,30 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **El aviso de incumplimiento del contrato `_logs/` está implementado y NO APARECE NUNCA** — frente
+  #161/#162, 2026-08-13. `avisoContratoLogs` está escrito y testeado en `admin-cargas.ts`, pero el
+  campo que lo dispara (`corridasSinLog`) **no se llena**: correlacionar las corridas terminadas
+  contra el listado de `_logs/` es lectura del almacenamiento, **prohibida en el request path** por
+  doctrina del repo (la misma que declara `freshness-loop`: el render lee solo la proyección), y la
+  proyección no guarda ese conteo. **Con el campo ausente la página no miente** —simplemente no
+  muestra el aviso—, pero la parte «se hace exigible» del punto 1 de #162 no se cumple. Arreglo:
+  que el lazo persista el conteo (columna o clave en `platform_setting`). `reg 2026-08-13`
+- **No hay umbrales de vigilancia por slot ni opt-out** — el `watch:` declarativo de §4.1 del diseño
+  `work/008` **no existe**: `IntakeSlot` no lo declara y su parse estaba asignado a un hito que no se
+  ejecutó. Hoy rigen los defaults (120 min de edad, 60 de corrida colgada) para **todos** los slots.
+  Un slot legítimamente lento producirá ruido y no hay cómo apagarlo salvo apagar el lazo entero.
+  `reg 2026-08-13`
+- **El control positivo se apaga en los slots sin corridas observadas** — decisión declarada del
+  ejecutor de H4, que **contradice §3.3 del diseño** (que lo pide también en land-only). Sin corridas
+  no hay corte —la última `Completed`— y toda carga histórica se «esperaría» para siempre, con lo que
+  la primera drenada legítima fabricaría una contradicción falsa. La decisión es correcta; lo que
+  queda es que **los slots land-only no tienen control positivo**. `reg 2026-08-13`
+- **Dos supuestos del frente #161/#162 sin verificar contra motor vivo** — (a) que un job que muere
+  antes de arrancar aparezca como `Failed` en `jobs/instances`; (b) que la correlación carga↔corrida
+  aguante el desfase de reloj del motor: **no lleva margen**, y con el reloj adelantado una corrida
+  real podría quedar fuera y la carga terminaría marcada `varada`. Ambos son de la familia de los
+  gates manuales del despliegue. `reg 2026-08-13`
+
 - **✅ RESUELTO (2026-08-13) — los PRs de Renovate nacían con el CI en rojo: era la VERSIÓN DE npm.**
   Renovate regeneraba el lockfile con **npm 12.0.2**, que **poda las optional deps de otras
   plataformas**: 156 referencias `@esbuild/` contra las 234 de `main`, y `npm ci` abortaba.
