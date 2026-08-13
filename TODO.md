@@ -49,11 +49,19 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   GitHub App (consentimiento OAuth del owner, no automatizable), corre **self-hosted** en el propio
   CI (`.github/workflows/renovate.yml`), usando el mismo `renovate.json` sin traducir nada.
   **COMPLETADO 2026-08-11**: César emitió el PAT fine-grained (`renovate-vergis`, owner Gegolabs,
-  solo `Gegolabs/vergis`, 5 permisos, expira **2027-08-12**) y lo guardó como secret
-  `RENOVATE_TOKEN`. Renovate corre verde, tiene su Dependency Dashboard (#169) y **el cooldown de
-  supply chain del ADR-001 está ACTIVO**. Su primera pasada abrió 2 PRs de seguridad. *Queda un
-  defecto vivo, encasillado en `PENDINGS.md`: los PRs que abre nacen con el CI en rojo por su
-  regeneración del lockfile.* ⏰ **El PAT vence el 2027-08-12** — ese día el workflow falla en rojo,
-  que es el comportamiento buscado
+  solo `Gegolabs/vergis`, expira **2027-08-12**) y lo guardó como secret `RENOVATE_TOKEN`. Tiene su
+  Dependency Dashboard (#169) y **el cooldown de supply chain del ADR-001 está ACTIVO**.
+  **CORREGIDO 2026-08-13 — esta ficha afirmaba dos cosas que ya no son ciertas:**
+  (a) decía «Renovate corre verde», y **era verde sin hacer su trabajo**: un 403 al publicar commit
+  status abortaba la corrida tras la PRIMERA rama de ~20, con el job en verde. Se resolvió agregando
+  **`Commit statuses: Read and write`** al PAT — que por eso hoy tiene **6 permisos, no los 5** que
+  esta ficha listaba. Efecto visible: el check `renovate/stability-days` ahora se publica en cada PR,
+  o sea el cooldown pasó de invisible a evidencia.
+  (b) decía que sus PRs «nacen con el CI en rojo». **Ya no**: la causa era la versión de npm —
+  Renovate regeneraba con **npm 12**, que poda las optional deps— y quedó curada con
+  `constraints.npm: "^10.9.8"` más el candado `allowedVersions: "<11"`. Verificado end-to-end: el
+  PR #177 nació verde y se mergeó.
+  ⏰ **El PAT vence el 2027-08-12** — ese día el workflow falla en rojo, que es el comportamiento
+  buscado
 - [x] **Redesplegar la VM** — **HECHO 2026-07-13**: PROD corre 0.6.0 (tren 0.4.0→0.5.0→0.6.0 en un día, cada release ensayado en el QA `vm-vergis-qa` antes de PROD); verificación estándar 6/6 PIs
 - [x] **Verificar render de charts con vega 6 en un PI real** — **HECHO 2026-07-13**: los 6 PIs (incl. dashboards con charts) rinden 200 con contenido en PROD 0.6.0
