@@ -83,3 +83,5 @@ exige razón demostrada**.
 
 En `TODO.md` y `PENDINGS.md`. De César: revisión legal de `CONTRIBUTING.draft.md` —renombrarlo **es**
 publicarlo—, y la marca. Sin tocar: **#139**, **#113**, **#111**, **#110**.
+
+<!-- /ww:next · 2026-08-13 · HEAD 7e9eb30 -->
