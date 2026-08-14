@@ -181,6 +181,36 @@ en el catálogo, o la carga falla nombrando archivo y catálogo.
 - **land-only** — Mira deja el crudo; el pipeline lo toma en su próxima corrida.
 - **land-and-trigger** — tras subir, Mira hace **run-now** del pipeline (inmediatez).
 
+### La consola de Cargas: una casilla por vez, cada una con su URL
+
+`/admin/dominio/<dom>/cargas` es la operación completa de las cargas del dominio, y muestra **una
+casilla a la vez**. Con más de un slot declarado, una **barra de pestañas** —una por casilla, en el
+orden de `slots.yaml`— encabeza la página, y el bloque de abajo (última conversión, log, «Subir
+archivos», Actividad, Landing, Procesados) es el de la casilla **activa**; con un solo slot no se
+dibuja. La barra hace dos cosas:
+
+- **Es el inventario visible de casillas del dominio.** Un dominio con casillas hermanas —el archivo de
+  productos, el de distribuciones, el maestro— las declara todas en pantalla, así que «esta es la
+  casilla del dominio» deja de ser una lectura posible de la página.
+- **Cada casilla es enlazable:** `…/cargas?slot=<slotId>`. Al usuario se le manda el link de la casilla
+  que le toca, no una instrucción de scroll. Sin el parámetro —o con un `slot` que no existe— abre la
+  primera declarada, sin error.
+
+El historial vive pegado a **su** casilla (Actividad, Landing y Procesados se filtran por `slot_id`):
+la pestaña no lo mueve de ahí, evita que el de una casilla entierre a las otras, y hace que la página
+pida datos solo de la casilla que dibuja.
+
+**El desenlace de una carga vuelve a donde el usuario estaba.** El formulario declara su origen y todo
+resultado —recibido o rechazado— aterriza en esa pantalla: el rechazo de una carga hecha en Cargas se
+pinta en la pestaña de su casilla, y lo que nace en Frescura muere en Frescura.
+
+**El rechazo por patrón nombra la casilla correcta.** Cuando el archivo rechazado **sí** matchea el
+`accept` declarado de otra casilla del dominio, el error lo dice y la enlaza («Este archivo va en
+*<label>*»); si matchean varias, se listan. Si ninguna, el mensaje queda en el patrón que falló y **no
+se ofrece destino**: solo se nombra un slot cuyo patrón declarado matchea el nombre real del archivo —
+nunca una heurística de parecido, contenido o tamaño, y nunca un slot sin `accept` (que aceptaría
+cualquier cosa).
+
 ### Revertir una carga (`revert_delete`)
 
 «Revertir esta carga» deshace, clave por clave, lo que una carga materializó. El **ledger carga→claves

@@ -88,7 +88,7 @@ export { createDwhPublisher, replicaTable, replicaStagingTable, masterDataPublis
 export type { Publisher, PublisherTarget } from './master-data-publish'
 export { parseDomainsConfig, canManageDomain, manageableDomains } from './domain'
 export type { DomainDecl } from './domain'
-export { parseIntakeConfig, matchSlot, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada, slotRunLogsDir } from './intake'
+export { parseIntakeConfig, matchSlot, slotsQueAceptan, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada, slotRunLogsDir } from './intake'
 export { RUN_LOG_DIR_DEFAULT, RUN_LOG_RETENTION, runLogFileName, parseRunLogTimestamp, resolveRunLog, contarCorridasSinLog, redactSecrets, parseRunFileOutcomes } from './run-logs'
 export type { RunLogResolution, FileOutcome } from './run-logs'
 export { expectedInLanding, classifySlot, intakeAlerts, parseIntakeWatchState, INTAKE_WATCH_STATE_KEY, DEFAULT_MAX_AGE_MINUTES, DEFAULT_MAX_RUN_MINUTES, DEFAULT_INTAKE_WATCH_MS, SIN_MEDIDA_TICKS } from './intake-observability'

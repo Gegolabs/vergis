@@ -31,7 +31,7 @@ function slotCargas(over: Partial<SlotCargas> = {}): SlotCargas {
   return { slot: SLOT, runs: RUNS, history: HISTORY, log: null, landing: LANDING, archived: [], procesoRegistrado: true, ...over }
 }
 const render = (over: Partial<SlotCargas> = {}): string =>
-  cargasBody('cartera', 'Cartera', [slotCargas(over)], 'TOK', () => '<form id="up"></form>')
+  cargasBody('cartera', 'Cartera', [SLOT], slotCargas(over), 'TOK', () => '<form id="up"></form>')
 
 // ─── El banner del vigilante: los cuatro estados de la medida (#161·§6.1) ───
 describe('banner del vigilante · los 4 estados de MedidaCalidad', () => {
@@ -125,7 +125,7 @@ const CON_DESENLACE: IntakeUploadEvent[] = [
 
 describe('columna Desenlace en Actividad', () => {
   it('la carga con desenlace muestra badge, motivo y enlace a SU corrida', () => {
-    const html = cargasBody('cartera', 'Cartera', [slotCargas({ history: CON_DESENLACE })], 'TOK', () => '',
+    const html = cargasBody('cartera', 'Cartera', [SLOT], slotCargas({ history: CON_DESENLACE }), 'TOK', () => '',
       (s, r) => `/admin/dominio/cartera/corrida?slot=${s.id}&started=${r.startedAt}`)
     expect(html).toContain('<th>Desenlace</th>')
     expect(html).toContain('✕ Falló')
