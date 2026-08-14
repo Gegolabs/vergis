@@ -40,6 +40,7 @@ import {
   buildSidecar,
   secondsToDuration,
   resolveRunLog,
+  type AdminEntry,
   type AdminStore,
   type DomainDecl,
   type GroupStore,
@@ -2383,13 +2384,16 @@ async function groupMembersPage(deps: AdminDeps, nav: Chrome, groups: GroupStore
 
 async function rolesPage(deps: AdminDeps, nav: Chrome, token: string, msg?: string): Promise<string> {
   const admins = await deps.adminStore.list()
+  // La baja se ofrece TAMBIÉN para las semillas (#182). En ese caso la confirmación advierte el drift:
+  // el estado queda diciendo algo distinto del env, y el operador tiene que enterarse — pero la
+  // revocación NO depende de editar el env ni de reiniciar, que era justo el defecto.
+  const confirmMsg = (a: AdminEntry): string =>
+    a.seed
+      ? `¿Quitar a ${a.email}? Sigue declarada en VERGIS_ADMIN_SEED: la baja manda (no se re-siembra), pero conviene quitarla del env para que la configuración diga lo mismo que el estado.`
+      : `¿Quitar a ${a.email}?`
   const rows = admins
     .map(
-      (a) => `<tr><td>${escapeHtml(a.email)}</td><td>${a.seed ? '<span class="tag">semilla</span>' : escapeHtml(a.addedBy ?? '')}</td><td class="r">${
-        a.seed
-          ? '<span class="sub">—</span>'
-          : `<form method="post" action="/admin/roles/remove" onsubmit="return confirm('¿Quitar a ${escapeHtml(a.email)}?')"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="email" value="${escapeHtml(a.email)}"><button class="del">Quitar</button></form>`
-      }</td></tr>`,
+      (a) => `<tr><td>${escapeHtml(a.email)}</td><td>${a.seed ? '<span class="tag">semilla</span>' : escapeHtml(a.addedBy ?? '')}</td><td class="r"><form method="post" action="/admin/roles/remove" onsubmit="return confirm('${escapeHtml(confirmMsg(a))}')"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="email" value="${escapeHtml(a.email)}"><button class="del">Quitar</button></form></td></tr>`,
     )
     .join('')
   return adminPage(deps, nav,

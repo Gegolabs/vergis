@@ -17,7 +17,8 @@ export interface AdminEntry {
   email: string
   addedBy?: string
   addedAt?: string
-  /** Admin semilla (de config de instancia): no se puede quitar in-app (anti-lockout). */
+  /** Admin declarado en la config de instancia (`VERGIS_ADMIN_SEED`). Se puede quitar in-app: la baja
+   *  deja tombstone y el re-sembrado del arranque siguiente NO lo resucita (precedencia runtime). */
   seed: boolean
 }
 
@@ -26,7 +27,7 @@ export interface AdminStore {
   list(): Promise<AdminEntry[]>
   /** Alta de un admin. Idempotente (re-alta no duplica). Devuelve true si agregó. */
   add(email: string, addedBy?: string): Promise<boolean>
-  /** Baja de un admin. Rechaza quitar una semilla o el último admin (anti-lockout). */
+  /** Baja de un admin, semilla incluida. Rechaza quitar el último (anti-lockout, el único real). */
   remove(email: string): Promise<void>
   close(): Promise<void>
 }
@@ -42,17 +43,31 @@ export const ADMIN_DDL = `CREATE TABLE IF NOT EXISTS admin (
   added_at TEXT,
   seed INTEGER NOT NULL DEFAULT 0
 );`
+// Tombstone de admins SEMILLA dados de baja en runtime (#182). Sin esto, la siembra de cada `open()`
+// resucita la fila borrada (el upsert la re-inserta con seed=1) y la plataforma sabe OTORGAR la
+// autoridad de admin sin saber QUITARLA: el único camino era detener el proceso y editar el .sqlite.
+// PRECEDENCIA runtime-sobre-semilla, la misma que ya rige para miembros de grupo
+// (`mira_group_seed_removed`) y para el registro de fuentes (`source_registry_removed`, #107):
+// un `adminRemove` deja la marca, el re-sembrado la salta, y un `adminAdd` posterior la limpia.
+// Tabla PROPIA, no una generalizada: tres registros sembrados, tres ciclos de vida distintos.
+export const ADMIN_SEED_REMOVED_DDL = `CREATE TABLE IF NOT EXISTS admin_seed_removed (
+  email TEXT PRIMARY KEY
+);`
 
 // ─── Ops puras sobre SqlDb (compartidas por SqliteAdminStore y GovernanceStore) ──
 export function ensureAdminTable(db: SqlDb, seedEmails: string[] = []): void {
   db.run(ADMIN_DDL)
+  db.run(ADMIN_SEED_REMOVED_DDL)
   for (const raw of seedEmails) {
     const email = normEmail(raw)
     if (!email) continue
+    // El `SELECT … WHERE NOT EXISTS` salta a los que un admin dio de baja en runtime: la semilla ya
+    // no gana sobre el estado. El `ON CONFLICT` sigue marcando seed=1 al que sí sobrevive.
     db.run(
-      `INSERT INTO admin (email, added_by, added_at, seed) VALUES (?,?,?,1)
+      `INSERT INTO admin (email, added_by, added_at, seed)
+       SELECT ?,?,?,1 WHERE NOT EXISTS (SELECT 1 FROM admin_seed_removed WHERE email = ?)
        ON CONFLICT(email) DO UPDATE SET seed=1`,
-      [email, 'config:VERGIS_ADMIN_SEED', now()],
+      [email, 'config:VERGIS_ADMIN_SEED', now(), email],
     )
   }
 }
@@ -81,6 +96,11 @@ export function adminAdd(db: SqlDb, email: string, addedBy?: string): boolean {
   if (!e) throw new Error('Correo vacío.')
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw new Error(`Correo inválido: '${email}'.`)
   if (adminIsAdmin(db, e)) return false
+  // Re-otorgar levanta el tombstone: si el email vuelve a estar declarado en la semilla, el arranque
+  // siguiente lo re-siembra como antes. Sin esto, «volver a dar de alta» exigiría tocar el disco.
+  // Va DESPUÉS del early-return: el camino que devuelve false no debe escribir (los stores solo
+  // persisten cuando `add` devolvió true, así que una escritura ahí se perdería al cerrar).
+  db.run(`DELETE FROM admin_seed_removed WHERE email = ?`, [e])
   db.run(`INSERT INTO admin (email, added_by, added_at, seed) VALUES (?,?,?,0)`, [e, normEmail(addedBy) || null, now()])
   return true
 }
@@ -90,9 +110,11 @@ export function adminRemove(db: SqlDb, email: string): void {
   const entries = adminList(db)
   const target = entries.find((a) => a.email === e)
   if (!target) return
-  if (target.seed) throw new AdminLockout(`«${e}» es admin semilla (config) — no se puede quitar in-app.`)
+  // El ÚNICO lockout real: quedarse sin administradores. Que la fila venga de la semilla no la vuelve
+  // inmune — esa inmunidad era el defecto (#182), no la protección.
   if (entries.length <= 1) throw new AdminLockout('No se puede quitar el último administrador.')
   db.run(`DELETE FROM admin WHERE email = ?`, [e])
+  if (target.seed) db.run(`INSERT OR IGNORE INTO admin_seed_removed (email) VALUES (?)`, [e])
 }
 
 // ─── Store embebido enfocado (un db solo de admins). El consolidado vive en GovernanceStore. ──

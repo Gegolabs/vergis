@@ -9,12 +9,37 @@ import {
 } from '@vergis/capabilities'
 
 describe('GovernanceStore · admins (consolidado)', () => {
-  it('implementa AdminStore: semilla, alta, anti-lockout', async () => {
+  it('implementa AdminStore: semilla, alta, anti-lockout del último', async () => {
     const g = await SqliteGovernanceStore.open(null, { admins: ['Cesar@ultrabase.com'] })
     expect(await g.isAdmin('cesar@ultrabase.com')).toBe(true)
+    await expect(g.remove('cesar@ultrabase.com')).rejects.toBeInstanceOf(AdminLockout) // último admin
     expect(await g.add('claudio@ratio.cl', 'cesar@ultrabase.com')).toBe(true)
-    await expect(g.remove('cesar@ultrabase.com')).rejects.toBeInstanceOf(AdminLockout) // semilla
+    await g.remove('cesar@ultrabase.com') // semilla, pero ya no es el último: se va
+    expect(await g.isAdmin('cesar@ultrabase.com')).toBe(false)
     await g.close()
+  })
+
+  // El paso que fallaba antes de #182 es la REAPERTURA: la siembra de `open()` resucitaba la fila
+  // borrada, así que revocar a un admin sembrado exigía detener el proceso y editar el .sqlite.
+  it('un admin SEMILLA dado de baja NO reaparece al reabrir; un alta posterior lo restituye (#182)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-gov-')), 'governance.sqlite')
+    const seed = { admins: ['a@x.com', 'b@x.com'] }
+    // 1ª apertura: dos semillas; se revoca a@x.com in-app, sin tocar la config.
+    const g1 = await SqliteGovernanceStore.open(file, seed)
+    await g1.remove('a@x.com')
+    expect((await g1.list()).map((a) => a.email)).toEqual(['b@x.com'])
+    await g1.close()
+    // Restart con la MISMA semilla, que todavía declara a@x.com: NO debe resucitar.
+    const g2 = await SqliteGovernanceStore.open(file, seed)
+    expect(await g2.isAdmin('a@x.com')).toBe(false)
+    expect(await g2.isAdmin('b@x.com')).toBe(true)
+    // Volver a otorgar levanta el tombstone, y sobrevive al arranque siguiente.
+    expect(await g2.add('a@x.com', 'b@x.com')).toBe(true)
+    await g2.close()
+    const g3 = await SqliteGovernanceStore.open(file, seed)
+    expect(await g3.isAdmin('a@x.com')).toBe(true)
+    expect((await g3.list()).find((a) => a.email === 'a@x.com')?.seed).toBe(true) // re-sembrado: vuelve a ser semilla
+    await g3.close()
   })
 })
 

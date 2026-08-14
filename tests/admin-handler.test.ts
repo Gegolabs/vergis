@@ -153,12 +153,25 @@ describe('admin handler · gobierno de escritura', () => {
     expect(dup.res.statusCode).toBe(409)
   })
 
-  it('Usuarios y Roles: alta audita; quitar la semilla → 409', async () => {
+  it('Usuarios y Roles: alta y baja auditan; la baja de la semilla pasa (#182) y el último admin → 409', async () => {
     const token = tokenFrom((await go(mockReq('GET', '/admin/roles', 'cesar@ultrabase.com'))).res.body)
     await go(mockReq('POST', '/admin/roles/add', 'cesar@ultrabase.com', `_csrf=${token}&email=claudio@ratio.cl`))
     expect(await adminStore.isAdmin('claudio@ratio.cl')).toBe(true)
     expect(audit.find((e) => e.type === 'admin-roles-write' && e.op === 'add')?.target).toBe('claudio@ratio.cl')
+    // Baja de la SEMILLA por la ruta in-app: ya no 409, y queda auditada con su actor.
     const rm = await go(mockReq('POST', '/admin/roles/remove', 'cesar@ultrabase.com', `_csrf=${token}&email=cesar@ultrabase.com`))
-    expect(rm.res.statusCode).toBe(409) // semilla, anti-lockout
+    expect(rm.res.statusCode).toBe(303)
+    expect(await adminStore.isAdmin('cesar@ultrabase.com')).toBe(false)
+    const rmEvent = audit.find((e) => e.type === 'admin-roles-write' && e.op === 'remove')
+    expect(rmEvent).toMatchObject({ target: 'cesar@ultrabase.com', by: 'cesar@ultrabase.com' })
+    // Claudio queda como único admin: quitarlo sí es lockout real.
+    const last = await go(mockReq('POST', '/admin/roles/remove', 'claudio@ratio.cl', `_csrf=${tokenFrom((await go(mockReq('GET', '/admin/roles', 'claudio@ratio.cl'))).res.body)}&email=claudio@ratio.cl`))
+    expect(last.res.statusCode).toBe(409)
+  })
+
+  it('Usuarios y Roles: la fila semilla ofrece el botón de baja y advierte el drift del env (#182)', async () => {
+    const body = (await go(mockReq('GET', '/admin/roles', 'cesar@ultrabase.com'))).res.body
+    expect(body).toContain('VERGIS_ADMIN_SEED') // la confirmación nombra el env que queda diciendo otra cosa
+    expect(body.match(/action="\/admin\/roles\/remove"/g) ?? []).toHaveLength(1) // la única fila (semilla) trae su form
   })
 })
