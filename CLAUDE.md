@@ -35,7 +35,20 @@ el compose de la instancia apuntaba ahí — ver `DECISIONS.md` D-28.)
 ## El aterrizaje: rama + PR
 
 **Todo cambio de código del Producto aterriza por rama y Pull Request contra `main`.** El merge es acto
-de César; el agente entrega el PR con sus gates corridos y comenta el issue **sin cerrarlo**.
+de César; el agente entrega el PR con sus gates corridos y **cierra el issue que atendió**.
+
+**El cierre del issue es nuestro, no del autor** (decisión de César, 2026-08-14 — deroga para este
+proyecto el default de `ww:work`/`ww:repo`, que reserva el cierre al autor). No se puede esperar a que
+el autor de cada request lo cierre: el pasivo se acumularía por un trámite. **Si al verlo considera que
+no correspondía, lo reabre** — reabrir es barato, y el issue conserva la conversación entera.
+
+Lo que el cierre **no** hace es afirmar más de lo medido: el comentario de cierre dice qué se verificó,
+qué versión lo publica y **qué queda sin evidencia**. Un requisito nacido de un incidente no está
+demostrado hasta que la instancia corra la versión y el fenómeno no reaparezca; eso se escribe con esas
+palabras y se nombra la condición que reabriría el issue.
+
+Sigue intacto lo que protege a terceros: **jamás se cierra el issue ni el PR de otra persona** — ahí el
+acto es suyo, y el entregable nuestro es el veredicto comentado.
 
 **El `git log` de este repo contradice esta norma y no la deroga.** Hay commits de feature directos en
 `main` (`feat(163)`, `feat(164)`, `feat(159)`, entre otros): documentan lo que se decidió entonces, no lo
