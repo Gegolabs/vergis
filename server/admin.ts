@@ -345,14 +345,15 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 
     const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
     const isAdmin = await deps.adminStore.isAdmin(email)
+    // Grupos de la identidad, resueltos UNA vez por request: alimentan las dos vías de grupo, que son
+    // UNIÓN y no se sustituyen (#183) — el default-steward-group (todos los dominios) y los
+    // `group:<id>` que un dominio nombra en sus `stewards:` (ese dominio). Al resolverse por request,
+    // un alta o baja en `/admin/grupos` surte efecto sin reiniciar ni recargar `domains.yaml`.
+    const myGroups = deps.groupStore && email ? await deps.groupStore.groupsOf(email) : []
     // Steward de TODOS los dominios si pertenece a un default-steward-group (p.ej. Centro de Excelencia).
-    let stewardAll = false
-    if (deps.domainStewardGroups?.length && deps.groupStore && email) {
-      const ug = await deps.groupStore.groupsOf(email)
-      stewardAll = ug.some((g) => deps.domainStewardGroups!.includes(g))
-    }
-    const canMng = (d: DomainDecl): boolean => isAdmin || stewardAll || canManageDomain(d, email, false)
-    const manageable = isAdmin || stewardAll ? allDomains : manageableDomains(allDomains, email, isAdmin)
+    const stewardAll = !!deps.domainStewardGroups?.length && myGroups.some((g) => deps.domainStewardGroups!.includes(g))
+    const canMng = (d: DomainDecl): boolean => isAdmin || stewardAll || canManageDomain(d, email, false, myGroups)
+    const manageable = isAdmin || stewardAll ? allDomains : manageableDomains(allDomains, email, isAdmin, myGroups)
     if (!isAdmin && manageable.length === 0) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
       const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home', false), avatar: buildAvatar(deps, email, false, false) }

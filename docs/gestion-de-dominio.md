@@ -63,10 +63,29 @@ mantener un registro central que driftee:
   (quién lo gestiona). El dominio es un objeto real para **autorizar y agrupar**.
 
 ### Autorización
-- **`canManageDomain(dominio, email, isAdmin)` = admin O steward declarado.** Stewards = correos en
-  el dominio **o** miembros de un **default-steward-group** (`VERGIS_DEFAULT_STEWARD_GROUPS`): un grupo
-  de Mira cuyos miembros son stewards de **todos** los dominios — simétrico al default-collaborator-group
-  de los PIs. Pensado para un equipo transversal (p. ej. el centro de excelencia que construye todo).
+- **`canManageDomain(dominio, email, isAdmin, grupos)` = admin O steward declarado.** Una entrada de
+  `stewards:` **declara qué es**, no se adivina por la forma del texto:
+
+  | Forma | Qué nombra | Ejemplo |
+  |---|---|---|
+  | correo | una persona | `ana@gh.cl` |
+  | `group:<id>` | un **grupo de Mira** — sus miembros son stewards de **ese** dominio | `group:feeders_cartera` |
+
+  Las dos se mezclan en la misma lista. Una entrada que no es ninguna de las dos **se rechaza al
+  parsear** `domains.yaml`, con su mensaje: una autorización mal escrita que nadie cumple nunca es
+  peor que un arranque que falla.
+- **La membresía se resuelve por request**, contra el store (`groupsOf`), no en el parseo: un alta o
+  baja en `/admin/grupos` surte efecto **sin reiniciar ni recargar el YAML**. `canManageDomain` recibe
+  los grupos ya resueltos — decide autorización y no habla con el store.
+- **Fail-closed en los bordes:** un `group:` inexistente, un grupo **vacío**, o un llamador que no
+  resolvió los grupos ⇒ **ningún acceso**. Una lista de stewards que no resuelve a nadie **no abre** el
+  dominio. Un grupo inexistente **no tumba el parseo**: el resto de los dominios sigue vivo.
+- **Y además** el **default-steward-group** (`VERGIS_DEFAULT_STEWARD_GROUPS`): un grupo de Mira cuyos
+  miembros son stewards de **todos** los dominios — simétrico al default-collaborator-group de los PIs.
+  Pensado para un equipo transversal (p. ej. el centro de excelencia que construye todo). Las dos vías
+  de grupo son **unión, no reemplazo**: la maestra abre todo; el `group:` del dominio abre el suyo. Con
+  granularidad por dominio disponible, la maestra deja de ser el único camino — que era el problema:
+  para que un equipo gestionara la ingesta de UN dominio, había que darle los siete.
 - El **gate de `/admin`** es **«admin O steward de algún dominio»** — quien no gestiona nada, no entra.
 - Una entidad de data maestra con `domain` se gestiona por el steward de ese dominio (o admin); sin
   `domain`, solo admin.
@@ -379,6 +398,8 @@ El área de dominio muestra las facetas vivas y un roadmap visible («Próximame
 2. **Dominio = tag.** Cada artefacto declara su `domain`; no asumas un registro central. La membresía
    se deriva.
 3. **Autz de dominio = admin O steward.** El gate de `/admin` es «admin O steward de algún dominio».
+   Un steward se declara por correo o por `group:<id>`, explícito — no infieras el tipo de una entrada
+   por su forma, y no trates un grupo vacío o inexistente como «todos»: es default-deny.
 4. **Ingesta = staging, nunca tablas.** El intake aterriza el crudo en `Files/...`; el pipeline
    existente transforma. No escribas `Tables/` desde el intake.
 5. **Valida y audita todo write-path de archivos.** Patrón + tamaño; auditá quién/qué/cuándo/disparó.

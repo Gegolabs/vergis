@@ -457,4 +457,89 @@ describe('admin · gestión de dominio + ingesta', () => {
     const ajeno = await run(mockReq('GET', '/admin', 'nadie@x.com'))
     expect(ajeno.statusCode).toBe(403)
   })
+
+  // #183 · un dominio nombra un GRUPO en sus `stewards:` — granularidad por dominio, que es lo que el
+  // default-steward-group (todo o nada) no puede expresar. Lo que se mide acá y no en el unitario: que
+  // la membresía se consulte POR REQUEST, así que un alta o baja en `/admin/grupos` se siente de una,
+  // con el MISMO handler y el MISMO `domains.yaml` parseado una sola vez.
+  it('un `group:` en stewards abre SOLO su dominio, y el alta/baja del grupo surte efecto sin reiniciar', async () => {
+    const gov = await SqliteGovernanceStore.open(null, {
+      admins: [ADMIN],
+      groups: [{ id: 'feeders_cartera', label: 'Feeders Cartera', members: [] }],
+    })
+    const domains = parseDomainsConfig({
+      domains: [
+        { id: 'cartera', label: 'Cartera / Finanzas', stewards: ['group:feeders_cartera'] },
+        { id: 'personas', label: 'Personas', stewards: ['rrhh@gh.cl'] },
+      ],
+    })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: gov,
+      groupStore: gov,
+      domains,
+      intakeSlots: SLOTS,
+      intake: { put: async () => {}, runNow: async () => {} },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const run = async (req: IncomingMessage) => { const res = mockRes(); await a.tryHandle(req, res as unknown as ServerResponse); return res }
+    const felipe = 'felipe@gh.cl'
+    // Grupo declarado pero VACÍO: fail-closed, la lista no resuelve a nadie y el dominio no se abre.
+    expect((await run(mockReq('GET', '/admin', felipe))).statusCode).toBe(403)
+    // Alta en el grupo (lo que hace `/admin/grupos`), sin tocar el YAML ni recrear el handler.
+    await gov.addMember('feeders_cartera', felipe)
+    const dash = await run(mockReq('GET', '/admin', felipe))
+    expect(dash.statusCode).toBe(200)
+    expect(dash.body).toContain('Cartera / Finanzas')
+    expect(dash.body).not.toContain('Personas') // granularidad: NO es la llave maestra
+    expect((await run(mockReq('GET', '/admin/dominio/cartera', felipe))).statusCode).toBe(200)
+    expect((await run(mockReq('GET', '/admin/dominio/personas', felipe))).statusCode).toBe(403)
+    // Baja: se le saca el acceso igual de inmediato.
+    await gov.removeMember('feeders_cartera', felipe)
+    expect((await run(mockReq('GET', '/admin', felipe))).statusCode).toBe(403)
+  })
+
+  // La unión de las dos vías (#183): el default-steward-group NO se sustituye, y un dominio con
+  // `group:` en stewards tampoco lo estorba — quien está en el grupo maestro sigue viendo todo.
+  it('`group:` en stewards y VERGIS_DEFAULT_STEWARD_GROUPS conviven como unión', async () => {
+    const gov = await SqliteGovernanceStore.open(null, {
+      admins: [ADMIN],
+      groups: [
+        { id: 'ce', label: 'Centro de Excelencia', members: ['consultor@teams.ratio.cl'] },
+        { id: 'feeders_cartera', label: 'Feeders Cartera', members: ['felipe@gh.cl'] },
+      ],
+    })
+    const domains = parseDomainsConfig({
+      domains: [
+        { id: 'cartera', label: 'Cartera / Finanzas', stewards: ['group:feeders_cartera'] },
+        { id: 'personas', label: 'Personas', stewards: ['rrhh@gh.cl'] },
+      ],
+    })
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: gov,
+      groupStore: gov,
+      domains,
+      domainStewardGroups: ['ce'],
+      intakeSlots: SLOTS,
+      intake: { put: async () => {}, runNow: async () => {} },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    const run = async (req: IncomingMessage) => { const res = mockRes(); await a.tryHandle(req, res as unknown as ServerResponse); return res }
+    // El grupo maestro sigue abriendo TODOS los dominios, como hoy.
+    const ce = await run(mockReq('GET', '/admin', 'consultor@teams.ratio.cl'))
+    expect(ce.statusCode).toBe(200)
+    expect(ce.body).toContain('Cartera / Finanzas')
+    expect(ce.body).toContain('Personas')
+    // El del grupo por-dominio sigue viendo solo el suyo.
+    const f = await run(mockReq('GET', '/admin', 'felipe@gh.cl'))
+    expect(f.body).toContain('Cartera / Finanzas')
+    expect(f.body).not.toContain('Personas')
+  })
 })
