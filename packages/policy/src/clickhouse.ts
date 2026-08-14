@@ -6,6 +6,10 @@
 // también filas con columna vacía). La inyección de claims es por custom setting
 // (request-scoped), análogo a SESSION_CONTEXT — el Botler la escribe, jamás el consumidor.
 //
+// Cubre SOLO el plano de FILA. El plano de COLUMNA (#163) es capacidad NO SOPORTADA en este
+// back-end y se rechaza al compilar (ver `assertNoColumnRules`): no hay dónde sustituir una celda
+// sin sacar la autorización del motor. Fail-closed — jamás se sirve la columna en claro.
+//
 // Incluye un EMULADOR SEMÁNTICO de la expresión generada: replica la semántica de
 // ClickHouse (has/splitByChar/eq + guard) en TS, para property-testear el codegen
 // contra el evaluador de referencia del IR SIN levantar un motor (doc 10 §9 #2, differential).
@@ -13,6 +17,7 @@
 import { VergisError } from '@vergis/botler'
 import {
   claimValues,
+  columnRules,
   isHierarchy,
   isPublic,
   type ClaimSet,
@@ -74,6 +79,53 @@ function predicateExpr(pred: Predicate): string {
   return `(${get} != '' AND has(splitByChar(',', ${get}), ${col}))`
 }
 
+/**
+ * PLANO DE COLUMNA (#163 H3): **este back-end NO lo soporta, y por eso ROMPE.**
+ *
+ * El diseño (§4.1) dejaba dos salidas: enmascarar en la proyección, o declarar la capacidad no
+ * soportada — fail-closed. Se declara no soportada, y el porqué está en lo que este back-end emite,
+ * que es exactamente DOS cosas y ninguna puede sustituir el valor de una celda:
+ *
+ *   1. `rowPolicySQL` — un `CREATE ROW POLICY ... FOR SELECT USING <expr>`. La expresión es un
+ *      PREDICADO booleano por fila: decide si la fila pasa, no qué valor lleva. ClickHouse no tiene
+ *      equivalente de `MASKED WITH` (lo más cercano, `GRANT SELECT(col)`, RETIRA la columna — cambia
+ *      la forma del resultado, que es justo lo que §4.1 descarta: mentimos el valor, jamás el esquema).
+ *   2. `injections` — nombres/valores de custom settings. Transportan el claim; no tocan la proyección.
+ *
+ * **Y la proyección no es nuestra.** El SQL que llega al motor lo escribe el consumidor de la
+ * capability (`packages/capabilities/src/execute-sql-ch.ts` manda `params.sql` verbatim al transporte;
+ * el compilador nunca ve ni emite un `SELECT`). Enmascarar «en la proyección» exigiría reescribir SQL
+ * arbitrario del consumidor, o pedirle que recorte columnas él — las dos mueven la autorización FUERA
+ * del motor y al plano equivocado: authz que depende de que el llamador coopere no es authz.
+ *
+ * La trampa que esto cierra es la de siempre en el plano de columna: si el compilador ignorara las
+ * reglas y emitiera el mismo `CREATE ROW POLICY` de siempre, la entidad se serviría **en claro**, con
+ * el gobierno declarado y sin señal de que no se aplicó. Servir en claro no es una degradación
+ * aceptable: es el fallo. Por eso el PI no se sirve.
+ *
+ * Alternativas reales para quien tope con esto: servir esa entidad por un back-end que sí enmascare
+ * (Fabric, `MASKED WITH`), o no cargar la columna al store de ClickHouse. Nunca «sacar la regla».
+ */
+function assertNoColumnRules(policy: PolicyDecl, table: string): void {
+  const rules = columnRules(policy)
+  if (rules.length === 0) return // el caso normal: sin reglas, este back-end no cambia en nada
+  const columns = [...new Set(rules.map((r) => r.column))]
+  throw new VergisError({
+    error: 'policy/compile',
+    code: 'column-masking-unsupported',
+    path: 'audience.columns',
+    value: columns,
+    message:
+      `El back-end ClickHouse no sabe enmascarar columnas (${columns.join(', ')}): su enforcement es ` +
+      `ROW POLICY (filtro de FILA) más inyección de claims, y la proyección la escribe el consumidor, ` +
+      `no el compilador. La tabla '${table}' NO se sirve: la alternativa a la máscara no es servir la ` +
+      `columna en claro.`,
+    remediation:
+      `Servir esta entidad por un back-end con enmascaramiento nativo (Fabric, MASKED WITH), o no ` +
+      `cargar la columna sensible al store ClickHouse. Retirar la regla de columna serviría el dato en claro.`,
+  })
+}
+
 /** Compila el IR a enforcement de ClickHouse. `public` (grant: all) → ROW POLICY ALLOW-ALL
  *  (`USING 1`): la policy EXISTE y permite toda fila — espejo del allow-all de Fabric. */
 export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget): ClickHouseEnforcement {
@@ -86,6 +138,10 @@ export function compileClickHouse(policy: PolicyDecl, target: ClickHouseTarget):
     // `OR REPLACE`: idempotente (re-especializar la misma tabla no falla por "already exists"),
     // simétrico con el setup drop-and-recreate de Fabric.
     `CREATE ROW POLICY OR REPLACE ${policyName} ON ${db}.${table}\n    FOR SELECT\n    USING ${using}\n    AS permissive\n    TO ${role};`
+
+  // Antes que nada, y ANTES de la rama pública: un PI público con una columna sensible es
+  // precisamente el driver que nombra el diseño (§6), y sería el que más silenciosamente fugaría.
+  assertNoColumnRules(policy, `${db}.${table}`)
 
   // PÚBLICO (grant: all) → ROW POLICY allow-all (`USING 1`); la policy existe y permite toda fila.
   if (isPublic(policy)) {

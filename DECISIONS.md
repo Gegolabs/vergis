@@ -9,6 +9,14 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-27 · 2026-08-13 — La vista de máscara y el DDM conviven, y la composición falla hacia el lado seguro
+
+- **Bifurcación**: la vista de máscara (H6) honra el claim por request; el `MASKED WITH` (H2) enmascara igual para todos. Pero **la vista lee la columna base**: si el Service Principal del pool **no** tiene `UNMASK`, la rama «en claro» de la vista devuelve igual el default de DDM y **el sujeto CON el claim tampoco ve el valor**. ¿Se emiten los dos, o se retira el DDM sobre las columnas que la vista cubre?
+- **Decidido**: **se emiten los dos.** La composición gana siempre el más restrictivo, así que el peor caso es **sobre-enmascarar**, nunca filtrar. Y cada uno cubre una topología distinta: la vista protege a quien se sirve por ella —el único camino que discrimina por sujeto—; el DDM protege a quien consulta **la tabla base**, que es el camino que queda si el spec no apunta a la vista.
+- **El costo asumido, dicho**: si el SP no tiene `UNMASK`, la capacidad queda degradada a «esta columna no se sirve a nadie» — que es la herramienta gruesa de la que el issue se queja, pero **es segura**. Retirar el DDM para evitarlo cambiaría una degradación segura por una fuga posible, y esa no es una permuta que se haga sin medir.
+- **La medición que lo destraba, y va antes de desplegar**: ¿el Service Principal de serving tiene `UNMASK`? Se mide en `vm-vergis-qa`, **en la misma sesión** que una consulta a la tabla sin vista como control positivo. Está en `PENDINGS.md` junto al gate de `MASKED WITH` × vistas-contrato.
+- **Costo de revertir**: bajo — no emitir DDM sobre columnas cubiertas por la vista es una condición en el emisor.
+
 ## D-26 · 2026-08-13 — La apertura de fila sube a la ENTIDAD, para que el caso del issue se pueda decir
 
 - **Bifurcación**: en la forma canónica un dataset `grant: all` no realiza entidad, así que no había atributo canónico que mapear y un `columns:` rompía con `grant-columns-unsupported`. La capacidad quedaba solo en la forma legacy — y con ella **el caso que origina #163**: la entidad `empleado`, abierta por decisión del cliente, con `rut` y nombre servibles a cualquier autenticado. ¿Se admite una regla inline en el dataset, o se mueve la apertura?
