@@ -55,3 +55,70 @@ describe('domain · contrato y autorización', () => {
     expect(manageableDomains(ds, 'nadie@x.com', false)).toEqual([])
   })
 })
+
+// #183 · `stewards:` admite GRUPOS de Mira además de correos. La entrada declara qué es (`group:<id>`);
+// nada se infiere de la forma del texto. La membresía la resuelve el llamador POR REQUEST y la pasa
+// como `groups` — este módulo decide autorización y no habla con el store.
+describe('domain · stewards por grupo (#183)', () => {
+  const mixto = () =>
+    parseDomainsConfig({
+      domains: [{ id: 'cartera', label: 'C', stewards: ['group:Finanzas_CLI', 'Ana@ga.test'] }],
+    })[0]
+
+  it('parsea correo y grupo mezclados en la misma lista, normalizados', () => {
+    expect(mixto().stewards).toEqual(['group:finanzas_cli', 'ana@ga.test'])
+  })
+
+  it('el dominio es gestionable por los miembros del grupo Y por el correo declarado', () => {
+    const d = mixto()
+    expect(canManageDomain(d, 'felipe@ga.test', false, ['finanzas_cli'])).toBe(true) // por grupo
+    expect(canManageDomain(d, 'ana@ga.test', false, [])).toBe(true) // por correo, sin grupos
+    expect(canManageDomain(d, 'ajeno@x.cl', false, ['otro_grupo'])).toBe(false)
+  })
+
+  it('la membresía manda en el momento: cambiarla cambia el acceso sin tocar el YAML', () => {
+    // El mismo dominio parseado UNA vez: lo único que cambia entre las dos llamadas es lo que el
+    // store respondió en ese request. Es el criterio «alta/baja en /admin/grupos surte efecto ya».
+    const d = mixto()
+    expect(canManageDomain(d, 'felipe@ga.test', false, ['finanzas_cli'])).toBe(true)
+    expect(canManageDomain(d, 'felipe@ga.test', false, [])).toBe(false)
+  })
+
+  it('fail-closed: grupo inexistente o vacío ⇒ nadie (una lista que no resuelve NO abre el dominio)', () => {
+    const d = parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['group:no_existe'] }] })[0]
+    // Un grupo inexistente y uno existente-pero-vacío son indistinguibles acá, y a propósito: los dos
+    // producen «esta identidad no pertenece», que es la respuesta correcta para ambos.
+    expect(canManageDomain(d, 'quien@sea.cl', false, [])).toBe(false)
+    expect(canManageDomain(d, 'quien@sea.cl', false, ['otro'])).toBe(false)
+    expect(manageableDomains([d], 'quien@sea.cl', false, [])).toEqual([])
+  })
+
+  it('un grupo inexistente NO tumba el parseo: los demás dominios siguen vivos', () => {
+    const ds = parseDomainsConfig({
+      domains: [
+        { id: 'a', label: 'A', stewards: ['group:fantasma'] },
+        { id: 'b', label: 'B', stewards: ['ana@ga.test'] },
+      ],
+    })
+    expect(ds.map((d) => d.id)).toEqual(['a', 'b'])
+    expect(canManageDomain(ds[1], 'ana@ga.test', false)).toBe(true)
+  })
+
+  it('sin `groups` (llamador que no los resolvió) el acceso por grupo se niega, no se asume', () => {
+    expect(canManageDomain(mixto(), 'felipe@ga.test', false)).toBe(false)
+  })
+
+  it('una entrada ambigua se rechaza AL PARSEAR, con mensaje que nombra las dos formas válidas', () => {
+    expect(() => parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['finanzas_cli'] }] })).toThrow(
+      /entrada inválida 'finanzas_cli'.*correo.*group:/s,
+    )
+    expect(() => parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['no-es-correo'] }] })).toThrow(/entrada inválida/)
+    expect(() => parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['group:Mal Id'] }] })).toThrow(/grupo con id inválido/)
+    expect(() => parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['group:'] }] })).toThrow(/grupo con id inválido/)
+  })
+
+  it('un correo que CONTIENE el prefijo no se confunde con un grupo (el prefijo es de inicio)', () => {
+    const d = parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['ana+group:x@ga.test'] }] })[0]
+    expect(canManageDomain(d, 'ana+group:x@ga.test', false)).toBe(true)
+  })
+})
