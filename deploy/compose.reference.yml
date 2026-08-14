@@ -20,6 +20,12 @@ services:
     # churn perpetuo: cada build de `main` publica un digest nuevo y Renovate abría PR para bumpearlo.
     # El cooldown de supply chain NO se debilita: aplica a las imágenes de TERCEROS (ver caddy abajo),
     # que son las que este repo no controla. `renovate.json` tiene la regla que impide re-pinearla.
+    #
+    # `latest` acá significa «la última versión PUBLICADA» (el tag lo mueve un tag de git, no un merge
+    # a `main` — ver la tabla de tags del CHANGELOG). Aun así, en PRODUCCIÓN conviene pinnear la
+    # versión exacta (`:0.16.0`) o la serie (`:0.16`): con un tag móvil, la próxima release entra en
+    # el siguiente `pull`/recreate sin que nadie lo decida. La elección es de quien opera la
+    # instancia; esta plantilla trae el tag móvil porque es lo que un lector quiere copiar.
     image: ghcr.io/gegolabs/vergis:latest
     restart: unless-stopped
     # Secretos de la instancia (NUNCA en git): VERGIS_CONNECTIONS (Service Principal → Fabric),

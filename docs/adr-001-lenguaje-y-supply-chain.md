@@ -33,7 +33,7 @@ Donde un bug de lógica sí sería grave — el compilador de policies — la ga
 - **Tipos borrados en runtime** — los contratos entre Botler y Capabilities requieren validación explícita en las fronteras (no la provee el lenguaje). Mitigación: validación de shape en `capabilityCall`.
 - **Supply chain npm** — el costo dominante; se analiza en detalle abajo.
 - **Compilación al vuelo en producción** — ejecutar `tsx` en la imagen es una deuda operacional independiente del lenguaje. Mitigación: build a `dist/` y `node dist/`.
-- **Sin binario único** — Go produciría un binario estático; la distribución por imagen Docker (`ghcr.io/cobach/vergis`) lo mitiga.
+- **Sin binario único** — Go produciría un binario estático; la distribución por imagen Docker (`ghcr.io/gegolabs/vergis`) lo mitiga.
 - **Percepción de solidez** — factor real en ventas enterprise, técnicamente discutible para un workload I/O-bound.
 
 ## Exposición de supply chain (medida sobre el repo)
