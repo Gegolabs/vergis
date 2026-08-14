@@ -179,6 +179,14 @@ export class MiraBotlet implements Botlet {
     // recibe el conteo de lo comentado sobre las filas que ya se van a servir — para el marcador.
     // Corre DESPUÉS de componer y no toca el camino del dato (D7: el motor no lee notas).
     const notasCtx = ctx.params?.['notas'] as { render?: unknown; resolver?: ResolverComentarios } | undefined
+    // El contexto que se publica al cliente lleva el ctx EFECTIVO, no el de la URL (#185). El llamador
+    // arma ese bloque ANTES de invocar a Mira, así que solo puede conocer la query de navegación; un
+    // control de alcance con `default:` se resuelve acá dentro. Con la URL pelada el bloque salía sin
+    // la llave `ctx`, el POST del comentario viajaba sin alcance, y el gate del servidor re-buscaba la
+    // fila con el param bindeado en blanco → 0 filas → 403 «no visible para esta identidad» sobre una
+    // fila que la identidad SÍ ve. `ctxValues` es el MISMO mapa con que corrieron las queries de esta
+    // página: publicar cualquier otra cosa sería publicar un alcance que nadie sirvió.
+    const notasRender = withEffectiveCtx(notasCtx?.render, ctxValues)
 
     // CORTE AS-OF por INGESTA (issue #108 · D6): lo deriva la PLATAFORMA (el server sabe qué procesos
     // producen las tablas del PI y cuándo corrieron por última vez) y viaja como param, igual que las
@@ -242,7 +250,7 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasCtx?.render, asOfParam, print, pdfUrl)
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasRender, asOfParam, print, pdfUrl)
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -515,6 +523,21 @@ export class MiraBotlet implements Botlet {
     }
     host.log({ type: 'mira-quality-ok', botletId: this.id, dataset: name, rows: res.rows.length })
   }
+}
+
+/**
+ * Sella el ctx EFECTIVO en el contexto de la capa de notas (#185): el que el llamador armó con la
+ * query de navegación se reemplaza por el que de verdad corrió las queries de esta página.
+ *
+ * NO decide precedencia — `ctxValues` ya la aplicó: un `ctx.<param>` explícito de la URL gana sobre
+ * el `default:` del control, y uno fuera del dominio cae al default (fail-safe de `resolveControlValue`).
+ * Acá solo se copia el resultado, porque el alcance que se publica al cliente tiene que ser el mismo
+ * con el que se sirvieron las filas — si difieren, la escritura vuelve a buscar filas que no existen.
+ */
+function withEffectiveCtx(render: unknown, ctxValues: CtxValues): unknown {
+  if (!render || typeof render !== 'object') return render
+  const ctx: CtxValues = { ...ctxValues }
+  return Object.keys(ctx).length > 0 ? { ...(render as Record<string, unknown>), ctx } : render
 }
 
 /** Crea un Botlet Mira a partir del texto YAML del DSL. */
