@@ -7,13 +7,16 @@
 // discriminador universal.
 
 import { VergisError } from '@vergis/botler'
-import type { Combine, HierarchyPredicate, MembershipPredicate, Policy, PolicyDecl, Predicate, PredicateOp } from './ir'
+import { validateColumnRule } from './ir'
+import type { ColumnRule, Combine, HierarchyPredicate, MembershipPredicate, Policy, PolicyDecl, Predicate, PredicateOp } from './ir'
 
 /** El bloque `quality.audience` tal como llega del DSL (sin tipar). */
 export interface AudienceDecl {
   rls?: unknown
   combine?: unknown
   default?: unknown
+  /** Plano de COLUMNA (#163 H4): lista de `{column, claim, action: mask}`. Ortogonal a `rls`. */
+  columns?: unknown
   classification_constraint?: unknown
   [k: string]: unknown
 }
@@ -27,16 +30,70 @@ function err(code: string, path: string, value: unknown, message: string, remedi
   return new VergisError({ error: 'policy/spec-invalid', code, path, value, message, remediation })
 }
 
+/** Claves admitidas en UNA regla de columna. El vocabulario es cerrado: lo demás no se ignora, rompe. */
+const COLUMN_RULE_KEYS = ['column', 'claim', 'action']
+
+/**
+ * `audience.columns` → reglas de columna del IR (#163 H4). Vocabulario **fijo**: `columna × claim ×
+ * acción mask`, sin condiciones ni operadores (diseño §4.6; guardrail del IR: "flexibilidad = motor
+ * de authz disfrazado").
+ *
+ * Existe porque el hueco que cierra H4 es de FRONT-END, no de evaluador: hasta acá una declaración de
+ * columna escrita en el YAML se ignoraba en silencio y la columna se servía en claro con el autor
+ * creyendo que la había protegido. **Fail-OPEN a nivel de spec** — el peor modo de falla de una capa
+ * de autorización, porque no deja rastro. Por eso lo malformado rompe al PARSEAR (al arrancar o al
+ * recargar, diseño §4.2) y jamás degrada a «sin regla».
+ *
+ * `undefined` (clave ausente) ≠ `[]`: la primera es «esta policy no dice nada de columnas» y devuelve
+ * `undefined` para que la policy salga BIT A BIT como antes de que este plano existiera; la segunda es
+ * «declara cero», legítima y explícita, igual que `policies: []` en el store.
+ */
+export function parseColumnRules(value: unknown, path = 'quality.audience.columns'): ColumnRule[] | undefined {
+  if (value == null) return undefined
+  if (!Array.isArray(value)) {
+    throw err('columns-malformed', path, value, `'columns' debe ser una lista de reglas de columna {column, claim, action}.`, `Declarar 'columns: [{column: <col>, claim: <claim>, action: mask}]' o quitar la clave.`)
+  }
+  return value.map((raw, i) => {
+    const at = `${path}[${i}]`
+    // Claves de más: `{column, claim, action, if: ...}` se leería como una regla CONDICIONAL, y el IR
+    // no las tiene. Ignorarlas sería el mismo fail-open con otra cara — el autor cree que condicionó.
+    if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
+      const extra = Object.keys(raw as Record<string, unknown>).filter((k) => !COLUMN_RULE_KEYS.includes(k))
+      if (extra.length > 0) {
+        throw err('column-rule-unknown-key', at, extra, `Una regla de columna solo admite ${COLUMN_RULE_KEYS.join(', ')}. Sobran: ${extra.join(', ')}. El vocabulario es cerrado: no hay condiciones ni operadores de columna.`, `Quitar ${extra.join(', ')}. Para no servir una columna a un sujeto, no la declares en la entidad (diseño §4.3).`)
+      }
+    }
+    // La validación de la regla es del ORÁCULO (`ir.validateColumnRule`), fuente única: reimplementarla
+    // acá haría divergir el spec de lo que el evaluador acepta. Solo se corrige el `path` del error,
+    // que allá se nombra genérico y acá se sabe exacto.
+    try {
+      validateColumnRule(raw as ColumnRule, i)
+    } catch (e) {
+      if (e instanceof VergisError) throw new VergisError({ ...e.structured, path: at })
+      throw e
+    }
+    const r = raw as ColumnRule
+    return { column: r.column, claim: r.claim, action: 'mask' as const }
+  })
+}
+
 /**
  * `quality.audience` → PolicyDecl.
  *
  * - ausente / `rls` ausente → `public`.
  * - `rls: public`           → `public`.
  * - `rls: [ ... ]`          → Policy (`default: deny`); cada item de pertenencia o jerárquico.
+ *
+ * `columns` es ORTOGONAL a `rls` y viaja en las TRES formas: un PI público con una columna sensible
+ * sigue siendo público (diseño §4.1) — colapsar «este dominio es público» con «esta columna es
+ * sensible» es justo el nudo que #163 viene a desatar.
  */
 export function parseAudience(audience: AudienceDecl | undefined): PolicyDecl {
-  if (!audience || audience.rls == null) return { public: true }
-  if (audience.rls === 'public') return { public: true }
+  const columnRules = parseColumnRules(audience?.columns)
+  const withColumns = <T extends object>(p: T): T => (columnRules === undefined ? p : { ...p, columnRules })
+
+  if (!audience || audience.rls == null) return withColumns<PolicyDecl>({ public: true })
+  if (audience.rls === 'public') return withColumns<PolicyDecl>({ public: true })
 
   if (!Array.isArray(audience.rls)) {
     throw err(
@@ -63,7 +120,7 @@ export function parseAudience(audience: AudienceDecl | undefined): PolicyDecl {
   }
 
   const policy: Policy = { predicates, combine, default: 'deny' }
-  return policy
+  return withColumns(policy)
 }
 
 function parsePredicate(p: unknown, i: number): Predicate {

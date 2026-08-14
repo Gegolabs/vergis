@@ -11,7 +11,7 @@
 // atributo que el autor del spec se auto-otorga.
 
 import { VergisError } from '@vergis/botler'
-import { parseAudience } from './frontend'
+import { parseAudience, parseColumnRules } from './frontend'
 import { isEntityStore, resolveEntityStore } from './entities'
 import type { PolicyDecl } from './ir'
 
@@ -23,6 +23,12 @@ export interface DataPolicyDecl {
   rls?: unknown
   /** Apertura explícita: `all` = todas las filas visibles (posture gobernada). */
   grant?: unknown
+  /**
+   * Plano de COLUMNA (#163 H4): `[{column, claim, action: mask}]`. ORTOGONAL a `rls`/`grant` — un
+   * dataset abierto (`grant: all`) puede tener una columna sensible sin dejar de ser abierto, y esa
+   * es la instancia que el diseño nombra como driver (§6).
+   */
+  columns?: unknown
   combine?: unknown
   default?: unknown
   [k: string]: unknown
@@ -81,6 +87,14 @@ export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; da
     if (out.has(entry.dataset)) {
       throw err('dataset-duplicate', `${path}.dataset`, entry.dataset, `El dataset '${entry.dataset}' tiene más de una política: el last-wins silencioso podría pisar la RLS con un 'grant: all' posterior.`, `Unificar la política de '${entry.dataset}' en una sola entrada.`)
     }
+    // El plano de columna se parsea SIEMPRE y ANTES de decidir la rama (#163 H4): una regla
+    // malformada rompe acá —al cargar o recargar el store, diseño §4.2— y no en el request de un
+    // consumidor. Se parsea igual en la rama `grant: all` porque los dos planos son ortogonales; si
+    // solo se leyera en la rama `rls`, la declaración del PI abierto se ignoraría en silencio, que es
+    // exactamente el fail-open que este hito viene a matar.
+    const columnRules = parseColumnRules(entry.columns, `${path}.columns`)
+    const withColumns = <T extends object>(p: T): T => (columnRules === undefined ? p : { ...p, columnRules })
+
     const hasGrant = entry.grant != null
     const hasRls = entry.rls != null
     if (hasGrant && hasRls) {
@@ -91,7 +105,7 @@ export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; da
         throw err('grant-unsupported', `${path}.grant`, entry.grant, `'grant' solo soporta 'all' (apertura explícita).`, `Usar 'grant: all' o quitar la entrada (sin entrada = deny).`)
       }
       // apertura explícita gobernada → sin restricción de fila (PublicPolicy del IR)
-      out.set(entry.dataset, { public: true })
+      out.set(entry.dataset, withColumns<PolicyDecl>({ public: true }))
       return
     }
     if (!hasRls) {
@@ -102,7 +116,7 @@ export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; da
       throw err('public-removed', `${path}.rls`, entry.rls, `'public' no existe como política. La apertura es 'grant: all', explícita y gobernada.`, `Usar 'grant: all'.`)
     }
     const policy = parseAudience({ rls: entry.rls, combine: entry.combine, default: entry.default })
-    out.set(entry.dataset, policy)
+    out.set(entry.dataset, withColumns(policy))
   })
   return out
 }

@@ -501,3 +501,597 @@ describe('Fabric · dependencias de esquema declaradas (#164)', () => {
     expect(compileFabric(pol, { schema: 'dbo', table: 't' })!.schemaDependencies).toEqual(['area'])
   })
 })
+
+// ===========================================================================
+// === #163 H2 · PLANO DE COLUMNA EN EL BACK-END FABRIC (DDM) ================
+// ===========================================================================
+//
+// Lo que estas pruebas fijan, y el orden importa:
+//   1. el DDL de la máscara y su teardown SIMÉTRICO;
+//   2. que la AUSENCIA de reglas no mueva un byte del SQL (control negativo del contrato);
+//   3. el differential test contra el oráculo, celda a celda, con el CONTROL de que ambas ramas
+//      (con máscara y sin máscara) se ejercitaron — sin ese conteo, un emulador que nunca enmascarara
+//      pasaría el differential test sin haber sido puesto en riesgo;
+//   4. la BRECHA medida: DDM discrimina por principal y Vergis sirve con uno solo, así que el claim
+//      queda inerte y el motor SOBRE-enmascara respecto del oráculo. Se asienta como aserción, no
+//      como comentario: una brecha que no está en un test se pierde en la primera relectura.
+//
+// `emulateFabricRows` se importa por ruta directa porque `packages/policy/src/index.ts` tiene lista de
+// exports explícita y está fuera del alcance de este hito (hay otros frentes en vuelo sobre ella).
+import { emulateFabricRows, fabricMaskedColumns } from '../packages/policy/src/fabric'
+import { MASK_VALUE, type ColumnRule } from '../packages/policy/src/ir'
+
+describe('Fabric · #163 H2 · enmascaramiento por columna (DDM nativo)', () => {
+  const REGLA_RUT: ColumnRule = { column: 'rut', claim: 've_pii', action: 'mask' }
+  const polConRegla = (rules: ColumnRule[] = [REGLA_RUT]): Policy => ({
+    predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+    combine: 'and',
+    default: 'deny',
+    columnRules: rules,
+  })
+
+  it('emite el ADD MASKED WITH de la columna declarada, al final del setup', () => {
+    const enf = compileFabric(polConRegla(), FAB_TARGET)
+    expect(enf.setupSQL[enf.setupSQL.length - 1]).toBe(
+      `ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] ADD MASKED WITH (FUNCTION = 'default()');`,
+    )
+    // el DDL de fila no se movió: la máscara se SUMA, no reemplaza
+    expect(enf.setupSQL.join('\n')).toContain('CREATE SECURITY POLICY [dbo].[secpol_areas]')
+  })
+
+  it('el teardown revierte la máscara, guardado (DROP MASKED sobre columna sin máscara es error)', () => {
+    const enf = compileFabric(polConRegla(), FAB_TARGET)
+    expect(enf.teardownSQL).toEqual([
+      `IF EXISTS (SELECT 1 FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'[dbo].[areas]') AND name = N'rut')\n` +
+        `    ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] DROP MASKED;`,
+      `DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`,
+      `DROP FUNCTION IF EXISTS [dbo].[fn_pol_areas];`,
+    ])
+    // simetría: todo lo que el setup instala, el teardown lo desinstala…
+    expect(enf.setupSQL.filter((s) => s.startsWith('ALTER TABLE'))).toHaveLength(1)
+    // …y el setup ARRANCA con el teardown completo (idempotencia por tira-y-recrea)
+    expect(enf.setupSQL.slice(0, enf.teardownSQL.length)).toEqual(enf.teardownSQL)
+  })
+
+  it('varias reglas → una máscara por columna, sin repetir, en orden de declaración', () => {
+    const enf = compileFabric(
+      polConRegla([REGLA_RUT, { column: 'sueldo', claim: 've_rem', action: 'mask' }, REGLA_RUT]),
+      FAB_TARGET,
+    )
+    expect(fabricMaskedColumns(enf)).toEqual(['rut', 'sueldo'])
+    expect(enf.setupSQL.filter((s) => s.startsWith('ALTER TABLE'))).toEqual([
+      `ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] ADD MASKED WITH (FUNCTION = 'default()');`,
+      `ALTER TABLE [dbo].[areas] ALTER COLUMN [sueldo] ADD MASKED WITH (FUNCTION = 'default()');`,
+    ])
+  })
+
+  it('`schemaDependencies` incluye las columnas enmascaradas junto a las de criterio (#164)', () => {
+    const gobernada = compileFabric(polConRegla(), FAB_TARGET)
+    expect(gobernada.schemaDependencies).toEqual(['area', 'rut'])
+    // una regla SOBRE la columna de criterio no la duplica
+    expect(compileFabric(polConRegla([{ column: 'area', claim: 've_pii', action: 'mask' }]), FAB_TARGET).schemaDependencies).toEqual(['area'])
+    // y el plano de columna es ortogonal al de fila: una policy PÚBLICA también enmascara
+    const publica = compileFabric(
+      { public: true, columnRules: [REGLA_RUT] },
+      { ...FAB_TARGET, bindColumn: 'area' },
+    )
+    expect(publica.schemaDependencies).toEqual(['area', 'rut'])
+    expect(publica.setupSQL.join('\n')).toContain(`ALTER COLUMN [rut] ADD MASKED WITH`)
+  })
+
+  it('fail-closed: regla malformada ROMPE el compilado (jamás degrada a «sin máscara»)', () => {
+    for (const mala of [
+      { column: 'rut', claim: 've_pii' },
+      { column: 'rut', claim: 've_pii', action: 'hide' },
+      { column: 'rut', action: 'mask' },
+      { column: '', claim: 've_pii', action: 'mask' },
+      null,
+    ]) {
+      expect(() => compileFabric(polConRegla([mala as unknown as ColumnRule]), FAB_TARGET)).toThrow(VergisError)
+    }
+  })
+
+  it('anti-inyección: el nombre de la columna y el del claim se validan como identificadores', () => {
+    expect(() =>
+      compileFabric(polConRegla([{ column: `rut] DROP TABLE x --`, claim: 've_pii', action: 'mask' }]), FAB_TARGET),
+    ).toThrow(/identificador|unsafe/i)
+    expect(() =>
+      compileFabric(polConRegla([{ column: 'rut', claim: `x'; DROP TABLE y; --`, action: 'mask' }]), FAB_TARGET),
+    ).toThrow(/identificador|unsafe/i)
+  })
+
+  it('CONTROL NEGATIVO: sin reglas de columna el SQL es el de siempre, byte a byte', () => {
+    const sinReglas = compileFabric(parseAudience(QW04_AUDIENCE), FAB_TARGET)
+    const conListaVacia = compileFabric({ ...(parseAudience(QW04_AUDIENCE) as Policy), columnRules: [] }, FAB_TARGET)
+    expect(sinReglas.setupSQL).toHaveLength(4) // DROP policy, DROP fn, CREATE fn, CREATE policy
+    expect(sinReglas.setupSQL.join('\n')).not.toContain('MASKED')
+    expect(sinReglas.teardownSQL).toEqual([
+      `DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`,
+      `DROP FUNCTION IF EXISTS [dbo].[fn_pol_areas];`,
+    ])
+    expect(conListaVacia.setupSQL).toEqual(sinReglas.setupSQL)
+    expect(conListaVacia.teardownSQL).toEqual(sinReglas.teardownSQL)
+    expect(sinReglas.schemaDependencies).toEqual(['area'])
+    // y el emulador tampoco toca nada: devuelve las MISMAS referencias de fila
+    const settings = settingsForInjections(sinReglas.injections, { groups: ['Producción'] })
+    const rows = STORE as unknown as Record<string, unknown>[]
+    expect(emulateFabricRows(sinReglas, settings, rows)[0]).toBe(rows[0])
+  })
+
+  it('BRECHA MEDIDA: DDM no discrimina por claim — el sujeto CON el claim también ve la máscara', () => {
+    // No es un bug de este emisor: `execute-sql-dwh` sirve a todos los consumidores con UN Service
+    // Principal y los distingue por SESSION_CONTEXT, mientras que DDM discrimina por el permiso
+    // UNMASK del principal. La dirección de la divergencia es SEGURA (sobre-enmascara, no filtra) y
+    // queda asentada acá para que no se descubra en producción.
+    const enf = compileFabric(polConRegla(), FAB_TARGET)
+    const rows = [{ area: 'Producción', rut: '11.111.111-1' }]
+    const claims = { groups: ['Producción'], ve_pii: ['si'] }
+    const settings = settingsForInjections(enf.injections, claims)
+    expect(emulateFabricRows(enf, settings, rows)[0].rut).toBe(MASK_VALUE) // motor: enmascarado
+    expect(applyPolicy(enf.policy, claims, rows)[0].rut).toBe('11.111.111-1') // oráculo: en claro
+  })
+})
+
+// === PROPERTY TEST: celdas servidas por Fabric vs el oráculo (#163 H2) =======
+describe('Fabric · #163 H2 · property test celda a celda (codegen vs oráculo)', () => {
+  function lcg(seed: number) {
+    let s = seed >>> 0
+    return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0x100000000)
+  }
+  const AREAS = ['Producción', 'Finanzas', 'Comercial', 'RRHH']
+  const pick = <T,>(rnd: () => number, xs: T[]) => xs[Math.floor(rnd() * xs.length)]
+  const subset = <T,>(rnd: () => number, xs: T[]) => xs.filter(() => rnd() < 0.5)
+
+  it('∀ store, reglas y claims aleatorios: mismas filas, mismas celdas — sin fuga y con ambas ramas', () => {
+    const rnd = lcg(20260813)
+    let conMascara = 0 // corridas donde el oráculo enmascaró alguna celda servida
+    let sinMascara = 0 // corridas donde el oráculo sirvió TODA la fila en claro
+    let sobreMascara = 0 // CELDAS donde el motor enmascaró y el oráculo no (la brecha de DDM)
+
+    for (let iter = 0; iter < 600; iter += 1) {
+      const rows = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => ({
+        area: pick(rnd, AREAS),
+        rut: `${Math.floor(rnd() * 1e6)}-K`,
+        present: Math.floor(rnd() * 100),
+      })) as unknown as Record<string, unknown>[]
+
+      // reglas de columna aleatorias: a veces ninguna (la extensión tiene que ser conservadora)
+      const rules: ColumnRule[] = []
+      if (rnd() < 0.7) rules.push({ column: 'rut', claim: 've_pii', action: 'mask' })
+      if (rnd() < 0.4) rules.push({ column: 'present', claim: 've_rem', action: 'mask' })
+
+      const policy: Policy = {
+        predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+        combine: 'and',
+        default: 'deny',
+        columnRules: rules,
+      }
+
+      const claims: ClaimSet = {}
+      if (rnd() < 0.9) claims.groups = subset(rnd, AREAS)
+      if (rnd() < 0.5) claims.ve_pii = ['si'] // a veces el sujeto SÍ trae el claim
+      if (rnd() < 0.5) claims.ve_rem = ['si']
+
+      const enf = compileFabric(policy, FAB_TARGET)
+      const settings = settingsForInjections(enf.injections, claims)
+      const fromFabric = emulateFabricRows(enf, settings, rows)
+      const fromReference = applyPolicy(policy, claims, rows)
+
+      // 1 · el plano de FILA no se movió: mismas filas, misma forma
+      expect(fromFabric).toHaveLength(fromReference.length)
+      fromFabric.forEach((fab, i) => {
+        const ref = fromReference[i]
+        expect(Object.keys(fab)).toEqual(Object.keys(ref))
+        for (const k of Object.keys(ref)) {
+          if (ref[k] === MASK_VALUE) {
+            // 2 · NO-FUGA (lo que de verdad sostiene el hito): donde el oráculo enmascara, el motor
+            // enmascara. Esta es la desigualdad que jamás puede aflojarse.
+            expect(fab[k]).toBe(MASK_VALUE)
+          } else if (fab[k] !== ref[k]) {
+            // 3 · la única divergencia admitida es en la dirección segura, y SOLO sobre una columna
+            // con regla declarada: el motor enmascaró de más porque DDM no ve el claim.
+            expect(fab[k]).toBe(MASK_VALUE)
+            expect(rules.some((r) => r.column === k)).toBe(true)
+            sobreMascara += 1
+          }
+        }
+      })
+
+      if (fromReference.length > 0) {
+        const hayMascara = Object.values(fromReference[0]).some((v) => v === MASK_VALUE)
+        if (hayMascara) conMascara += 1
+        else sinMascara += 1
+      }
+    }
+    // CONTROL DE RAMAS: sin esto, un emulador que nunca enmascarara (o que enmascarara siempre)
+    // pasaría el differential test sin haber sido puesto en riesgo ni una vez.
+    expect(conMascara).toBeGreaterThan(50)
+    expect(sinMascara).toBeGreaterThan(50)
+    expect(sobreMascara).toBeGreaterThan(50) // y la brecha de DDM se ejercitó de verdad
+  })
+})
+
+describe('ClickHouse · el plano de columna es capacidad NO SOPORTADA, fail-closed (#163 H3)', () => {
+  // Evidencia de por qué no se implementó la máscara: este back-end emite un PREDICADO de fila
+  // (`USING`, booleano) más inyección de settings, y la proyección la escribe el consumidor
+  // (`execute-sql-ch` manda `params.sql` verbatim). No hay punto donde sustituir una celda sin
+  // mover la authz fuera del motor. Lo que estos tests fijan es que ROMPE, y que romper es lo
+  // correcto: la alternativa a la máscara nunca es servir la columna en claro.
+  const COL_RULE = { column: 'rut', claim: 'pii', action: 'mask' as const }
+
+  const withRules = (base: PolicyDecl): PolicyDecl =>
+    ({ ...(base as object), columnRules: [COL_RULE] }) as PolicyDecl
+
+  const ROW_POLICY: Policy = {
+    predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+    combine: 'and',
+    default: 'deny',
+  }
+
+  it('una policy de fila CON regla de columna no compila (code exacto)', () => {
+    let caught: unknown
+    try {
+      compileClickHouse(withRules(ROW_POLICY), TARGET)
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(VergisError)
+    const d = (caught as VergisError).structured
+    expect(d.error).toBe('policy/compile')
+    expect(d.code).toBe('column-masking-unsupported')
+    expect(d.path).toBe('audience.columns')
+    expect(d.value).toEqual(['rut'])
+    // El mensaje dice la verdad completa: qué no soporta, y que la salida NO es servir en claro.
+    expect(String(d.message)).toMatch(/no sabe enmascarar/i)
+    expect(String(d.message)).toMatch(/en claro/i)
+    expect(String(d.remediation)).toMatch(/en claro/i)
+  })
+
+  it('un PI PÚBLICO con columna sensible tampoco compila — es el caso que más fugaría en silencio', () => {
+    // Sin el chequeo previo a la rama pública, esto habría devuelto `USING 1` y servido el rut entero.
+    expect(() => compileClickHouse(withRules({ public: true }), TARGET)).toThrow(VergisError)
+    expect(() => compileClickHouse(withRules({ public: true }), TARGET)).toThrow(/no sabe enmascarar/i)
+  })
+
+  it('el rechazo es del compilador, no del deploy: nunca llega a existir un enforcement', () => {
+    // Si devolviera un enforcement «sin máscara», `bootstrapClickHouse` lo aplicaría verbatim y la
+    // columna quedaría servida. La única forma de que eso no pase es no producir el artefacto.
+    expect(() => compilePolicyToClickHouse(
+      { rls: [{ column: 'area', claim: 'groups', op: 'in' }] },
+      TARGET,
+      BIND,
+    )).not.toThrow()
+    const conReglas = withRules(parseAudience({ rls: [{ column: 'area', claim: 'groups', op: 'in' }] }))
+    expect(() => compileClickHouse(conReglas, TARGET)).toThrow(/column-masking-unsupported|no sabe enmascarar/i)
+  })
+
+  // --- CONTROL NEGATIVO: sin reglas de columna, el back-end es bit a bit el de siempre ----------
+  it('CONTROL — una policy SIN reglas de columna emite EXACTAMENTE el SQL de siempre', () => {
+    const enf = compileClickHouse(ROW_POLICY, TARGET)
+    expect(enf.rowPolicySQL).toBe(
+      `CREATE ROW POLICY OR REPLACE pol_areas ON vergis.areas\n` +
+        `    FOR SELECT\n` +
+        `    USING (getSetting('vergis_claim_groups') != '' AND has(splitByChar(',', getSetting('vergis_claim_groups')), area))\n` +
+        `    AS permissive\n` +
+        `    TO consumer_role;`,
+    )
+    expect(enf.injections).toEqual([{ setting: 'vergis_claim_groups', claim: 'groups' }])
+  })
+
+  it('CONTROL — `columnRules: []` (declarado y vacío) no es «tiene reglas»: compila igual', () => {
+    const vacias = { ...ROW_POLICY, columnRules: [] } as PolicyDecl
+    expect(compileClickHouse(vacias, TARGET).rowPolicySQL).toBe(compileClickHouse(ROW_POLICY, TARGET).rowPolicySQL)
+  })
+
+  it('CONTROL — el público sin reglas sigue siendo allow-all, y las filas servidas no cambian', () => {
+    expect(compileClickHouse({ public: true }, TARGET).rowPolicySQL).toContain('USING 1')
+    // Y el plano de fila del back-end sigue coincidiendo con el oráculo (extensión conservadora).
+    expect(served(ROW_POLICY, { groups: ['Finanzas'] })).toEqual(
+      applyPolicy(ROW_POLICY, { groups: ['Finanzas'] }, STORE as unknown as Record<string, unknown>[]),
+    )
+  })
+})
+
+// === #163 H6 · LA VISTA DE MÁSCARA: la máscara honra el CLAIM DEL SUJETO =====
+//
+// Lo que separa este hito del H2 en una línea: DDM enmascara IGUAL PARA TODOS (discrimina por el
+// permiso UNMASK del principal, y Vergis sirve a todos los consumidores con UN Service Principal),
+// así que el claim de la `ColumnRule` quedaba INERTE. La vista evalúa ese claim contra
+// SESSION_CONTEXT —el mismo canal por el que ya viaja el sujeto para el FILTER PREDICATE de fila— en
+// la PROYECCIÓN, que es el único lugar donde una celda se puede reescribir.
+//
+// Los tests del H2 (arriba) NO se tocan: asertan el otro mecanismo, que sigue emitiéndose como
+// defensa en profundidad. Acá se aserta la vista.
+import { emulateFabricMaskView, fabricMaskViewColumns } from '../packages/policy/src/fabric'
+
+describe('Fabric · #163 H6 · vista de máscara evaluada por request (el claim deja de ser inerte)', () => {
+  const REGLA_PII: ColumnRule = { column: 'rut', claim: 've_pii', action: 'mask' }
+  const REGLA_REM: ColumnRule = { column: 'sueldo', claim: 've_rem', action: 'mask' }
+  /** Target con la proyección declarada: sin ella la vista no se puede emitir (no se sabe la forma). */
+  const VIEW_TARGET = {
+    ...FAB_TARGET,
+    tableColumns: ['area', 'rut', 'sueldo'],
+    columnTypes: { rut: 'NVARCHAR(20)', sueldo: 'DECIMAL(18,2)' },
+  }
+  const polCol = (rules: ColumnRule[] = [REGLA_PII]): Policy => ({
+    predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+    combine: 'and',
+    default: 'deny',
+    columnRules: rules,
+  })
+  const FILAS = [
+    { area: 'Producción', rut: '11.111.111-1', sueldo: 900 },
+    { area: 'Finanzas', rut: '22.222.222-2', sueldo: 1500 },
+  ] as Record<string, unknown>[]
+
+  it('emite el CREATE VIEW exacto: misma forma, centinela TIPADO por columna, guard de SESSION_CONTEXT', () => {
+    const enf = compileFabric(polCol([REGLA_PII, REGLA_REM]), VIEW_TARGET)
+    expect(enf.maskView?.qualifiedName).toBe('[dbo].[vw_mask_areas]')
+    expect(enf.maskView?.columns).toEqual(['area', 'rut', 'sueldo']) // la forma NO cambia
+    expect(enf.maskView?.createSQL).toBe(
+      `CREATE VIEW [dbo].[vw_mask_areas]\n` +
+        `AS\n` +
+        `    SELECT\n` +
+        `        [area],\n` +
+        `        CASE WHEN CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS NVARCHAR(MAX)) <> N'' THEN [rut] ELSE CAST(N'${MASK_VALUE}' AS NVARCHAR(20)) END AS [rut],\n` +
+        `        CASE WHEN CAST(SESSION_CONTEXT(N'vergis_claim_ve_rem') AS NVARCHAR(MAX)) <> N'' THEN [sueldo] ELSE CAST(0 AS DECIMAL(18,2)) END AS [sueldo]\n` +
+        `    FROM [dbo].[areas];`,
+    )
+    // la vista es la ÚLTIMA sentencia del setup (se apoya en la tabla ya gobernada) y viaja SOLA
+    expect(enf.setupSQL[enf.setupSQL.length - 1]).toBe(enf.maskView?.createSQL)
+    // y el plano de fila no se movió: la vista se SUMA
+    expect(enf.setupSQL.join('\n')).toContain('CREATE SECURITY POLICY [dbo].[secpol_areas]')
+  })
+
+  it('centinela por FAMILIA de tipos: texto, numérica, fecha, hora, binaria y uniqueidentifier', () => {
+    const columnas = ['t_nvarchar', 't_int', 't_date', 't_time', 't_varbinary', 't_guid']
+    const tipos = {
+      t_nvarchar: 'NVARCHAR(50)', t_int: 'INT', t_date: 'DATE',
+      t_time: 'TIME', t_varbinary: 'VARBINARY(16)', t_guid: 'UNIQUEIDENTIFIER',
+    }
+    const enf = compileFabric(
+      polCol(columnas.map((c) => ({ column: c, claim: 've_pii', action: 'mask' as const }))),
+      { ...FAB_TARGET, tableColumns: columnas, columnTypes: tipos },
+    )
+    const sql = enf.maskView!.createSQL
+    expect(sql).toContain(`ELSE CAST(N'${MASK_VALUE}' AS NVARCHAR(50)) END AS [t_nvarchar]`)
+    expect(sql).toContain(`ELSE CAST(0 AS INT) END AS [t_int]`)
+    expect(sql).toContain(`ELSE CAST('1900-01-01' AS DATE) END AS [t_date]`)
+    expect(sql).toContain(`ELSE CAST('00:00:00' AS TIME) END AS [t_time]`)
+    expect(sql).toContain(`ELSE CAST(0x00 AS VARBINARY(16)) END AS [t_varbinary]`)
+    expect(sql).toContain(`ELSE CAST('00000000-0000-0000-0000-000000000000' AS UNIQUEIDENTIFIER) END AS [t_guid]`)
+  })
+
+  it('el teardown tira la vista PRIMERO, y el setup arranca con el teardown completo (idempotente)', () => {
+    const enf = compileFabric(polCol(), VIEW_TARGET)
+    expect(enf.teardownSQL).toEqual([
+      `DROP VIEW IF EXISTS [dbo].[vw_mask_areas];`,
+      `IF EXISTS (SELECT 1 FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'[dbo].[areas]') AND name = N'rut')\n` +
+        `    ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] DROP MASKED;`,
+      `DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`,
+      `DROP FUNCTION IF EXISTS [dbo].[fn_pol_areas];`,
+    ])
+    expect(enf.setupSQL.slice(0, enf.teardownSQL.length)).toEqual(enf.teardownSQL)
+    // simetría: una sola vista instalada, una sola tirada
+    expect(enf.setupSQL.filter((s) => s.startsWith('CREATE VIEW'))).toHaveLength(1)
+    expect(enf.teardownSQL.filter((s) => s.startsWith('DROP VIEW'))).toHaveLength(1)
+    // y correr el setup dos veces produce el MISMO SQL (el compilado no arrastra estado)
+    expect(compileFabric(polCol(), VIEW_TARGET).setupSQL).toEqual(enf.setupSQL)
+  })
+
+  it('EL HITO: el sujeto CON el claim ve el valor en claro; el sujeto SIN el claim ve el centinela', () => {
+    const enf = compileFabric(polCol([REGLA_PII, REGLA_REM]), VIEW_TARGET)
+    const base = { groups: ['Producción'] }
+
+    // request 1 — trae ve_pii, no trae ve_rem
+    const s1 = settingsForInjections(enf.injections, { ...base, ve_pii: ['si'] })
+    const r1 = emulateFabricMaskView(enf, s1, FILAS)
+    expect(r1[0].rut).toBe('11.111.111-1') // EN CLARO: el claim está
+    expect(r1[0].sueldo).toBe(MASK_VALUE) // enmascarado: el claim falta
+
+    // request 2 — el MISMO enforcement, otro sujeto: nada en claro
+    const s2 = settingsForInjections(enf.injections, base)
+    const r2 = emulateFabricMaskView(enf, s2, FILAS)
+    expect(r2[0].rut).toBe(MASK_VALUE)
+    expect(r2[0].sueldo).toBe(MASK_VALUE)
+
+    // la FORMA es la misma para los dos (§4.1: mentimos el valor, jamás el esquema)
+    expect(Object.keys(r1[0])).toEqual(Object.keys(r2[0]))
+    expect(Object.keys(r1[0])).toEqual(Object.keys(FILAS[0]))
+    // y coincide con el oráculo en los dos requests
+    expect(r1).toEqual(applyPolicy(enf.policy, { ...base, ve_pii: ['si'] }, FILAS))
+    expect(r2).toEqual(applyPolicy(enf.policy, base, FILAS))
+  })
+
+  it('claim presente pero VACÍO enmascara igual (el guard `<> N\'\'` es el mismo del plano de fila)', () => {
+    const enf = compileFabric(polCol(), VIEW_TARGET)
+    for (const ve_pii of [[], [''], '' as string]) {
+      const s = settingsForInjections(enf.injections, { groups: ['Producción'], ve_pii })
+      expect(emulateFabricMaskView(enf, s, FILAS)[0].rut).toBe(MASK_VALUE)
+    }
+  })
+
+  it('el claim de la regla SE INYECTA (si no, un residuo del pool desenmascararía a quien no lo trae)', () => {
+    const enf = compileFabric(polCol([REGLA_PII]), VIEW_TARGET)
+    expect(enf.injections).toEqual([
+      { setting: 'vergis_claim_groups', claim: 'groups' },
+      { setting: 'vergis_claim_ve_pii', claim: 've_pii' },
+    ])
+    // el prelude lo reinyecta SIEMPRE, con '' cuando el sujeto no lo trae → default-deny de la celda
+    const prelude = sessionContextPrelude(enf.injections, { groups: ['Producción'] })
+    expect(prelude.sql).toContain(`@key = N'vergis_claim_ve_pii'`)
+    expect(prelude.params.find((p) => p.name === 'vergis_sc_1')?.value).toBe('')
+    // y el VALOR del claim viaja parametrizado, jamás interpolado en el SQL
+    const conValor = sessionContextPrelude(enf.injections, { groups: ['Producción'], ve_pii: ["x' OR 1=1--"] })
+    expect(conValor.sql).not.toContain('OR 1=1')
+    expect(conValor.params.find((p) => p.name === 'vergis_sc_1')?.value).toBe("x' OR 1=1--")
+    // un PI PÚBLICO con columna sensible también inyecta: los planos son ortogonales
+    const publica = compileFabric({ public: true, columnRules: [REGLA_PII] }, { ...VIEW_TARGET, bindColumn: 'area' })
+    expect(publica.injections).toEqual([{ setting: 'vergis_claim_ve_pii', claim: 've_pii' }])
+    expect(publica.maskView?.createSQL).toContain(`SESSION_CONTEXT(N'vergis_claim_ve_pii')`)
+  })
+
+  it('varias reglas sobre la MISMA columna → AND de los claims (hacen falta todos para verla en claro)', () => {
+    const enf = compileFabric(
+      polCol([REGLA_PII, { column: 'rut', claim: 've_rut', action: 'mask' }]),
+      VIEW_TARGET,
+    )
+    expect(enf.maskView?.createSQL).toContain(
+      `CASE WHEN CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS NVARCHAR(MAX)) <> N'' AND ` +
+        `CAST(SESSION_CONTEXT(N'vergis_claim_ve_rut') AS NVARCHAR(MAX)) <> N'' THEN [rut]`,
+    )
+    const soloUno = settingsForInjections(enf.injections, { groups: ['Producción'], ve_pii: ['si'] })
+    expect(emulateFabricMaskView(enf, soloUno, FILAS)[0].rut).toBe(MASK_VALUE)
+    const ambos = settingsForInjections(enf.injections, { groups: ['Producción'], ve_pii: ['si'], ve_rut: ['si'] })
+    expect(emulateFabricMaskView(enf, ambos, FILAS)[0].rut).toBe('11.111.111-1')
+    // …que es exactamente lo que hace el oráculo con dos reglas sobre la misma columna
+    expect([...fabricMaskViewColumns(enf, soloUno)]).toEqual(['rut'])
+    expect([...fabricMaskViewColumns(enf, ambos)]).toEqual([])
+  })
+
+  it('la vista NO filtra: el plano de fila sigue viniendo de la SECURITY POLICY sobre la tabla', () => {
+    const enf = compileFabric(polCol(), VIEW_TARGET)
+    expect(enf.maskView?.createSQL).not.toContain('WHERE')
+    const s = settingsForInjections(enf.injections, { groups: ['Finanzas'], ve_pii: ['si'] })
+    expect(emulateFabricMaskView(enf, s, FILAS).map((r) => r.area)).toEqual(['Finanzas'])
+    // sin claim de fila no hay ninguna fila que enmascarar: la máscara no resucita nada
+    expect(emulateFabricMaskView(enf, settingsForInjections(enf.injections, {}), FILAS)).toHaveLength(0)
+  })
+
+  it('FAIL-CLOSED: tipo desconocido, tipo no declarado o columna fuera de la proyección ROMPEN', () => {
+    // tipo que no se sabe mapear a centinela → nunca «se sirve sin CASE»
+    let caught: unknown
+    try {
+      compileFabric(polCol(), { ...VIEW_TARGET, columnTypes: { rut: 'GEOGRAPHY' } })
+    } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(VergisError)
+    expect((caught as VergisError).structured.code).toBe('mask-sentinel-unknown-type')
+
+    // tipo NO declarado: no se supone NVARCHAR (una columna INT reventaría en cada request)
+    try {
+      caught = undefined
+      compileFabric(polCol(), { ...FAB_TARGET, tableColumns: ['area', 'rut', 'sueldo'] })
+    } catch (e) { caught = e }
+    expect((caught as VergisError).structured.code).toBe('mask-view-column-type-missing')
+
+    // regla sobre una columna que la proyección declarada no trae (typo o declaración rancia)
+    try {
+      caught = undefined
+      compileFabric(polCol([{ column: 'fantasma', claim: 've_pii', action: 'mask' }]), VIEW_TARGET)
+    } catch (e) { caught = e }
+    expect((caught as VergisError).structured.code).toBe('mask-view-column-not-projected')
+  })
+
+  it('anti-inyección: proyección, nombre de vista, columna y claim se validan como identificadores', () => {
+    expect(() => compileFabric(polCol(), { ...VIEW_TARGET, tableColumns: ['area', 'rut', 'x] FROM sys.tables --'] }))
+      .toThrow(/identificador|unsafe/i)
+    expect(() => compileFabric(polCol(), { ...VIEW_TARGET, maskViewName: 'v]; DROP TABLE x --' }))
+      .toThrow(/identificador|unsafe/i)
+    expect(() => compileFabric(polCol([{ column: 'rut', claim: `x'; DROP TABLE y; --`, action: 'mask' }]), VIEW_TARGET))
+      .toThrow(/identificador|unsafe/i)
+    expect(() => compileFabric(polCol(), { ...VIEW_TARGET, columnTypes: { rut: 'NVARCHAR(20)); DROP' } }))
+      .toThrow(/tipo|type|unsafe/i)
+  })
+
+  it('CONTROL NEGATIVO: sin reglas de columna no hay vista y el SQL es el de hoy, byte a byte', () => {
+    const hoy = compileFabric(parseAudience(QW04_AUDIENCE), FAB_TARGET)
+    const conProyeccion = compileFabric(parseAudience(QW04_AUDIENCE), VIEW_TARGET)
+    const listaVacia = compileFabric({ ...(parseAudience(QW04_AUDIENCE) as Policy), columnRules: [] }, VIEW_TARGET)
+    for (const enf of [conProyeccion, listaVacia]) {
+      expect(enf.setupSQL).toEqual(hoy.setupSQL) // declarar la proyección NO cambia un byte
+      expect(enf.teardownSQL).toEqual(hoy.teardownSQL)
+      expect(enf.injections).toEqual(hoy.injections)
+      expect(enf.maskView).toBeNull()
+      expect(enf.setupSQL.join('\n')).not.toContain('VIEW')
+    }
+    // y sin vista el emulador no toca las filas: devuelve las MISMAS referencias
+    const s = settingsForInjections(hoy.injections, { groups: ['Producción'] })
+    expect(emulateFabricMaskView(hoy, s, FILAS)[0]).toBe(FILAS[0])
+  })
+
+  it('sin `tableColumns` la vista no se emite, y no emitirla NO abre nada (queda el DDM del H2)', () => {
+    // No se puede construir la proyección sin conocerla; la salida segura es no emitir la vista y
+    // dejar la tabla con DDM, que enmascara para TODOS (sobre-enmascara, nunca filtra).
+    const enf = compileFabric(polCol(), FAB_TARGET)
+    expect(enf.maskView).toBeNull()
+    expect(enf.setupSQL.join('\n')).toContain(`ALTER COLUMN [rut] ADD MASKED WITH`)
+    const conClaim = settingsForInjections(enf.injections, { groups: ['Producción'], ve_pii: ['si'] })
+    expect(emulateFabricMaskView(enf, conClaim, FILAS)[0].rut).toBe(MASK_VALUE)
+  })
+
+  it('el DDM del H2 SIGUE emitiéndose junto a la vista (defensa en profundidad: cubre el rodeo)', () => {
+    const enf = compileFabric(polCol(), VIEW_TARGET)
+    expect(enf.setupSQL.join('\n')).toContain(
+      `ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] ADD MASKED WITH (FUNCTION = 'default()');`,
+    )
+    expect(fabricMaskedColumns(enf)).toEqual(['rut']) // el mecanismo del H2, intacto
+    expect(enf.schemaDependencies).toEqual(['area', 'rut'])
+  })
+})
+
+// === #163 H6 · DIFFERENTIAL contra el oráculo, con control de ramas ==========
+describe('Fabric · #163 H6 · property test: la vista ≡ applyPolicy (celda a celda)', () => {
+  function lcg(seed: number) {
+    let s = seed >>> 0
+    return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0x100000000)
+  }
+  const AREAS = ['Producción', 'Finanzas', 'Comercial', 'RRHH']
+  const pick = <T,>(rnd: () => number, xs: T[]) => xs[Math.floor(rnd() * xs.length)]
+  const subset = <T,>(rnd: () => number, xs: T[]) => xs.filter(() => rnd() < 0.5)
+
+  it('∀ reglas y claims aleatorios: MISMAS celdas que el oráculo, y las dos ramas se ejercitaron', () => {
+    const rnd = lcg(20260813)
+    let conClaim = 0 // celdas servidas EN CLARO por una columna CON regla (el sujeto traía el claim)
+    let sinClaim = 0 // celdas ENMASCARADAS por una columna con regla (el sujeto no lo traía)
+    let corridasConRegla = 0
+
+    for (let iter = 0; iter < 600; iter += 1) {
+      const rows = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => ({
+        area: pick(rnd, AREAS),
+        rut: `${Math.floor(rnd() * 1e6)}-K`,
+        present: Math.floor(rnd() * 100),
+      })) as unknown as Record<string, unknown>[]
+
+      const rules: ColumnRule[] = []
+      if (rnd() < 0.7) rules.push({ column: 'rut', claim: 've_pii', action: 'mask' })
+      if (rnd() < 0.4) rules.push({ column: 'present', claim: 've_rem', action: 'mask' })
+      if (rules.length > 0) corridasConRegla += 1
+
+      const policy: Policy = {
+        predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+        combine: 'and',
+        default: 'deny',
+        columnRules: rules,
+      }
+      const claims: ClaimSet = {}
+      if (rnd() < 0.9) claims.groups = subset(rnd, AREAS)
+      if (rnd() < 0.5) claims.ve_pii = ['si']
+      if (rnd() < 0.5) claims.ve_rem = ['si']
+
+      const enf = compileFabric(policy, {
+        ...FAB_TARGET,
+        tableColumns: ['area', 'rut', 'present'],
+        columnTypes: { rut: 'NVARCHAR(20)', present: 'INT' },
+      })
+      const settings = settingsForInjections(enf.injections, claims)
+      const fromView = emulateFabricMaskView(enf, settings, rows)
+      const fromOracle = applyPolicy(policy, claims, rows)
+
+      // IGUALDAD, no desigualdad: la vista SÍ ve el claim, así que acá no hay brecha que tolerar.
+      expect(fromView).toEqual(fromOracle)
+      fromView.forEach((fila) => {
+        expect(Object.keys(fila)).toEqual(Object.keys(rows[0])) // la forma nunca cambia
+        for (const r of rules) {
+          if (fila[r.column] === MASK_VALUE) sinClaim += 1
+          else conClaim += 1
+        }
+      })
+    }
+    // CONTROL DE RAMAS — sin esto, una implementación que enmascarara SIEMPRE (o nunca) pasaría el
+    // differential sin haber sido puesta en riesgo ni una vez. Es el hito entero: las DOS ramas.
+    // Medido con esta semilla: 533 celdas en claro · 575 enmascaradas · 483 corridas con regla.
+    expect(corridasConRegla).toBeGreaterThan(300)
+    expect(conClaim).toBeGreaterThan(100)
+    expect(sinClaim).toBeGreaterThan(100)
+  })
+})
