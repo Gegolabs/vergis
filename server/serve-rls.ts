@@ -135,6 +135,7 @@ import {
   type NotasRenderContext,
   type SqlConnectionProfile,
   type TokenSource,
+  importIdentityMapFile,
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
@@ -148,7 +149,7 @@ import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
-import { createIdentity } from './identity'
+import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
 import { createContractRegistry, createContractHandler } from './contract'
 import { createContractJournal } from './contract-delta'
@@ -271,8 +272,19 @@ const visibleFor = discovery.visibleFor
 // (identidades que entran) × (tablas gobernadas) — del orden del padrón de la instancia, no del
 // tráfico.
 const denialSeen = new Set<string>()
+/**
+ * Identidades que el gate autenticó en la vida de este proceso (#159, capacidad 1: «cuántas no
+ * resuelven a ninguna entrada»). El store de gobierno NO puede responderlo solo — ahí vive el mapa,
+ * no el registro de quién entró—, así que el universo lo aporta el canal de serving.
+ *
+ * SU LÍMITE, DICHO: es lo observado DESDE EL ÚLTIMO ARRANQUE, no el padrón de la organización. Una
+ * identidad que nunca entró no aparece, y eso es correcto: la pregunta del issue es cuántas de las
+ * que llegan quedan sin claims. La cota del conjunto es el padrón, no el tráfico.
+ */
+const identitiesSeen = new Set<string>()
 function reportDenials(identity: IdentityContext, reports: Report[]): void {
   const who = identity.user ?? '(sin identidad)'
+  if (identity.user) identitiesSeen.add(identity.user.toLowerCase())
   for (const { table, denials } of discovery.diagnoseFor(reports, identity.claims ?? {})) {
     for (const d of denials) {
       const key = `${who}|${table}|${d.kind}`
@@ -504,16 +516,46 @@ const GATE_SECRET = contract.env('VERGIS_GATE_SECRET') ?? ''
 
 // RESOLVER DE IDENTIDAD desde un DIRECTORIO (charter §4–§5): cuando el claim del criterio no viaja
 // en la cabecera del gate sino que se deriva de la identidad autenticada (p.ej. el ÁREA del viewer
-// a partir de su email corporativo), se resuelve contra un mapa de referencia. VERGIS_IDENTITY_MAP
-// apunta a un JSON { email → { claim: valor(es) } } (trust-base; lo produce un proceso admin —
-// p.ej. reconciliación AAD↔directorio de personas). Fail-closed: email no mapeado → sin claim → deny.
-const IDENTITY_MAP: Record<string, Record<string, string | string[]>> | null = process.env['VERGIS_IDENTITY_MAP']
-  ? (JSON.parse(readFileSync(resolve(process.env['VERGIS_IDENTITY_MAP']), 'utf8')) as Record<string, Record<string, string | string[]>>)
-  : null
+// a partir de su email corporativo), se resuelve contra un mapa de referencia { email → claims } —
+// el TRUST-BASE sobre el que se aplica toda política. Fail-closed: email no mapeado → sin claim → deny.
+//
+// PRECEDENCIA archivo ↔ store (issue #159, hito 2). El mapa dejó de ser un archivo desplegado y pasó
+// a ser ESTADO DE GOBIERNO, administrable y con procedencia. La regla:
+//
+// 1. `VERGIS_IDENTITY_MAP` sigue siendo legítimo, y es la SEMILLA: al arrancar se lee sincrónicamente
+//    a la proyección (el store abre después, async, y el server ya escucha — sin esta semilla habría
+//    una ventana sirviendo sin trust-base) y se IMPORTA al store como `autoritativa` vía
+//    `importIdentityMapFile`, que reconcilia PRESERVANDO los overrides humanos.
+// 2. Desde ese import, la FUENTE es el store: la proyección se refresca desde él, y es lo que la
+//    Administración edita. El archivo solo vuelve a mandar cuando cambia (watch → re-import).
+// 3. Sin `VERGIS_IDENTITY_MAP` no hay migración: el store es la única fuente desde el primer arranque.
+//
+// Es idempotente entre reinicios (la clave es el email normalizado): una instancia viva arranca sin
+// perder claims ni duplicarlos.
+const IDENTITY_MAP_FILE = contract.env('VERGIS_IDENTITY_MAP') ? resolve(contract.env('VERGIS_IDENTITY_MAP') as string) : null
+/** Proyección EN MEMORIA del mapa (ver ./identity): `identityFor` es SÍNCRONO —así lo consume
+ *  routes.ts— y el store es async; el resolver no puede hacer un `await` por request. */
+const identityProjection = new IdentityProjection()
+/** Claves del archivo que estaban MUERTAS por no estar normalizadas — el aviso de alcance de abajo. */
+let identityClavesRevividas: string[] = []
+if (IDENTITY_MAP_FILE) {
+  // Sin try: un mapa ilegible o mal formado TUMBA EL ARRANQUE con nombre (patrón #117). Degradar a
+  // «sin directorio» sería servir con el trust-base ausente, que es autorizar mal en silencio.
+  const map = JSON.parse(readFileSync(IDENTITY_MAP_FILE, 'utf8')) as IdentityMap
+  identityClavesRevividas = clavesNoNormalizadas(map)
+  const n = identityProjection.seedFromMap(map)
+  console.log(`[vergis-rls] mapa de identidad: ${n} entrada(s) desde VERGIS_IDENTITY_MAP (${IDENTITY_MAP_FILE}) — semilla; la fuente pasa al store de gobierno.`)
+}
+/** ¿El trust-base quedó SIN proyección viva habiendo gobierno de identidad declarado? Entonces el
+ *  nodo NO sirve (gate `isReady` abajo): sin claims del directorio la política deniega, y devolver
+ *  cero filas mudas a todo el mundo es peor que un 503 que se ve, se explica y se repara con una
+ *  recarga. No se lanza desde `identityFor` porque routes.ts lo invoca sin try/catch (sería una
+ *  excepción no capturada, no un 503). `/contrato` y Administración siguen en pie para diagnosticar. */
+let identityTrustBroken = false
 
 // Identidad del gate + claims enriquecidos desde el directorio: extraído y testeado en ./identity.
 // El 3er argumento (dev identity) es null salvo en dev sin gate real — imposible de activar en prod.
-const identityFor = createIdentity(gateClaims, IDENTITY_MAP, config.devIdentity).identityFor
+const identityFor = createIdentity(gateClaims, identityProjection, config.devIdentity).identityFor
 
 // CAPA DE NOTAS (vergis#84): impresiones + anotaciones + comentarios + compartición. Store embebido
 // propio (`VERGIS_NOTES_DB`), abierto no-fatal: si falla, la capa queda deshabilitada con log y el
@@ -771,7 +813,9 @@ const server = createServer(
   createRequestHandler({
     engine: ENGINE,
     gateSecret: GATE_SECRET,
-    isReady: () => ready,
+    // El trust-base de identidad es parte de la readiness: sin proyección viva no se sirve dato
+    // gobernado (ver `identityTrustBroken`). Una recarga exitosa lo repara sin restart.
+    isReady: () => ready && !identityTrustBroken,
     getAdmin: () => admin,
     // CONTRATO OPERATIVO (issue #139). Getter en CALL-TIME (como `getAdmin`/`getPiConfig`): `governance`
     // se asigna en el bootstrap async del bloque de administración, así que capturarlo acá daría null
@@ -1530,6 +1574,15 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       cargas: cargasOps,
       // Registro de cargas (issue #62): dedup por contenido, pre-check y el indexado retroactivo.
       intakeUploads: govStore,
+      // MAPA DE IDENTIDAD (#159): el store de gobierno ES la superficie administrable, y la recarga
+      // en caliente se dispara desde la propia pantalla — sin esto, corregir una entrada exigiría el
+      // SIGHUP, o sea el acto que interrumpe el servicio, que es justo lo que el issue vino a matar.
+      identityClaims: govStore,
+      onIdentityChange: (reason) => void reloadIdentityClaims(reason),
+      // El universo para «cuántas no resuelven»: lo observado por el gate desde este arranque. No es
+      // el padrón de la organización, y por eso la pantalla lo rotula así en vez de dar un número
+      // con más autoridad de la que tiene.
+      observedIdentities: async () => [...identitiesSeen],
       intakeBackfill: fabricWiring.backfill,
       // Acceso al log de una corrida (issue #99): la página `/corrida` y sus enlaces «Ver log».
       runLogs: fabricWiring.runLogs,
@@ -1881,6 +1934,55 @@ if (config.miranda.enabled) {
   }
 }
 
+// ── Mapa identidad→claims: MIGRACIÓN archivo → store, y el store como fuente (issue #159, hito 2) ──
+// Va DESPUÉS del bloque de administración (necesita el store abierto) y ANTES de `listen`: el nodo no
+// empieza a servir con un trust-base a medio migrar.
+if (governance) {
+  const govId = governance
+  try {
+    if (IDENTITY_MAP_FILE) {
+      const res = await importIdentityMapFile(govId, IDENTITY_MAP_FILE, { updatedBy: 'boot:VERGIS_IDENTITY_MAP' })
+      console.log(
+        `[vergis-rls] mapa de identidad importado al store (${IDENTITY_MAP_FILE}): ${res.escritas} escrita(s) · ` +
+          `${res.conservadas} conservada(s) por override humano · ${res.retiradas} retirada(s) que el archivo ya no trae.`,
+      )
+      if (res.invalidas.length)
+        console.warn(`[vergis-rls] mapa de identidad: ${res.invalidas.length} clave(s) del archivo NO son una entrada válida y no se importaron.`)
+      // AVISO DE ALCANCE (hallazgo del hito 1). El resolver por archivo indexa las claves TAL CUAL y
+      // busca en minúscula: una clave con mayúsculas o espacios estaba en el mapa y NO aplicaba. El
+      // store normaliza, así que la migración las REVIVE — es una corrección, pero es un cambio de
+      // alcance de autorización observable: esas personas pueden empezar a ver filas que ayer no
+      // veían. Se anuncia con el conteo, sin nombrar a nadie (el log no es lugar para un padrón).
+      if (identityClavesRevividas.length)
+        console.warn(
+          `[vergis-rls] AVISO DE ALCANCE · mapa de identidad: ${identityClavesRevividas.length} clave(s) del archivo no estaban ` +
+            `normalizadas (mayúsculas o espacios) y por eso NO aplicaban su claim con el resolver por archivo. Al importarlas al ` +
+            `store quedan normalizadas y AHORA SÍ aplican: esas identidades pueden ver filas que antes no veían. Revísalas en ` +
+            `Administración si el alcance no es el que corresponde.`,
+        )
+    }
+    const r = await identityProjection.refresh(govId)
+    if (!r.ok) throw new Error(r.error ?? 'la lectura del mapa no devolvió resultado')
+    console.log(`[vergis-rls] mapa de identidad: ${r.entradas} entrada(s) vigentes desde el store de gobierno (fuente).`)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    identityProjection.markFailed(msg)
+    console.error(`[vergis-rls] mapa de identidad: la carga desde el store de gobierno FALLÓ: ${msg}`)
+    contract.record({ reason: 'boot:identidad', ok: false, error: msg })
+  }
+}
+// FAIL-CLOSED del arranque: si hay gobierno de identidad declarado (archivo o store) y NO quedó
+// ninguna proyección viva, el nodo no sirve. Con la semilla del archivo cargada SÍ se sirve aunque el
+// import al store haya fallado: hay trust-base vigente —el mismo de ayer— y convertir la migración en
+// una caída nueva sería peor que quedarse un rato con el archivo mandando.
+if ((IDENTITY_MAP_FILE || governance) && !identityProjection.state.cargada) {
+  identityTrustBroken = true
+  console.error(
+    '[vergis-rls] SIN TRUST-BASE DE IDENTIDAD: el nodo responde 503 (fail-closed). Administración y /contrato siguen en pie; ' +
+      'una recarga (SIGHUP) que consiga leer el mapa lo restablece sin restart.',
+  )
+}
+
 const listening = () => {
   const r = discover()
   console.log(`[vergis-rls] engine=${ENGINE} · ${r.length} PI por-consumidor en ${HOST ? `${HOST}:${PORT}` : `:${PORT}`} · rutas: ${r.map((x) => '/' + x.slug).join(' ')}`)
@@ -1943,6 +2045,56 @@ const domainGovTargets = [
   ...(contract.env('VERGIS_INTAKE') ? [resolve(contract.env('VERGIS_INTAKE') as string)] : []),
 ]
 const domainArtifacts = (): { source: string; path: string }[] => domainGovTargets.map((p) => ({ source: 'dominio', path: p }))
+const identityArtifacts = (): { source: string; path: string }[] => (IDENTITY_MAP_FILE ? [{ source: 'identidad', path: IDENTITY_MAP_FILE }] : [])
+
+/**
+ * Recarga del MAPA DE IDENTIDAD (issue #159, hito 2). Dos caminos, un solo swap:
+ *
+ * · `desdeArchivo` — el watch de `VERGIS_IDENTITY_MAP` disparó: se re-importa el archivo al store
+ *   (reconciliación que PRESERVA los overrides humanos) y luego se proyecta desde el store. Sin store
+ *   de gobierno, el archivo se proyecta directo — es lo único que hay.
+ * · sin él — la fuente es el store (edición en Administración, SIGHUP, recarga de gobierno).
+ *
+ * NUNCA lanza y NUNCA degrada lo vigente: el swap de la proyección ocurre solo con el mapa completo
+ * ya construido (validate-before-swap en `IdentityProjection`), y una recarga fallida conserva la
+ * proyección viva y lo grita. Si el trust-base estaba roto y esta recarga lo repara, el nodo vuelve a
+ * servir sin restart — que es la promesa entera de la capacidad 4 del issue.
+ */
+async function reloadIdentityClaims(reason: string, opts: { desdeArchivo?: boolean } = {}): Promise<void> {
+  try {
+    if (opts.desdeArchivo && IDENTITY_MAP_FILE && !governance) {
+      // Parsear ANTES de tocar la proyección: un archivo roto conserva el mapa vigente.
+      const map = JSON.parse(readFileSync(IDENTITY_MAP_FILE, 'utf8')) as IdentityMap
+      const revividas = clavesNoNormalizadas(map)
+      const n = identityProjection.seedFromMap(map)
+      if (revividas.length)
+        console.warn(`[hot-reload] AVISO DE ALCANCE · mapa de identidad (${reason}): ${revividas.length} clave(s) sin normalizar ahora SÍ aplican su claim.`)
+      console.log(`[hot-reload] mapa de identidad (${reason}): ${n} entrada(s) desde el archivo (sin store de gobierno).`)
+      contract.record({ reason: `identidad:${reason}`, ok: true }, identityArtifacts())
+    } else if (governance) {
+      if (opts.desdeArchivo && IDENTITY_MAP_FILE) {
+        const res = await importIdentityMapFile(governance, IDENTITY_MAP_FILE, { updatedBy: `${reason}:VERGIS_IDENTITY_MAP` })
+        console.log(`[hot-reload] mapa de identidad re-importado (${reason}): ${res.escritas} escrita(s) · ${res.conservadas} conservada(s) por override · ${res.retiradas} retirada(s).`)
+      }
+      const r = await identityProjection.refresh(governance)
+      if (!r.ok) throw new Error(r.error ?? 'lectura del mapa sin resultado')
+      console.log(`[hot-reload] mapa de identidad (${reason}): ${r.entradas} entrada(s) vigentes desde el store.`)
+      contract.record({ reason: `identidad:${reason}`, ok: true }, opts.desdeArchivo ? identityArtifacts() : undefined)
+    } else {
+      return // ni archivo ni store: no hay directorio que recargar
+    }
+    if (identityTrustBroken && identityProjection.state.cargada) {
+      identityTrustBroken = false
+      console.log(`[hot-reload] trust-base de identidad restablecido (${reason}): el nodo vuelve a servir sin restart.`)
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    // Sin artefactos en el record: los hashes previos sobreviven y `/contrato` muestra el archivo del
+    // disco como `pending` — «hay algo ahí que este nodo NO tomó».
+    console.error(`[hot-reload] recarga del mapa de identidad falló (${reason}); proyección vigente conservada (${identityProjection.size} entrada(s)): ${msg}`)
+    contract.record({ reason: `identidad:${reason}`, ok: false, error: msg })
+  }
+}
 
 /** Re-parsea conexiones + dominios + slots (issue #50) con validate-before-swap POR ARCHIVO: uno
  * malformado conserva su estado vigente y se loguea, los otros dos igual entran. Los swaps son
@@ -2057,6 +2209,10 @@ function reloadInstanceSlices(reason: string): void {
 }
 
 function reloadGovernance(reason: string): void {
+  // El mapa identidad→claims es gobierno como cualquier otro (issue #159): entra en la recarga
+  // completa. Es async y no bloquea al resto — su swap es atómico y no hay orden que respetar con las
+  // políticas (el resolver lee la proyección por request, no al cargar la política).
+  void reloadIdentityClaims(reason)
   // Primero el gobierno de dominio (conexiones/dominios/slots): el re-bootstrap de abajo ya debe ver
   // los perfiles nuevos para verificar un PI sobre un warehouse recién dado de alta (issue #50 + #52).
   reloadDomainGovernance(reason)
@@ -2110,7 +2266,26 @@ contract.record({ reason: 'boot', ok: true, policies: store.size, servablePis: d
   ...specArtifacts(),
   ...domainArtifacts(),
   ...instanceArtifacts(),
+  ...identityArtifacts(),
 ])
+// Mapa identidad→claims (issue #159): lo que un operador tiene que saber para no equivocarse de
+// palanca — dónde vive la verdad, qué hace el archivo, y qué NO se puede recargar.
+contract.caveat(
+  'El mapa identidad→claims vive en el STORE de gobierno y se administra desde la plataforma. VERGIS_IDENTITY_MAP es una ' +
+    'SEMILLA: se importa al arrancar (y cuando el archivo cambia) como procedencia `autoritativa`, reconciliando — los ' +
+    'overrides inscritos a mano SOBREVIVEN a la regeneración, y una entrada autoritativa que el archivo ya no trae se retira.',
+)
+if (!HAS_GOV_BLOCK && IDENTITY_MAP_FILE)
+  contract.caveat(
+    'Sin bloque de gobierno (VERGIS_MASTER_DATA/VERGIS_ADMIN_SEED) el mapa de identidad solo vive en memoria desde el archivo: ' +
+      'se recarga en caliente, pero no hay administración, ni overrides, ni procedencia por entrada.',
+  )
+if (identityClavesRevividas.length)
+  contract.caveat(
+    `Mapa de identidad · CAMBIO DE ALCANCE: ${identityClavesRevividas.length} clave(s) del archivo no estaban normalizadas ` +
+      '(mayúsculas o espacios) y NO aplicaban su claim con el resolver por archivo; al importarse al store quedan normalizadas ' +
+      'y ahora sí aplican. Esas identidades pueden ver filas que antes no veían.',
+  )
 // Caveats de la config de instancia (issue #138·2) — colocados donde el operador pregunta, en la
 // misma superficie que le dice qué se recarga y qué no.
 contract.caveat(
@@ -2217,13 +2392,31 @@ if (HOT_RELOAD) {
   // D7: la promesa de SIGHUP es «fuerza la recarga COMPLETA». Con la config de instancia recargable,
   // seguir recargando solo el gobierno la volvería mentira — y SIGHUP es la vía manual del operador
   // cuyo watch se perdió (bind-mount con inotify no propagado).
+  // Mapa identidad→claims (issue #159, capacidad 4): el archivo se vigila y su cambio re-importa al
+  // store + re-proyecta. La edición EN LA PLATAFORMA no pasa por acá (no hay archivo que tocar): la
+  // recarga completa —SIGHUP y `reloadGovernance`— re-lee el store, que es la fuente.
+  if (IDENTITY_MAP_FILE) {
+    contract.watch(
+      {
+        envs: ['VERGIS_IDENTITY_MAP'],
+        reloads: 'mapa identidad→claims: re-import del archivo al store de gobierno (preserva los overrides humanos) + swap de la proyección viva',
+      },
+      [IDENTITY_MAP_FILE],
+      () => void reloadIdentityClaims('watch:identidad', { desdeArchivo: true }),
+    )
+  }
   process.on('SIGHUP', () => {
-    reloadGovernance('SIGHUP')
+    reloadGovernance('SIGHUP') // incluye el mapa de identidad (re-lee el store)
     reloadInstanceSlices('SIGHUP')
   })
-  contract.signal({ signal: 'SIGHUP', action: 'fuerza la recarga completa: gobierno (equivale a watch:policies) + config de instancia (avisos, dueños de PI, fuentes)' })
+  contract.signal({
+    signal: 'SIGHUP',
+    action:
+      'fuerza la recarga completa: gobierno (equivale a watch:policies) + mapa identidad→claims (re-lee el store) + config de instancia (avisos, dueños de PI, fuentes)',
+  })
   console.log(
     `[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} · ` +
-      `instancia=${instanceTargets.length} (SIGHUP fuerza la recarga completa)`,
+      `instancia=${instanceTargets.length} · identidad=${identityProjection.size} entrada(s)${IDENTITY_MAP_FILE ? ' (semilla: VERGIS_IDENTITY_MAP)' : ''} ` +
+      `(SIGHUP fuerza la recarga completa)`,
   )
 }

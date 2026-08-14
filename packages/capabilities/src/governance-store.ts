@@ -497,6 +497,100 @@ export interface JobPublicationStore {
   ): Promise<number>
 }
 
+/**
+ * PROCEDENCIA de una entrada del mapa identidad→claims (issue #159·§5 del diseño 010). Es lo que
+ * hace revisable todo lo demás: sin distinguir «vino de la fuente» de «lo inscribió un humano», la
+ * primera reconciliación borra los overrides — que es literalmente el defecto que el issue reporta
+ * (la cuenta de operación que se cae del mapa cada vez que se regenera).
+ *
+ * `autoritativa-ambigua` NO es un error: es el estado de la identidad que la fuente SÍ trajo pero que
+ * no resolvió a un valor único (la persona con dos fichas activas legítimas, #165·§4). Existe para
+ * que «ninguna» deje de ser un hueco indistinguible de «nadie la reconcilió»: una entrada ambigua
+ * está presente y se ve como tal; una identidad ausente del mapa es otra cosa. Desempatar sigue
+ * prohibido — el mapa muestra el empate, no lo resuelve.
+ */
+export type IdentityOrigin = 'autoritativa' | 'override' | 'autoritativa-ambigua'
+
+/** Una entrada del mapa: identidad (email, SIEMPRE minúscula) → claims, con procedencia y auditoría. */
+export interface IdentityClaimEntry {
+  /** Clave. Normalizada a minúscula en escritura y lectura (el resolver hace `user.toLowerCase()`). */
+  email: string
+  /** El claim es un CONJUNTO, posiblemente unitario (#165): siempre lista, aunque traiga un valor. */
+  claims: Record<string, string[]>
+  origin: IdentityOrigin
+  updatedBy?: string
+  updatedAt?: string
+}
+
+/** Lo que se escribe de una entrada. `claims` acepta `string | string[]` (el formato del archivo). */
+export interface IdentityClaimInput {
+  claims: Record<string, string | string[]>
+  origin: IdentityOrigin
+  updatedBy?: string
+}
+
+/** Lo que la fuente autoritativa aporta por identidad en una reconciliación. Sin `override`: una
+ *  fuente no puede declarar overrides — el override es, por definición, lo que un humano inscribió. */
+export interface IdentityReconcileEntry {
+  email: string
+  claims: Record<string, string | string[]>
+  /** Default `autoritativa`. La fuente declara `autoritativa-ambigua` cuando no resolvió a un único valor. */
+  origin?: Exclude<IdentityOrigin, 'override'>
+}
+
+/** Qué hizo una reconciliación. `conservadas` es la cuenta que prueba que los overrides sobrevivieron. */
+export interface IdentityReconcileResult {
+  /** Entradas de la fuente efectivamente escritas. */
+  escritas: number
+  /** Entradas autoritativas previas que la fuente ya no trae: se retiran (la fuente es el espejo). */
+  retiradas: number
+  /** Entradas de la fuente que NO se escribieron porque hay un override humano sobre ese email. */
+  conservadas: number
+}
+
+/**
+ * El mapa identidad→claims como estado de gobierno (issue #159), y no como archivo desplegado.
+ *
+ * Es el TRUST-BASE sobre el que se aplica toda política de datos: lo que acá se escribe decide qué
+ * filas ve una persona. Dos invariantes duras, que ninguna conveniencia de UI relaja:
+ *
+ * 1. **Jamás se infiere una identidad.** Un email que no tiene entrada queda SIN claims del
+ *    directorio y la política decide fail-closed. Ninguna heurística por parecido de nombre o
+ *    correo, ni «la ficha más reciente». No hay en esta API ningún camino que adivine.
+ * 2. **El email es la clave y va normalizado a minúscula** en escritura y en lectura: el resolver
+ *    busca por `identity.user.toLowerCase()`, y una entrada guardada con mayúsculas sería invisible
+ *    para él — un claim escrito que nunca aplica es peor que un claim ausente.
+ */
+export interface IdentityClaimStore {
+  /** Todas las entradas del mapa con su procedencia, por email ascendente. Es la vista de «ver el mapa». */
+  listIdentityClaims(): Promise<IdentityClaimEntry[]>
+  /** La entrada de un email, o null si NO hay entrada — que es un estado distinto de «entrada sin claims». */
+  getIdentityClaims(email: string): Promise<IdentityClaimEntry | null>
+  /** Alta o corrección de UNA entrada (la escritura de la superficie de Administración). */
+  upsertIdentityClaims(email: string, input: IdentityClaimInput): Promise<void>
+  /** Baja de una entrada. Sin tombstone: la reconciliación es un espejo de la fuente, no un piso. */
+  deleteIdentityClaims(email: string): Promise<void>
+  /**
+   * Aplica EL CONJUNTO autoritativo completo, PRESERVANDO los overrides humanos: reemplaza las
+   * entradas `autoritativa`/`autoritativa-ambigua` por las que la fuente trae, retira las que la
+   * fuente ya no trae, y NO toca ninguna fila `override` — ni siquiera cuando la fuente trae ese
+   * mismo email (el override es la excepción declarada; si la fuente ganara, la regeneración lo
+   * borraría en silencio y estaríamos en el defecto original).
+   *
+   * Validate-before-write: una entrada inválida lanza SIN haber escrito una sola fila.
+   */
+  reconcileIdentityClaims(entries: IdentityReconcileEntry[], opts?: { updatedBy?: string }): Promise<IdentityReconcileResult>
+  /**
+   * De un conjunto de identidades OBSERVADAS (las que el gate autenticó), cuáles no resuelven a
+   * ninguna entrada — la capacidad 1 del issue («cuántas identidades autenticadas no resuelven»).
+   *
+   * El conjunto lo aporta el llamador porque el store NO lo tiene: acá vive el mapa, no el registro
+   * de quién se autenticó. Devolver un conteo propio exigiría inventarse ese registro, y un número
+   * fabricado sobre un universo que nadie midió sería peor que no darlo.
+   */
+  unresolvedIdentities(emails: string[]): Promise<string[]>
+}
+
 export interface GovernanceStore
   extends AdminStore,
     GroupStore,
@@ -509,6 +603,7 @@ export interface GovernanceStore
     IntakeRevertStore,
     IngestionRunStore,
     IntakeWatchStore,
+    IdentityClaimStore,
     JobPublicationStore {
   close(): Promise<void>
 }
@@ -730,6 +825,49 @@ const INTAKE_WATCH_RUN_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_run (
   PRIMARY KEY (slot_id, started_at)
 );`
 
+// ── Mapa identidad→claims (issue #159): el trust-base deja de ser un archivo del host ──
+// `email` es la PK y va SIEMPRE en minúscula (el resolver busca por `user.toLowerCase()`).
+// `claims` viaja como JSON `{claim: string[]}` — el claim es un CONJUNTO (#165) y una tabla anexa
+// por valor obligaría a un join en la lectura más caliente del arranque sin comprarnos nada: nadie
+// consulta «quién tiene el valor V» desde el store, se consulta la entrada de un email.
+// `origin` es lo que hace la reconciliación no-destructiva; sin él, regenerar borra los overrides.
+const IDENTITY_CLAIM_DDL = `CREATE TABLE IF NOT EXISTS identity_claim (
+  email TEXT PRIMARY KEY,
+  claims TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'autoritativa',
+  updated_by TEXT,
+  updated_at TEXT
+);`
+// La consulta de la reconciliación y la de la vista de auditoría son la misma: «las de esta procedencia».
+const IDENTITY_CLAIM_IDX = `CREATE INDEX IF NOT EXISTS idx_identity_claim_origin ON identity_claim (origin);`
+
+const IDENTITY_ORIGINS: readonly IdentityOrigin[] = ['autoritativa', 'override', 'autoritativa-ambigua']
+
+/**
+ * Normaliza los claims de UNA entrada: cada claim a lista de strings no vacías y sin repetidos (es
+ * un CONJUNTO), preservando el orden de llegada. Un claim sin nombre o sin ningún valor se descarta
+ * —guardarlo produciría un claim vacío que la política leería como «tiene el claim»—, pero una
+ * entrada que queda con CERO claims se conserva igual: «se reconcilió y no resolvió» es un estado.
+ */
+function normalizeClaims(claims: Record<string, string | string[]>): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [rawKey, rawVal] of Object.entries(claims ?? {})) {
+    const key = rawKey.trim()
+    if (!key) continue
+    const vals = (Array.isArray(rawVal) ? rawVal : [rawVal]).map((v) => String(v).trim()).filter(Boolean)
+    if (!vals.length) continue
+    out[key] = [...new Set(vals)]
+  }
+  return out
+}
+
+/** Email de una entrada del mapa, validado y normalizado. Lanza: una clave vacía haría una fila muda. */
+function identityKey(email: string): string {
+  const e = normEmail(email)
+  if (!e) throw new Error('La entrada del mapa de identidad necesita un email.')
+  return e
+}
+
 export interface GovernanceSeed {
   admins?: string[]
   groups?: GroupSeed[]
@@ -858,6 +996,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
     ensureColumns(db, 'intake_watch_state', INTAKE_WATCH_STATE_COLS)
     db.run(INTAKE_WATCH_LANDING_DDL)
     db.run(INTAKE_WATCH_RUN_DDL)
+    db.run(IDENTITY_CLAIM_DDL)
+    db.run(IDENTITY_CLAIM_IDX)
     // #107 fase 2: ledger append-only de publicaciones de jobs. Sus ops viven en `job-publication.ts`
     // (puras sobre SqlDb, patrón admin-roles); acá solo nace la tabla, en el mismo db de gobierno.
     ensureJobPublicationTable(db)
@@ -1890,6 +2030,116 @@ export class SqliteGovernanceStore implements GovernanceStore {
       if (s?.corridasSinLog != null) snap.corridasSinLog = s.corridasSinLog
       out.push(snap)
     }
+    return out
+  }
+
+  // ── IdentityClaimStore (el mapa identidad→claims como estado de gobierno, issue #159) ──
+  private identityRow(r: Record<string, unknown>): IdentityClaimEntry {
+    // Los claims se leen tal cual se guardaron; un JSON ilegible NO tumba la consulta pero tampoco
+    // se inventa: la entrada queda sin claims, que es exactamente lo que la política ve (fail-closed),
+    // y su procedencia sigue visible para que un humano pueda corregirla.
+    let claims: Record<string, string[]> = {}
+    try {
+      const parsed = JSON.parse(String(r['claims'])) as Record<string, string[]>
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) claims = parsed
+    } catch { claims = {} }
+    const row: IdentityClaimEntry = {
+      email: String(r['email']),
+      claims,
+      // Se lee tal cual está en la fila: un valor fuera del enum sería dato corrupto, y mentir sobre
+      // la procedencia de una entrada del trust-base es peor que mostrarla como está.
+      origin: String(r['origin']) as IdentityOrigin,
+    }
+    if (r['updated_by'] != null) row.updatedBy = String(r['updated_by'])
+    if (r['updated_at'] != null) row.updatedAt = String(r['updated_at'])
+    return row
+  }
+
+  async listIdentityClaims(): Promise<IdentityClaimEntry[]> {
+    return selectAll(this.db, `SELECT email, claims, origin, updated_by, updated_at FROM identity_claim ORDER BY email ASC`).map((r) => this.identityRow(r))
+  }
+
+  async getIdentityClaims(email: string): Promise<IdentityClaimEntry | null> {
+    const stmt = this.db.prepare(`SELECT email, claims, origin, updated_by, updated_at FROM identity_claim WHERE email = ?`)
+    stmt.bind([normEmail(email)]) // lectura por la MISMA clave normalizada con que se escribió
+    if (!stmt.step()) {
+      stmt.free()
+      return null // sin entrada: la identidad no se adivina — queda sin claims y la política decide
+    }
+    const r = stmt.getAsObject()
+    stmt.free()
+    return this.identityRow(r)
+  }
+
+  async upsertIdentityClaims(email: string, input: IdentityClaimInput): Promise<void> {
+    const key = identityKey(email)
+    if (!IDENTITY_ORIGINS.includes(input.origin)) throw new Error(`Procedencia inválida '${input.origin}' para '${key}'.`)
+    this.db.run(
+      `INSERT INTO identity_claim (email, claims, origin, updated_by, updated_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(email) DO UPDATE SET claims=excluded.claims, origin=excluded.origin,
+         updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
+      [key, JSON.stringify(normalizeClaims(input.claims)), input.origin, normEmail(input.updatedBy) || null, now()],
+    )
+    this.persist()
+  }
+
+  async deleteIdentityClaims(email: string): Promise<void> {
+    this.db.run(`DELETE FROM identity_claim WHERE email = ?`, [normEmail(email)])
+    this.persist()
+  }
+
+  async reconcileIdentityClaims(entries: IdentityReconcileEntry[], opts: { updatedBy?: string } = {}): Promise<IdentityReconcileResult> {
+    // Validate-before-write (mismo criterio que `applySeed`): una fuente con la entrada N inválida no
+    // puede dejar el mapa a medio reemplazar — un trust-base a medias autoriza mal, no falla ruidoso.
+    const rows = entries.map((e) => {
+      const origin: IdentityOrigin = e.origin ?? 'autoritativa'
+      if (origin !== 'autoritativa' && origin !== 'autoritativa-ambigua') {
+        throw new Error(`Una reconciliación no puede declarar procedencia '${origin}' (el override lo inscribe un humano).`)
+      }
+      return { email: identityKey(e.email), claims: JSON.stringify(normalizeClaims(e.claims)), origin }
+    })
+    // La última escritura por email gana: si la fuente repite una identidad, no se duplica ni se
+    // «mezclan» sus claims — mezclar sería fabricar un sujeto que la fuente no declaró.
+    const porEmail = new Map(rows.map((r) => [r.email, r]))
+
+    const overrides = new Set(selectAll(this.db, `SELECT email FROM identity_claim WHERE origin = 'override'`).map((r) => String(r['email'])))
+    const previas = new Set(selectAll(this.db, `SELECT email FROM identity_claim WHERE origin <> 'override'`).map((r) => String(r['email'])))
+
+    // Los overrides NO entran en el barrido: son la excepción declarada que sobrevive a la
+    // regeneración. Sin esta cláusula, cada reconciliación borraría la cuenta de operación — el
+    // defecto exacto que el issue #159 reporta.
+    this.db.run(`DELETE FROM identity_claim WHERE origin <> 'override'`)
+    const at = now()
+    const by = normEmail(opts.updatedBy) || null
+    let escritas = 0
+    let conservadas = 0
+    for (const r of porEmail.values()) {
+      if (overrides.has(r.email)) { conservadas++; continue } // el humano manda sobre la fuente
+      this.db.run(`INSERT INTO identity_claim (email, claims, origin, updated_by, updated_at) VALUES (?,?,?,?,?)`, [r.email, r.claims, r.origin, by, at])
+      escritas++
+    }
+    this.persist()
+    let retiradas = 0
+    for (const e of previas) if (!porEmail.has(e)) retiradas++
+    return { escritas, retiradas, conservadas }
+  }
+
+  async unresolvedIdentities(emails: string[]): Promise<string[]> {
+    const out: string[] = []
+    const vistos = new Set<string>()
+    const stmt = this.db.prepare(`SELECT 1 FROM identity_claim WHERE email = ?`)
+    for (const raw of emails) {
+      const e = normEmail(raw)
+      if (!e || vistos.has(e)) continue
+      vistos.add(e)
+      stmt.bind([e])
+      // «No resuelve» es EXACTAMENTE «no hay fila»: una entrada ambigua, o una con cero claims, SÍ
+      // resolvió —la fuente la trajo— y se ve como el estado que es. Confundirlas escondería la
+      // diferencia entre «nadie la reconcilió» y «se reconcilió y no resolvió».
+      if (!stmt.step()) out.push(e)
+      stmt.reset()
+    }
+    stmt.free()
     return out
   }
 
