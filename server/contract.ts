@@ -92,6 +92,20 @@ export interface ContractRegistry {
   record(event: Omit<ReloadEvent, 'at'>, artifacts?: { source: string; path: string }[]): void
   /** Snapshot para el endpoint (calcula `pending` leyendo disco). El reloj se inyecta al construir. */
   snapshot(): ContractSnapshot
+  /**
+   * Aviso de que el contrato GANÓ una declaración (`watch`/`signal`/`caveat`) — issue #139.
+   *
+   * Existe porque el orden del arranque no puede ser la garantía de que la proyección persistida esté
+   * completa: **medido** que observar el journal antes de registrar los watches persiste
+   * `watches: []` y, peor, clasifica las claves recargables como `bootOnly` — el contrato afirmando
+   * «esto exige reiniciar» cuando ya no, que es el error de costo asimétrico que #139 existe para
+   * matar (`tests/contract-boot-projection.test.ts`).
+   *
+   * Con este aviso, quien persiste vuelve a observar cuando algo se declara tarde, así que el orden
+   * deja de importar. El registry NO conoce al journal: sigue siendo capa de composición.
+   * Se instala UNA vez, después de la observación del arranque; el segundo llamado reemplaza.
+   */
+  onRegister(cb: () => void): void
 }
 
 /** Tamaño del ring de recargas recientes que el contrato conserva. */
@@ -128,15 +142,33 @@ export function createContractRegistry(opts: {
 
   const key = (source: string, path: string): string => `${source}\u0000${path}`
 
+  // #139 · aviso de declaración TARDÍA. Nulo hasta que quien persiste lo instale (después de observar
+  // el arranque), así que las N declaraciones del boot NO producen N escrituras del journal.
+  let registered: (() => void) | null = null
+  const notifyRegistered = (): void => {
+    try {
+      registered?.()
+    } catch (e) {
+      // El aviso jamás rompe la declaración que lo disparó: el contrato es observabilidad, no serving.
+      console.error(`[contrato] fallo al re-observar tras una declaración tardía: ${errMsg(e)}`)
+    }
+  }
+
   return {
+    onRegister(cb) {
+      registered = cb
+    },
     watch(meta, paths, onChange) {
       // Registrar ANTES de instalar: el contrato dice qué se pretendía vigilar aunque un path no sea
       // observable (watchPaths ya es tolerante: loguea y omite ese path).
       watches.push({ envs: [...meta.envs], paths: [...paths], reloads: meta.reloads })
-      return watchPaths(paths, onChange)
+      const un = watchPaths(paths, onChange)
+      notifyRegistered()
+      return un
     },
     signal(entry) {
       signals.push(entry)
+      notifyRegistered()
     },
     env(k) {
       consumed.add(k)
@@ -146,7 +178,9 @@ export function createContractRegistry(opts: {
       for (const k of keys) consumed.add(k)
     },
     caveat(text) {
-      if (!caveats.includes(text)) caveats.push(text)
+      if (caveats.includes(text)) return
+      caveats.push(text)
+      notifyRegistered()
     },
     record(event, arts) {
       try {
