@@ -213,6 +213,39 @@ export interface JobsPublishOps {
   ledger: JobPublicationLedger
 }
 
+// ─── Mapa identidad→claims (#159): el trust-base, administrado desde la plataforma ──────────
+/**
+ * Procedencia de una entrada del mapa. `autoritativa-ambigua` **no es un error**: es la identidad que
+ * la fuente SÍ trajo y que no resolvió a un valor único (#165·§4, la persona con dos fichas activas).
+ * Se muestra como el ESTADO que es — «ninguna» tiene que ser visible, no un hueco.
+ */
+type AdminIdentityOrigin = 'autoritativa' | 'override' | 'autoritativa-ambigua'
+
+interface AdminIdentityEntry {
+  email: string
+  claims: Record<string, string[]>
+  origin: AdminIdentityOrigin
+  updatedBy?: string
+  updatedAt?: string
+}
+
+/**
+ * Lo que esta superficie necesita del `IdentityClaimStore` de capabilities, declarado acá y por
+ * estructura: el tipo del store todavía no se re-exporta desde `@vergis/capabilities`, y cablear un
+ * `SqliteGovernanceStore` satisface esta forma sin conversión. Si el paquete lo exporta, esto se
+ * reemplaza por el import — la forma es la misma a propósito.
+ */
+export interface IdentityClaimsAdmin {
+  listIdentityClaims(): Promise<AdminIdentityEntry[]>
+  getIdentityClaims(email: string): Promise<AdminIdentityEntry | null>
+  upsertIdentityClaims(
+    email: string,
+    input: { claims: Record<string, string | string[]>; origin: AdminIdentityOrigin; updatedBy?: string },
+  ): Promise<void>
+  deleteIdentityClaims(email: string): Promise<void>
+  unresolvedIdentities(emails: string[]): Promise<string[]>
+}
+
 export interface AdminDeps {
   entities: MasterDataEntity[]
   mdStore: MasterDataStore
@@ -251,6 +284,18 @@ export interface AdminDeps {
   sourcesAdmin?: SourceRegistryStore
   /** Publicación de jobs en el motor (#107 fase 2). Sin él, la sección no existe (D4, fail-closed). */
   jobsPublish?: JobsPublishOps
+  /** Mapa identidad→claims como estado de gobierno (#159). Sin él la sección NO existe (404): una
+   * instancia que todavía sirve el mapa desde un archivo no gana una pantalla que no escribe nada. */
+  identityClaims?: IdentityClaimsAdmin
+  /** Identidades que el gate autenticó (para «cuántas no resuelven»). El store NO las tiene: acá vive
+   * el mapa, no el registro de quién entró. Sin esta dep la sección omite el bloque — un conteo sobre
+   * un universo que nadie midió sería un número fabricado, y este es el trust-base. Opcional. */
+  observedIdentities?: () => Promise<string[]>
+  /** Aviso de que el mapa de identidad cambió DESDE ESTA PANTALLA (#159, capacidad 4). Sin esto la
+   * corrección persistiría en el store pero el resolver seguiría con la proyección vieja hasta un
+   * SIGHUP o una recarga de gobierno — o sea la pantalla cumpliría a medias justo lo que el issue
+   * vino a arreglar: que corregir NO exija el acto que interrumpe el servicio. */
+  onIdentityChange?: (reason: string) => void
   /** Estado por proceso para la vista de Fuentes (issue #101). Opcional: sin él, la vista es el
    * registro puro (sin columnas de estado) — instancias sin motor. */
   processStates?: () => Promise<ProcessIngestionState[]>
@@ -324,6 +369,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     else if (path.startsWith('/admin/roles')) { scope = 'config'; active = 'roles' }
     else if (path.startsWith('/admin/groups')) { scope = 'config'; active = 'groups' }
     else if (path.startsWith('/admin/sources')) { scope = 'config'; active = 'sources' }
+    else if (path.startsWith('/admin/identidades')) { scope = 'config'; active = 'identidades' }
     else if (dmActive) active = dmActive[2] ? `dom:${dmActive[1]}/${dmActive[2]}` : `dom:${dmActive[1]}`
     else {
       const emActive = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)/)
@@ -598,6 +644,33 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         return true
       }
 
+      // ── Mapa identidad→claims (#159) ─────────────────────────────────────
+      // Gestión de PLATAFORMA, y la más sensible del producto: lo que acá se escribe es el TRUST-BASE
+      // sobre el que se aplica TODA política de datos. Mismos gates que Fuentes —admin-only, CSRF por
+      // identidad, auditoría por escritura— y por la misma razón: un steward no toca lo transversal.
+      if (deps.identityClaims && path === '/admin/identidades' && req.method === 'GET') {
+        if (!isAdmin) return denyPlatform()
+        send(res, 200, await identidadesPage(deps, nav, token, url.searchParams.get('msg') ?? undefined, url.searchParams.get('edit') ?? undefined))
+        return true
+      }
+      if (deps.identityClaims && path.startsWith('/admin/identidades/') && req.method === 'POST') {
+        if (!isAdmin) return denyPlatform()
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        try {
+          const msg = await handleIdentityWrite(deps, deps.identityClaims, path.slice('/admin/identidades/'.length), f, email)
+          // Recarga en caliente TRAS la escritura, no antes: si la escritura falló, no hay nada que
+          // reproyectar y avisar igual haría releer el store para nada.
+          deps.onIdentityChange?.('admin:identidades')
+          redirect(res, `/admin/identidades?msg=${encodeURIComponent(msg)}`)
+        } catch (e) {
+          // Todo lo que falla acá es entrada del cliente (email inválido, claim sin valor, operación
+          // desconocida): se re-renderiza la vista con el error para corregir sin perderla de vista.
+          send(res, statusForError(e), await identidadesPage(deps, nav, token, `Error: ${errMsg(e)}`))
+        }
+        return true
+      }
+
       // ── Data maestra: /admin/e/<id>[/insert|update|delete] ───────────────
       const m = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)(?:\/(insert|update|delete))?$/)
       if (m) {
@@ -833,6 +906,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
     s += lvl('/admin/roles', 'Usuarios y Roles', active === 'roles')
     if (deps.groupStore) s += lvl('/admin/groups', 'Grupos de Mira', active === 'groups')
     if (deps.sourceRegistry) s += lvl('/admin/sources', 'Fuentes', active === 'sources')
+    if (deps.identityClaims) s += lvl('/admin/identidades', 'Mapa de identidad', active === 'identidades')
   } else {
     s += lvl('/admin', 'Inicio', active === 'home')
     if (manageable.length) {
@@ -1066,6 +1140,8 @@ async function platformPage(deps: AdminDeps, nav: Chrome, token: string, msg?: s
     'Gestión de Plataforma',
     `<h2>Acceso</h2><ul class="cards"><li><a href="/admin/roles">Usuarios y Roles</a><div class="sub">Quién puede administrar.</div></li>${
        deps.groupStore ? `<li><a href="/admin/groups">Grupos de Mira</a><div class="sub">Grupos para compartir PIs (no grupos AAD).</div></li>` : ''
+     }${
+       deps.identityClaims ? `<li><a href="/admin/identidades">Mapa de identidad</a><div class="sub">Qué claims tiene cada identidad — el trust-base de la política de datos.</div></li>` : ''
      }</ul>
      ${msg ? `<p class="msg err">${escapeHtml(msg)}</p>` : ''}
      ${settings}
@@ -2328,6 +2404,168 @@ async function entityPage(deps: AdminDeps, nav: Chrome, entity: MasterDataEntity
 
 const fmt = (v: unknown): string => (v == null ? '' : typeof v === 'boolean' ? (v ? 'Sí' : 'No') : String(v))
 
+
+// ─── Mapa identidad→claims (#159 · §5 del diseño del cluster authz) ─────────
+/**
+ * La sintaxis con que un humano escribe los claims de UNA entrada: **una línea por claim**,
+ * `clave: valor` o `clave: valor1, valor2` (el claim es un CONJUNTO, posiblemente unitario · #165).
+ *
+ * Se valida en vez de adivinar: una línea sin `:` es un error, no «una clave sin valores» — inferir
+ * qué quiso decir el admin sobre el trust-base es exactamente lo que no se hace acá. Una clave
+ * repetida también lanza: quedarse con la última perdería la otra en silencio.
+ */
+function parseClaimLines(texto: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const raw of (texto ?? '').split(/\r?\n/)) {
+    const linea = raw.trim()
+    if (!linea) continue
+    const i = linea.indexOf(':')
+    if (i < 0) throw new ValidationError(`Claim sin valor: '${linea}'. Se escribe una línea por claim, con el formato clave: valor1, valor2`)
+    const clave = linea.slice(0, i).trim()
+    const vals = linea.slice(i + 1).split(',').map((v) => v.trim()).filter(Boolean)
+    if (!clave) throw new ValidationError(`Claim sin nombre: '${linea}'.`)
+    if (!vals.length) throw new ValidationError(`El claim '${clave}' no trae ningún valor. Para dejar la identidad sin claims, borrá la línea entera.`)
+    if (out[clave]) throw new ValidationError(`El claim '${clave}' aparece dos veces: escribí sus valores en una sola línea, separados por coma.`)
+    out[clave] = vals
+  }
+  return out
+}
+
+/** El texto del textarea para una entrada existente (round-trip exacto de `parseClaimLines`). */
+function claimLines(claims: Record<string, string[]>): string {
+  return Object.entries(claims).map(([k, v]) => `${k}: ${v.join(', ')}`).join('\n')
+}
+
+/** Email de una entrada. Formato, no identidad: valida que la clave PUEDA coincidir con lo que el
+ * gate autentica (el resolver busca por `user.toLowerCase()`); jamás corrige ni sugiere un parecido. */
+const IDENTITY_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+function identityEmail(raw: string): string {
+  const e = (raw ?? '').trim().toLowerCase()
+  if (!e) throw new ValidationError('La entrada del mapa necesita un correo.')
+  if (!IDENTITY_EMAIL_RE.test(e)) throw new ValidationError(`Correo inválido: '${e}'.`)
+  return e
+}
+
+/**
+ * Cómo se ve la procedencia de una entrada. Las tres se ven DISTINTO a propósito:
+ *  · `autoritativa` — la trajo la fuente y resolvió;
+ *  · `override` — la inscribió un humano; es lo único que sobrevive a la regeneración del mapa;
+ *  · `autoritativa-ambigua` — la fuente la trajo y NO resolvió a un valor único. Es un ESTADO, no un
+ *    error: se muestra como tal para que «ninguna» deje de ser indistinguible de «sin entrada».
+ *    Desempatar sigue prohibido — la superficie muestra el empate, no lo resuelve.
+ */
+function procedenciaBadge(o: AdminIdentityOrigin): string {
+  if (o === 'override') return '<span class="tag">override declarado</span>'
+  if (o === 'autoritativa-ambigua') return '<b style="color:var(--err)">⚠ autoritativa · ambigua</b>'
+  return '<span class="sub">autoritativa</span>'
+}
+
+/**
+ * Administración del mapa identidad→claims (#159): ver el mapa vigente con su procedencia por
+ * entrada, corregirlo e inscribir overrides declarados — sin tocar el host ni reiniciar nada.
+ *
+ * Lo que esta vista NO hace, y es requisito duro del issue: **no infiere identidad**. No autocompleta
+ * ni sugiere claims por parecido de nombre o de correo. Una identidad que no resuelve queda sin
+ * claims y la política decide fail-closed; la conveniencia de la UI no toca esa restricción.
+ */
+async function identidadesPage(deps: AdminDeps, nav: Chrome, token: string, msg?: string, edit?: string): Promise<string> {
+  const store = deps.identityClaims!
+  const entradas = await store.listIdentityClaims()
+  const csrfIn = `<input type="hidden" name="_csrf" value="${token}">`
+  const claimsCell = (e: AdminIdentityEntry): string => {
+    const keys = Object.keys(e.claims)
+    // Entrada SIN claims ≠ identidad SIN entrada: la primera se reconcilió y no resolvió, la segunda
+    // nadie la reconcilió. Que se lean distinto es el punto de §4 de #165 aterrizado acá.
+    if (!keys.length) return '<span class="sub">sin claims · presente en el mapa, no resolvió</span>'
+    return keys.map((k) => `<div><span class="c">${escapeHtml(k)}</span> ${e.claims[k].map((v) => `<code>${escapeHtml(v)}</code>`).join(' ')}</div>`).join('')
+  }
+  const filas = entradas
+    .map((e) => `<tr>
+        <td>${escapeHtml(e.email)}</td>
+        <td>${claimsCell(e)}</td>
+        <td>${procedenciaBadge(e.origin)}</td>
+        <td class="sub">${escapeHtml(e.updatedBy ?? '—')}${e.updatedAt ? `<div>${escapeHtml(fmtWhen(e.updatedAt))}</div>` : ''}</td>
+        <td class="r"><a class="edit" href="/admin/identidades?edit=${encodeURIComponent(e.email)}">Editar</a>
+          <form method="post" action="/admin/identidades/entry-delete" style="display:inline" onsubmit="return confirm('¿Sacar del mapa la entrada de ${escapeHtml(e.email)}?')">${csrfIn}<input type="hidden" name="email" value="${escapeHtml(e.email)}"><button class="del">Eliminar</button></form>
+        </td></tr>`)
+    .join('')
+
+  // Capacidad 1 del issue: cuántas identidades AUTENTICADAS no resuelven. Solo si alguien aporta el
+  // universo observado — sin él no se pinta un número inventado (el instrumento declara que no midió).
+  let sinEntrada = ''
+  if (deps.observedIdentities) {
+    try {
+      const noResuelven = await store.unresolvedIdentities(await deps.observedIdentities())
+      sinEntrada = noResuelven.length
+        ? `<h2>Identidades autenticadas sin entrada (${noResuelven.length})</h2>
+           <p class="sub">Entraron por el gate y NO tienen entrada en el mapa: quedan sin claims y la política decide fail-closed. Inscribir una es un acto explícito — el mapa no adivina a quién se parecen.</p>
+           <ul class="cards">${noResuelven.map((e) => `<li><a href="/admin/identidades?edit=${encodeURIComponent(e)}">${escapeHtml(e)}</a><div class="sub">inscribir un override</div></li>`).join('')}</ul>`
+        : `<h2>Identidades autenticadas sin entrada</h2><p class="sub">Ninguna: todas las identidades observadas tienen entrada en el mapa.</p>`
+    } catch {
+      sinEntrada = `<p class="msg err">⚠ No se pudo leer el universo de identidades autenticadas — el mapa de arriba es correcto; este bloque no se pudo medir.</p>`
+    }
+  }
+
+  const eE = edit ? entradas.find((x) => x.email === edit.trim().toLowerCase()) : undefined
+  // Editar es el MISMO form pre-poblado vía `?edit=` (patrón de Fuentes). Con un `?edit=` que no está
+  // en el mapa, el form queda con ese correo y claims vacíos: es el camino de alta del override.
+  const emailPrefill = eE?.email ?? (edit ? edit.trim().toLowerCase() : '')
+  const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
+  return adminPage(deps, nav,
+    'Mapa de identidad',
+    `<p class="sub"><a href="/admin/plataforma">← Plataforma</a></p>
+     ${feedback}
+     <p class="sub">Qué claims tiene cada identidad: el <b>trust-base</b> sobre el que se aplica toda política de datos. Se administra acá, no por archivo desplegado. Una identidad <b>sin entrada</b> no aparece en esta tabla — queda sin claims y la política decide <b>fail-closed</b>; no se adivina por parecido de nombre ni de correo.</p>
+     <table><thead><tr><th>Identidad</th><th>Claims</th><th>Procedencia</th><th>Actualizada por</th><th></th></tr></thead>
+     <tbody>${filas || '<tr><td colspan="5" class="sub">El mapa está vacío: ninguna identidad tiene claims.</td></tr>'}</tbody></table>
+     <p class="sub"><b>Procedencia:</b> <i>autoritativa</i> = la trajo la fuente · <i>override declarado</i> = lo inscribió un humano y sobrevive a la regeneración del mapa · <b style="color:var(--err)">⚠ autoritativa · ambigua</b> = la fuente la trajo y no resolvió a un valor único (doble pertenencia legítima). La ambigua <b>es un estado, no un error</b>, y no se desempata desde acá.</p>
+     <h2>${eE ? `Corregir la entrada de <code>${escapeHtml(eE.email)}</code>` : 'Inscribir una entrada'}</h2>
+     <form method="post" action="/admin/identidades/entry" class="grid">${csrfIn}
+       <label class="fld"><span>Correo *</span><input type="email" name="email" value="${escapeHtml(emailPrefill)}" required ${eE ? 'readonly' : ''}></label>
+       <label class="fld"><span>Claims (una línea por claim: <code>clave: valor1, valor2</code>)</span>
+         <textarea name="claims" rows="4" placeholder="area: finanzas">${escapeHtml(eE ? claimLines(eE.claims) : '')}</textarea></label>
+       <div class="actions"><button class="add">${eE ? 'Guardar como override' : 'Inscribir override'}</button>${eE ? '<a class="cancel" href="/admin/identidades">Cancelar</a>' : ''}</div>
+     </form>
+     <p class="sub">Toda escritura desde acá queda con procedencia <b>override</b>, y no es una etiqueta cosmética: el override es lo único que la regeneración del mapa <b>no</b> borra. Marcarla como autoritativa sería mentir sobre de dónde vino, y la corrección se perdería en la próxima regeneración — que es el defecto que esta pantalla existe para arreglar. Para devolverle una identidad a la fuente autoritativa, se da de baja el override: la próxima reconciliación la vuelve a traer.</p>
+     ${sinEntrada}`,
+  )
+}
+
+/**
+ * Las escrituras del mapa. Dos operaciones y ninguna más: alta/corrección (que son la misma) y baja.
+ * La procedencia NO es un campo del form: se deriva del acto —lo escribió un humano ⇒ `override`—
+ * porque dejar elegir «autoritativa» permitiría inscribir a mano una entrada que se presenta como
+ * venida de la fuente, y la auditoría posterior ya no podría separarlas.
+ */
+async function handleIdentityWrite(deps: AdminDeps, store: IdentityClaimsAdmin, op: string, f: Record<string, string>, by: string): Promise<string> {
+  const audit = (o: string, target: string, detalle: Record<string, unknown> = {}): void =>
+    deps.audit({ type: 'identity-map-write', op: o, target, by, ...detalle })
+  switch (op) {
+    case 'entry': {
+      const email = identityEmail(f['email'] ?? '')
+      const claims = parseClaimLines(f['claims'] ?? '')
+      const previa = await store.getIdentityClaims(email)
+      await store.upsertIdentityClaims(email, { claims, origin: 'override', updatedBy: by })
+      audit('entry-upsert', email, {
+        origin: 'override',
+        // Qué había ANTES: sin esto, la auditoría no puede decir si un override pisó una entrada
+        // autoritativa (que es el caso que un revisor querrá mirar) o inscribió una identidad nueva.
+        previo: previa?.origin ?? null,
+        claims: Object.entries(claims).map(([k, v]) => `${k}=${v.join('|')}`).join(' '),
+      })
+      return `Entrada ${email} guardada como override.`
+    }
+    case 'entry-delete': {
+      const email = identityEmail(f['email'] ?? '')
+      const previa = await store.getIdentityClaims(email)
+      await store.deleteIdentityClaims(email)
+      audit('entry-delete', email, { previo: previa?.origin ?? null })
+      return `Entrada ${email} sacada del mapa (queda sin claims: la política decide fail-closed).`
+    }
+    default:
+      throw new ValidationError(`Operación desconocida: '${op}'.`)
+  }
+}
 
 // ─── Errores tipados (códigos accionables; HTTP helpers viven en ./ui) ───────
 class ValidationError extends Error {}

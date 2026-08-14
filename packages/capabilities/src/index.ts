@@ -130,6 +130,18 @@ export type { IntakeWatchStore, SlotWatchSnapshot } from './governance-store'
 export type { IntakeRevertStore, IntakeRevertRow } from './governance-store'
 export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from './governance-store'
 export type { JobPublicationStore } from './governance-store'
+// #159 · el mapa identidad→claims como estado de gobierno (con procedencia) + su import desde el
+// archivo desplegado. El server lo consume por el barrel: el trust-base es capacidad del Producto.
+export type {
+  IdentityClaimStore,
+  IdentityClaimEntry,
+  IdentityClaimInput,
+  IdentityOrigin,
+  IdentityReconcileEntry,
+  IdentityReconcileResult,
+} from './governance-store'
+export { parseIdentityMapFile, importIdentityMap, importIdentityMapFile } from './identity-map-import'
+export type { IdentityMapFile, IdentityMapImportResult } from './identity-map-import'
 // #107 fase 2 · H3 — ledger de publicaciones de jobs y derivación del plan (puro sobre shas).
 export {
   ensureJobPublicationTable,
