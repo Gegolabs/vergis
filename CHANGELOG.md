@@ -1,8 +1,90 @@
 # Changelog — Vergis
 
-Versionado del Producto (la imagen `ghcr.io/cobach/vergis`). La versión vigente se muestra en el
+Versionado del Producto (la imagen `ghcr.io/gegolabs/vergis`). La versión vigente se muestra en el
 pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
 cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
+
+## Qué significa cada tag de la imagen
+
+Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, no un merge a `main`.
+
+| Tag | Qué es | Para quién |
+|--|--|--|
+| `0.16.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.16` | Flota al último patch de la serie 0.16 | Producción que quiere correcciones sin capacidades nuevas |
+| `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
+| `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
+| `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
+
+No se publica el tag `0` (major solo): pre-1.0 el eje de ruptura es la **Y** de este mismo esquema,
+así que `:0` prometería una compatibilidad que nadie sostuvo.
+
+**El despliegue es del operador de la instancia, no del Producto.** Acá se publica la versión y se
+declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
+cambio lo decide quien opera esa instancia.
+
+## 0.16.0 — 2026-08-14
+
+**El intake que se observa y la autorización que baja a la columna** — 70 commits sobre los issues
+#161 #162 #163 #165 #159 #178, más dos CVEs y el frente de Renovate. Tests 1661 → 2095.
+
+- **La plataforma observa sus propias cargas** (#161): un lazo de vigilancia clasifica cada slot y la
+  consola dibuja el veredicto ya medido —jamás mide en el request path—. Lo que el requisito exige y
+  la vista entrega es que el operador **distinga «no hay novedad» de «no pude medir»**: la calidad de
+  la medida es un campo de primera clase (`fresca` · `ultima-conocida` · `contradice-registro` ·
+  `ninguna`), un archivo que nadie tomó a tiempo se marca **VARADO** con su edad, y la vigilancia se
+  declara por slot con un bloque `watch:` fail-closed (ausente = los defaults; `watch: false` es el
+  opt-out total, con todas sus consecuencias escritas). Sin vigilante cableado, la consola renderiza
+  exactamente la página anterior: regresión cero por construcción.
+- **El fallo de una carga llega al usuario con su causa** (#162): desenlace por carga —`procesada`,
+  `saltada`, `fallida`, `sin-informe`, `varada`— resuelto contra el log de la corrida que la cubrió,
+  con el motivo textual que el job declaró (escapado y redactado: un log puede traer una cadena de
+  conexión). Y el contrato `_logs/` que el error ya prometía queda **especificado** — con su aviso
+  ruidoso cuando la instancia no lo cumple: sin log por corrida no hay causa por archivo, y el
+  desenlace cae a «sin informe», que es la verdad y es cara.
+- **Autorización por COLUMNA** (#163, nueve hitos): la política sabía esconder filas y el terreno
+  ancho traía columnas que no se podían proteger. Ahora el compilador controla por columna, la vista
+  de máscara es **servible** —el gate la reconoce corroborando en `sys`, no por el prefijo del
+  nombre, que cualquiera con `CREATE VIEW` puede falsificar— y Miranda **nombra** la columna
+  protegida en vez de sondearla. En ClickHouse la capacidad se declara **no soportada** y el PI no se
+  sirve: ese back-end no controla la proyección, y fingir que sí sería servir dato sin protección.
+- **El claim como conjunto** (#165): la doble pertenencia legítima —un sujeto que pertenece a dos
+  zonas— negaba **en silencio**. La negación por cardinalidad del claim ahora se explica, y el
+  rechazo de ClickHouse llega con el sitio donde ocurrió.
+- **El mapa identidad→claims se administra desde la plataforma** (#159): deja de vivir en un archivo
+  desplegado. Un cambio de claims era un despliegue; ahora es una escritura auditada.
+- **La consola de Cargas navega por casilla** (#178): con más de un slot, una barra de pestañas —una
+  por casilla, en el orden de `slots.yaml`— y **URL propia por casilla** (`?slot=<slotId>`), así que
+  se le manda a alguien el link de la suya en vez de una instrucción de scroll. El rechazo ya no
+  navega a Frescura: deja al usuario en su casilla y, cuando el archivo **sí** matchea el `accept`
+  declarado de otra, el error la nombra y la enlaza. Sin candidato no se ofrece destino: cero
+  heurística de parecido. Nace de un incidente medido —cinco cargas rechazadas en dos días, todas por
+  el mismo motivo—, y con un solo slot la página es la de siempre.
+- **Render**: el carril del rótulo de una serie lo decide la posición del punto, no el índice de la
+  serie (#166); y el render de gráficos **no hace E/S** —ni de red ni de disco— por gate declarativo
+  más un loader que niega. El subproceso para aislarlo se descartó **con medición**: el permission
+  model de Node 22 no cubre la red.
+- **Supply chain**: las dos CVEs de `ajv` y `yaml` corregidas a mano (#173); Renovate corriendo
+  self-hosted con su cooldown de 14 días efectivo; y la política de tags de la imagen que encabeza
+  este archivo, para que publicar sea un acto y no un efecto secundario de mergear.
+
+**⚠ Notas de despliegue** — lo que el operador necesita para decidir:
+
+- **La autorización por columna (#163/#165) está cerrada EN CÓDIGO y no se ha corrido contra un motor
+  vivo.** Lo verificado es el SQL emitido y sus emuladores contra el oráculo. Cuatro preguntas siguen
+  abiertas y la primera manda: si el Service Principal de serving **no** tiene `UNMASK`, la rama «en
+  claro» de la vista de máscara recibe igual el default del DDM y la capacidad queda degradada a
+  «esta columna no se sirve a nadie» — segura, pero no es lo pedido. **No apoyar una decisión de
+  protección de datos en esta capacidad hasta medirla en el terreno de destino.**
+- **#164 sigue abierto**: el andamiaje de RLS ancla su allow-all en una columna de datos, o sea que
+  toma rehén al terreno. Está declarado y medido; no resuelto.
+- **La vigilancia del intake (#161) no se enciende sola**: sin el lazo cableado en la instancia, la
+  consola es la de antes. El aviso de incumplimiento del contrato `_logs/` exige que el convertidor
+  de la instancia escriba su log al terminar (`docs/contrato-ingesta-logs.md`).
+- **Recomendación de pin**: quien corra esto en producción debería referenciar `:0.16.0` (o su
+  digest) en vez de `:latest`. Con la política de tags de esta versión, `:latest` ya significa «la
+  última versión publicada» y no «el último merge» — pero un tag móvil en producción sigue
+  significando que la próxima release entra en el siguiente recreate, sin decidirlo nadie.
 
 ## 0.15.0 — 2026-08-10
 
