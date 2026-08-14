@@ -1,103 +1,74 @@
 # NEXT — Vergis
 
-PROD corre **0.15.0** y está sano. Suite en **1882 tests**, typecheck y build verdes. Árbol limpio.
+PROD corre **0.15.0** y está sano. Suite en **2081 tests**, typecheck y build verdes, CI de `main`
+verde, árbol limpio y pusheado.
 
-La sesión del 2026-08-13 cerró tres tandas: **Renovate** (causa raíz curada) y **la observabilidad
-del intake** (#161/#162) en la primera; **el pasivo trabajado con mandato** en la segunda — el pin de
-nuestra imagen, `~/evals-finaliza/` versionado, la marca decidida, el frente de authz.
+El **frente de autorización quedó cerrado en código** el 2026-08-13: #163 (control por columna, nueve
+hitos), #159 (administración del mapa identidad→claims) y #165 (el claim como conjunto + diagnóstico
+de la negación). Diseño, estado por issue y los nueve hitos: `work/010-cluster-authz-2026-08-13/`.
 
-## Lo primero: un PR esperando el cooldown
+**Nada de eso se corrió contra un motor vivo.** Lo verificado es el SQL emitido y sus emuladores
+contra el oráculo. Ése es exactamente el próximo paso.
 
-| PR | Estado | Qué es |
-|----|--------|--------|
-| #175 | `test` ✓ `review` ✓, `stability-days` **pendiente** | Digest de `caddy:2` en el compose de referencia. |
+## Próximo paso
 
-Cuando el cooldown de 14 días lo libere, mergea directo. **No se salta**: ese control es la razón de
-ser del arnés de Renovate. (#176 se cerró: era el bump del pin que se retiró.)
+**Una sesión de QA que mida lo que decide si la capacidad de #163 sirve — y que de paso destranca
+#164.** Son el mismo viaje: encender `vm-vergis-qa` contra `ws-arbol-qa`, medir, apagar.
 
-## El pin de nuestra propia imagen — DECIDIDO (2026-08-13, César): se quita
+**Las cuatro preguntas, en orden de consecuencia:**
 
-`deploy/compose.reference.yml` vuelve al tag móvil `ghcr.io/gegolabs/vergis:latest`, con la regla en
-`renovate.json` que impide al preset `docker:pinDigests` re-pinearla sola (`pinDigests: false` +
-`enabled: false` para ese paquete). El cooldown queda intacto donde importa: las imágenes de terceros.
+1. **¿El Service Principal de serving tiene `UNMASK`?** Es la que manda. Si **no** lo tiene, la rama
+   «en claro» de la vista de máscara lee la columna base y recibe igual el default del DDM: **ni el
+   sujeto con el claim ve el valor**, y la capacidad queda degradada a «esta columna no se sirve a
+   nadie» — segura, pero es la herramienta gruesa de la que #163 se queja.
+   **Control obligatorio, en la misma sesión:** una consulta a la tabla **sin** vista. Sin él, un
+   negativo no distingue «no tiene el permiso» de «la vista no se aplicó».
+2. **¿Fabric acepta el DDL de la vista de máscara y del `ADD MASKED`** sobre una tabla que ya tiene
+   vista-contrato `SCHEMABINDING`? La instancia las usa, así que la interacción no es hipotética.
+3. **#164 — ¿acepta Fabric un `ADD FILTER PREDICATE` cuya función NO recibe ninguna columna** de la
+   tabla? Y si no, ¿acepta un parámetro alimentado por constante? **Registrar el error exacto**:
+   «sintaxis inválida» y «no soportado en este SKU» llevan a caminos distintos.
+   **Control obligatorio:** la forma **actual** (función con columna) tiene que pasar en el mismo
+   terreno y la misma sesión, o un fallo no distingue «Fabric no lo admite» de «el terreno estaba
+   mal».
+4. El **costo de enforcement por columna**, de paso.
 
-**Queda por verificar, y solo lo dirá una corrida**: que la regla gane sobre el preset. La señal es
-que Renovate **no** vuelva a abrir `renovate/ghcr.io-gegolabs-vergis-latest`. Aplicado en `9beeda8`;
-#176 cerrado por quedar sin objeto.
+**Contexto para arrancar en frío:** el runbook de la VM está en la skill `mira-ops`; el `RESOURCES.md`
+autoritativo y el compose viven en el repo del **lab** de A.R.B.O.L. (`clientes/ratio/hijuelas/`), no
+acá. Encender el QA **cuesta plata**: es acto de César, no del agente.
 
-## Gates de despliegue que este trabajo dejó pendientes
+**Si la medición dijera que el SP tiene `UNMASK` y aun así la vista no discrimina, #163 se reabre** —
+así quedó escrito en su comentario de cierre.
 
-Ninguno se puede medir sin terreno; **simularlos produciría la evidencia falsa que estos frentes
-existen para evitar**. Levantarlos en el próximo despliegue a QA:
+## Lo que espera a César (no lo mueve nadie más)
 
-- **C6 — drenar un landing real deja el directorio existente**: `listOrAbsent` debe dar `ok` vacío,
-  **no `absent`**. Acotado desde el código (ningún camino de Vergis borra el directorio; retiro y
-  reversión hacen `remove` del archivo), pero la semántica de OneLake no se mide desde acá.
-  **Si un landing vaciado devuelve `absent`, el control del directorio se retira.**
-- **C7 — ningún `slots.yaml` de instancia trae hoy una clave `watch:` inerte** que el parse nuevo
-  empezaría a interpretar. Verificado que **este** repo no tiene ningún YAML con `slots:`; los de
-  instancia viven en el repo del lab. Un `grep -n 'watch:'` antes de subir basta.
-- **Los dos supuestos del intake contra motor vivo**: que un job que muere antes de arrancar aparezca
-  como `Failed` en `jobs/instances`, y que la correlación carga↔corrida aguante el desfase de reloj
-  del motor (**no lleva margen**: con el reloj adelantado una carga real podría marcarse `varada`).
-- Siguen abiertos los **gates manuales del 0.14.0** en `TODO.md`, que nunca se corrieron.
+Sin cambios respecto de la vista de `/ww:work`: la ventana de terreno vivo (que incluye lo de
+arriba), los dos actos de QA —`VERGIS_CSRF_SECRET` y los permisos del SP sobre dos items del motor—,
+sellar sus cinco archivos de `dotclaude`, el ojo humano al header del theme `default`, y **publicar
+`CONTRIBUTING.md`** (renombrar el `.draft.md` *es* el acto de publicación; la ventana del dual
+licensing se cierra con el primer PR externo sin acuerdo).
 
-## El frente de authz — diseñado el 2026-08-13, con orden declarado
+## Lo que espera al reloj
 
-`work/010-cluster-authz-2026-08-13/` tiene el diseño de los cuatro issues, que son **cuatro caras de
-una pregunta**, no cuatro pedidos. Lo construido y lo que falta:
+**PR #175** (digest de `caddy:2`): `test` ✓ `review` ✓, solo cuelga `renovate/stability-days`. Cuando
+el cooldown de 14 días lo libere, mergea directo. **No se salta.**
 
-| Issue | Estado |
-|---|---|
-| **#165** | §1 y §3 **construidos** (`07271b5`): el claim es un **conjunto** —declarado en el IR y el README— y la negación por cardinalidad **dejó de ser muda** (`packages/policy/src/diagnose.ts`, con `deniesAllRows` afirmado como teorema sobre el oráculo). §4 se decide dentro de #159 |
-| **#164** | **Mitigado, no resuelto** (`bc64922`): `FabricEnforcement.schemaDependencies` vuelve legible la dependencia que `SCHEMABINDING` crea. Los caminos 1 y 2 esperan **una medición en QA**, que está en `PENDINGS.md` con su control obligatorio |
-| **#163** | **Diseñado** con sus cinco decisiones resueltas y 5 hitos. **No se construye antes de #165 §4 y #159** |
-| **#159** | **Diseñado** en su encaje. Es el siguiente del frente |
+**Sin verificar todavía**: que la regla de `renovate.json` gane sobre el preset `docker:pinDigests`.
+La señal es que Renovate **no** vuelva a abrir `renovate/ghcr.io-gegolabs-vergis-latest`.
 
-**El orden no es el de apertura, y es la parte que no se puede saltar:** #165 y #159 definen al
-sujeto; #163 define qué se le sirve. Construir la granularidad fina antes de cerrar el modelo del
-sujeto es construir sobre una definición pendiente — y ese error no se cae, se propaga.
+## Terreno ya recorrido — no reintentar
 
-### El siguiente: #159 — el mapa identidad→claims se administra desde la plataforma Hoy vive en un archivo del
-host que se genera fuera, se sube, y se lee **solo al arrancar**: nadie lo ve desde la plataforma,
-corregirlo obliga a reiniciar, y cada regeneración borra las cuentas que no vienen de la fuente
-autoritativa (típicamente la de operación). Es la única pieza del gobierno que no se administra —
-las políticas de datos ya se recargan en caliente, esta no.
+- **Subproceso para aislar el render Vega** — descartado con medición: el permission model de Node 22
+  **no cubre la red** (bloquea fs y `child_process`; `net.connect` conecta). La E/S se cerró con gate
+  declarativo + loader que niega. Si algún día hace falta, la red se cierra **en el contenedor**.
+- **Migrar los specs del canon a `docs/`** — no se hace: el libro es **GNU FDL v1.3** y no mezcla con
+  la AGPL de este repo. Se cita, no se copia (`docs/canon.md`).
+- **Enmascarar en ClickHouse** — no hay dónde: ese back-end no controla la proyección. Declara la
+  capacidad no soportada y no sirve el PI.
+- **Reconocer la vista de máscara por el prefijo `vw_mask_`** — descartado: falsificable por
+  cualquiera con `CREATE VIEW`. El reconocimiento exige corroboración en `sys`.
+- **Worktrees para paralelizar subagentes en este repo** — no sirven tal cual: un worktree nuevo no
+  trae `node_modules` y los gates no corren. El reparto que funcionó fue por **conjuntos de archivos
+  disjuntos**, con los ejecutores sin tocar git y el orquestador integrando.
 
-⚠️ **El «44 personas pierden acceso» que este archivo arrastraba NO está verificado**: el issue no
-menciona cifra alguna y `P-22` no existe en este árbol (sería del repo del lab). Es una cadena de
-citas que ganó autoridad sin que nadie volviera a medirla. **Comprobarlo antes de usarlo para
-priorizar.**
-
-Y lo que el diseño le agregó a este issue: **la procedencia por entrada es lo que hace revisable
-todo lo demás** —sin ella la regeneración borra los overrides, que es el defecto reportado— y admite
-un **tercer valor**, `autoritativa ambigua`, que es donde cae el §4 de #165 (la persona con doble
-ficha activa). Con eso «ninguna» deja de ser un hueco.
-
-## Lo que estos dos frentes dejaron como método
-
-Vale más que el código, y es la misma lección en dos planos: **un instrumento que no distingue «no
-ocurrió» de «no lo registré» fabrica conclusiones tan falsas como las afirmaciones que pretende
-corregir.**
-
-- El `renovate-config-validator` **verifica forma, no semántica**: acepta valores que la corrida
-  rechaza. Correrlo es obligatorio; pasarlo no es prueba.
-- Contar ocurrencias en un log **cuyo nivel no las imprime** «refutó» una causa verdadera.
-- Medir el lockfile **con un solo npm** exoneró tres días a la variable culpable. **Un experimento
-  que no varía la variable sospechosa no la exonera: la ignora.**
-- Un `grep` sobre un log puede contar **los propios comentarios que describen el fenómeno** como si
-  fueran el fenómeno.
-- **Un test verde que nunca se vio fallar no es evidencia.** Dos ejecutores descubrieron que sus
-  tests estaban tapados por un efecto lateral y los endurecieron.
-
-De ahí la práctica que quedó instalada en el frente del intake y conviene sostener: **prueba por
-mutación en cada hito, y re-verificación independiente al integrar**. Y su corolario honesto:
-cuando un mutante sobrevive, la primera hipótesis es que el test es flojo; **declararlo equivalente
-exige razón demostrada**.
-
-## Lo demás abierto
-
-En `TODO.md` y `PENDINGS.md`. De César: revisión legal de `CONTRIBUTING.draft.md` —renombrarlo **es**
-publicarlo—, y la marca. Sin tocar: **#139**, **#113**, **#111**, **#110**.
-
-<!-- /ww:next · 2026-08-13 · HEAD 7e9eb30 -->
+<!-- /ww:finish · 2026-08-13 · HEAD d9cdc06 -->
