@@ -29,6 +29,17 @@
         "npm"
       ],
       "allowedVersions": "<11"
+    },
+    {
+      "description": "NUESTRA propia imagen no se pinea ni se actualiza. El preset `docker:pinDigests` la re-pinearia sola, y cada build de `main` publica un digest nuevo: seria churn perpetuo del bot sobre una imagen que este mismo repo produce. El cooldown de supply chain no pierde nada — su objeto son las dependencias de TERCEROS. Decidido el 2026-08-13 por Cesar, revirtiendo el pin que entro con #174.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/gegolabs/vergis"
+      ],
+      "pinDigests": false,
+      "enabled": false
     }
   ]
 }

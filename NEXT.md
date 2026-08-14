@@ -14,16 +14,15 @@ pendientes saldados). Suite en **1854 tests**, typecheck y build verdes. Árbol 
 Si el cooldown de 14 días ya los liberó, mergean directo. **No se saltan**: ese control es la razón
 de ser del arnés de Renovate.
 
-## Decisión pendiente: el pin de nuestra propia imagen
+## El pin de nuestra propia imagen — DECIDIDO (2026-08-13, César): se quita
 
-`deploy/compose.reference.yml` fija `ghcr.io/gegolabs/vergis:latest@sha256:…`, así que **cada build de
-`main` publica un digest nuevo y Renovate abre un PR** (hoy, #176). Y lo expone como mal planteado:
-el cooldown existe para que una versión envenenada **de un tercero** se despublique antes de que la
-toquemos; aplicárselo a una imagen **que publicamos nosotros** no protege de nada y retiene 14 días
-una actualización propia.
+`deploy/compose.reference.yml` vuelve al tag móvil `ghcr.io/gegolabs/vergis:latest`, con la regla en
+`renovate.json` que impide al preset `docker:pinDigests` re-pinearla sola (`pinDigests: false` +
+`enabled: false` para ese paquete). El cooldown queda intacto donde importa: las imágenes de terceros.
 
-**Decidir:** quitar el pin (si la referencia debe seguir el tag móvil) o ignorar ese paquete en
-`renovate.json` (si debe quedar fija).
+**Queda por verificar, y solo lo dirá una corrida**: que la regla gane sobre el preset. La señal es
+que Renovate **no** vuelva a abrir `renovate/ghcr.io-gegolabs-vergis-latest`. Y **#176 queda sin
+objeto** — es el bump de ese mismo digest: se cierra cuando esto llegue a `main`.
 
 ## Gates de despliegue que este trabajo dejó pendientes
 
