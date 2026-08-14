@@ -88,6 +88,7 @@ Canonical product docs live in `docs/`:
 - [`frescura-oferta-demanda.md`](docs/frescura-oferta-demanda.md) — Freshness: **oferta vs demanda**, demand ceiling, required-cadence derivation, observability, and the reconciler (delegate to the engine's scheduler).
 - [`capa-de-notas.md`](docs/capa-de-notas.md) — The **notes layer**: the two species (**comment** anchored to a governed record via the dataset's `anchor`, **annotation** anchored to a frozen **impression**), the write-time authorization check against live data, lazy materialization, governed sharing, retention settings, and the **contract for agents**.
 - [`adr-001-lenguaje-y-supply-chain.md`](docs/adr-001-lenguaje-y-supply-chain.md) — language & supply-chain ADR.
+- [`canon.md`](docs/canon.md) — **where the normative specs live** (Botler contract, Mira spec, DSL, naming): in the AgencyDomains book, cited and not copied — the two licenses do not mix and a spec with two homes drifts.
 
 ## Edition and license
 
@@ -98,8 +99,9 @@ adoption) and the anti-crippleware promise. Commercial territory is what only an
 operating at scale buys: HA / Kubernetes / carrier-grade, the multi-instance fleet control plane,
 and the operated service — none of it exists as code today, and when it does it will live in a
 separate program talking to Vergis over its APIs, never linked into the AGPL process. The canon's
-normative specs (Botler contract, Mira spec, DSL, naming) ship with AgencyDomains; their migration
-to this repo's `docs/` is pending.
+normative specs (Botler contract, Mira spec, DSL, naming) ship with **AgencyDomains** and stay
+there: the book is **GNU FDL v1.3**, which does not mix with this repo's AGPL, and a normative text
+with two homes drifts. See [`docs/canon.md`](docs/canon.md) — the canon is cited, not copied.
 
 ---
 

@@ -31,7 +31,16 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   Vergis (cluster 006, H1-H5, PRs #152-#158). El issue lo cerró César el 2026-08-09
 - [x] **Deploy 0.14.0 a la VM** — **HECHO 2026-08-06 20:33** (autorizado por César): pre-check #117 de los 13 YAML ✓, ensayo QA ✓, PROD healthz 8/8 + smoke 8 PIs + frontera externa ✓; rollbacks listos (`vergis-rollback:pre-0140`, `governance.bak-1786062563.tgz`). El reconcile de #105 corrigió un drift real en su primera vuelta (G-M1 parcial ✓)
 - [x] Caché de discovery de specs — **HECHO** (memoizado + invalidado on-change en `server/discovery.ts` vía `createCachedScanner`)
-- [ ] Migrar los specs normativos del canon (contrato Botler, spec Mira, DSL, naming) de AgencyDomains a `docs/` (declarado en README)
+- [x] ~~Migrar los specs normativos del canon a `docs/`~~ — **NO SE MIGRAN, decidido 2026-08-13**
+  (D-22). La premisa se re-derivó contra el terreno y no se sostenía: no hay archivos-spec sueltos
+  que mover — lo normativo vive dentro del **libro publicado** *AgencyDomains* (v1.0, agosto 2026,
+  agencydomains.org), bajo **GNU FDL v1.3**. Y esa licencia **no mezcla con la AGPL de este repo**:
+  copiar el texto acá volvería una parte del árbol no redistribuible bajo su propia licencia.
+  Segundo motivo, el que dolería después: un spec con dos casas driftea, y la copia siempre pierde
+  — es exactamente lo que pasó con la línea del port a Go.
+  **Hecho en su lugar**: `docs/canon.md` (dónde vive el canon, qué edición, por qué se cita y no se
+  copia, y qué gana cada lado ante desacuerdo) + la frase del README corregida, que declaraba la
+  migración «pendiente».
 - ~~Port del kernel `@vergis/policy` a Go~~ — **DADA DE BAJA de este archivo 2026-08-10** (mandato de
   César). No se descarta el port: se devuelve a su única casa. La decisión ya vivía en
   `docs/adr-001-lenguaje-y-supply-chain.md` §Decisión·2 y esta línea era un duplicado que envejeció
