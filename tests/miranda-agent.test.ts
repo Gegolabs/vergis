@@ -39,6 +39,9 @@ function ctx(over: Partial<MirandaToolContext> = {}): MirandaToolContext {
     runProbe: async () => ({ rows: [{ n: 1 }] }),
     columnsOf: async () => [],
     sampleRows: async () => [],
+    // Escudo de columna (#163 · H9): estos mocks miden OTRA cosa, así que declaran el objeto SIN
+    // reglas de columna — el fail-closed y el enmascarado se miden en tests/miranda-columnas.test.ts.
+    columnShield: async () => ({ known: true, columns: [] }),
     profileColumn: async () => [],
     listSpecs: () => [],
     readSpec: () => null,

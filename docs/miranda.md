@@ -88,9 +88,9 @@ las rutas y sin entrada en el menú.
 | Tool | Input | Salida | Notas |
 |--|--|--|--|
 | `catalog_tables` | — | objetos del allowlist | Solo el catálogo de instancia (nada de `INFORMATION_SCHEMA` abierto). |
-| `describe_table` | `{name}` | columnas+tipos + 3 filas de muestra en `repr()` | `repr()` revela espacios/mayúsculas (guard `'TC '` vs `'TC'`). |
-| `profile_column` | `{table, column, top?}` | top-N valores distintos con conteo, en `repr()` | Columna sanitizada (identificador simple). |
-| `run_probe` | `{sql, why}` | filas (≤500) o error de guardia | Pasa por `sql-guard` (un `SELECT`, `TOP 500` forzado, allowlist). `why` se registra. |
+| `describe_table` | `{name}` | columnas+tipos (con marca `protegida`) + 3 filas de muestra en `repr()` | `repr()` revela espacios/mayúsculas (guard `'TC '` vs `'TC'`). La muestra se pide con **proyección explícita** de lo sondeable: nunca `SELECT *`. |
+| `profile_column` | `{table, column, top?}` | top-N valores distintos con conteo, en `repr()` | Columna sanitizada (identificador simple). Columna protegida ⇒ se rechaza sin tocar el motor. |
+| `run_probe` | `{sql, why}` | filas (≤500) o error de guardia | Pasa por `sql-guard` (un `SELECT`, `TOP 500` forzado, allowlist) **y** por el plano de columna. `why` se registra. |
 | `list_pis` / `read_spec` | `{code?}` | specs existentes (read-only) | Ejemplares; no se editan. |
 | `save_draft` | `{yaml}` | `{ok, version}` o errores del DSL | Valida (`dsl/parse`+`dsl/validate`) y guarda `spec_draft` vN. **Nunca** escribe al SPECS_DIR. |
 | `update_intent_summary` | JSON estructurado | `{ok, version}` | Guarda `intent_summary` vN; invalida `validado` si aplica. |
@@ -104,6 +104,37 @@ Una probe es una lectura **exploratoria**: un único `SELECT`, sin efectos, con 
 (el `TOP` del usuario se descarta). Se rechaza: multi-statement (`;`), CTE (`WITH`), comment-smuggling
 (`--`, `/* */`), DML/DDL, `SELECT … INTO`, `EXEC`/`sp_`/`xp_`, `OPENROWSET`/`OPENQUERY`/`BULK`, y toda
 tabla fuera del allowlist. Es defensa en profundidad: la RLS data-anchored filtra las filas igual.
+
+## ¿Cómo ve Miranda una columna protegida?
+
+**La columna existe, se nombra, y no se sondea.** Ocultar su existencia protegería más, pero mentiría
+sobre el terreno — y un asistente de catálogo que miente sobre el terreno envenena todo lo que se
+construya con lo que describa. Es la misma línea del control por columna en el serving: **se miente el
+valor, jamás el esquema**.
+
+Una columna con **regla de columna** declarada en la política del dato (`columnRules` del policy store,
+leída con `columnRules(policy)` de `@vergis/policy`):
+
+- **Se nombra**: `describe_table` la lista con su nombre y su tipo, marcada `protegida: true`, y la
+  repite en `columnas_protegidas`. El especificador sabe que está ahí y que no la puede ver.
+- **No se sondea, y es literal**: ni valores de ejemplo, ni top-N, ni conteos por valor, ni
+  mínimos/máximos, ni cardinalidad, ni nada derivado de sus celdas. La muestra de `describe_table` se
+  pide proyectando solo lo sondeable; `profile_column` la rechaza sin llamar al motor; `run_probe` veta
+  la probe **antes** de ejecutarla si la menciona —esté en la proyección, en el `WHERE`, en un
+  `GROUP BY`, dentro de una función o de un agregado— o si proyecta `*` sobre un objeto que tenga
+  alguna (`COUNT(*)` se exceptúa: no proyecta ninguna celda).
+- **Fail-closed**: si el plano de columna de un objeto **no se puede determinar** —no hay política para
+  él en el store, o la fuente de política no está cableada— se trata el objeto entero como protegido:
+  se describe su esquema y no se muestrea nada. La duda no habilita el sondeo.
+
+El veto de `run_probe` es deliberadamente **grueso** (coincidencia por token, sin parser SQL): una
+columna protegida llamada `rut` veta también las probes que nombren un `rut` de otra tabla del `FROM`.
+Bloquear de más es el lado correcto del error.
+
+**Sin claims.** La superficie de Miranda conoce el email del gate, no un `ClaimSet`, así que el escudo
+usa **todas** las reglas declaradas (`columnRules`) y no `maskedColumns(policy, claims)`: inventar los
+claims para afinar la respuesta sería exactamente el «inferir identidad» que el charter prohíbe. El
+superconjunto protege de más — especificar un PI no requiere ver el valor de una columna sensible.
 
 ## ¿Self-check QC① (el revisor interiorizado)?
 

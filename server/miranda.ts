@@ -27,7 +27,10 @@ import {
   type CatalogEntry,
   type SpecRef,
   type IntentSummary,
+  type ColumnShield,
+  UNKNOWN_SHIELD,
 } from '@vergis/miranda'
+import { columnRules, type PolicyDecl } from '@vergis/policy'
 import { page, readForm, redirect, send, csrfFactory, requireCsrf, CsrfError } from './ui'
 
 export interface MirandaHandler {
@@ -55,6 +58,19 @@ export interface MirandaServerDeps {
   probe(sql: string, email: string | undefined): Promise<{ rows: Record<string, unknown>[] }>
   /** Columnas+tipos de un objeto del catálogo. */
   columnsOf(table: string): Promise<{ name: string; type: string }[]>
+  /**
+   * La política data-anchored del policy store para un objeto del catálogo (#163 · H9). De ella sale
+   * el plano de columna: `columnRules(policy)` — la lectura canónica de `@vergis/policy`, que no se
+   * reimplementa acá.
+   *
+   * **Devolver `undefined` NO abre nada**: el nodo es default-deny sobre el dato sin política («dato
+   * sin política no se sirve», serve-rls §cabecera), y lo mismo rige para el sondeo. Un objeto sin
+   * política determinable se describe entero —su esquema se nombra— y no se muestrea.
+   *
+   * Opcional SOLO por compatibilidad de cableado: si esta dep no se cablea, Miranda no sondea NADA.
+   * Es el lado correcto del error, pero es una degradación visible — cablearla es parte del hito.
+   */
+  policyFor?(table: string): PolicyDecl | undefined
   /** Valida un draft contra el DSL (schema + capabilities de instancia). */
   validateDraft(yaml: string): { ok: true } | { ok: false; error: string }
   listSpecs(): SpecRef[]
@@ -128,7 +144,7 @@ const STATE_LABEL: Record<string, string> = {
   descartado: 'Descartado',
 }
 
-/** Solo identificador simple (anti-inyección en profile_column). */
+/** Solo identificador simple (anti-inyección en profile_column y en la proyección de sampleRows). */
 const IDENT_RE = /^[A-Za-z0-9_]+$/
 
 /** Normalización de email para comparar dueño vs requester (misma semántica que `normEmail` del
@@ -161,8 +177,34 @@ export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
         }
       },
       columnsOf: (table) => deps.columnsOf(table),
-      sampleRows: async (table, n) => {
-        const g = guardProbeSql(`SELECT * FROM ${table}`, { allowlist: deps.catalog.map((c) => c.name), topLimit: n })
+      /**
+       * El plano de columna del objeto (#163 · H9). Tres estados y ninguno es «quizás»: sin dep
+       * cableada, sin política para el objeto, o lectura que lanza ⇒ escudo DESCONOCIDO (el objeto no
+       * se sondea). Con política ⇒ las columnas de sus `columnRules`.
+       *
+       * Las reglas se toman TODAS, sin mirar los claims de quien pregunta: la superficie de Miranda
+       * no conoce claims (el gate le entrega un email, no un `ClaimSet`), así que usar
+       * `maskedColumns(policy, claims)` acá exigiría inventar los claims — y un claim inventado es
+       * exactamente el «inferir identidad» que el charter prohíbe. El superconjunto protege de más:
+       * quien especifica un PI no necesita ver el valor de una columna sensible para especificarlo.
+       */
+      columnShield: async (table): Promise<ColumnShield> => {
+        if (!deps.policyFor) return UNKNOWN_SHIELD
+        try {
+          const policy = deps.policyFor(table)
+          if (!policy) return UNKNOWN_SHIELD
+          return { known: true, columns: columnRules(policy).map((r) => r.column) }
+        } catch {
+          return UNKNOWN_SHIELD
+        }
+      },
+      sampleRows: async (table, n, columns) => {
+        // Proyección explícita: solo identificadores simples, y jamás vacía. El tool ya filtró por el
+        // escudo; acá no se confía en él — lo que se interpola en SQL se valida donde se interpola.
+        if (!columns.length) throw new Error('sampleRows exige al menos una columna sondeable.')
+        const bad = columns.filter((c) => !IDENT_RE.test(c))
+        if (bad.length) throw new Error(`Columna inválida en la proyección: ${bad.join(', ')}.`)
+        const g = guardProbeSql(`SELECT ${columns.join(', ')} FROM ${table}`, { allowlist: deps.catalog.map((c) => c.name), topLimit: n })
         return (await deps.probe(g.sql, email)).rows
       },
       profileColumn: async (table, column, top) => {
@@ -639,4 +681,29 @@ async function assembleProbeContext(gov: MirandaStore, sessionId: string): Promi
     }
   }
   return chunks.slice(-12).join('\n')
+}
+
+
+/**
+ * Resuelve la política de una tabla del catálogo de Miranda contra el policy store del nodo.
+ *
+ * El problema es que las dos superficies no nombran igual: el store se llama por referencia
+ * calificada (`schema.tabla`), y el catálogo de Miranda puede traer la tabla pelada. Resolver mal
+ * acá no produce un error: produce un **escudo vacío**, o sea sondeo en claro de una columna
+ * protegida. Por eso las tres ramas son explícitas y la del medio es la única que adivina:
+ *
+ *   · Coincidencia EXACTA → esa.
+ *   · Sufijo `.<tabla>` con UN solo candidato → ése. Es la única inferencia, y es segura porque no
+ *     hay a quién confundir.
+ *   · Cero candidatos, o VARIOS → `undefined`, que aguas arriba significa **escudo desconocido y
+ *     nada se sondea**. La ambigüedad NO se desempata: dos schemas con la misma tabla y distinta
+ *     política es exactamente el caso donde elegir mal sirve el dato equivocado.
+ */
+export function resolvePolicyFor(store: Map<string, PolicyDecl>, table: string): PolicyDecl | undefined {
+  const exacta = store.get(table)
+  if (exacta) return exacta
+  if (table.includes('.')) return undefined // ya venía calificada: si no está, no está
+  const sufijo = `.${table.toLowerCase()}`
+  const candidatos = [...store.keys()].filter((k) => k.toLowerCase().endsWith(sufijo))
+  return candidatos.length === 1 ? store.get(candidatos[0]) : undefined
 }

@@ -70,7 +70,7 @@ import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, DEFAULT_GATE_MAPPING, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
 import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
-import { createMiranda, mirandaValidateCaps, previewIdentityFor, type MirandaServerDeps } from './miranda'
+import { createMiranda, mirandaValidateCaps, previewIdentityFor, resolvePolicyFor, type MirandaServerDeps } from './miranda'
 import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
   bootstrapClickHouse,
@@ -1876,6 +1876,11 @@ if (config.miranda.enabled) {
         const out = (await servingCap.execute({ database_ref: PROBE_REF, sql }, probeIdentityOf(email))) as { rows: Record<string, unknown>[] }
         return { rows: out.rows ?? [] }
       },
+      // ESCUDO DE COLUMNA (#163·H9): sin esta dep, Miranda no sondea NADA (fail-closed total). Con
+      // ella, una columna con regla de máscara se nombra pero no se muestrea — que es la decisión
+      // §4.4 del diseño: mentimos el valor, jamás el esquema. La resolución tabla↔dataset es
+      // deliberadamente conservadora: ante ambigüedad devuelve `undefined`, o sea no se sondea.
+      policyFor: (t) => resolvePolicyFor(store, t),
       columnsOf: async (table) => {
         const [a, b] = table.includes('.') ? table.split('.') : [null, table]
         const sql = a
