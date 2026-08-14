@@ -3,6 +3,35 @@
 > Subordinado a la Constitución (`~/.claude/CLAUDE.md`): concreta sus reglas para este repo, nunca las
 > contradice. Solo entra acá lo que **no** se deriva del código, del `git log` ni de la doc del repo.
 
+## La frontera: acá se es el PRODUCTO, no el operador
+
+**Este repo es el Producto. Su entregable termina en una versión publicada, con su changelog y su
+aviso. El despliegue es de quien opera la instancia, con su política de control de cambio.**
+
+No es una división de tareas: es **quién tiene la autoridad**. Un despliegue toca datos, disponibilidad
+y ventanas de un tercero, y esa decisión no es del que escribe el código.
+
+| Nos toca | No nos toca |
+|---|---|
+| Cortar la versión (CHANGELOG + `package.json` + tag `vX.Y.Z`) | Elegir **qué** versión corre una instancia |
+| Publicar la imagen (la dispara el tag; ver la tabla de tags del CHANGELOG) | Decidir **cuándo** entra |
+| Declarar **qué trae y qué exige** — migraciones, env nuevo, capacidades sin verificar contra motor vivo | El `pull`, el recreate, la ventana, el rollback |
+| Avisar por el canal del cliente | Su control de cambio, su QA, su respaldo |
+
+**El sombrero se elige por el repo, no por la capacidad.** La skill `mira-ops` sabe desplegar y **es del
+operador**: se ejecuta desde el repo del lab de A.R.B.O.L., no desde acá. Una sesión de este repo que
+recibe «hay que desplegar esto» no despliega — **publica y avisa**. Si César pide explícitamente en la
+sesión que operemos la VM, ahí el sombrero cambia por su acto, y consta.
+
+**El corolario que se olvida:** un pendiente que dice «falta desplegar» **no es pasivo nuestro**. Si de
+verdad lo es, es porque falta publicar o falta avisar — y eso se escribe con esas palabras.
+
+**La versión que no existe también rompe la frontera.** Un operador solo puede ejercer su control de
+cambio sobre algo que pueda **nombrar**: sin versión publicada, lo único que puede consumir es el
+último commit de `main`, y entonces mergear *es* desplegar. Por eso el tag no es ceremonia — es la
+condición de que la frontera exista. (Ocurrió: hasta 0.16.0, `latest` se movía en cada push a `main` y
+el compose de la instancia apuntaba ahí — ver `DECISIONS.md` D-28.)
+
 ## El aterrizaje: rama + PR
 
 **Todo cambio de código del Producto aterriza por rama y Pull Request contra `main`.** El merge es acto

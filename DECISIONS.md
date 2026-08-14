@@ -5,9 +5,19 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 |
 
 ---
+
+## D-28 · 2026-08-14 — Acá se es el Producto: se publica la versión, no se despliega la instancia
+
+- **Bifurcación**: la sesión cerró #178 y reportó como pendiente «falta el despliegue a la instancia». César lo corrigió: en este proyecto representamos el **Producto** y manipulamos el repo; no somos el usuario con acceso a la VM. ¿El entregable termina en el merge, en la versión publicada, o en el despliegue?
+- **Decidido por César** (2026-08-14): **termina en la versión publicada, con su changelog y su aviso.** El descargue y el despliegue son del cliente —en este caso el agente que atiende A.R.B.O.L.— con su política de control de cambio. Canal de aviso **por ahora**: solo el GitHub Release; la lista de correos se define después.
+- **Por qué no es una división de tareas**: un despliegue toca datos, disponibilidad y ventanas de un tercero. Esa autoridad no es de quien escribe el código. La norma queda en `CLAUDE.md` (se carga en toda sesión de este repo) y la cara al cliente en el preámbulo del `CHANGELOG.md`.
+- **La condición material de la frontera, medida**: la frontera no existía técnicamente. `latest` se movía en **cada push a `main`** y los dos compose que gobiernan el deploy apuntan a ese tag (verificado en el repo del lab: `deploy/mira-vm/compose.yml:15` y `mira-vm-qa/compose.yml:11`) — así que un merge entraba en el siguiente recreate sin acto nuestro ni control de cambio suyo. Y no había alternativa: entre 0.15.0 y HEAD no existía versión que el operador pudiera **nombrar**. Corregido en 0.16.0: los tags que un consumidor pinnea los mueve un tag de git. *Alcance de lo verificado: el repo del lab, no el compose vivo en la VM.*
+- **La política de tags se validó contra práctica de industria**, a pedido de César y no por criterio propio: `latest` reservado a releases estables con los builds de desarrollo en tag aparte, y el consumidor pinneando versión exacta o digest (ACR · Docker tagging best practices · Container Registry · Mend). De ahí salió el tag en cascada `0.16`, que la propuesta original no traía. Se dejó fuera `:0`: pre-1.0 el eje de ruptura es la Y del esquema X.Y, así que prometería compatibilidad que nadie sostuvo.
+- **Lo que NO se revirtió**: la decisión de `9beeda8` (plantilla con tag móvil, sin digest) sigue en pie — es otra palanca, y con esta política el `:latest` de la plantilla por fin significa lo que ese commit quería que dijera.
+- **Costo de revertir**: bajo en lo técnico (la lista de tags de `build.yml` es cinco líneas) y **nulo** en lo normativo: la frontera es una declaración de autoridad; se cambia diciéndolo.
 
 ## D-27 · 2026-08-13 — La vista de máscara y el DDM conviven, y la composición falla hacia el lado seguro
 
