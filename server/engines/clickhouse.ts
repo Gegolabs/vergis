@@ -41,7 +41,20 @@ export function computeBound(datasets: DatasetCfg[], store: Map<string, PolicyDe
       throw new Error(`Sin política para '${cfg.table}' en el policy store. Default-deny: declara la entidad/grant — el dato no se sirve sin política.`)
     }
     const schema: ChStoreSchema = { database, table, columns: cfg.columns }
-    return { schema, enforcement: compileClickHouse(policy, { database, table, role: targetRole }), cfg }
+    // El fallo de compilación tumba el ARRANQUE, y es deliberado: es la misma conducta que la línea
+    // de arriba —un dataset sin política tampoco deja arrancar— y la alternativa sería servir la
+    // tabla sin el gobierno que su policy declara. Fail-closed en el borde más barato.
+    //
+    // Lo que sí se agrega es CONTEXTO: sin el nombre del dataset, un error del compilador (p. ej. una
+    // regla de columna sobre este back-end, que no sabe enmascarar — issue #163) llega al operador
+    // como un mensaje sin sitio, y el sitio es la mitad del diagnóstico. La causa original viaja
+    // entera: se re-lanza envuelto, no traducido.
+    try {
+      return { schema, enforcement: compileClickHouse(policy, { database, table, role: targetRole }), cfg }
+    } catch (e) {
+      const causa = e instanceof Error ? e.message : String(e)
+      throw new Error(`Dataset '${cfg.table}': el gobierno declarado no se puede aplicar en ClickHouse — ${causa}`, { cause: e })
+    }
   })
 }
 
