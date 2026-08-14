@@ -26,6 +26,22 @@ sesión que operemos la VM, ahí el sombrero cambia por su acto, y consta.
 **El corolario que se olvida:** un pendiente que dice «falta desplegar» **no es pasivo nuestro**. Si de
 verdad lo es, es porque falta publicar o falta avisar — y eso se escribe con esas palabras.
 
+**Y el corolario que corta para el otro lado: su despliegue corrobora, jamás mide por nosotros.** La
+frontera reparte autoridad sobre el despliegue; **no** traslada nuestra verificación. Un pendiente
+escrito como *«esperando el próximo despliegue para saber si esto funciona»* está mal escrito dos
+veces: el mecanismo se mide con arnés propio —local, sin VM, sin plata—, y lo único que legítimamente
+se espera del operador es si el cambio **satisface** lo que pidió. Las dos preguntas se distinguen por
+quién puede responderlas:
+
+| Pregunta | ¿De quién es? |
+|---|---|
+| «¿Mi mecanismo hace lo que digo?» | **Nuestra.** Si falta medirla, falta el arnés — no falta un despliegue |
+| «¿Esto satisface lo que pedí?» | Del que pidió. Se espera, y no bloquea el cierre del issue |
+
+Ley, Norma 7 · «Corolario sobre quién corre el experimento». Precedente: el delta del contrato de #139,
+publicado dos versiones con su mecanismo sin medir y el pendiente redactado como si dependiera del
+operador.
+
 **La versión que no existe también rompe la frontera.** Un operador solo puede ejercer su control de
 cambio sobre algo que pueda **nombrar**: sin versión publicada, lo único que puede consumir es el
 último commit de `main`, y entonces mergear *es* desplegar. Por eso el tag no es ceremonia — es la
