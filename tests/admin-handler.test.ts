@@ -153,12 +153,25 @@ describe('admin handler · gobierno de escritura', () => {
     expect(dup.res.statusCode).toBe(409)
   })
 
-  it('Usuarios y Roles: alta audita; quitar la semilla → 409', async () => {
+  it('Usuarios y Roles: alta y baja auditan; la baja de la semilla pasa (#182) y el último admin → 409', async () => {
     const token = tokenFrom((await go(mockReq('GET', '/admin/roles', 'admin@ua.test'))).res.body)
     await go(mockReq('POST', '/admin/roles/add', 'admin@ua.test', `_csrf=${token}&email=especificador@consultora.test`))
     expect(await adminStore.isAdmin('especificador@consultora.test')).toBe(true)
     expect(audit.find((e) => e.type === 'admin-roles-write' && e.op === 'add')?.target).toBe('especificador@consultora.test')
+    // Baja de la SEMILLA por la ruta in-app: ya no 409, y queda auditada con su actor.
     const rm = await go(mockReq('POST', '/admin/roles/remove', 'admin@ua.test', `_csrf=${token}&email=admin@ua.test`))
-    expect(rm.res.statusCode).toBe(409) // semilla, anti-lockout
+    expect(rm.res.statusCode).toBe(303)
+    expect(await adminStore.isAdmin('admin@ua.test')).toBe(false)
+    const rmEvent = audit.find((e) => e.type === 'admin-roles-write' && e.op === 'remove')
+    expect(rmEvent).toMatchObject({ target: 'admin@ua.test', by: 'admin@ua.test' })
+    // el especificador queda como único admin: quitarlo sí es lockout real.
+    const last = await go(mockReq('POST', '/admin/roles/remove', 'especificador@consultora.test', `_csrf=${tokenFrom((await go(mockReq('GET', '/admin/roles', 'especificador@consultora.test'))).res.body)}&email=especificador@consultora.test`))
+    expect(last.res.statusCode).toBe(409)
+  })
+
+  it('Usuarios y Roles: la fila semilla ofrece el botón de baja y advierte el drift del env (#182)', async () => {
+    const body = (await go(mockReq('GET', '/admin/roles', 'admin@ua.test'))).res.body
+    expect(body).toContain('VERGIS_ADMIN_SEED') // la confirmación nombra el env que queda diciendo otra cosa
+    expect(body.match(/action="\/admin\/roles\/remove"/g) ?? []).toHaveLength(1) // la única fila (semilla) trae su form
   })
 })

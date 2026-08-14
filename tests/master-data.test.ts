@@ -128,13 +128,13 @@ describe('admin-roles · SqliteAdminStore (semilla + anti-lockout)', () => {
     await s.close()
   })
 
-  it('no se puede quitar la semilla ni el último admin', async () => {
+  it('el único lockout es el último admin — la semilla SÍ se puede quitar (#182)', async () => {
     const s = await SqliteAdminStore.open(null, ['seed@x.com'])
-    await expect(s.remove('seed@x.com')).rejects.toBeInstanceOf(AdminLockout) // es semilla
+    await expect(s.remove('seed@x.com')).rejects.toBeInstanceOf(AdminLockout) // último admin
     await s.add('normal@x.com', 'seed@x.com')
-    await expect(s.remove('seed@x.com')).rejects.toBeInstanceOf(AdminLockout) // sigue siendo semilla
-    await s.remove('normal@x.com') // este sí
-    expect((await s.list()).map((a) => a.email)).toEqual(['seed@x.com'])
+    await s.remove('seed@x.com') // ya no es el último: la semilla se va, sin 409
+    expect((await s.list()).map((a) => a.email)).toEqual(['normal@x.com'])
+    await expect(s.remove('normal@x.com')).rejects.toBeInstanceOf(AdminLockout) // ahora ESTE es el último
     await s.close()
   })
 })
