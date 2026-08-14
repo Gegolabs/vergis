@@ -43,6 +43,26 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **La medición de #164 contra Fabric NO se hizo, y sin ella los caminos 1 y 2 son conjetura** — la
+  pregunta exacta es si Fabric/Azure SQL acepta un `ADD FILTER PREDICATE` cuya función **no recibe
+  ninguna columna** de la tabla (y si no, si acepta un parámetro alimentado por constante). Se puede
+  medir en el QA `vm-vergis-qa` contra `ws-arbol-qa`, **sin PROD**. **El control es obligatorio**: la
+  forma actual (función con columna) tiene que pasar en el mismo terreno y la misma sesión, o un
+  fallo de las variantes no distingue «Fabric no lo admite» de «el terreno estaba mal». Lo construido
+  hoy (`schemaDependencies`) **mitiga y no resuelve**: vuelve legible la dependencia, no la quita.
+  `reg 2026-08-13`
+- **`MASKED WITH` × vistas-contrato `SCHEMABINDING`: interacción no medida** — es el gate que va antes
+  del H2 de #163 (back-end Fabric del control por columna), junto con el costo de enforcement por
+  columna. La instancia ya usa vistas `SCHEMABINDING`, así que la interacción no es hipotética. El
+  issue lo declaró conjetura al abrirse y **lo sigue siendo**: nada de lo hecho hoy lo tocó.
+  `reg 2026-08-13`
+- **El render de gráficos: queda un residuo que ninguna capa detiene** — un exploit de Vega que haga
+  E/S **sin pasar por su loader** (p. ej. vía una dependencia transitiva) atraviesa el gate
+  declarativo y el loader que niega. Es justo lo que cubriría un subproceso, y el subproceso se
+  descartó con medición (D-21): el permission model de Node 22 **no cubre la red**. El día que haya
+  driver, la fs se cierra con el permission model y **la red se cierra en la red del contenedor**,
+  no en Node. `reg 2026-08-13`
+
 - **✅ RESUELTO (2026-08-13) — el aviso de incumplimiento del contrato `_logs/` ya aparece.** El lazo
   mide `corridasSinLog` por tick (con caché del listado compartida con el resolver, un solo listado
   por vuelta) y lo persiste en `intake_watch_state.corridas_sin_log`; la consola lo lee de la
