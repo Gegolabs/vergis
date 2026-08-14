@@ -696,9 +696,65 @@ export async function renderSeries(
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
 }
 
-async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
+/**
+ * E/S del render de gráficos: NINGUNA. Dos capas, y son dos porque fallan distinto.
+ *
+ * El vector: Vega sabe cargar datos por sí mismo (`data.url`) — por red o por `file://`— usando su
+ * *loader*. Los specs de Vergis traen los datos YA resueltos por la capability, así que ese camino
+ * no debería usarse jamás; que exista y esté abierto es lo que lo vuelve superficie de ataque.
+ *
+ * · **Capa 1 — el gate declarativo (`assertNoRemoteData`)**: un spec con `url` se RECHAZA antes de
+ *   llegar a Vega. Falla fuerte y nombra el sitio. Es la capa que importa para el operador, porque
+ *   un spec así es un error de autoría o una inyección, y en los dos casos hay que enterarse.
+ * · **Capa 2 — el loader que niega**: por si algún camino de Vega no pasara por el gate. Es la red
+ *   de seguridad, no la defensa principal.
+ *
+ * POR QUÉ LAS DOS Y NO SOLO EL LOADER — medido, no supuesto (2026-08-13, control con servidor HTTP
+ * local contando hits): con el loader por defecto el fetch OCURRE (`hits=1`); con el loader que
+ * niega **no ocurre** (`hits=0`) pero Vega **se traga el error y rinde un gráfico vacío**, sin
+ * excepción. O sea el loader solo protege en silencio, y un PI degradado calladamente es
+ * exactamente lo que esta plataforma trata como defecto en todas las demás capas.
+ */
+function assertNoRemoteData(node: unknown, path = 'spec'): void {
+  if (Array.isArray(node)) return node.forEach((n, i) => assertNoRemoteData(n, `${path}[${i}]`))
+  if (!node || typeof node !== 'object') return
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (k === 'url' && typeof v === 'string') {
+      throw new Error(
+        `Gráfico rechazado: el spec pide cargar datos externos en '${path}.url'. El render no hace E/S — ` +
+          'los datos los resuelve la capability y viajan en el spec.',
+      )
+    }
+    assertNoRemoteData(v, `${path}.${k}`)
+  }
+}
+
+/** Loader que niega toda E/S. Capa 2: red de seguridad del gate declarativo, no su reemplazo. */
+const DENY_IO_LOADER = {
+  load: async (uri: string): Promise<string> => {
+    throw new Error(`E/S denegada en el render de gráficos: ${uri}`)
+  },
+  sanitize: async (uri: string): Promise<{ href: string }> => {
+    throw new Error(`E/S denegada en el render de gráficos: ${uri}`)
+  },
+  http: async (): Promise<string> => {
+    throw new Error('E/S denegada en el render de gráficos (http)')
+  },
+  file: async (): Promise<string> => {
+    throw new Error('E/S denegada en el render de gráficos (file)')
+  },
+}
+
+export async function vegaLiteToSvg(spec: TopLevelSpec): Promise<string> {
+  assertNoRemoteData(spec)
   const vgSpec = compile(spec).spec
-  const view = new vega.View(vega.parse(vgSpec as vega.Spec), { renderer: 'none' })
+  // El compilado también se revisa: `compile()` es de vega-lite y puede materializar `url` propios
+  // (p. ej. de un `lookup`). Revisar solo la entrada sería confiar en un tercero para un gate.
+  assertNoRemoteData(vgSpec, 'spec(compilado)')
+  const view = new vega.View(vega.parse(vgSpec as vega.Spec), {
+    renderer: 'none',
+    loader: DENY_IO_LOADER as unknown as vega.Loader,
+  })
   await view.runAsync()
   const svg = await view.toSVG()
   view.finalize()

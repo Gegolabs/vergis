@@ -9,6 +9,16 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-21 · 2026-08-13 — El aislamiento del render Vega: se cierra la E/S, NO se construye el subproceso
+
+- **Bifurcación**: el roadmap pide «aislamiento del render Vega en **subproceso sin red ni filesystem**». ¿Se construye el subproceso, o se ataca el vector por otra vía?
+- **La medición que decidió** (2026-08-13, en esta máquina, Node v22.22.3 — el mismo mayor que corre en la imagen, `node:22-slim`): el **permission model de Node 22 NO cubre la red**. Con `--experimental-permission --allow-fs-read=<dir>`: lectura fuera de la lista `ERR_ACCESS_DENIED` ✓, `child_process` `ERR_ACCESS_DENIED` ✓, y **`net.connect` a un host externo CONECTÓ**. O sea el subproceso entregaría *la mitad* del enunciado, y a cambio mete un pool de procesos en el camino caliente del render.
+- **Corrección de instrumento, que casi produce el hallazgo contrario**: las primeras corridas fallaban al arrancar incluso con `node -e`, y parecía que el permission model rompía todo. Era el `NODE_OPTIONS` de esta terminal inyectando un `--require`. Con `env -u NODE_OPTIONS` el modelo funciona. **El instrumento medía el entorno, no el fenómeno.**
+- **Decidido**: cerrar el vector **donde está**, en dos capas dentro del proceso, y no construir el subproceso. El vector real es que Vega sabe cargar datos sola (`data.url`, por red o `file://`) y los specs de Vergis traen los datos ya resueltos: ese camino no debe usarse nunca. (1) **Gate declarativo** — un spec con `url` se rechaza antes de llegar a Vega, ruidosamente. (2) **Loader que niega** toda E/S, como red de seguridad.
+- **Por qué DOS capas y no solo el loader — medido, no supuesto**: con un servidor HTTP local contando hits, el loader por defecto **hace el fetch** (`hits=1`); el loader que niega lo evita (`hits=0`) **pero Vega se traga el error y rinde un gráfico vacío**, sin excepción. Protección silenciosa = PI degradado en silencio, que esta plataforma trata como defecto en todas las demás capas.
+- **Lo que queda sin cubrir, dicho**: un exploit de Vega que haga E/S **sin pasar por su loader** (p. ej. por una dependencia transitiva) no lo detiene ninguna de las dos capas. Esa es la parte que un subproceso sí cubriría, y el día que exista un driver, la fs se cierra con el permission model y **la red hay que cerrarla en la red del contenedor**, no en Node. Queda escrito en el roadmap.
+- **Costo de revertir**: bajo — dos piezas locales en `render-chart.ts`; quitarlas restaura el comportamiento anterior. El subproceso sigue disponible como camino, ahora con su medición hecha.
+
 ## D-20 · 2026-08-13 — El diagnóstico de #165 NO esconde el PI: lo explica
 
 - **Bifurcación**: `canAccess` deja ver un PI si el sujeto trae **algún** valor del claim. Con `op: eq` y un claim de dos valores, la política niega **todas** las filas: el PI aparece en el índice y se abre vacío. ¿Se corrige la visibilidad (esconderlo, que es la dirección fail-closed) o se deja como está y se agrega el diagnóstico?
