@@ -9,6 +9,34 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-26 · 2026-08-13 — La apertura de fila sube a la ENTIDAD, para que el caso del issue se pueda decir
+
+- **Bifurcación**: en la forma canónica un dataset `grant: all` no realiza entidad, así que no había atributo canónico que mapear y un `columns:` rompía con `grant-columns-unsupported`. La capacidad quedaba solo en la forma legacy — y con ella **el caso que origina #163**: la entidad `empleado`, abierta por decisión del cliente, con `rut` y nombre servibles a cualquier autenticado. ¿Se admite una regla inline en el dataset, o se mueve la apertura?
+- **Decidido**: `entities[].grant: all` — **la apertura sube a la entidad** y convive con `columns`. Un solo sitio de autoría, la misma gramática, y `grant: all` conserva intacta su semántica de fila (apertura explícita y gobernada, con artefacto propio). La regla inline se descartó porque duplicar el sitio de autoría garantiza que las dos copias divierjan.
+- **Evidencia**: la entidad ya era el sitio único del gobierno (`governed_by` ↔ `dimensions`) y ya sabía llevar reglas de columna sobre atributos canónicos; poner ahí la apertura reusa esa maquinaria entera. Y el default sigue siendo romper: una entidad sin gobierno **y** sin apertura sigue dando `entity-ungoverned`.
+- **Costo de revertir**: medio — hay specs que podrían adoptar la forma. Mientras nadie la use, es una rama de parseo que se retira.
+
+## D-25 · 2026-08-13 — Una regla de columna sobre ClickHouse tumba el arranque, y se le da SITIO
+
+- **Bifurcación**: el back-end ClickHouse rechaza las reglas de columna (D-24). ¿Ese rechazo debe degradar a «ese PI no se sirve» —doctrina de #52— o tumbar el arranque del nodo?
+- **Decidido**: **tumba el arranque**, sin doctrina nueva. Medido el precedente: en `computeBound`, la línea de al lado ya tumba el arranque cuando un dataset **no tiene política**. El fallo duro es la conducta establecida de ese motor y es fail-closed; la doctrina por-PI de #52 es de la verificación de servibilidad de **Fabric**, no del bootstrap de ClickHouse. Cambiarla acá habría sido inventar una excepción para el caso nuevo.
+- **Lo que sí faltaba**: el **sitio**. El error del compilador llegaba sin nombrar el dataset, y el sitio es la mitad del diagnóstico. Se envuelve agregando el nombre y **conservando la causa original entera** (`cause`), con un control que fija que el envoltorio no se traga los errores que ya existían.
+- **Costo de revertir**: nulo — es un `try/catch` que agrega contexto.
+
+## D-24 · 2026-08-13 — ClickHouse declara la máscara NO SOPORTADA en vez de fingirla
+
+- **Bifurcación** (§4.1 del diseño la dejaba abierta): ¿el back-end ClickHouse enmascara en la proyección, o declara la capacidad no soportada?
+- **Decidido**: **no soportada, fail-closed al compilar**, con evidencia del propio código: el enforcement emite **solo** `CREATE ROW POLICY … USING <expr>`, que es un **predicado booleano por fila** —decide si la fila pasa, no qué valor lleva la celda—; la proyección **no la escribe el compilador** (`execute-sql-ch.ts` manda el `SELECT` del consumidor verbatim); y el aplicador solo aplica `rowPolicySQL`. Lo más cercano del motor, `GRANT SELECT(col)`, **retira** la columna: cambiaría la forma del resultado, que es justo lo que §4.1 descarta.
+- **La consecuencia se acepta**: un PI con columna sensible sobre ClickHouse **no se sirve**. Es estrictamente mejor que la alternativa —servirlo en claro— y la remediación del error lo dice de frente para que nadie «arregle» el problema retirando la regla.
+- **Lo que NO está medido, y va dicho**: que ClickHouse carezca de un equivalente de `MASKED WITH` no se corroboró contra un motor vivo. Lo medido, que es lo que sostiene la decisión, es que **este back-end no controla la proyección** — y eso es del código de este repo.
+- **Costo de revertir**: bajo — es un gate en el compilador.
+
+## D-23 · 2026-08-13 — El valor de máscara es del BACK-END; el oráculo conserva un centinela
+
+- **Bifurcación**: el hito 1 fijó `MASK_VALUE = '•••'`, pero Fabric `MASKED WITH` devuelve el default **del tipo** (`0` en `INT`, `XXXX` en texto). El differential test chocaría. Las dos salidas obvias son malas: un valor de máscara por tipo convierte la constante en función y contamina el IR con tipos SQL; castear la columna a texto **cambia el esquema**, que §4.1 prohíbe.
+- **Decidido**: **el valor de máscara pertenece al back-end; el IR conserva `•••` como centinela canónico, y cada emulador normaliza a centinela** lo que su motor produce antes de comparar. Así hay un solo oráculo, cada motor enmascara nativamente, y el esquema no se toca. El differential test afirma la **posición** de la máscara, jamás su contenido.
+- **Costo de revertir**: bajo — la normalización vive en los emuladores, no en el SQL emitido.
+
 ## D-22 · 2026-08-13 — Los specs del canon NO se migran: se citan
 
 - **Bifurcación**: `TODO.md` y el README declaraban pendiente «migrar los specs normativos del canon (contrato Botler, spec Mira, DSL, naming) de AgencyDomains a `docs/`». ¿Se migran, o la premisa cambió?

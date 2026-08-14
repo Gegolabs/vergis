@@ -25,6 +25,29 @@ describe('engine clickhouse · computeBound', () => {
   it('dataset mal formado (no db.tabla) lanza', () => {
     expect(() => computeBound([{ table: 'sinpunto', columns: {} }], new Map([['sinpunto', PUBLIC]]), 'r')).toThrow(/db\.tabla/)
   })
+
+  // Una regla de columna sobre ClickHouse rompe: este back-end no sabe enmascarar y la alternativa
+  // NO es servir en claro (issue #163). Lo que se fija acá es que el error llegue con SITIO — sin el
+  // nombre del dataset, el operador recibe un mensaje del compilador sin saber a qué tabla culpar.
+  it('regla de columna sobre ClickHouse: rompe el arranque, nombrando el dataset y conservando la causa', () => {
+    const conColumna: PolicyDecl = { public: true, columnRules: [{ column: 'rut', claim: 've_pii', action: 'mask' }] }
+    let capturado: unknown
+    try {
+      computeBound(DATASETS, new Map([['qw04.areas', conColumna]]), 'consumer_role')
+    } catch (e) {
+      capturado = e
+    }
+    expect(capturado).toBeInstanceOf(Error)
+    const err = capturado as Error & { cause?: unknown }
+    expect(err.message).toContain("Dataset 'qw04.areas'") // el SITIO
+    expect(err.message).toMatch(/en claro|enmascar/i) // …y la causa original, no traducida
+    expect(err.cause).toBeDefined() // la causa viaja entera, para quien la necesite completa
+  })
+
+  // CONTROL: el envoltorio no puede tragarse los errores que ya existían ni cambiar su forma.
+  it('CONTROL: el dataset sin política sigue lanzando su error de siempre, sin envolver', () => {
+    expect(() => computeBound(DATASETS, new Map(), 'consumer_role')).toThrow(/Sin política/)
+  })
 })
 
 describe('engine clickhouse · A11 (recompute desde el store cierra la fuga del hot-hardening)', () => {
