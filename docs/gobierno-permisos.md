@@ -43,7 +43,7 @@ El inventario completo, por familia (DDL e interfaces en
 
 | Familia | Tablas | Qué es |
 |---|---|---|
-| Admins de plataforma | `admin` | Rol admin (§5): semilla `VERGIS_ADMIN_SEED` + gestión in-app. |
+| Admins de plataforma | `admin` · `admin_seed_removed` | Rol admin (§5): semilla `VERGIS_ADMIN_SEED` + gestión in-app. El tombstone da precedencia al runtime sobre la semilla. |
 | Grupos de Mira | `mira_group` · `mira_group_member` · `mira_group_seed_removed` | Grupos para compartir PIs (§4) — NO grupos AAD. El tombstone da precedencia al runtime sobre la semilla. |
 | Gobierno de PI | `pi_governance` · `pi_grant` · `pi_demanda` | Visibilidad, ACL (owner/collaborator/viewer) y demanda de frescura, por código de PI (§4). |
 | Settings de plataforma | `platform_setting` | Clave→valor editable in-app + memoria durable de los lazos (abajo). |
@@ -84,8 +84,8 @@ una regla: **el runtime gana**. El mecanismo (en `SqliteGovernanceStore.open` y
   (`ON CONFLICT … WHERE managed_at IS NULL`) y jamás toca `managed_at`.
 - Una **baja** in-app deja **tombstone** en `source_registry_removed` (`kind` + `id`): el
   re-sembrado **no resucita** el id. Un **alta** in-app posterior del mismo id limpia el tombstone
-  (readmitir = revocar el tombstone). Los grupos de Mira usan el mismo patrón con su tabla propia
-  (`mira_group_seed_removed`) — dos registros, dos ciclos de vida.
+  (readmitir = revocar el tombstone). Los grupos de Mira y el rol admin usan el mismo patrón con su
+  tabla propia (`mira_group_seed_removed`, `admin_seed_removed`) — tres registros, tres ciclos de vida.
 - Para una instancia que solo gestiona por yaml, la conducta es la declarativa pura.
 
 La **pausa de un proceso** (`ingestion_process.paused_at`/`paused_by`, `setProcessPaused`) también es
@@ -240,6 +240,15 @@ Distinto del ownership de un PI: el **admin** opera el ambiente de Administraci�
 fuentes). Se siembra de `VERGIS_ADMIN_SEED` (rompe el bootstrap) y se gestiona in-app (sección Usuarios y
 Roles). Es autz de **acción**, no de fila. El admin es **override** de gestión sobre cualquier PI (para
 poder asignar dueños), pero su acceso a **datos** sigue gobernado por RLS.
+
+**La autoridad se otorga y se quita, y ninguna de las dos exige reiniciar** (issue #182). Un admin
+**sembrado** se da de baja in-app como cualquier otro: la baja deja **tombstone** en
+`admin_seed_removed` y el re-sembrado del arranque siguiente **no lo resucita**, aunque el email siga
+declarado en `VERGIS_ADMIN_SEED`; un alta posterior limpia el tombstone (es la misma precedencia
+runtime-sobre-semilla de los grupos y del registro de fuentes, abajo). El **único** lockout es
+quedarse sin administradores: quitar al último se rechaza con `AdminLockout` → HTTP 409. La UI
+advierte el **drift** cuando la identidad revocada sigue en el env — la baja no depende de editar la
+config, pero el operador tiene que enterarse de que estado y config dicen cosas distintas.
 
 ## 6 · Aplicación de la RLS (cómo se gobierna una tabla servida)
 
