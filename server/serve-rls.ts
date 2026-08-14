@@ -798,7 +798,9 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
   let hasDomains = isAdmin
   if (!hasDomains && governance && domainsCfg.length) {
     const ug = await governance.groupsOf(emailLc)
-    hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false).length > 0
+    // Las dos vías de grupo son unión (#183): el default-steward-group abre todos los dominios; un
+    // `group:<id>` en los `stewards:` de un dominio abre ese. Los mismos grupos alimentan a las dos.
+    hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false, ug).length > 0
   }
   // Entrada «Miranda» en el menú: solo si el flag está ON y la identidad tiene el scope (admin o grupo).
   const hasMiranda = config.miranda.enabled && governance ? isAdmin || (await governance.isMember(config.miranda.scopeGroup, emailLc)) : false
