@@ -15,15 +15,6 @@ la promoción PENDINGS→TODO se pide, no se toma.
   (#151) — el mecanismo está demostrado por test, pero la línea del fan-out en producción sigue
   siendo inspección, no medición. **Ninguna de las dos se vuelve verdadera por el hecho de que el
   deploy saliera bien.** `reg 2026-08-11`
-- **La proyección guardada del contrato NO es estable justo tras el arranque** — medido en el deploy
-  de 0.15.0 a PROD (2026-08-11 22:21). Dos lecturas del **mismo archivo y la misma única entrada**
-  del journal dieron distinto: primero `watches: []`, `signals: []`, `projectionSha256 c61ab476…`;
-  minutos después `watches: 4`, `signals: 1`, sha `8539f4db…`. **Importa porque N2 computa su delta
-  diffeando proyecciones persistidas**: si el sha de un mismo arranque cambia, hay que saber cuál
-  queda registrada — y una lectura temprana puede producir un delta fantasma en el deploy siguiente.
-  **La causa NO está medida** (re-registro deliberado, escritura diferida, o una primera recarga que
-  re-proyecta): es observación, no mecanismo. Casi se publica como «#151 no registra sus watches en
-  producción», que era **falso**. `reg 2026-08-11`
 - **`VERGIS_CSRF_SECRET` no definido en QA** — *actualizado 2026-08-10*: en **PROD ya está aplicado**
   (sesión de A.R.B.O.L. del 2026-08-10 tarde, KV `arbol-secrets/vergis-csrf-secret`, corte medido
   6.597 ms). En **QA sigue sin definir** — verificado hoy: `vergis.env` de QA no declara ninguno de
@@ -223,11 +214,3 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   preguntar. Hecho en `protocolos`, `evals/finaliza/ARNES-v1.0.md` §7 (commit `3a834c5`), más un
   `README.md` en el repo nuevo que separa método (allá) de corridas (acá).
   `reg 2026-08-07 · resuelto 2026-08-13`
-- **`dotclaude` con cambios sin sellar de otras sesiones** — *revisado el 2026-08-10 (diff SANO) y
-  **encogido el 2026-08-11***: las sesiones dueñas ya sellaron lo suyo — `WATCH.md`/`WATCH-logs.md`
-  están commiteados (con **la ocurrencia 8 de W-01** que registró esta sesión; el contador va en
-  **12**, las 9-12 son de otras). **Quedan solo dos**: `settings.json` (hook `Stop` a
-  `hooks/sync-cmux-title.sh` —el script existe, ejecutable, del 08-08— y la clave `model` reubicada
-  sin cambiar de valor, que es el `/model` reescribiendo el archivo) y `commands/label.md` borrado.
-  **NO se sellan a propósito**: no son de esta sesión, y commitear el estado parcial de otro actor
-  es el fenómeno W-01 que el propio diff registra. `reg 2026-08-07 · act 2026-08-11`
