@@ -2324,11 +2324,6 @@ if (NOTIFY_PATH)
       'período que bajo la anterior no existía, y el registro de envíos no lo tiene marcado. Coherente con el at-least-once ' +
       'del lazo — un latido duplicado es inocuo, uno perdido sería una falsa alarma.',
   )
-// …y deja la huella de ESTA versión en el journal (#139 N2). Obligatorio al boot aunque nadie consulte
-// `/contrato` jamás: si solo se persistiera en el GET, una instancia que no consulta no dejaría
-// referencia para el próximo despliegue — y el delta que importa es justo el del despliegue siguiente.
-contractJournal.observe(contract.snapshot())
-
 if (HOT_RELOAD) {
   const specTargets = SPECS_DIR ? [resolve(SPECS_DIR)] : SPECS_LIST.map((p) => resolve(p))
   // `contract.watch` instala el watch Y lo registra en una sola llamada: registrar y vigilar no pueden driftear.
@@ -2430,3 +2425,19 @@ if (HOT_RELOAD) {
       `(SIGHUP fuerza la recarga completa)`,
   )
 }
+
+// La huella de ESTA versión en el journal (#139 N2). Obligatoria al boot aunque nadie consulte
+// `/contrato` jamás: si solo se persistiera en el GET, una instancia que no consulta no dejaría
+// referencia para el próximo despliegue — y el delta que importa es justo el del despliegue siguiente.
+//
+// VA AL FINAL DEL CABLEADO, y no es estilo: `snapshot()` deriva `env.reloadableContent` de los watches
+// REGISTRADOS, así que observar antes del bloque de hot-reload persistía un contrato que declaraba
+// `VERGIS_POLICIES` como `bootOnly` — «esto exige reiniciar» cuando ya no, el error de costo asimétrico
+// que este issue existe para matar. Medido, con la convergencia posterior que confundía al lector:
+// `tests/contract-boot-projection.test.ts`.
+contractJournal.observe(contract.snapshot())
+
+// Y el orden deja de ser la garantía: cualquier declaración TARDÍA —un bootstrap async, un watch que
+// alguien agregue debajo de esta línea— re-observa. El journal une proyecciones y no toca disco si la
+// huella no cambió, así que esto es gratis cuando no hay nada nuevo.
+contract.onRegister(() => contractJournal.observe(contract.snapshot()))
