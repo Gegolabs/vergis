@@ -144,7 +144,7 @@ import { createSinks, fanout, forEvent, type Notification, type ReportSchedule }
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
-import { verifyFabricServability, createFabricSourceStateOf, type PiVerdict } from './engines/fabric'
+import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, type PiVerdict } from './engines/fabric'
 import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
@@ -453,9 +453,14 @@ if (ENGINE === 'clickhouse') {
   // demás siguen. La lógica pura vive en ./engines/fabric (testeada); acá solo el plumbing.
   bootstrapAll = async () => {
     const reports = discover()
+    // VISTAS DE MÁSCARA (#163): las candidatas se derivan del policy store. Derivar el nombre por
+    // convención NO es confiar en él — el gate exige además corroboración de `sys`. El porqué
+    // completo y el límite vive con la función, en ./engines/fabric.
+    const maskViews = maskViewCandidates(store)
     const { state, usedRefs, refErrors, inherited, viewLineage: lineage } = await verifyFabricServability({
       pis: reports.map((r) => ({ slug: r.slug, tables: r.tables, databaseRefs: r.databaseRefs })),
       store,
+      maskViews,
       sourceStateOf: createFabricSourceStateOf((input) => dwh.execute(input, { agent: 'vergis' }) as Promise<{ rows: Record<string, unknown>[] }>),
       previous: piState,
     })

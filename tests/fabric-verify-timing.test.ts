@@ -109,12 +109,17 @@ describe('arranque en frío de Motor C — escalamiento (issue #138·3)', () => 
       if (input.sql === SYS_SECURITY_POLICIES_SQL) {
         return { rows: [{ sch: 'dbo', tbl: 'saldos' }] as Record<string, unknown>[] }
       }
-      // Linaje con par repetido (una fila por columna referenciada) → debe deduplicarse.
+      // Linaje con par repetido (una fila por columna referenciada) → debe deduplicarse. Desde H8 la
+      // query trae `bound` y las dos poblaciones se separan en el cliente: schemabound hereda solo,
+      // no-schemabound queda como evidencia de corroboración (y una fila sin `bound` legible cae al
+      // cubo que NO hereda — degradación hacia el lado seguro).
       return {
         rows: [
-          { vsch: 'dbo', vname: 'v_saldos', bsch: 'dbo', bname: 'saldos' },
-          { vsch: 'dbo', vname: 'v_saldos', bsch: 'dbo', bname: 'saldos' },
-          { vsch: 'dbo', vname: 'v_saldos', bsch: 'dbo', bname: 'ventas' },
+          { vsch: 'dbo', vname: 'v_saldos', bsch: 'dbo', bname: 'saldos', bound: 1 },
+          { vsch: 'dbo', vname: 'v_saldos', bsch: 'dbo', bname: 'saldos', bound: 1 },
+          { vsch: 'dbo', vname: 'v_saldos', bsch: 'dbo', bname: 'ventas', bound: 1 },
+          { vsch: 'dbo', vname: 'vw_mask_saldos', bsch: 'dbo', bname: 'saldos', bound: 0 },
+          { vsch: 'dbo', vname: 'v_rara', bsch: 'dbo', bname: 'saldos' }, // sin bit → no-schemabound
         ] as Record<string, unknown>[],
       }
     })
@@ -129,6 +134,10 @@ describe('arranque en frío de Motor C — escalamiento (issue #138·3)', () => 
     // Shape intacto respecto del closure que reemplaza: tablas protegidas + linaje deduplicado.
     expect([...state.protectedTables]).toEqual(['dbo.saldos'])
     expect([...state.viewLineage]).toEqual([['dbo.v_saldos', ['dbo.saldos', 'dbo.ventas']]])
+    expect([...(state.unboundViewLineage ?? [])]).toEqual([
+      ['dbo.vw_mask_saldos', ['dbo.saldos']],
+      ['dbo.v_rara', ['dbo.saldos']],
+    ])
     expect(execute).toHaveBeenCalledWith({ database_ref: 'wh', sql: SYS_SECURITY_POLICIES_SQL })
     expect(execute).toHaveBeenCalledWith({ database_ref: 'wh', sql: SYS_VIEW_LINEAGE_SQL })
   })
