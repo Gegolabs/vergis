@@ -391,7 +391,8 @@ export function textoDeClave(c: ClaveAccion): string {
  */
 export function revertPlanBody(domainId: string, domainLabel: string, slot: IntakeSlot, plan: RevertPlan, token: string, aviso?: string): string {
   const action = `/admin/dominio/${escapeHtml(domainId)}/cargas`
-  const back = `<p class="sub"><a href="${action}">← ${escapeHtml(domainLabel)} · Cargas</a></p>`
+  // #178 · el «volver» apunta a la casilla desde la que se entró, no al tope de la consola.
+  const back = `<p class="sub"><a href="${escapeHtml(cargasHref(domainId, slot.id))}">← ${escapeHtml(domainLabel)} · ${escapeHtml(slot.label)}</a></p>`
   const avisoHtml = aviso ? `<p class="msg err">${escapeHtml(aviso)}</p>` : ''
   const filas = plan.claves.length
     ? plan.claves.map((c) => `<li>${escapeHtml(textoDeClave(c))}</li>`).join('')
@@ -413,10 +414,54 @@ const csrf = (token: string): string => `<input type="hidden" name="_csrf" value
 const postForm = (action: string, token: string, fields: Record<string, string>, label: string, confirmMsg?: string): string =>
   `<form method="post" action="${escapeHtml(action)}" style="display:inline"${confirmMsg ? ` onsubmit="return confirm('${escapeHtml(confirmMsg)}')"` : ''}>${csrf(token)}${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('')}<button class="add">${escapeHtml(label)}</button></form>`
 
-/** El cuerpo HTML de la consola (se envuelve con adminPage en admin.ts). */
-export function cargasBody(domainId: string, domainLabel: string, slots: SlotCargas[], token: string, uploadFormOf: (slot: IntakeSlot) => string, runLogHrefOf?: (slot: IntakeSlot, r: RunRecord) => string | null): string {
+/** URL de UNA casilla (issue #178): el ancla enlazable que antes no existía. */
+export const cargasHref = (domainId: string, slotId: string): string =>
+  `/admin/dominio/${encodeURIComponent(domainId)}/cargas?slot=${encodeURIComponent(slotId)}`
+
+/**
+ * El aviso que nombra la casilla correcta (issue #178·§3).
+ *
+ * Se dibuja donde el usuario aterriza tras el rechazo, y solo con candidatos ya filtrados por
+ * `slotsQueAceptan` — es decir, slots cuyo `accept` DECLARADO matchea el nombre real del archivo.
+ * Sin candidatos devuelve vacío: el mensaje de error queda como está y no se inventa un destino.
+ *
+ * Los ids de los candidatos viajan en la URL del redirect; el label y el href los resuelve la página
+ * contra su propia declaración de slots. Por eso el mensaje de error nunca transporta HTML.
+ */
+export function destinoAviso(domainId: string, candidatos: IntakeSlot[]): string {
+  if (!candidatos.length) return ''
+  const links = candidatos.map((s) => `<a href="${escapeHtml(cargasHref(domainId, s.id))}"><b>${escapeHtml(s.label)}</b></a>`)
+  return candidatos.length === 1
+    ? `<div>Este archivo va en ${links[0]}.</div>`
+    : `<div>Este archivo va en una de estas casillas: ${links.join(' · ')}.</div>`
+}
+
+/**
+ * La BARRA DE PESTAÑAS de las casillas del dominio (issue #178·§1).
+ *
+ * Es el inventario visible: con más de una casilla, «no existe la otra casilla» deja de ser una
+ * lectura posible de la página. Con una sola no se dibuja — el dominio de una casilla se ve como
+ * siempre. El orden es el de declaración en `slots.yaml`: la página no reordena nada.
+ */
+export function pestañasCasillas(domainId: string, slots: IntakeSlot[], activoId: string): string {
+  if (slots.length < 2) return ''
+  const items = slots.map((s) => s.id === activoId
+    ? `<b class="on" title="${escapeHtml(s.id)}">${escapeHtml(s.label)}</b>`
+    : `<a href="${escapeHtml(cargasHref(domainId, s.id))}" title="${escapeHtml(s.id)}">${escapeHtml(s.label)}</a>`)
+  return `<nav class="tabs" aria-label="Casillas de carga">${items.join('')}</nav>`
+}
+
+/**
+ * El cuerpo HTML de la consola (se envuelve con adminPage en admin.ts).
+ *
+ * `slots` es el inventario COMPLETO del dominio (la barra de pestañas) y `activo` la única casilla
+ * cuyo bloque se dibuja (#178): el historial sigue pegado a su slot, pero el de una casilla ya no
+ * entierra a las otras varias pantallas más abajo. Por eso los datos caros —Actividad, Landing,
+ * Procesados, vigilancia— se fetchean solo para la casilla activa.
+ */
+export function cargasBody(domainId: string, domainLabel: string, slots: IntakeSlot[], activo: SlotCargas | null, token: string, uploadFormOf: (slot: IntakeSlot) => string, runLogHrefOf?: (slot: IntakeSlot, r: RunRecord) => string | null): string {
   const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domainId)}">← ${escapeHtml(domainLabel)}</a></p>`
-  if (!slots.length) {
+  if (!slots.length || !activo) {
     return `${back}<p class="sub">Este dominio no tiene slots de ingesta declarados (instancia: <code>intake/slots.yaml</code>).</p>`
   }
   const action = `/admin/dominio/${escapeHtml(domainId)}/cargas`
@@ -424,7 +469,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
   // ofrece revertir (fail-closed) — para esas queda el camino por archivo desde Procesados.
   const revertFormOf = (s: IntakeSlot) => (h: IntakeUploadEvent): string =>
     h.id != null && h.sha256 && h.ok ? postForm(action, token, { slot: s.id, accion: 'revert-plan', upload: String(h.id) }, 'Revertir esta carga') : ''
-  const secciones = slots.map((sc) => {
+  const seccion = ((sc: SlotCargas): string => {
     const s = sc.slot
     const lastDone = lastCompletedStart(sc.runs)
     const last = sc.runs !== 'error' && sc.runs.length ? sc.runs[0] : null
@@ -522,11 +567,15 @@ export function cargasBody(domainId: string, domainLabel: string, slots: SlotCar
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Procesado</th><th></th></tr></thead><tbody>${archivedRows}</tbody></table>`
-  }).join('<hr style="border:0;border-top:1px solid var(--border);margin:28px 0">')
+  })(activo)
 
   const guia = `<details class="guia"><summary>¿Cómo funciona el ciclo de una carga? (y cómo revertirla)</summary>
     <p class="sub">Subís archivos → aterrizan en el <b>landing</b> → la conversión corre (automática al subir, o con «Correr conversión de nuevo») → el resultado queda en «Actividad» con su log. Los pipelines procesan por clave (semana, OC): <b>retirar</b> un archivo del landing y re-correr revierte lo que ese archivo aportó; <b>reactivar</b> uno del histórico lo vuelve a materializar. Un archivo marcado <b style="color:var(--err)">⚠ residuo</b> quedó de una corrida anterior y se re-procesará — retiralo si no corresponde.</p>
     <p class="sub"><b>«Revertir esta carga»</b> (en cada carga de «Actividad», y por archivo en el histórico) deshace lo que esa carga materializó, clave por clave: primero muestra el <b>plan derivado</b> —qué clave vuelve a su versión anterior, cuál queda vacía, cuál no se toca porque una carga posterior la pisó— y recién con tu confirmación lo ejecuta. Nunca toca claves ajenas a la carga.</p>
   </details>`
-  return `${back}<p class="sub">Operación de cargas del dominio: historial, estado y log de cada conversión, y el ciclo completo del landing (retirar / reactivar / re-correr).</p>${guia}${secciones}`
+  const pestañas = pestañasCasillas(domainId, slots, activo.slot.id)
+  const enlace = slots.length > 1
+    ? `<p class="sub">Cada casilla tiene su propia dirección: la de esta es <code>${escapeHtml(cargasHref(domainId, activo.slot.id))}</code> — se puede enlazar a quien deba usarla.</p>`
+    : ''
+  return `${back}<p class="sub">Operación de cargas del dominio: historial, estado y log de cada conversión, y el ciclo completo del landing (retirar / reactivar / re-correr).</p>${guia}${pestañas}${enlace}${seccion}`
 }

@@ -34,6 +34,7 @@ import {
   canManageDomain,
   manageableDomains,
   slotMaxBytes,
+  slotsQueAceptan,
   validateUpload,
   validateMeta,
   buildSidecar,
@@ -74,7 +75,7 @@ import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
-import { cargasBody, revertPlanBody, type CargasOps, type SlotCargas } from './admin-cargas'
+import { cargasBody, revertPlanBody, cargasHref, destinoAviso, type CargasOps, type SlotCargas } from './admin-cargas'
 import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -437,7 +438,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         // Consola de CARGAS (issue #58): historial + landing + retiro/reactivación + re-run. Stewards.
         if (section === 'cargas' && deps.cargas && req.method === 'GET') {
-          send(res, 200, await cargasPage(deps, nav, domain, token, url.searchParams.get('msg') ?? undefined))
+          send(res, 200, await cargasPage(deps, nav, domain, token, url.searchParams))
           return true
         }
         if (section === 'cargas' && deps.cargas && req.method === 'POST') {
@@ -460,7 +461,9 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
               msg = `Error: ${errMsg(e)}`
             }
           }
-          redirect(res, `/admin/dominio/${domain.id}/cargas?msg=${encodeURIComponent(msg)}`)
+          // #178 · la acción vuelve a la casilla sobre la que se ejecutó (retirar en B no aterriza en A).
+          const volver = slot ? cargasHref(domain.id, slot.id) : `/admin/dominio/${domain.id}/cargas`
+          redirect(res, `${volver}${slot ? '&' : '?'}msg=${encodeURIComponent(msg)}`)
           return true
         }
         // Log de UNA corrida (issue #99): fallida O exitosa — `Completed` no garantiza el dato.
@@ -470,7 +473,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         // Frescura del dominio (por entidad): vista + «aplicar cadencia» (reconciliador). Abierta a stewards.
         if (section === 'frescura' && deps.domainFreshness && req.method === 'GET') {
-          send(res, 200, await domainFreshnessPage(deps, nav, domain, token, url.searchParams.get('msg') ?? undefined))
+          send(res, 200, await domainFreshnessPage(deps, nav, domain, token, url.searchParams.get('msg') ?? undefined, url.searchParams.get('destino')))
           return true
         }
         // Un solo POST para las acciones por proceso de Frescura: `accion` rutea. Ausente = «aplicar»
@@ -792,9 +795,20 @@ async function handleIntake(
   }
   const { fields, files } = await readMultipart(req, 60 * 1024 * 1024) // headroom para lotes
   requireCsrf(fields, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
+  // #178 · el desenlace de la carga vuelve a la pantalla donde el usuario ESTABA. El form declara su
+  // origen con un valor ACOTADO (`origen=cargas`), nunca con una URL: un campo de formulario no elige
+  // el destino de un redirect. Sin el campo —los forms de Frescura, un cliente viejo— el destino es
+  // Frescura, exactamente como antes: lo que nace en Frescura sigue muriendo en Frescura.
+  const enCargas = fields['origen'] === 'cargas'
+  const volver = (msg: string, destinos: IntakeSlot[] = []): string => {
+    // Los candidatos viajan como IDS de slot; el label y el enlace los resuelve la página que aterriza.
+    const d = destinos.length ? `&destino=${encodeURIComponent(destinos.map((s) => s.id).join(','))}` : ''
+    const base = enCargas ? cargasHref(domain.id, slot.id) + '&' : `/admin/dominio/${domain.id}/frescura?`
+    return `${base}msg=${encodeURIComponent(msg)}${d}`
+  }
   const uploads = files.filter((f) => f.field === 'file' && f.filename)
   if (uploads.length === 0) {
-    redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: no se adjuntó ningún archivo.')}`)
+    redirect(res, volver('Error: no se adjuntó ningún archivo.'))
     return
   }
   deps.intakeBackfill?.(slot) // el indexado retroactivo de `_processed/` converge solo, en background
@@ -814,7 +828,13 @@ async function handleIntake(
     if (!v.ok) {
       await registrar(uploadRow(i, false, { error: v.error }))
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
-      redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + v.error)}`)
+      // #178 · el rechazo por PATRÓN es el único con destino computable: qué otra casilla del dominio
+      // aceptaría este archivo, según su `accept` declarado. Si ninguna, la lista va vacía y el mensaje
+      // queda como está — no se adivina un destino. Si varias, se listan todas.
+      const destinos = v.reason === 'accept'
+        ? slotsQueAceptan((deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id), u.filename, slot.id)
+        : []
+      redirect(res, volver('Error: ' + v.error, destinos))
       return
     }
   }
@@ -831,7 +851,7 @@ async function handleIntake(
     if (!metaCheck.ok) {
       await registrar(uploadRow(i, false, { error: metaCheck.error }))
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: metaCheck.error })
-      redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent('Error: ' + metaCheck.error)}`)
+      redirect(res, volver('Error: ' + metaCheck.error))
       return
     }
     metaPorArchivo.push({ values: metaCheck.values, ...(metaCheck.verify ? { verify: metaCheck.verify } : {}) })
@@ -861,7 +881,7 @@ async function handleIntake(
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
   const aviso = duplicados.length ? ` ⚠ Contenido ya procesado antes: ${duplicados.join('; ')} — re-procesarlo no cambiará el dato.` : ''
-  redirect(res, `/admin/dominio/${domain.id}/frescura?msg=${encodeURIComponent(`${uploads.length} archivo(s) recibido(s).${aviso}${willTrigger ? ' La carga está corriendo — seguila en «Última corrida».' : ''}`)}`)
+  redirect(res, volver(`${uploads.length} archivo(s) recibido(s).${aviso}${willTrigger ? ' La carga está corriendo — seguila en «Última corrida».' : ''}`))
 }
 
 async function handleEntityWrite(
@@ -1865,10 +1885,17 @@ const PRECHECK_JS = `(function(f){
   });
 })(document.currentScript.previousElementSibling)`
 
-/** Formulario compacto de carga manual de un slot (mismo write-path que el intake). */
-function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
+/**
+ * Formulario compacto de carga manual de un slot (mismo write-path que el intake).
+ *
+ * `origen` (#178) declara DÓNDE vive este formulario, para que el desenlace de la carga —recibido o
+ * rechazado— vuelva a esa pantalla. Es un valor acotado que el handler compara contra `'cargas'`,
+ * no una URL de retorno: el destino del redirect lo decide el server.
+ */
+function uploadForm(domainId: string, slot: IntakeSlot, token: string, origen?: 'cargas'): string {
   return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:320px">
        <input type="hidden" name="_csrf" value="${token}">
+       ${origen ? `<input type="hidden" name="origen" value="${origen}">` : ''}
        <input type="file" name="file" multiple required>
        ${metaFieldsHtml(slot)}
        <button class="add">Subir</button>
@@ -1876,17 +1903,24 @@ function uploadForm(domainId: string, slot: IntakeSlot, token: string): string {
      </form><script>${PRECHECK_JS}</script>`
 }
 
-/** Consola de CARGAS de un dominio (issue #58): arma los datos por slot (paralelo, tolerante a
+/** Consola de CARGAS de un dominio (issue #58): arma los datos de la casilla activa (#178, tolerante a
  * fallos) y delega el render puro a admin-cargas. Gate de steward: lo aplica el ruteo del dominio. */
-async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, msg?: string): Promise<string> {
+async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, params: URLSearchParams): Promise<string> {
   const ops = deps.cargas!
   const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
+  // #178 · la casilla ACTIVA: la del `?slot=`, y si el parámetro falta o nombra un slot que no existe,
+  // la primera declarada — sin error. Una URL vieja (sin el parámetro) sigue abriendo una página válida.
+  const activo = slots.find((s) => s.id === params.get('slot')) ?? slots[0]
+  const msg = params.get('msg') ?? undefined
   // #56 · procesos registrados (para la coherencia trigger↔proceso). Tolerante: sin registro, no acusa.
   const engineIds = new Set<string>(
     deps.sourceRegistry ? (await deps.sourceRegistry().catch(() => ({ processes: [] as ProcessRow[] }))).processes.map((p) => p.engine?.itemId ?? '').filter(Boolean) : [],
   )
-  const data: SlotCargas[] = await Promise.all(slots.map(async (slot) => {
-    const sc: SlotCargas = {
+  // Los datos caros se piden SOLO para la casilla activa (#178): es la única cuyo bloque se dibuja.
+  let data: SlotCargas | null = null
+  if (activo) {
+    const slot = activo
+    data = {
       slot,
       runs: await ops.runs(slot, 20).catch(() => 'error' as const),
       history: await ops.history(slot, 30).catch(() => 'error' as const),
@@ -1902,16 +1936,32 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
     // — y sin `vigilancia` la página renderiza exactamente la de antes del vigilante.
     if (ops.vigilancia) {
       const v = await ops.vigilancia(slot).catch(() => null)
-      if (v) sc.vigilancia = v
+      if (v) data.vigilancia = v
     }
-    return sc
-  }))
-  const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
+  }
+  const feedback = cargaFeedback(deps, domain, msg, params.get('destino'))
   // #99 · «Ver log» por corrida, solo si la instancia cableó el acceso a los logs (sin él: cero cambio).
   const runLogHrefOf = deps.runLogs
     ? (s: IntakeSlot, r: RunRecord): string => `/admin/dominio/${domain.id}/corrida?slot=${encodeURIComponent(s.id)}&started=${encodeURIComponent(r.startedAt)}`
     : undefined
-  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, data, token, (s) => uploadForm(domain.id, s, token), runLogHrefOf))
+  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, slots, data, token, (s) => uploadForm(domain.id, s, token, 'cargas'), runLogHrefOf))
+}
+
+/**
+ * El feedback de una carga: el mensaje + —si el rechazo tuvo destino computable— el enlace a la casilla
+ * que SÍ acepta el archivo (#178·§3).
+ *
+ * `destino` llega como ids de slot en la URL: acá se resuelven contra la declaración del dominio, así
+ * que un id inventado a mano en la barra de direcciones no produce ningún aviso. El mensaje viaja
+ * escapado como siempre; el HTML del destino lo arma la página.
+ */
+function cargaFeedback(deps: AdminDeps, domain: DomainDecl, msg?: string, destino?: string | null): string {
+  if (!msg) return ''
+  const ids = new Set((destino ?? '').split(',').map((s) => s.trim()).filter(Boolean))
+  const candidatos = ids.size
+    ? (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id && ids.has(s.id))
+    : []
+  return `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}${destinoAviso(domain.id, candidatos)}</p>`
 }
 
 /**
@@ -2076,11 +2126,12 @@ async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<s
 /** Faceta FRESCURA de un dominio (página propia): el contrato de frescura entity-anchored — brecha
  * demanda↔oferta · corridas · schedule + «aplicar cadencia» (refresco AUTOMÁTICO) · **carga de archivo**
  * (refresco MANUAL, plegado acá). Las dos caras de mantener la entidad fresca, en un solo lugar. */
-async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, msg?: string): Promise<string> {
+async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, msg?: string, destino?: string | null): Promise<string> {
   const title = `${domain.label} · Frescura`
   const back = `<p class="sub"><a href="/admin/dominio/${escapeHtml(domain.id)}">← ${escapeHtml(domain.label)}</a></p>`
   const rows = await deps.domainFreshness!(domain.id)
-  const feedback = msg ? `<p class="msg ${msg.startsWith('Error') ? 'err' : 'ok'}">${escapeHtml(msg)}</p>` : ''
+  // #178 · un rechazo nacido en un form de ESTA página vuelve acá, y trae su destino con él.
+  const feedback = cargaFeedback(deps, domain, msg, destino)
   const notebooks = rows.filter((r) => r.engine && engineKind(r.engineJobType).isNotebook).map((r) => r.processLabel || r.processId).filter(Boolean)
   const migAlert = notebooks.length
     ? `<p class="msg err">⚠ ${notebooks.length === 1 ? 'Un proceso corre' : `${notebooks.length} procesos corren`} como <b>Notebook</b> (${escapeHtml([...new Set(notebooks)].join(', '))}). Debe migrar a <b>Spark Job</b> (Fabric-native, failure-safe) — ver el patrón de Finanzas.</p>`

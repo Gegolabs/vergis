@@ -486,7 +486,27 @@ export function matchSlot(slots: IntakeSlot[], filename: string): IntakeSlot | u
   return slots.find((s) => !s.accept || globToRegExp(s.accept).test(filename))
 }
 
-export type ValidateResult = { ok: true } | { ok: false; error: string }
+/**
+ * Los OTROS slots que SÍ aceptarían este archivo (issue #178): el destino computable de un rechazo.
+ *
+ * Distinto de `matchSlot` en las dos cosas que lo vuelven publicable como consejo al usuario:
+ * devuelve TODOS los candidatos (si hay varios, se listan — no se elige uno) y exige `accept`
+ * DECLARADO. Un slot sin `accept` acepta cualquier nombre: nombrarlo como el destino correcto sería
+ * adivinar, y el requisito prohíbe la heurística — solo se nombra un slot cuyo patrón declarado
+ * matchea el nombre real.
+ */
+export function slotsQueAceptan(slots: IntakeSlot[], filename: string, exceptSlotId: string): IntakeSlot[] {
+  const name = (filename ?? '').trim()
+  if (!name) return []
+  return slots.filter((s) => s.id !== exceptSlotId && !!s.accept && globToRegExp(s.accept).test(name))
+}
+
+/**
+ * `reason` identifica el motivo del rechazo cuando el llamador puede hacer algo con él: hoy solo
+ * `'accept'` (patrón de nombre), que es el único con un destino alternativo computable (#178). Los
+ * demás rechazos no lo llevan — no hay nada que ofrecer para un archivo vacío o sobredimensionado.
+ */
+export type ValidateResult = { ok: true } | { ok: false; error: string; reason?: 'accept' }
 
 /** Valida un upload contra el slot: patrón de nombre y tamaño. Resultado accionable. */
 export function validateUpload(slot: IntakeSlot, filename: string, size: number): ValidateResult {
@@ -499,7 +519,7 @@ export function validateUpload(slot: IntakeSlot, filename: string, size: number)
   // eslint-disable-next-line no-control-regex
   if (/[/\\?#%\x00-\x1f]/.test(name)) return { ok: false, error: `Nombre de archivo inválido (sin rutas ni caracteres especiales): '${name}'.` }
   if (slot.accept && !globToRegExp(slot.accept).test(name)) {
-    return { ok: false, error: `El nombre '${name}' no coincide con el patrón esperado «${slot.accept}».` }
+    return { ok: false, error: `El nombre '${name}' no coincide con el patrón esperado «${slot.accept}».`, reason: 'accept' }
   }
   if (size <= 0) return { ok: false, error: 'El archivo está vacío.' }
   const max = slotMaxBytes(slot)
