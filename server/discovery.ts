@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { parseSpec } from '@vergis/mira'
-import { claimValues, isPublic, type ClaimSet, type PolicyDecl } from '@vergis/policy'
+import { claimValues, diagnoseClaims, isPublic, type ClaimDenial, type ClaimSet, type PolicyDecl } from '@vergis/policy'
 import { analyzeSqlTables } from './sql-tables'
 import { createCachedScanner } from './hot-reload'
 import type { Engine } from './config'
@@ -55,6 +55,15 @@ export interface Discovery {
   canAccess(table: string, claims: ClaimSet): boolean
   /** Filtra los reports visibles para una identidad (sin datos gobernados → visible). */
   visibleFor(reports: Report[], claims: ClaimSet): Report[]
+  /**
+   * Por qué estos claims no pueden ver NINGUNA fila de las tablas de estos PIs (issue #165 §3).
+   *
+   * Observabilidad pura: NO decide nada. En particular NO se usa para esconder el PI del índice, y
+   * es deliberado — esconderlo cambiaría una falla muda por otra (el sujeto pasaría de «lo abro y
+   * está vacío» a «ya no está», igual de indistinguible de «no tengo permiso»). Lo que faltaba no
+   * era ocultar mejor: era que alguien pudiera DECIR cuál de las tres cosas pasó.
+   */
+  diagnoseFor(reports: Report[], claims: ClaimSet): { table: string; denials: ClaimDenial[] }[]
 }
 
 /** slug estable desde un código de PI (minúscula, sin acentos, no-alfanum → `-`). */
@@ -134,5 +143,18 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
     return reports.filter((r) => r.tables.length === 0 || r.tables.some((t) => canAccess(t, claims)))
   }
 
-  return { discover: () => specReg.get(), rebuild: () => specReg.rebuild(), canAccess, visibleFor }
+  function diagnoseFor(reports: Report[], claims: ClaimSet): { table: string; denials: ClaimDenial[] }[] {
+    // Una tabla puede servir a varios PIs; el hallazgo es de la TABLA y su política, no del PI.
+    const tables = [...new Set(reports.flatMap((r) => r.tables))]
+    const out: { table: string; denials: ClaimDenial[] }[] = []
+    for (const t of tables) {
+      const policy = store.get(t)
+      if (!policy) continue // sin política propia (o herencia de vista): no hay nada que explicar acá
+      const denials = diagnoseClaims(policy, claims)
+      if (denials.length) out.push({ table: t, denials })
+    }
+    return out
+  }
+
+  return { discover: () => specReg.get(), rebuild: () => specReg.rebuild(), canAccess, visibleFor, diagnoseFor }
 }

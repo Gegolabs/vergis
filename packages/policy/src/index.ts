@@ -33,6 +33,13 @@ export {
   type FabricTarget,
   type SessionContextPrelude,
 } from './fabric'
+export {
+  diagnoseClaims,
+  deniesAllRows,
+  explainDenial,
+  type ClaimDenial,
+  type ClaimDenialKind,
+} from './diagnose'
 export { trivialClickHouseProvider, type AuthorizationProvider } from './provider'
 export { parsePolicyStore, type DataPolicyDecl, type PolicyStoreDoc } from './store'
 export {

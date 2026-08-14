@@ -12,7 +12,17 @@
 // contra el que se prueba todo codegen (doc 10 §9). Para los predicados jerárquicos toma los datos
 // de la jerarquía (closure) como insumo — el dato de referencia gobernado (trust-base, charter §5).
 
-/** Claims del consumidor: claim → valor(es). Los aporta el gate; los inyecta el Botler. */
+/**
+ * Claims del consumidor: claim → valor(es). Los aporta el gate; los inyecta el Botler.
+ *
+ * MODELO DECLARADO (issue #165 §1): **el claim de un sujeto es un CONJUNTO, posiblemente unitario** —
+ * no un escalar con una lista como detalle de transporte. Una persona con dos nodos legítimos del
+ * criterio (doble dependencia, matriz, proyecto transversal, interinato) es un sujeto VÁLIDO del
+ * modelo. `in` y el jerárquico producen la UNIÓN; `eq` declara que ese criterio no admite
+ * pertenencia múltiple y por eso niega ante dos valores (ver `evalPredicate`). La negación es
+ * correcta —abrir sería over-grant, elegir sería inferir identidad— y `./diagnose` la vuelve
+ * distinguible de «sin claim» y de «sin datos», que es lo que le faltaba.
+ */
 export type ClaimSet = Record<string, string[] | string | undefined>
 
 export type PredicateOp = 'in' | 'eq'
@@ -124,7 +134,10 @@ export function evalPredicate(pred: Predicate, claims: ClaimSet, row: Record<str
     return visible.has(cell)
   }
   if (pred.op === 'eq') {
-    // escalar: exactamente un valor permitido, igual a la celda
+    // `eq` DECLARA que el criterio no admite pertenencia múltiple: exactamente un valor permitido,
+    // igual a la celda. Con dos valores niega — y niega a la persona con doble pertenencia legítima,
+    // no a un intruso (issue #165). Es fail-closed deliberado: abrir sería over-grant y desempatar
+    // sería inferir identidad. `./diagnose` existe para que esa negación se pueda explicar.
     return allowed.length === 1 && allowed[0] === cell
   }
   return allowed.includes(cell) // in: membresía
