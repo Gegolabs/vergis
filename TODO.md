@@ -48,6 +48,17 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   Disparadores vivos y su re-verificación: en el ADR-001. Informe de la baja:
   `work/007-informe-port-go-2026-08-10/01-informe-baja-port-go-v1.0.md`
 
+- [ ] **Terreno Fabric propio del Producto, desconectado del cliente** — **DECIDIDO POR CÉSAR
+  2026-08-14** («hay que tenerlo»), registrado en **#186**. El Producto no tiene dónde medir lo que
+  toca Fabric, así que **#163 se publicó en 0.16.0 con su mecanismo central sin medir** y siete
+  partidas de `PENDINGS.md` existen solo porque el único banco es el QA **del cliente**.
+  **Se evaluó y se descartó** apoyarse en la plataforma de Grupo Hijuelas para copiar sus datos: un
+  terreno que copia datos del cliente deja de ser propio, acopla el banco a su esquema y no quita la
+  dependencia. **Datos sintéticos**, tenant propio, y el terreno se **recrea** en vez de respaldarse.
+  **El costo dejó de ser el argumento**: capacidad F2 pay-as-you-go **pausada por defecto** —mismo
+  modelo que la VM desasignada—, del orden de un dólar por sesión de medición. **Trial NO**: muere a
+  los 60 días y se lleva el terreno. Las decisiones de gasto e infraestructura siguen siendo suyas.
+
 ### Decisiones y acciones de César (2026-08-08, ronda de decisiones del cluster 004)
 
 - [x] **Marca «Vergis» (y eventualmente «Custos»/«Miranda»)** — **DECIDIDO POR CÉSAR 2026-08-13: no
