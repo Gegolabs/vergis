@@ -76,6 +76,10 @@ Estas brechas corresponden a funcionalidad declarada pero no implementada en v0.
 
 - Refactor de los tres monolitos (`render-html-piece`, `MiraBotlet.invoke`, `serve-rls`).
 - HMAC criptográfico en anotaciones.
-- Aislamiento del render Vega en subproceso sin red ni filesystem (defensa en profundidad).
+- ~~Aislamiento del render Vega en subproceso sin red ni filesystem~~ — **resuelto por otra vía el
+  2026-08-13** (D-21): gate declarativo que rechaza specs con `url` + loader que niega toda E/S, las
+  dos capas dentro del proceso. El subproceso no se construyó porque **el permission model de Node 22
+  no cubre la red** (medido: bloquea fs y `child_process`; `net.connect` conecta). Si algún día hace
+  falta, la red se cierra en el contenedor, no en Node.
 - Virtualización de tabla para volúmenes grandes, i18n, accesibilidad, exportación CSV/PDF.
 - Caché de discovery de specs.
