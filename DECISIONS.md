@@ -9,6 +9,16 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-22 · 2026-08-13 — Los specs del canon NO se migran: se citan
+
+- **Bifurcación**: `TODO.md` y el README declaraban pendiente «migrar los specs normativos del canon (contrato Botler, spec Mira, DSL, naming) de AgencyDomains a `docs/`». ¿Se migran, o la premisa cambió?
+- **La premisa re-derivada contra el terreno**: **no existen archivos-spec sueltos que mover**. Lo normativo vive dentro del **libro publicado** *AgencyDomains · Arquitectura del Mundo Agentivo* (v1.0, agosto 2026, agencydomains.org). Buscar «contrato Botler» o «spec Mira» como documentos en ese repo no devuelve nada: la migración estaba enunciada sobre artefactos que no existen con esa forma.
+- **Decidido**: **no se migran; se citan.** Dos razones, y la primera es un hecho verificable, no una preferencia:
+  1. **Las licencias no mezclan.** El libro es **GNU FDL v1.3**; este repo es **AGPL-3.0-or-later**, y la FDL no es compatible con la GPL. Copiar el texto normativo acá volvería una parte del árbol no redistribuible bajo su propia licencia — un defecto que solo aparecería el día que alguien redistribuyera.
+  2. **Un spec con dos casas driftea**, y la copia siempre pierde porque es la que nadie relee. Este proyecto ya pagó esa factura: la línea del port a Go en `TODO.md` era un duplicado de una decisión del ADR-001 y envejeció peor que su fuente.
+- **Hecho en su lugar**: `docs/canon.md` — dónde vive el canon, qué edición se cita, por qué no se copia, qué queda en `docs/` (lo verdadero de ESTA implementación), y la regla ante desacuerdo: el canon manda sobre *qué es* un Botler/Mira/DSL, el repo manda sobre *qué hace* esta implementación. Más el camino si algún día hace falta un fragmento in-tree: relicenciamiento explícito del autor (César tiene el copyright de ambas obras) registrado en un ADR — un acto, no un copy-paste.
+- **Costo de revertir**: nulo — migrar sigue siendo posible el día que exista el acto de licencia; lo que se retiró fue una promesa que el README hacía sin poder cumplir.
+
 ## D-21 · 2026-08-13 — El aislamiento del render Vega: se cierra la E/S, NO se construye el subproceso
 
 - **Bifurcación**: el roadmap pide «aislamiento del render Vega en **subproceso sin red ni filesystem**». ¿Se construye el subproceso, o se ataca el vector por otra vía?
