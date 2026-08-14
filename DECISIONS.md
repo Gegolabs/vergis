@@ -9,6 +9,14 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-29 · 2026-08-14 — El esquema del Producto admite Z: la corrección se publica sin capacidades nuevas
+
+- **Bifurcación**: el preámbulo del `CHANGELOG` declaraba esquema **X.Y** (sin Z), pero 0.9.1 existía como precedente y la tabla de tags de 0.16.0 prometía que `:0.16` «flota al último patch» — dos afirmaciones incompatibles en el mismo archivo, introducidas por esta sesión. ¿Se admite la Z, o se retira la promesa del tag `0.16` y el fix viaja en la próxima Y?
+- **Decidido por César** (2026-08-14): **se admite la Z** — corrección sin capacidad nueva. Queda coherente con 0.9.1, con la tabla de tags y con el `type=semver,pattern={{major}}.{{minor}}` del CI.
+- **Por qué, y el caso que lo prueba**: el fix de #139 corrige un contrato que **inducía a operar mal** (declaraba `bootOnly` una clave recargable, o sea «reiniciá» cuando no hacía falta). Es exactamente el cambio que un operador querría adoptar **aislado**; sin Z, la única forma de dárselo era obligarlo a tomar una Y completa con capacidades que todavía no evaluó.
+- **Se deja escrito lo que se iba a confundir**: la Z del Producto **no** es la Z de la Norma 3 de la Ley (que rige documentos y significa «solo cambió la forma»). Acá un cambio cosmético de código no se publica solo; lo que merece número propio es la corrección adoptable aislada.
+- **Costo de revertir**: bajo — es el preámbulo del changelog más una línea de la lista de tags del CI. Lo que no se revierte gratis son las versiones ya publicadas con ese número.
+
 ## D-28 · 2026-08-14 — Acá se es el Producto: se publica la versión, no se despliega la instancia
 
 - **Bifurcación**: la sesión cerró #178 y reportó como pendiente «falta el despliegue a la instancia». César lo corrigió: en este proyecto representamos el **Producto** y manipulamos el repo; no somos el usuario con acceso a la VM. ¿El entregable termina en el merge, en la versión publicada, o en el despliegue?

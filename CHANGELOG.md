@@ -1,8 +1,19 @@
 # Changelog — Vergis
 
 Versionado del Producto (la imagen `ghcr.io/gegolabs/vergis`). La versión vigente se muestra en el
-pie del inspector de cada PI (`Mira v<versión>`, de `package.json`). Esquema **X.Y**: Y sube con
-cada conjunto de capacidades nuevas del DSL/runtime; X se reserva para el primer release estable.
+pie del inspector de cada PI (`Mira v<versión>`, de `package.json`).
+
+**Esquema X.Y.Z:**
+
+- **Y** sube con cada conjunto de **capacidades nuevas** del DSL/runtime.
+- **Z** sube con **correcciones sin capacidad nueva**. Existe para que un operador pueda tomar un
+  arreglo **sin** tragarse funcionalidad que todavía no evaluó — el caso que lo justifica es la
+  corrección de algo que induce a operar mal (ver 0.16.1). Precedente: 0.9.1.
+- **X** se reserva para el primer release estable.
+
+*La Z del Producto no es la Z de la Norma 3 de la Ley de Wingworking* (que rige **documentos** y
+significa «solo cambió la forma»): acá un cambio cosmético del código no se publica solo, y lo que
+merece número propio es la corrección que el operador querría adoptar aislada.
 
 ## Qué significa cada tag de la imagen
 
@@ -22,6 +33,39 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 **El despliegue es del operador de la instancia, no del Producto.** Acá se publica la versión y se
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
+
+## 0.16.1 — 2026-08-14
+
+**El contrato operativo dejaba de mentir hacia el lado que cuesta downtime** (#139). Corrección sin
+capacidad nueva: quien corra 0.16.0 puede tomar esto aislado, y quien todavía no la haya desplegado
+debería tomar **0.16.1** directamente — un solo despliegue en vez de dos.
+
+- **`GET /contrato` persistía una clasificación falsa de la env recargable.** La observación del
+  arranque corría **antes** de que el bloque de hot-reload registrara sus watches, y
+  `env.reloadableContent` se **deriva** de esos watches: la proyección persistida clasificaba
+  `VERGIS_POLICIES` (y las demás claves vigiladas) como `bootOnly`. O sea, el contrato afirmando
+  *«esto exige reiniciar»* cuando ya no — **el error de costo asimétrico que #139 existe para matar,
+  cometido por el mecanismo que lo iba a matar**. Una regla que pide más cautela de la necesaria no
+  falla nunca: solo cobra un corte de servicio cada vez.
+- **Consecuencia para el delta entre versiones:** contra una referencia que nadie hubiera sanado con
+  una consulta a `/contrato`, un despliegue donde nada cambió reportaba `nowReloadable` — un delta
+  fantasma en el campo que el issue declara el más valioso.
+- **El arreglo no depende del orden del arranque**: la observación va al final del cableado y, además,
+  cualquier declaración **tardía** (`watch`/`signal`/`caveat`) re-observa sola, así que un orden
+  equivocado se sana sin esperar a que alguien consulte el endpoint. El journal no toca disco si la
+  huella no cambió; el registro del contrato sigue sin conocer al journal.
+- **Medido, no leído**: las cuatro piezas —la clasificación falsa, la proyección completa, la
+  convergencia que se había observado en producción y el delta fantasma— tienen su experimento con el
+  registro y el journal reales (`tests/contract-boot-projection.test.ts`), con control de refutación
+  corrido. Tests 2095 → 2101.
+
+**⚠ Nota de despliegue**: sin cambios de configuración ni de contrato de instancia. Lo único que
+cambia de conducta observable es que la entrada del journal del arranque nace completa; las entradas
+ya persistidas por versiones anteriores se sanan solas en la primera consulta a `/contrato`.
+
+**Lo que queda sin medir, dicho:** ningún test arranca el módulo `serve-rls` completo, así que que su
+boot real observe al final está **leído, no medido**. La re-observación tardía es lo que vuelve ese
+eslabón inofensivo.
 
 ## 0.16.0 — 2026-08-14
 
