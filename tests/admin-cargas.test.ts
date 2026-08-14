@@ -261,7 +261,8 @@ describe('admin-cargas · consola por dominio (issue #58)', () => {
     const token = tokenFrom(page.body)
     const res = await go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&accion=rerun`, 'application/x-www-form-urlencoded'))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/cargas?msg=')
+    // #178 · la acción vuelve a SU casilla (no al tope de la consola): el slot va en la URL.
+    expect(res.headers['location']).toContain('/cargas?slot=saldos&msg=')
     expect(o.rerun).toHaveBeenCalled()
     expect(audit.some((e) => (e as { type?: string }).type === 'intake-rerun')).toBe(true)
   })

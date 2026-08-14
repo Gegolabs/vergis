@@ -63,7 +63,11 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px}
 .tile{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 18px;min-width:96px}
 .tile .n{font-size:26px;font-weight:700;line-height:1.1}.tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
-.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}${AVATAR_CSS}`
+.tile.warn{border-color:var(--err)}.tile.warn .n{color:var(--err)}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;margin:18px 0 4px;border-bottom:1px solid var(--border)}
+.tabs a,.tabs b{display:inline-block;padding:9px 15px;font-size:13px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;margin-bottom:-1px}
+.tabs a{color:var(--muted)}.tabs a:hover{color:var(--accent);background:var(--card);text-decoration:none}
+.tabs b.on{background:var(--card);border-color:var(--border);color:var(--fg);font-weight:700}${AVATAR_CSS}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. */
 export function page(brand: string, title: string, body: string): string {
