@@ -16,7 +16,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "esbuild server/serve-rls.ts --bundle --platform=node --target=node22 --format=esm --external:canvas --external:mssql --external:tedious --external:sql.js --external:ajv --external:ajv-formats --external:yaml --outfile=dist/serve-rls.mjs && cp packages/capabilities/src/themes/arbol-logo.png dist/",
-    "start": "node dist/serve-rls.mjs"
+    "start": "node dist/serve-rls.mjs",
+    "lab:up": "docker run -d --platform linux/amd64 --name vergis-tsql-lab -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=Vergis!Lab2026' -e MSSQL_PID=Developer -p 11433:1433 mcr.microsoft.com/mssql/server:2022-latest",
+    "lab:down": "docker rm -f vergis-tsql-lab",
+    "lab:proof": "tsx scripts/tsql-lab-proof.ts"
   },
   "license": "AGPL-3.0-or-later",
   "devDependencies": {
