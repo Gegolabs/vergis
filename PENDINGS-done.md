@@ -103,6 +103,28 @@ cerrar.
   La pieza viva que quedaba —rediseñar la época del CSRF— no es un pendiente suelto: vive como
   hito H4 del diseño `work/004-cluster-disenos-backlog-2026-08-07/10-113-hardening-v1.0.md`.
   `reg 2026-08-07 · cerrado 2026-08-07`
+- **La proyección guardada del contrato NO es estable justo tras el arranque** — observado en el
+  deploy de 0.15.0 a PROD (2026-08-11 22:21): dos lecturas del mismo archivo y la misma única
+  entrada del journal dieron distinto (`watches: []` / sha `c61ab476…`, y minutos después
+  `watches: 4`, `signals: 1`, sha `8539f4db…`). La ficha decía **«la causa NO está medida»**, y con
+  razón: era observación, no mecanismo.
+  **Cerrado 2026-08-14 (0.16.1), con la causa medida y no deducida:** la observación del arranque
+  corría **antes** de que el bloque de hot-reload registrara sus watches, y `env.reloadableContent`
+  se **deriva** de ellos — la proyección persistida clasificaba `VERGIS_POLICIES` como `bootOnly`.
+  No era una escritura diferida ni un re-registro: era orden de cableado. Arreglado sin depender del
+  orden (una declaración tardía re-observa sola), con su experimento en
+  `tests/contract-boot-projection.test.ts` y control de refutación corrido.
+  El **delta fantasma** que la ficha temía era real y quedó cubierto por el mismo arreglo.
+  `reg 2026-08-11 · cerrado 2026-08-14`
+- **`dotclaude` con cambios sin sellar de otras sesiones** — la ficha quedó con dos residuos
+  enumerados (`settings.json` y `commands/label.md` borrado), sin sellar a propósito por ser de
+  otro actor (W-01).
+  **Cerrado 2026-08-14:** los dos se resolvieron en su propia sesión — `/label` se retiró en
+  `59d22c0`. Lo que quedaba al retomar era **residuo propio y completo**: la ocurrencia 20 de W-01,
+  que esta sesión escribió y no había sellado; commiteada en `e3c6e74` del repo `dotclaude`.
+  Árbol de `~/.claude` limpio, verificado con `git status --porcelain` vacío.
+  *La ficha no se cierra por «ya no aplica»: se cierra porque el árbol se midió.*
+  `reg 2026-08-07 · cerrado 2026-08-14`
 
 ## Vencidas sin veredicto
 
