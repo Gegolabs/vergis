@@ -6,6 +6,7 @@
  */
 import { guardProbeSql, SqlGuardError } from './sql-guard'
 import type { MirandaToolContext } from './context'
+import { isProtectedColumn, probeVeto, shieldNote, shieldUnknown, UNKNOWN_SHIELD, type ColumnShield } from './columns'
 import { validateIntentSummary } from '../intent'
 
 export type ToolResult = Record<string, unknown>
@@ -26,6 +27,18 @@ function reprRow(row: Record<string, unknown>): Record<string, string> {
   return out
 }
 
+/** Identificador simple: lo único que se proyecta en una muestra (anti-inyección; ver `sampleRows`). */
+const IDENT_RE = /^[A-Za-z0-9_]+$/
+
+/** El escudo del objeto, nunca una excepción: si el seam falla, el objeto queda protegido entero. */
+async function shieldOf(ctx: MirandaToolContext, table: string): Promise<ColumnShield> {
+  try {
+    return (await ctx.columnShield(table)) ?? UNKNOWN_SHIELD
+  } catch {
+    return UNKNOWN_SHIELD
+  }
+}
+
 export async function catalogTables(_input: unknown, ctx: MirandaToolContext): Promise<ToolResult> {
   return {
     tables: ctx.catalog.map((c) => ({
@@ -42,8 +55,41 @@ export async function describeTable(input: unknown, ctx: MirandaToolContext): Pr
   if (!name) return { error: 'describe_table requiere `name`.' }
   if (!ctx.isAllowed(name)) return { error: `'${name}' no está en el catálogo permitido. Usa catalog_tables para ver los disponibles.` }
   try {
-    const [columns, sample] = await Promise.all([ctx.columnsOf(name), ctx.sampleRows(name, 3)])
-    return { table: name, columns, sample: sample.map(reprRow), note: 'sample en repr(): las comillas revelan espacios y mayúsculas.' }
+    // El esquema se pide SIEMPRE y entero: la columna protegida se nombra con su tipo (§4.4). Lo que
+    // cambia es la muestra, que se pide con proyección explícita de lo sondeable — nunca `SELECT *`.
+    const [columns, shield] = await Promise.all([ctx.columnsOf(name), shieldOf(ctx, name)])
+    const protegidas = columns.filter((c) => isProtectedColumn(shield, c.name)).map((c) => c.name)
+    // Una columna cuyo nombre no es un identificador simple no se proyecta (no se puede interpolar sin
+    // riesgo): queda fuera de la muestra, que es el lado seguro del error.
+    const sondeables = columns.filter((c) => !isProtectedColumn(shield, c.name) && IDENT_RE.test(c.name)).map((c) => c.name)
+    let sample: Record<string, unknown>[] = []
+    let sampleError: string | undefined
+    if (sondeables.length > 0) {
+      try {
+        sample = await ctx.sampleRows(name, 3, sondeables)
+      } catch (e) {
+        // Que la muestra falle no borra el esquema: nombrar la columna es la mitad del contrato.
+        sampleError = e instanceof Error ? e.message : String(e)
+      }
+    }
+    const permitido = new Set(sondeables.map((c) => c.toLowerCase()))
+    // Recorte de cinturón y tirantes: aunque la proyección ya excluyó lo protegido, ninguna clave que
+    // no sea sondeable sale de acá (un motor que devuelva de más no puede filtrar el dato).
+    const rows = sample.map((r) => reprRow(Object.fromEntries(Object.entries(r).filter(([k]) => permitido.has(k.toLowerCase())))))
+    const note = [
+      'sample en repr(): las comillas revelan espacios y mayúsculas.',
+      shieldNote(shield, protegidas),
+      sampleError ? `La muestra no se pudo tomar (${sampleError}); el esquema de arriba sí es real.` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ')
+    return {
+      table: name,
+      columns: columns.map((c) => (isProtectedColumn(shield, c.name) ? { name: c.name, type: c.type, protegida: true } : { name: c.name, type: c.type })),
+      columnas_protegidas: protegidas,
+      sample: rows,
+      note,
+    }
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
   }
@@ -56,6 +102,19 @@ export async function profileColumn(input: unknown, ctx: MirandaToolContext): Pr
   if (!table || !column) return { error: 'profile_column requiere `table` y `column`.' }
   if (!ctx.isAllowed(table)) return { error: `'${table}' no está en el catálogo permitido.` }
   try {
+    // El perfil ES un sondeo de valores (top-N con conteos): sobre una columna con regla no se produce
+    // NADA — ni valores, ni conteos, ni cardinalidad. La respuesta la nombra: existe, y no se sondea.
+    const shield = await shieldOf(ctx, table)
+    if (isProtectedColumn(shield, column)) {
+      return {
+        table,
+        column,
+        protegida: true,
+        error: shieldUnknown(shield)
+          ? `No se pudo determinar la política de columna de '${table}': no se sondea ninguna de sus columnas (fail-closed). Usa describe_table para ver el esquema.`
+          : `La columna '${column}' está protegida por una regla de columna de la política: existe y se nombra (describe_table la lista con su tipo), pero no se sondea — ni valores, ni conteos, ni cardinalidad.`,
+      }
+    }
     const rows = await ctx.profileColumn(table, column, top)
     return { table, column, top, values: rows.map((r) => ({ value: repr(r.value), count: r.count })), note: 'valores en repr().' }
   } catch (e) {
@@ -75,6 +134,11 @@ export async function runProbe(input: unknown, ctx: MirandaToolContext): Promise
     if (e instanceof SqlGuardError) return { error: `Probe rechazada por la guardia: ${e.message}` }
     return { error: e instanceof Error ? e.message : String(e) }
   }
+  // Segunda guardia, ORTOGONAL a la del SQL: la primera decide qué objetos se pueden tocar; esta,
+  // qué columnas. Corre ANTES de ejecutar — una probe vetada no llega nunca al motor.
+  const shields = await Promise.all(guarded.tables.map(async (t) => ({ table: t, shield: await shieldOf(ctx, t) })))
+  const veto = probeVeto(guarded.sql, shields)
+  if (veto) return { error: `Probe rechazada por el plano de columna: ${veto}`, executed_sql: guarded.sql }
   const res = await ctx.runProbe(guarded.sql, why)
   if ('error' in res) return { error: res.error, executed_sql: guarded.sql }
   return { executed_sql: guarded.sql, row_count: res.rows.length, rows: res.rows.map(reprRow) }

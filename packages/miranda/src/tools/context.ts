@@ -5,6 +5,7 @@
  */
 import type { IntentSummary } from '../intent'
 import type { SelfCheckResult } from '../qc'
+import type { ColumnShield } from './columns'
 
 /** Una entrada del catálogo (allowlist de instancia). */
 export interface CatalogEntry {
@@ -29,9 +30,21 @@ export interface MirandaToolContext {
   runProbe(sql: string, why: string): Promise<{ rows: Record<string, unknown>[] } | { error: string }>
   /** Columnas + tipos de un objeto del catálogo (metadata acotada al objeto allowlisteado). */
   columnsOf(table: string): Promise<{ name: string; type: string }[]>
-  /** N filas de muestra de un objeto del catálogo (`SELECT TOP n *`). */
-  sampleRows(table: string, n: number): Promise<Record<string, unknown>[]>
-  /** Top-N valores distintos de una columna con su conteo. */
+  /**
+   * El plano de columna vigente para un objeto del catálogo (#163 · H9): qué columnas tienen regla
+   * declarada y por lo tanto NO se sondean. El cableado lo resuelve contra el policy store; una
+   * implementación que no pueda determinarlo devuelve `UNKNOWN_SHIELD` — y entonces el objeto
+   * entero queda fuera del sondeo. Nunca lanza: la duda se representa, no se propaga como excepción.
+   */
+  columnShield(table: string): Promise<ColumnShield>
+  /**
+   * N filas de muestra de un objeto del catálogo, **con proyección explícita**: `columns` son las
+   * columnas sondeables ya filtradas por el escudo. No existe la variante `SELECT *` — la estrella
+   * traería la columna protegida al proceso aunque después se recortara, y «no se muestrea» es
+   * literal: la celda no se pide.
+   */
+  sampleRows(table: string, n: number, columns: string[]): Promise<Record<string, unknown>[]>
+  /** Top-N valores distintos de una columna con su conteo. Solo se llama sobre columnas sondeables. */
   profileColumn(table: string, column: string, top: number): Promise<{ value: unknown; count: number }[]>
   /** Specs existentes (ejemplares). */
   listSpecs(): SpecRef[]

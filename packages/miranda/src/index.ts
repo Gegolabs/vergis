@@ -9,6 +9,16 @@ export { guardProbeSql, referencedTables, SqlGuardError, type SqlGuardOptions, t
 export { buildToolRegistry, type ToolRegistry, type ToolDefinition } from './tools/registry'
 export { repr, type ToolResult } from './tools/tools'
 export type { MirandaToolContext, CatalogEntry, SpecRef } from './tools/context'
+export {
+  isProtectedColumn,
+  probeVeto,
+  protectedNames,
+  shieldNote,
+  shieldUnknown,
+  OPEN_SHIELD,
+  UNKNOWN_SHIELD,
+  type ColumnShield,
+} from './tools/columns'
 export { validateIntentSummary, normalizeIntent, normalizeFormaVista, FORMAS, PIEZAS, type IntentSummary, type Forma, type Pieza, type FormaVista } from './intent'
 export { crossCheckForma, derivePiecesFromDraft, formaFromPiezas, type DraftView } from './forma'
 export { hasBlockingGaps, VEREDICTOS, SEVERIDADES, type Veredicto, type Severidad, type Brecha, type SelfCheckResult } from './qc'

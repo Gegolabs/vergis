@@ -49,7 +49,7 @@ const ENTRIES: ToolEntry[] = [
   {
     def: {
       name: 'describe_table',
-      description: 'Devuelve columnas+tipos y 3 filas de muestra (en repr(): las comillas revelan espacios/mayúsculas). Úsalo para aterrizar la realizabilidad antes de escribir SQL.',
+      description: 'Devuelve columnas+tipos y 3 filas de muestra (en repr(): las comillas revelan espacios/mayúsculas). Úsalo para aterrizar la realizabilidad antes de escribir SQL. Las columnas marcadas `protegida` existen y se nombran, pero NO se sondean: no aparecen en la muestra.',
       input_schema: OBJ({ name: { type: 'string', description: 'Nombre del objeto del catálogo.' } }, ['name']),
     },
     fn: describeTable,
@@ -57,7 +57,7 @@ const ENTRIES: ToolEntry[] = [
   {
     def: {
       name: 'profile_column',
-      description: 'Top-N valores distintos de una columna con su conteo, en repr(). Detecta trampas como \'TC \' (con espacio) vs \'TC\'.',
+      description: 'Top-N valores distintos de una columna con su conteo, en repr(). Detecta trampas como \'TC \' (con espacio) vs \'TC\'. Una columna `protegida` no se perfila (la tool lo rechaza).',
       input_schema: OBJ({ table: { type: 'string' }, column: { type: 'string' }, top: { type: 'integer', description: 'default 20, máx 100' } }, ['table', 'column']),
     },
     fn: profileColumn,
@@ -65,7 +65,7 @@ const ENTRIES: ToolEntry[] = [
   {
     def: {
       name: 'run_probe',
-      description: 'Ejecuta un SELECT de exploración (≤500 filas, forzado). Un solo SELECT, sin CTE/DML. `why` se registra para auditoría. Úsalo para reconciliar cifras antes del self-check.',
+      description: 'Ejecuta un SELECT de exploración (≤500 filas, forzado). Un solo SELECT, sin CTE/DML. `why` se registra para auditoría. Úsalo para reconciliar cifras antes del self-check. Se rechaza si menciona una columna `protegida` (incluso dentro de un agregado) o si proyecta `*` sobre una tabla que tenga alguna.',
       input_schema: OBJ({ sql: { type: 'string' }, why: { type: 'string', description: 'Por qué corres esta probe.' } }, ['sql', 'why']),
     },
     fn: runProbe,

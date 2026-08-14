@@ -10,6 +10,9 @@ function mockCtx(over: Partial<MirandaToolContext> = {}): MirandaToolContext {
     runProbe: async () => ({ rows: [{ empresa: 'ACME', saldo: 10 }] }),
     columnsOf: async () => [{ name: 'empresa', type: 'nvarchar' }, { name: 'saldo', type: 'decimal' }],
     sampleRows: async () => [{ empresa: 'TC ', saldo: 5 }],
+    // Escudo de columna (#163 · H9): estos mocks miden OTRA cosa, así que declaran el objeto SIN
+    // reglas de columna — el fail-closed y el enmascarado se miden en tests/miranda-columnas.test.ts.
+    columnShield: async () => ({ known: true, columns: [] }),
     profileColumn: async () => [{ value: 'TC ', count: 3 }, { value: 'TC', count: 7 }],
     listSpecs: () => [{ code: 'PI-101', name: 'Saldos' }],
     readSpec: (c) => (c === 'PI-101' ? 'mira_version: "1.0"' : null),
