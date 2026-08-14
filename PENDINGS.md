@@ -43,6 +43,35 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **El frente de authz dejó cuatro cosas sin medir, y una de ellas decide si la capacidad sirve** —
+  todas del cierre de #163/#159 (2026-08-13). Ninguna se puede medir sin terreno vivo:
+  (a) **¿el Service Principal de serving tiene `UNMASK`?** Si NO lo tiene, la vista de máscara
+  tampoco discrimina —su rama «en claro» lee la columna base y recibe el default del DDM— y la
+  capacidad queda degradada a «esta columna no se sirve a nadie». Es seguro, pero no es lo que el
+  issue pide. **Control obligatorio en la misma sesión**: una consulta a la tabla sin vista, o un
+  negativo no distingue «no tiene el permiso» de «la vista no se aplicó». (b) que Fabric acepte el
+  DDL de la vista y del `ADD MASKED` **sobre una tabla con vista-contrato `SCHEMABINDING`**.
+  (c) el costo de enforcement por columna. (d) el bit `is_schema_bound` según el driver: se aceptan
+  `1`/`true`/`'1'` y **cualquier otra cosa cae al cubo que no hereda** — fail-closed ruidoso, pero
+  si un driver devolviera algo inesperado, vistas-contrato hoy servibles dejarían de serlo.
+  `reg 2026-08-13`
+- **Miranda deja de muestrear los objetos que NO estén en el policy store** — consecuencia del
+  escudo de columna (#163·H9) y de su lectura estricta de «sin política ⇒ no se sondea». Es
+  coherente con la doctrina del nodo (dato sin política no se sirve) y es fail-closed, **pero si el
+  catálogo de Miranda de una instancia incluye tablas fuera del store, se nota de inmediato**: el
+  `describe_table` nombra el esquema y devuelve muestra vacía. Reversible en una línea de
+  `columnShield`. **No verificado contra el catálogo de la instancia de referencia.** `reg 2026-08-13`
+- **Dos límites declarados del reconocimiento de la vista de máscara** — (a) si una instancia generó
+  su DDL con `maskViewName` propio, la derivación por convención no la encuentra y el PI queda **no
+  servible** (ruidoso, jamás en claro); la vía entonces es declararla en el store, no aflojar el
+  reconocimiento. (b) la corroboración contra `sys` es una **foto del bootstrap**: un `ALTER VIEW`
+  posterior no se detecta hasta el próximo `bootstrapAll`, y acá —a diferencia del linaje
+  schemabound— nada ata la base. `reg 2026-08-13`
+- **El veto de `run_probe` es por token, sin parser SQL** — sobre-bloquea: una columna protegida
+  llamada `rut` veta probes que nombren el `rut` de OTRA tabla del `FROM`. Consciente y documentado;
+  se anota porque el primer reporte de «Miranda no me deja consultar algo que sí puedo ver» va a
+  venir de acá y conviene no diagnosticarlo desde cero. `reg 2026-08-13`
+
 - **La medición de #164 contra Fabric NO se hizo, y sin ella los caminos 1 y 2 son conjetura** — la
   pregunta exacta es si Fabric/Azure SQL acepta un `ADD FILTER PREDICATE` cuya función **no recibe
   ninguna columna** de la tabla (y si no, si acepta un parámetro alimentado por constante). Se puede
