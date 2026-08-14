@@ -162,10 +162,18 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Práctica / entorno (fuera del árbol de Vergis)
 
-- **`~/evals-finaliza/` no está bajo control de versiones** — ahí viven la clave, los 3 reportes
-  del A/B, los 2 veredictos y el reporte de bug de esta sesión. Perderlos borraría la evidencia del
-  experimento. Decidir: `git init` local (sin remoto basta) o declarar en el arnés que es scratch
-  desechable. `reg 2026-08-07`
+- **✅ RESUELTO (2026-08-13) — `~/evals-finaliza/` es repo git local, sin remoto** (decisión de
+  César: se aplicó la recomendación). `git init` + commit inicial `68b2785`: 12 archivos, 992
+  líneas — la clave del espécimen, las 3 rondas anonimizadas, las 2 corridas en seco, los 2 juicios
+  ciegos, el reporte de bug de autoidentificación y `RESULTADOS.md`.
+  **Sin remoto a propósito**, y queda dicho: contienen salidas crudas de sesiones sobre proyectos
+  reales; publicarlas arrastraría ese contenido sin aportar nada. El día que haga falta un remoto,
+  que sea decisión tomada y no herencia del `git init`.
+  **Lo que faltaba para cerrarlo de verdad no era el `git init`**: la corrida que detectó esto
+  (`C.md` del espécimen) pedía **dejarlo dicho en el arnés**, para que la próxima no se lo vuelva a
+  preguntar. Hecho en `protocolos`, `evals/finaliza/ARNES-v1.0.md` §7 (commit `3a834c5`), más un
+  `README.md` en el repo nuevo que separa método (allá) de corridas (acá).
+  `reg 2026-08-07 · resuelto 2026-08-13`
 - **`dotclaude` con cambios sin sellar de otras sesiones** — *revisado el 2026-08-10 (diff SANO) y
   **encogido el 2026-08-11***: las sesiones dueñas ya sellaron lo suyo — `WATCH.md`/`WATCH-logs.md`
   están commiteados (con **la ocurrencia 8 de W-01** que registró esta sesión; el contador va en
