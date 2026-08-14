@@ -10,9 +10,12 @@ import { vegaLiteToSvg } from '../packages/capabilities/src/render-chart'
 
 // `vega`/`vega-lite` son dependencias DEL PAQUETE `capabilities`, no de la raíz: el control tiene que
 // resolverlas desde ahí, igual que lo hace el módulo que prueba.
+// Tipado laxo A PROPÓSITO: `vega`/`vega-lite` no son dependencias de la raíz, así que sus tipos no
+// resuelven desde acá. El control no necesita tipos — necesita ejercitar el runtime real.
+type VegaLike = { View: new (runtime: unknown, opts: unknown) => { runAsync(): Promise<unknown>; finalize(): void }; parse(spec: unknown): unknown }
 const req = createRequire(new URL('../packages/capabilities/src/render-chart.ts', import.meta.url))
-const vega = (await import(req.resolve('vega'))) as typeof import('vega')
-const { compile } = (await import(req.resolve('vega-lite'))) as typeof import('vega-lite')
+const vega = (await import(req.resolve('vega'))) as unknown as VegaLike
+const { compile } = (await import(req.resolve('vega-lite'))) as unknown as { compile(spec: unknown): { spec: unknown } }
 
 const specConUrl = (url: string) =>
   ({
@@ -41,7 +44,7 @@ describe('render de gráficos · sin E/S', () => {
     const port = (srv.address() as { port: number }).port
     try {
       const vg = compile(specConUrl(`http://127.0.0.1:${port}/d.json`)).spec
-      const view = new vega.View(vega.parse(vg as vega.Spec), { renderer: 'none' })
+      const view = new vega.View(vega.parse(vg), { renderer: 'none' })
       await view.runAsync()
       view.finalize()
       expect(hits).toBe(1) // el fetch ocurrió: el instrumento sabe detectarlo

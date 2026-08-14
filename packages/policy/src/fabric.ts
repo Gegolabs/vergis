@@ -79,6 +79,21 @@ export interface FabricEnforcement {
   injections: { setting: string; claim: string }[]
   /** El IR compilado (para emulación/aserciones). */
   policy: PolicyDecl
+  /**
+   * Columnas de la tabla que la SECURITY POLICY toma REHÉN (issue #164).
+   *
+   * `WITH SCHEMABINDING` convierte cada columna referenciada por el predicado en una **dependencia
+   * dura**: mientras la policy exista, esa columna no se puede alterar ni retirar. Para una policy
+   * gobernada eso es semántico —la columna es el criterio— pero para `grant: all` es **andamiaje**:
+   * la función ignora su argumento y la columna elegida es un accidente del aplicador.
+   *
+   * Declararlas acá es la mitigación mínima del camino 3 del issue: la dependencia deja de ser un
+   * descubrimiento —un `ALTER` rechazado en producción— y pasa a ser un dato que el gate de
+   * regresión de terreno puede leer ANTES de intentar el cambio. **No resuelve #164**: la
+   * dependencia sigue existiendo. La vuelve visible, que es lo que se podía hacer sin medir contra
+   * un endpoint vivo si Fabric admite un predicado sin columna.
+   */
+  schemaDependencies: string[]
 }
 
 /** El tipo de columna debe ser un tipo SQL plausible: letras/dígitos/_ y opcional `(n)` o `(n,m)`. */
@@ -179,6 +194,9 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
       teardownSQL,
       injections: [], // pública: sin claim que inyectar
       policy,
+      // ANDAMIAJE, no criterio: la función ignora este argumento (issue #164). Se declara para que
+      // el gate de regresión de terreno sepa que esta columna está atada antes de intentar el ALTER.
+      schemaDependencies: [bindCol],
     }
   }
 
@@ -213,6 +231,8 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
     teardownSQL,
     injections: [...new Set(policy.predicates.map((p) => p.claim))].map((claim) => ({ setting: settingForClaim(claim), claim })),
     policy,
+    // Acá la dependencia SÍ es semántica: son las columnas que la política usa como criterio.
+    schemaDependencies: columns,
   }
 }
 

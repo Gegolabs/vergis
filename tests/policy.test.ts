@@ -463,3 +463,41 @@ describe('Compilador de policy · property test (Fabric ≡ IR de referencia ≡
     }
   })
 })
+
+describe('Fabric · dependencias de esquema declaradas (#164)', () => {
+  // El issue mide el daño: 9 de 10 columnas de un hecho cayeron sin resistencia y `barcode` no,
+  // porque la security policy del `grant: all` estaba anclada en ella — una columna elegida por
+  // accidente. Esto NO quita la dependencia; la vuelve LEGIBLE antes del ALTER.
+  it('`grant: all` declara la columna que toma rehén, y es andamiaje: la función la ignora', () => {
+    const enf = compileFabric({ public: true }, { schema: 'dbo', table: 'fct_plantacion', bindColumn: 'barcode' })!
+    expect(enf.schemaDependencies).toEqual(['barcode'])
+    // El SQL sigue siendo el mismo allow-all: la declaración no cambia el artefacto.
+    expect(enf.setupSQL.join('\n')).toContain('SELECT 1 AS vergis_allowed;')
+    expect(enf.setupSQL.join('\n')).toContain('ADD FILTER PREDICATE')
+  })
+
+  it('la policy gobernada declara sus columnas de criterio (ahí la dependencia SÍ es semántica)', () => {
+    const pol: Policy = {
+      predicates: [
+        { kind: 'membership', column: 'area', claim: 'groups', op: 'in' },
+        { kind: 'membership', column: 'region', claim: 'regions', op: 'in' },
+      ],
+      combine: 'and',
+      default: 'deny',
+    }
+    const enf = compileFabric(pol, { schema: 'dbo', table: 'saldos' })!
+    expect(enf.schemaDependencies).toEqual(['area', 'region'])
+  })
+
+  it('sin columnas repetidas: dos predicados sobre la MISMA columna declaran una dependencia', () => {
+    const pol: Policy = {
+      predicates: [
+        { kind: 'membership', column: 'area', claim: 'groups', op: 'in' },
+        { kind: 'membership', column: 'area', claim: 'areas2', op: 'eq' },
+      ],
+      combine: 'or',
+      default: 'deny',
+    }
+    expect(compileFabric(pol, { schema: 'dbo', table: 't' })!.schemaDependencies).toEqual(['area'])
+  })
+})
