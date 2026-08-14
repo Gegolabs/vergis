@@ -9,6 +9,14 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-20 · 2026-08-13 — El diagnóstico de #165 NO esconde el PI: lo explica
+
+- **Bifurcación**: `canAccess` deja ver un PI si el sujeto trae **algún** valor del claim. Con `op: eq` y un claim de dos valores, la política niega **todas** las filas: el PI aparece en el índice y se abre vacío. ¿Se corrige la visibilidad (esconderlo, que es la dirección fail-closed) o se deja como está y se agrega el diagnóstico?
+- **Decidido**: **la visibilidad no se toca; se agrega la explicación**. Esconderlo cambia una falla muda por otra —el sujeto pasa de «lo abro y está vacío» a «ya no está», igual de indistinguible de «no tengo permiso»— y encima destruye la única pista que tenía el operador. El issue pide explícitamente que el fail-closed no se toque; lo que faltaba no era ocultar mejor sino **poder decir cuál de las tres cosas pasó**.
+- **Dónde vive, y por qué importa**: en `packages/policy/src/diagnose.ts`, junto al evaluador de referencia, **no** en el server. La explicación de una negación es semántica del IR: en el canal de serving cada back-end tendría su propia versión de «por qué no ves nada» y divergirían en la primera corrección. Además es función de `(policy, claims)` sin tocar filas — así vale igual en push-down, donde las filas no pasan por este proceso.
+- **Lo que lo hace afirmable**: `deniesAllRows` se prueba como **teorema** contra el oráculo (2000 casos: si dice que niega todo, `applyPolicy` devuelve `[]`), con un **control de que las dos ramas se ejercitaron** (≥100 de cada lado) — sin él, una función que devolviera siempre `false` habría «pasado» el teorema sin ser puesta en riesgo jamás.
+- **Costo de revertir**: bajo y aislado — el módulo es aditivo y nadie depende de él para decidir; quitar la llamada en `indexReports` apaga la línea del log sin tocar enforcement.
+
 ## D-19 · 2026-08-10 — La marca queda sin tocar (gasto), y se dice qué falta
 
 > **SUPERADA 2026-08-13 por decisión de César: no se registra nada.** Esta entrada dejó la marca

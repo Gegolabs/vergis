@@ -135,3 +135,62 @@ describe('discovery · canAccess / visibleFor', () => {
     expect(dv.canAccess('dbo.va', conClaim)).toBe(false) // ciclo → deny, sin colgarse
   })
 })
+
+describe('discovery · diagnóstico de la negación (#165 §3)', () => {
+  const EQ: PolicyDecl = {
+    predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'eq' }],
+    combine: 'and',
+    default: 'deny',
+  }
+  function mkEq() {
+    return createDiscovery({
+      store: new Map<string, PolicyDecl>([['qw04.areas', PUBLIC], ['dbo.saldos', EQ]]),
+      engine: 'clickhouse',
+      servingCaps: new Set(['execute-sql-ch']),
+      specPaths: () => ['/a.yaml', '/b.yaml'],
+      readSpec: (p: string) =>
+        p === '/a.yaml' ? specYaml('QW-04', 'SELECT * FROM qw04.areas') : specYaml('QW-09', 'SELECT * FROM dbo.saldos'),
+      log: () => {},
+    })
+  }
+
+  it('el gerente con DOS áreas legítimas: el PI se ve, y ahora hay línea que dice por qué está vacío', () => {
+    const d = mkEq()
+    const claims: ClaimSet = { groups: ['Gerencia General', 'Proyecto'] }
+    const reports = d.discover()
+    // La visibilidad NO cambia — es lo que el issue pide que no se toque.
+    expect(d.visibleFor(reports, claims).map((r) => r.code).sort()).toEqual(['QW-04', 'QW-09'])
+    const diag = d.diagnoseFor(reports, claims)
+    expect(diag).toHaveLength(1)
+    expect(diag[0].table).toBe('dbo.saldos')
+    expect(diag[0].denials[0].kind).toBe('cardinalidad-eq')
+  })
+
+  it('el mismo sujeto con UN área: nada que diagnosticar', () => {
+    const d = mkEq()
+    expect(d.diagnoseFor(d.discover(), { groups: ['Gerencia General'] })).toEqual([])
+  })
+
+  it('sin claim: se diagnostica como `sin-claim`, distinto de la cardinalidad', () => {
+    const d = mkEq()
+    const diag = d.diagnoseFor(d.discover(), {})
+    expect(diag.map((x) => x.denials[0].kind)).toEqual(['sin-claim'])
+  })
+
+  it('la tabla `grant: all` nunca aparece en el diagnóstico', () => {
+    const d = mkEq()
+    expect(d.diagnoseFor(d.discover(), {}).map((x) => x.table)).not.toContain('qw04.areas')
+  })
+
+  it('una tabla sin política propia no se inventa un hallazgo (la herencia de vista se resuelve aparte)', () => {
+    const d = createDiscovery({
+      store: new Map<string, PolicyDecl>(),
+      engine: 'clickhouse',
+      servingCaps: new Set(['execute-sql-ch']),
+      specPaths: () => ['/a.yaml'],
+      readSpec: () => specYaml('QW-04', 'SELECT * FROM qw04.areas'),
+      log: () => {},
+    })
+    expect(d.diagnoseFor(d.discover(), {})).toEqual([])
+  })
+})

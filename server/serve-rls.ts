@@ -160,6 +160,7 @@ import { purgarRetencion, PURGA_INTERVALO_MS } from './notas-settings'
 import type { MirandaHandler } from './miranda'
 import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from './deployment-check'
 import {
+  explainDenial,
   isPublic,
   parsePolicyStore,
   settingForClaim,
@@ -252,6 +253,36 @@ const viewLineage = new Map<string, string[]>()
 const discovery = createDiscovery({ store, engine: ENGINE as 'clickhouse' | 'fabric', servingCaps: SERVING_CAPS, specPaths, resolveBases: (t) => viewLineage.get(t) })
 const discover = discovery.discover
 const visibleFor = discovery.visibleFor
+
+// --- DIAGNÓSTICO DE LA NEGACIÓN (#165 §3) ------------------------------------
+// El sujeto denegado por la CARDINALIDAD de su claim y el sujeto SIN claim producen hoy el mismo
+// resultado observable —cero filas—, y ninguno de los dos se distingue de «no hay datos». Esto no
+// cambia ni el enforcement ni la visibilidad: emite la línea que le faltaba al operador.
+//
+// Se emite al armar el índice porque es el único punto per-request que ya conoce identidad Y el
+// conjunto de PIs — y en push-down las filas no pasan por este proceso, así que un diagnóstico
+// colgado del resultado no existiría allá. Éste es función de (política, claims): vale en los dos
+// motores por igual.
+//
+// DEDUPE deliberado y su límite: un índice se pide muchas veces por sesión y el mismo hallazgo
+// inundaría el log hasta volverlo inútil. La clave es (usuario, tabla, causa), y el conjunto vive
+// en memoria del proceso: un restart vuelve a emitir cada hallazgo una vez, que es exactamente lo
+// que se quiere de un aviso de configuración. NO se acota su tamaño porque su cota es el producto
+// (identidades que entran) × (tablas gobernadas) — del orden del padrón de la instancia, no del
+// tráfico.
+const denialSeen = new Set<string>()
+function reportDenials(identity: IdentityContext, reports: Report[]): void {
+  const who = identity.user ?? '(sin identidad)'
+  for (const { table, denials } of discovery.diagnoseFor(reports, identity.claims ?? {})) {
+    for (const d of denials) {
+      const key = `${who}|${table}|${d.kind}`
+      if (denialSeen.has(key)) continue
+      denialSeen.add(key)
+      // Nombra el claim, JAMÁS su valor: los claims son datos de la persona (área, cargo, nodo).
+      console.warn(`[vergis-rls] sin filas para '${who}' en '${table}' — ${explainDenial(d)}`)
+    }
+  }
+}
 
 // --- Setup del CONECTOR según el motor --------------------------------------
 // VERGIS_CONNECTIONS acepta JSON inline (compat) o una RUTA a un archivo JSON (issue #50). El archivo
@@ -706,9 +737,12 @@ const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCod
 // estado del server (governance/piAclEnabled/domainsCfg/…), leído a request-time. Lógica verbatim.
 const indexReports = async (all: Report[], identity: IdentityContext): Promise<Report[]> => {
   const claims = identity.claims ?? {}
-  if (!(piAclEnabled && governance)) return visibleFor(all, claims)
-  const roles = await Promise.all(all.map((r) => piManagementRole(r.code, identity.user)))
-  return all.filter((_, i) => canOpen(roles[i]))
+  const visible = piAclEnabled && governance
+    ? await Promise.all(all.map((r) => piManagementRole(r.code, identity.user))).then((roles) => all.filter((_, i) => canOpen(roles[i])))
+    : visibleFor(all, claims)
+  // Sobre lo VISIBLE: un PI que el consumidor no puede abrir no tiene por qué explicar sus filas.
+  reportDenials(identity, visible)
+  return visible
 }
 const renderIndexPage = async (visible: Report[], identity: IdentityContext): Promise<string> => {
   const idxTitle = (governance ? await governance.getSetting('index_title') : null) || INDEX_TITLE
