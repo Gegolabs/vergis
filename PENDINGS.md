@@ -124,14 +124,20 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   afirmaciones que pretende arreglar.** `reg 2026-08-12 · resuelto 2026-08-13`
 
 
-- **Pinear nuestra propia imagen creó una fuente permanente de churn** — consecuencia del merge de
-  #174, y estaba señalada en su cuerpo antes de mergear. `deploy/compose.reference.yml` ahora fija
-  `ghcr.io/gegolabs/vergis:latest@sha256:…`, así que **cada build de `main` publica un digest nuevo y
-  Renovate abre/actualiza `renovate/ghcr.io-gegolabs-vergis-latest`**. Hoy esa rama encabeza la cola
-  y es la que se lleva el único intento de escritura antes del abort. **No es la causa del abort**
-  (el patrón es idéntico con cualquier rama), pero garantiza trabajo perpetuo del bot sobre una
-  imagen que es nuestra. **Decidir:** si la referencia debe seguir el tag móvil, quitar ese pin;
-  si debe quedar fija, ignorar ese paquete en `renovate.json`. `reg 2026-08-12`
+- **✅ RESUELTO (2026-08-13) — el pin de nuestra propia imagen se QUITA** (decisión de César).
+  El pin entró con #174 y su churn estaba señalado en el cuerpo del PR antes de mergear:
+  `deploy/compose.reference.yml` fijaba `ghcr.io/gegolabs/vergis:latest@sha256:…`, y **cada build de
+  `main` publica un digest nuevo**, así que el bot trabajaba a perpetuidad sobre una imagen que este
+  repo produce. Vuelve al tag móvil, que además es lo que un lector quiere copiar de una plantilla.
+  **Quitar el digest NO basta y ahí está lo delicado**: `renovate.json` extiende `docker:pinDigests`,
+  que **re-pinearía la imagen sola** en la corrida siguiente. Por eso va con su regla —
+  `matchPackageNames: ghcr.io/gegolabs/vergis` con `pinDigests: false` + `enabled: false`.
+  **El cooldown de supply chain no pierde nada**: su objeto son las dependencias de terceros
+  (`caddy:2` sigue pineada). Aplicarle 14 días de espera a una imagen propia no protege de nada.
+  **Sin verificar todavía** (no se puede sin una corrida): que la regla efectivamente gane sobre el
+  preset. La evidencia será la primera corrida de Renovate que no abra ni reabra
+  `renovate/ghcr.io-gegolabs-vergis-latest`. `renovate-config-validator` pasó, pero él mismo está
+  documentado acá como verificador de FORMA, no de semántica. `reg 2026-08-12 · resuelto 2026-08-13`
 
 - **La hipótesis de que `pin-dependencies` bloqueaba el tablero — REFUTADA por el merge** (2026-08-12).
   Se mergeó (#174) y la corrida siguiente (`31623564782`) **abortó igual**, ahora tras

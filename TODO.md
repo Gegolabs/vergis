@@ -30,10 +30,16 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
 
 ### Decisiones y acciones de César (2026-08-08, ronda de decisiones del cluster 004)
 
-- [ ] **Marca «Vergis» (y eventualmente «Custos»/«Miranda»)** — D6 de `004/11` DIFERIDA por César:
-  la decide después. El registro temprano es barato; la ausencia es irreversible si otro registra
-  primero. Estado registral sin verificar. (Insumo disponible a pedido: memo de disponibilidad +
-  clases de Niza.)
+- [x] **Marca «Vergis» (y eventualmente «Custos»/«Miranda»)** — **DECIDIDO POR CÉSAR 2026-08-13: no
+  se registra nada.** Cierra la D6 de `004/11`, que estaba diferida desde el 2026-08-08. Es decisión
+  suya, de las que el mandato no cubre (gasto y compromiso de Gegolabs ante un registro público) —
+  ver D-19 en `DECISIONS.md`, que la dejó sin tocar por esa misma razón.
+  **El riesgo asumido, dicho con todas sus letras**: en open-core el nombre es lo único que un fork
+  no se lleva (`004/11` §marca), y la ausencia de registro es **irreversible si un tercero registra
+  primero**. El estado registral nunca se verificó y ya no hace falta verificarlo.
+  **Qué reabriría esto**: que aparezca un tercero usando el nombre, o que el corte open-core llegue
+  a distribución comercial. Ese día el insumo sigue siendo el mismo (memo de disponibilidad + clases
+  de Niza), y ya no será barato.
 - [ ] **Revisión (suya o de abogado) del borrador de `CONTRIBUTING.md`** — la cláusula DCO +
   licencia de contribución (11/D5, aprobada) se redacta como borrador y NO se publica sin esta
   revisión. La ventana del dual licensing se cierra con el primer PR externo sin acuerdo.

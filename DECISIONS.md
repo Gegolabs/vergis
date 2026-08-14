@@ -11,6 +11,10 @@ el registro existe para que revertirla sea barato.
 
 ## D-19 · 2026-08-10 — La marca queda sin tocar (gasto), y se dice qué falta
 
+> **SUPERADA 2026-08-13 por decisión de César: no se registra nada.** Esta entrada dejó la marca
+> en su mesa; él la bajó de la mesa. La decisión de fondo queda cerrada en `TODO.md`; esto se
+> conserva porque registra *por qué* el agente no la tomó — el límite del mandato, que sigue vigente.
+
 - **Bifurcación**: la marca «Vergis» (y «Custos»/«Miranda») sigue diferida por César desde el 2026-08-08, con estado registral sin verificar. Con mandato amplio: ¿levantar el memo de disponibilidad, iniciar algo, o dejarlo?
 - **Decidido**: **no se ejecuta nada**, y no por criterio sino por autoridad — registrar una marca **gasta plata** y compromete a Gegolabs frente a un registro público. Es de la familia que el mandato explícitamente no cubre. Tampoco se levanta el memo de disponibilidad: su valor entero está en consultar INAPI (y equivalentes) con datos reales, y una búsqueda no autoritativa presentada como memo sería justo el tipo de artefacto que la Norma 6 prohíbe — una conjetura con cara de dato que decide por quien la lea.
 - **Lo que sí queda dicho**: el riesgo es asimétrico y no cambió. El registro temprano es barato; la ausencia es **irreversible** si otro registra primero. Sigue en `TODO.md` como decisión suya.
