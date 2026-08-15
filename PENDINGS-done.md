@@ -125,6 +125,20 @@ cerrar.
   Árbol de `~/.claude` limpio, verificado con `git status --porcelain` vacío.
   *La ficha no se cierra por «ya no aplica»: se cierra porque el árbol se midió.*
   `reg 2026-08-07 · cerrado 2026-08-14`
+- **`MASKED WITH` × vistas-contrato `SCHEMABINDING`: interacción no medida** — declarada conjetura al
+  abrirse #163 y sostenida como tal, porque «no había dónde medirla».
+  **Cerrada 2026-08-14, medida contra un motor y peor de lo que se temía:** un objeto `SCHEMABINDING`
+  que referencia la columna bloquea el `ADD MASKED` **y** el `DROP MASKED`, así que el plano de
+  columna no se instalaba en las tablas que la instancia real usa. Con su control de causa (quitada
+  **solo** la vista, la misma sentencia se acepta) y su remediación **corrida**, no prometida: no es
+  incompatibilidad, es **orden**.
+  De la misma corrida salió un defecto que nadie había conjeturado: el guard de idempotencia del
+  `DROP MASKED` **no guardaba** —T-SQL compila el batch antes de ejecutarlo—, y por eso **toda**
+  instalación nueva del plano de columna fallaba en su primera sentencia.
+  Corregido en #163 (PR #191) con preflight diagnosticado; racional en `DECISIONS.md` D-30.
+  *La premisa que la sostenía —«no hay dónde medirlo»— era falsa: el compilador emite T-SQL y un
+  motor T-SQL cabe en un contenedor (`npm run lab:proof`).*
+  `reg 2026-08-13 · cerrado 2026-08-14`
 
 ## Vencidas sin veredicto
 
