@@ -267,10 +267,62 @@ una tabla devolvería todas sus filas → fuga. "Sin artefacto" = bug, no "públ
 > necesita su artefacto y, si es otra DB, su propia conexión registrada. (Verificar la topología real —
 > qué store/motor lee cada PI — antes de tocar; es dato de instancia, no asumible.)
 
+## 6·bis · Control por COLUMNA — dos mecanismos, y el orden que hay que respetar
+
+La RLS de §6 esconde **filas**. Cuando el terreno ancho trae una columna que no todos pueden ver
+(un RUT, una remuneración), el control es por **columna**, y el compilador emite **dos artefactos
+que no son redundantes** — cada uno cubre lo que el otro no:
+
+| Artefacto | Discrimina por | Cubre |
+|---|---|---|
+| **DDM** (`ADD MASKED WITH`) — vive en la columna | el permiso **`UNMASK` del principal** | el **rodeo**: quien esquive la vista y consulte la tabla directa |
+| **Vista de máscara** (`vw_mask_<tabla>`) — `CASE` por request | el **claim del sujeto**, vía `SESSION_CONTEXT` | que la columna se sirva **a quien corresponde**, no a un principal entero |
+
+Que el consumidor consulte la vista y no la tabla es decisión de **arquitectura de instancia** (qué
+objeto nombra el spec), no del emisor: el compilador la emite y la declara.
+
+### La dependencia que decide si la capacidad sirve
+
+**La rama «en claro» de la vista de máscara lee la columna base**, y esa columna tiene DDM. Medido:
+
+- Si el principal de serving **no tiene `UNMASK`**, esa rama recibe el default del DDM ⇒ **ni el
+  sujeto con el claim ve el valor**. La capacidad queda degradada a «esta columna no se sirve a
+  nadie»: es seguro, pero no es lo que se pidió.
+- Si **lo tiene**, la vista discrimina por claim como se diseñó — y el DDM queda **inerte para ese
+  principal**, que es lo esperable: su papel es cubrir a los demás.
+
+**Control obligatorio al verificarlo en una instancia**, en la misma sesión: una consulta a la tabla
+**sin** la vista. Sin él, un negativo no distingue «al principal le falta el permiso» de «la vista no
+se aplicó».
+
+### El orden importa: `SCHEMABINDING` inmoviliza la columna (medido)
+
+Un objeto `SCHEMABINDING` que referencia la columna la deja **inmutable**: ni `ADD MASKED` ni
+`DROP MASKED` pasan mientras exista. Es el caso de las **vistas-contrato**.
+
+**No es incompatibilidad — es orden**, y esa salida está corrida, no supuesta:
+
+1. la máscara sobre una columna libre se acepta;
+2. la vista-contrato se crea **después**, sobre la columna ya enmascarada, y también se acepta;
+3. lo imposible es alterar la columna con el objeto ya atado.
+
+Por eso el setup emite un **preflight** que diagnostica antes de intentarlo, **nombra** los objetos
+que atan la columna y falla ruidoso (`RAISERROR` 16). Falla a propósito y no avisa: el plano de
+**fila** ya quedó instalado —va antes en el setup—, así que lo que corta es exactamente el plano de
+columna. Un install parcial y silencioso es lo que produjo el defecto que esto corrige.
+
+> **Cómo se mide todo lo anterior sin Fabric:** `npm run lab:up && npm run lab:proof` levanta un motor
+> T-SQL real en contenedor y aplica **el DDL que emite el compilador**. Ver
+> [`scripts/README-tsql-lab.md`](../scripts/README-tsql-lab.md), incluida la asimetría al citar sus
+> resultados: un **negativo** refuta también para Fabric; un **positivo no garantiza** el SKU.
+
 ## 7 · Para agentes — el contrato
 
 1. **Tres estados, tres lugares.** Datos→engine · spec→archivos authz-blind · gobierno→`GovernanceStore`.
    No metas gobierno en el spec ni en el data engine.
+2·bis. **El control por columna son DOS artefactos y un orden.** DDM cubre el rodeo, la vista de
+   máscara honra al sujeto, y sin `UNMASK` en el principal de serving la columna no se sirve a nadie.
+   Un objeto `SCHEMABINDING` inmoviliza la columna: la máscara va **antes** que él (§6·bis).
 2. **AND de dos autorizaciones, sin bypass.** Acceso-al-artefacto Y RLS-de-filas. Jamás abras una vía que
    eleve datos por colaboración/ownership. "Público" no abre datos: la RLS sigue.
 3. **Grupos en Mira, no en AAD.** Para compartir, usa grupos de Mira / correos; no asumas que la
