@@ -21,8 +21,8 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.16.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
-| `0.16` | Flota al último patch de la serie 0.16 | Producción que quiere correcciones sin capacidades nuevas |
+| `0.17.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.17` | Flota al último patch de la serie 0.17 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
 | `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
@@ -33,6 +33,68 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 **El despliegue es del operador de la instancia, no del Producto.** Acá se publica la versión y se
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
+
+## 0.17.0 — 2026-08-14
+
+**La autoridad se puede quitar, el alcance se puede acotar, y lo que toca Fabric por fin se mide.**
+Cuatro issues (#182 #183 #185 #163), tres de ellos nacidos de casos reales de una instancia. Tests
+2101 → 2125.
+
+- **Un admin sembrado se puede revocar, in-app y sin reiniciar** (#182). La siembra de
+  `VERGIS_ADMIN_SEED` era un upsert sin `DELETE` ni tombstone: quitar el correo del env no revocaba
+  nada y la UI rechazaba la baja con 409, así que el único camino era **detener el contenedor y
+  editar el `.sqlite` a mano** — con corte de servicio y sin rastro de auditoría. Ahora la baja deja
+  tombstone (`admin_seed_removed`), el re-sembrado del arranque siguiente no la resucita y un alta
+  posterior levanta la marca. Es la **misma precedencia runtime-sobre-semilla** que el store ya tenía
+  para miembros de grupo y para el registro de fuentes (#107): `admin` era la única de las tres
+  familias sembradas sin ella. Se conserva el único lockout real —no quitar al último admin—, que era
+  lo que la inmunidad de la semilla venía confundiendo con protección. La UI advierte el **drift**
+  cuando la identidad revocada sigue declarada en el env.
+- **`stewards:` admite grupos de Mira, no solo correos** (#183). El único camino grupo→steward era
+  `VERGIS_DEFAULT_STEWARD_GROUPS`, y es **todo o nada**: en una instancia real, para que un equipo
+  gestionara la ingesta de UN dominio, sus seis integrantes quedaron steward de los **siete**. Una
+  entrada de `stewards:` ahora **declara** qué es —`ana@gh.cl` o `group:feeders_cartera`—, nunca se
+  infiere del texto. La **pertenencia se resuelve por request** contra el store, así que un alta o
+  baja en `/admin/grupos` surte efecto **sin reiniciar ni recargar el YAML**. Fail-closed en los tres
+  bordes: grupo inexistente, grupo vacío, o llamador que no resolvió los grupos ⇒ ningún acceso. Las
+  dos vías de grupo son **unión**: `VERGIS_DEFAULT_STEWARD_GROUPS` sigue igual.
+- **Comentar una fila deja de dar 403 cuando el alcance viene de un `default:`** (#185). El bloque de
+  contexto que la capa de notas publica al cliente se armaba con la **query de navegación**, y un
+  control de alcance con `default:` se resuelve server-side: con la URL pelada el bloque salía sin la
+  llave `ctx`, el POST del comentario viajaba sin alcance y el gate re-buscaba la fila con el
+  parámetro en blanco → cero filas → *«Registro no visible para esta identidad»* sobre una fila que la
+  identidad **sí** ve. Ahora se publica el ctx **efectivo**, el mismo con que corrieron las queries de
+  la página. **No se tocó el gate**: la llave inexistente sigue dando 403.
+- **El control por COLUMNA instala, es idempotente y diagnostica** (#163). Tres defectos, los tres
+  **medidos contra un motor** y ninguno deducido: (a) el guard de idempotencia del `DROP MASKED` **no
+  guardaba** —T-SQL compila el batch antes de ejecutarlo—, y como ese statement encabeza el setup,
+  **toda instalación nueva del plano de columna fallaba en su primera sentencia**; (b) un objeto
+  `SCHEMABINDING` que referencia la columna bloquea el `ADD` y el `DROP MASKED` — el caso de las
+  **vistas-contrato**; (c) el motor rechazaba con «one or more objects access this column», que no
+  nombra al culpable ni dice qué hacer. Ahora un **preflight** diagnostica antes, nombra los objetos
+  que atan la columna y da la salida **medida**: no es incompatibilidad, es **orden** —la máscara se
+  aplica antes de crear el objeto, y el objeto se recrea después—. Falla ruidoso a propósito: el
+  plano de **fila** ya quedó instalado, así que el corte es exactamente el de columna.
+
+**Cómo se midió, que es la parte que cambia de aquí en adelante:** el Producto ganó un **terreno
+T-SQL propio** (`npm run lab:up && npm run lab:proof`) — un motor real en contenedor, local y sin
+tocar infraestructura de nadie, que aplica el DDL **que emite el compilador**, no SQL escrito para la
+ocasión. La justificación que sostenía siete pendientes —«no hay dónde medir lo que toca Fabric»—
+resultó **falsa para la semántica del lenguaje**. Sigue siendo cierta para el SKU de Fabric, los
+permisos de un service principal concreto y el costo de enforcement.
+
+**⚠ Nota de despliegue — un cambio de conducta observable al arrancar.** El parseo de `domains.yaml`
+se vuelve **estricto**: una entrada de `stewards:` que no sea un correo válido ni `group:<slug>`
+**falla al arrancar** en vez de quedar muerta en silencio. Es deseable —esa entrada era una
+autorización que la instancia creía tener y no tenía—, pero conviene revisar el `stewards:` de cada
+dominio **antes** de tomar la versión. Sin otros cambios de configuración ni de contrato de instancia;
+`admin_seed_removed` nace sola en la apertura del store y una db anterior la estrena vacía.
+
+**Lo que queda sin medir, dicho con esas palabras:** que **Fabric** se comporte como el motor donde
+se midió #163. La asimetría es la que importa: un **negativo** del terreno T-SQL refuta también para
+Fabric, pero el preflight y su remediación son **positivos**, y un positivo no garantiza el SKU. Y
+para #182/#183/#185, ninguna corrida ejercita el proceso completo contra una instancia viva — eso lo
+corrobora quien opere la versión.
 
 ## 0.16.1 — 2026-08-14
 
