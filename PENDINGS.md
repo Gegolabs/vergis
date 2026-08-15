@@ -34,18 +34,21 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **El frente de authz dejó cuatro cosas sin medir, y una de ellas decide si la capacidad sirve** —
-  todas del cierre de #163/#159 (2026-08-13). Ninguna se puede medir sin terreno vivo:
-  (a) **¿el Service Principal de serving tiene `UNMASK`?** Si NO lo tiene, la vista de máscara
-  tampoco discrimina —su rama «en claro» lee la columna base y recibe el default del DDM— y la
-  capacidad queda degradada a «esta columna no se sirve a nadie». Es seguro, pero no es lo que el
-  issue pide. **Control obligatorio en la misma sesión**: una consulta a la tabla sin vista, o un
-  negativo no distingue «no tiene el permiso» de «la vista no se aplicó». (b) que Fabric acepte el
-  DDL de la vista y del `ADD MASKED` **sobre una tabla con vista-contrato `SCHEMABINDING`**.
-  (c) el costo de enforcement por columna. (d) el bit `is_schema_bound` según el driver: se aceptan
-  `1`/`true`/`'1'` y **cualquier otra cosa cae al cubo que no hereda** — fail-closed ruidoso, pero
-  si un driver devolviera algo inesperado, vistas-contrato hoy servibles dejarían de serlo.
-  `reg 2026-08-13`
+- **El frente de authz dejó cuatro cosas sin medir — quedan DOS, y ya no por falta de terreno**
+  (*encogido el 2026-08-14 con el arnés T-SQL local; la premisa «ninguna se puede medir sin terreno
+  vivo» resultó falsa para la mitad*):
+  (a) **¿el SP de serving tiene `UNMASK`?** — el **mecanismo** está medido: sin `UNMASK`, la rama «en
+  claro» de la vista devuelve el default del DDM y **ni el sujeto con el claim ve el valor**; con
+  `UNMASK` la vista discrimina por claim, con su control de que no es un no-op. Lo que queda es un
+  dato de instancia: **qué permisos tiene ESE service principal**. Se responde con una consulta, no
+  con un frente. (b) **RESUELTA y peor de lo que se temía**: el `ADD MASKED` no entra sobre una tabla
+  con vista-contrato — es **orden**, no incompatibilidad, y el motor lo rechazaba sin nombrar al
+  culpable. Corregido con preflight diagnosticado; ver #163 y `DECISIONS.md` D-30. (c) el **costo de
+  enforcement** por columna sigue siendo de Fabric (#186). (d) el bit `is_schema_bound` según el
+  driver: se aceptan `1`/`true`/`'1'` y **cualquier otra cosa cae al cubo que no hereda** —
+  fail-closed ruidoso, pero si un driver devolviera algo inesperado, vistas-contrato hoy servibles
+  dejarían de serlo. **Sigue sin medir**, y ahora sí se puede: el arnés tiene un driver real.
+  `reg 2026-08-13 · act 2026-08-14`
 - **Miranda deja de muestrear los objetos que NO estén en el policy store** — consecuencia del
   escudo de columna (#163·H9) y de su lectura estricta de «sin política ⇒ no se sondea». Es
   coherente con la doctrina del nodo (dato sin política no se sirve) y es fail-closed, **pero si el
@@ -63,19 +66,16 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   se anota porque el primer reporte de «Miranda no me deja consultar algo que sí puedo ver» va a
   venir de acá y conviene no diagnosticarlo desde cero. `reg 2026-08-13`
 
-- **La medición de #164 contra Fabric NO se hizo, y sin ella los caminos 1 y 2 son conjetura** — la
-  pregunta exacta es si Fabric/Azure SQL acepta un `ADD FILTER PREDICATE` cuya función **no recibe
-  ninguna columna** de la tabla (y si no, si acepta un parámetro alimentado por constante). Se puede
-  medir en el QA `vm-vergis-qa` contra `ws-arbol-qa`, **sin PROD**. **El control es obligatorio**: la
-  forma actual (función con columna) tiene que pasar en el mismo terreno y la misma sesión, o un
-  fallo de las variantes no distingue «Fabric no lo admite» de «el terreno estaba mal». Lo construido
-  hoy (`schemaDependencies`) **mitiga y no resuelve**: vuelve legible la dependencia, no la quita.
-  `reg 2026-08-13`
-- **`MASKED WITH` × vistas-contrato `SCHEMABINDING`: interacción no medida** — es el gate que va antes
-  del H2 de #163 (back-end Fabric del control por columna), junto con el costo de enforcement por
-  columna. La instancia ya usa vistas `SCHEMABINDING`, así que la interacción no es hipotética. El
-  issue lo declaró conjetura al abrirse y **lo sigue siendo**: nada de lo hecho hoy lo tocó.
-  `reg 2026-08-13`
+- **La medición de #164 está hecha a MEDIAS, y la mitad que falta es la de Fabric** (*act 2026-08-14*)
+  — la forma **es válida en T-SQL**: el motor acepta la función sin parámetro, el `ADD FILTER
+  PREDICATE` sin argumento y la variante con constante, con su **control positivo** (la forma actual
+  pasa en el mismo terreno y la misma sesión) y verificando que la tabla siga sirviendo sus filas —
+  una policy que instala y **niega todo** también «se acepta», y sería peor que el problema original.
+  **Lo que falta es Fabric, y la asimetría manda**: un negativo de la familia T-SQL habría refutado
+  para ambos, pero esto es un **positivo**, y un positivo no garantiza el SKU. Emitir la forma nueva
+  antes de verla pasar en Fabric sería exactamente la Norma 7 al revés. Lo construido
+  (`schemaDependencies`) **mitiga y no resuelve**: vuelve legible la dependencia, no la quita.
+  `reg 2026-08-13 · act 2026-08-14`
 - **El render de gráficos: queda un residuo que ninguna capa detiene** — un exploit de Vega que haga
   E/S **sin pasar por su loader** (p. ej. vía una dependencia transitiva) atraviesa el gate
   declarativo y el loader que niega. Es justo lo que cubriría un subproceso, y el subproceso se
