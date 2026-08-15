@@ -248,15 +248,72 @@ function maskedColumnsOf(policy: PolicyDecl): string[] {
  *  columna SIN máscara es un error: sin el guard, el teardown (que también encabeza el setup, que es
  *  como este emisor es idempotente) fallaría en la PRIMERA instalación y dejaría la tabla sin policy. */
 function dropMaskedSQL(qTable: string, column: string): string {
+  // El `ALTER` va DENTRO de `EXEC(...)` y no colgando del `IF`. Motivo medido, no estilístico: T-SQL
+  // **compila el batch entero antes de ejecutarlo**, y `DROP MASKED` se valida en compilación — así
+  // que sobre una columna sin máscara el batch falla ANTES de evaluar el `IF`, y el guard no guarda
+  // nada. Como este statement encabeza también el setup (tira-y-recrea), la consecuencia era que
+  // **toda instalación nueva** de una policy con reglas de columna fallaba en su primera sentencia.
+  // `EXEC` difiere la compilación al momento de ejecutar, que es cuando el guard ya decidió.
+  // (Medido en `scripts/tsql-lab-proof.ts`, con su control: con la máscara puesta sí la quita.)
   return (
     `IF EXISTS (SELECT 1 FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'${qTable}') AND name = N'${column}')\n` +
-    `    ALTER TABLE ${qTable} ALTER COLUMN [${column}] DROP MASKED;`
+    `    EXEC(N'ALTER TABLE ${qTable} ALTER COLUMN [${column}] DROP MASKED;');`
   )
 }
 
 /** Instala la máscara sobre la columna. */
 function addMaskedSQL(qTable: string, column: string): string {
   return `ALTER TABLE ${qTable} ALTER COLUMN [${column}] ADD MASKED WITH (FUNCTION = '${MASK_FUNCTION}');`
+}
+
+/**
+ * PREFLIGHT del plano de columna: diagnostica ANTES de intentar la máscara.
+ *
+ * Un objeto `SCHEMABINDING` que referencia la columna la deja **inmutable**: ni `ADD MASKED` ni
+ * `DROP MASKED` pasan mientras exista. Es el caso de las **vistas-contrato**, que la instancia real
+ * usa. El motor lo rechaza con «one or more objects access this column», que no nombra al culpable
+ * ni dice qué hacer — y un aplicador que solo ve ese texto no puede distinguirlo de un problema de
+ * permisos.
+ *
+ * Lo medido, y por eso la remediación es concreta y no un «revise su esquema»: **no es una
+ * incompatibilidad, es el ORDEN**. La máscara sobre una columna libre se acepta, y crear después la
+ * vista-contrato sobre esa columna YA enmascarada también. Lo que no se puede es alterar la columna
+ * con el objeto ya atado.
+ *
+ * Se emite RAISERROR severidad 16 —falla ruidosa— y no un aviso: el plano de FILA ya quedó instalado
+ * (va antes en `setupSQL`), así que lo que este error corta es exactamente el plano de columna. Un
+ * install parcial y silencioso es lo que produjo este defecto en primer lugar.
+ */
+function maskPreflightSQL(qTable: string, columns: string[]): string {
+  // Se buscan SOLO las dependencias A NIVEL DE COLUMNA de las columnas que se van a enmascarar.
+  //
+  // La versión ingenua sumaba también la dependencia de objeto (`referenced_minor_id = 0`), y el
+  // arnés la refutó de inmediato: **la propia SECURITY POLICY de fila es `SCHEMABINDING`** y deja su
+  // fila de objeto, así que el preflight se disparaba contra el artefacto que el mismo setup acababa
+  // de instalar — un falso positivo que habría roto toda instalación con reglas de columna.
+  // Medido: un objeto schema-bound registra una fila por CADA columna que referencia (`secpol` ata
+  // solo la columna del predicado; una vista-contrato ata las de su proyección). Con eso alcanza y
+  // sobra para distinguir «ata la columna que voy a enmascarar» de «toca esta tabla».
+  const dependeDeAlgunaColumna = (alias: string) =>
+    columns
+      .map((c) => `${alias}.referenced_minor_id = COLUMNPROPERTY(OBJECT_ID(N'${qTable}'), N'${c}', 'ColumnId')`)
+      .join(`\n           OR `)
+  return (
+    `IF EXISTS (\n` +
+    `    SELECT 1 FROM sys.sql_expression_dependencies d\n` +
+    `    WHERE d.referenced_id = OBJECT_ID(N'${qTable}') AND d.is_schema_bound_reference = 1\n` +
+    `      AND (${dependeDeAlgunaColumna('d')})\n` +
+    `)\n` +
+    `BEGIN\n` +
+    `    DECLARE @vergis_bound NVARCHAR(MAX) = (\n` +
+    `        SELECT STRING_AGG(QUOTENAME(OBJECT_SCHEMA_NAME(x.referencing_id)) + N'.' + QUOTENAME(OBJECT_NAME(x.referencing_id)), N', ')\n` +
+    `        FROM (SELECT DISTINCT e.referencing_id FROM sys.sql_expression_dependencies e\n` +
+    `              WHERE e.referenced_id = OBJECT_ID(N'${qTable}') AND e.is_schema_bound_reference = 1\n` +
+    `                AND (${dependeDeAlgunaColumna('e')})) x\n` +
+    `    );\n` +
+    `    RAISERROR(N'vergis: no se puede instalar el plano de columna sobre ${qTable}: la(s) columna(s) ${columns.map((c) => `[${c}]`).join(', ')} están atadas por objeto(s) SCHEMABINDING (%s). No es incompatibilidad sino ORDEN: la máscara se aplica ANTES de crear ese objeto, y el objeto se recrea después. El plano de FILA ya quedó instalado.', 16, 1, @vergis_bound);\n` +
+    `END`
+  )
 }
 
 // --- PLANO DE COLUMNA (#163 H6): la VISTA DE MÁSCARA, evaluada POR REQUEST ---
@@ -461,7 +518,14 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
   // completo (que ya desinstala vista y máscaras) y las vuelve a poner al final. La vista va ÚLTIMA:
   // se apoya en la tabla ya gobernada, y `CREATE VIEW` tiene que encabezar su batch en T-SQL — por eso
   // viaja como UNA sentencia suelta de `setupSQL`, nunca concatenada a otra.
-  const maskSetup = [...maskedCols.map((c) => addMaskedSQL(qTable, c)), ...(maskView ? [maskView.createSQL] : [])]
+  // El preflight encabeza el plano de columna: diagnostica el bloqueo por SCHEMABINDING con los
+  // objetos nombrados, en vez de dejar que el motor devuelva «one or more objects access this column».
+  // Sin reglas de columna no se emite ni una línea — la promesa de «la ausencia de reglas no mueve un
+  // byte del SQL» sigue intacta, y hay un test que la sostiene.
+  const maskSetup =
+    maskedCols.length === 0
+      ? []
+      : [maskPreflightSQL(qTable, maskedCols), ...maskedCols.map((c) => addMaskedSQL(qTable, c)), ...(maskView ? [maskView.createSQL] : [])]
   // Claims que solo aparecen en reglas de COLUMNA: hay que inyectarlos igual. No es cosmético — es la
   // misma nuance de no-fuga del pool (doc 10 §5): un claim que el nodo NO inyecta no se reescribe en
   // cada request, así que el `SESSION_CONTEXT` de OTRO consumidor sobreviviría en la conexión reusada
