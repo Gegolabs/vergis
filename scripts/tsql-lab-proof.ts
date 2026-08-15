@@ -141,56 +141,64 @@ async function main(): Promise<void> {
       .input('a', sql.NVarChar, f.area).input('r', sql.NVarChar, f.rut).input('s', sql.Decimal(18, 2), f.sueldo)
       .query('INSERT INTO dbo.areas (area, rut, sueldo) VALUES (@a, @r, @s)')
   }
-  // La VISTA-CONTRATO con SCHEMABINDING que la instancia real usa. Está acá porque #163 dejó como
-  // conjetura si `ADD MASKED` y la vista de máscara conviven con ella — no es hipotético.
-  await sa.request().batch(`
-    CREATE VIEW dbo.vw_contrato_areas WITH SCHEMABINDING AS
-      SELECT area, rut, sueldo FROM dbo.areas;`)
-
-  // ── P2 (#163·b) · ¿acepta el motor el DDL del compilador SOBRE una tabla con vista-contrato? ──
-  seccion('P2 (#163·b) · el DDL emitido, sobre una tabla que YA tiene vista-contrato SCHEMABINDING')
-  const rechazadas: { stmt: string; error: string }[] = []
-  for (const stmt of enf.setupSQL) {
-    const r = await intentar(sa, stmt)
-    if (!r.ok) rechazadas.push({ stmt: stmt.split('\n')[0], error: r.error })
-  }
-  for (const r of rechazadas) {
-    hallazgo(`RECHAZADO: ${r.stmt}…`)
-    hallazgo(`   motor: ${r.error}`)
-  }
-  const setupLimpio = rechazadas.length === 0
-  ok(setupLimpio, `las ${enf.setupSQL.length} sentencias del setup emitido se aplican sobre la tabla con vista-contrato`)
-
-  // El plano de FILA sí entra: acotar el hallazgo a la máscara es lo que lo vuelve accionable.
-  const policies = (await sa.request().query(
-    `SELECT name, is_enabled FROM sys.security_policies`,
-  )).recordset as unknown as { name: string; is_enabled: boolean }[]
-  ok(policies.some((p) => p.is_enabled), `el plano de FILA sí queda instalado — sys.security_policies: ${policies.map((p) => `${p.name}(${p.is_enabled ? 'ON' : 'off'})`).join(', ')}`)
-
-  const enmascaradas = async (): Promise<string[]> =>
-    (await sa.request().query(`SELECT name FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'dbo.areas') AND is_masked = 1`))
-      .recordset.map((r) => String((r as Record<string, unknown>)['name']))
-
-  if (!setupLimpio) {
-    // CONTROL DE CAUSA — el experimento que habría refutado «la vista-contrato es la culpable».
-    // Se retira SOLO la vista y se reintenta la MISMA sentencia, en la misma sesión y sobre la misma
-    // tabla. Si el rechazo fuera por otra cosa (el tipo, la policy de fila, el motor), seguiría
-    // rechazando. Sin este control, «falló con la vista puesta» es correlación, no mecanismo.
-    ok((await enmascaradas()).length === 0, 'CONTROL · con la vista-contrato puesta, NINGUNA columna quedó enmascarada')
-    await sa.request().batch('DROP VIEW dbo.vw_contrato_areas;')
-    const reintento = await intentar(sa, `ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] ADD MASKED WITH (FUNCTION = 'default()');`)
-    ok(reintento.ok, `CONTROL · retirada SOLO la vista-contrato, la MISMA sentencia se acepta${reintento.ok ? '' : ` — ${reintento.error}`}`)
-    ok((await enmascaradas()).includes('rut'), `CONTROL · corroborado en sys.masked_columns: [${(await enmascaradas()).join(', ')}]`)
-    hallazgo('MECANISMO MEDIDO: la vista-contrato SCHEMABINDING bloquea el `ADD MASKED` de las columnas que proyecta.')
-    hallazgo('   Consecuencia: el plano de COLUMNA de #163 no se instala en las tablas con vista-contrato — que son las que la instancia real usa.')
-    // La vista de máscara se emite al final del setup y cayó con la máscara: se instala ahora que sí.
-    if (rechazadas.some((r) => r.stmt.startsWith('CREATE VIEW'))) {
-      const v = await intentar(sa, enf.maskView.createSQL)
-      ok(v.ok, `la vista de máscara se instala una vez que la columna pudo enmascararse${v.ok ? '' : ` — ${v.error}`}`)
+  // ── P2 (#163) · el plano de columna corregido, contra el motor ─────────────────────────────
+  // Los tres defectos que este bloque cubre los devolvió ESTE arnés, no una lectura del manual:
+  //   D1 · el guard `IF EXISTS … DROP MASKED` no guardaba (T-SQL compila el batch entero antes de
+  //        ejecutarlo), así que TODA instalación nueva fallaba en su primera sentencia.
+  //   D2 · un objeto SCHEMABINDING que referencia la columna bloquea `ADD` y `DROP MASKED`.
+  //   D3 · el motor no dice cuál objeto, ni que la salida es el ORDEN.
+  seccion('P2a (#163·D1) · instalación limpia sobre tabla LIBRE, y la MISMA otra vez (idempotencia)')
+  for (const vuelta of ['1ª vuelta', '2ª vuelta (idempotencia)']) {
+    const fallidas: { stmt: string; error: string }[] = []
+    for (const stmt of enf.setupSQL) {
+      const r = await intentar(sa, stmt)
+      if (!r.ok) fallidas.push({ stmt: stmt.split('\n')[0], error: r.error })
     }
-  } else {
-    ok((await enmascaradas()).includes('rut'), `corroborado en sys.masked_columns: [${(await enmascaradas()).join(', ')}]`)
+    for (const f of fallidas) hallazgo(`${vuelta} RECHAZADA: ${f.stmt}… → ${f.error}`)
+    ok(fallidas.length === 0, `${vuelta}: las ${enf.setupSQL.length} sentencias del setup se aplican`)
   }
+  const enmascaradasDe = async (tabla: string): Promise<string[]> =>
+    (await sa.request().query(`SELECT name FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'${tabla}') AND is_masked = 1`))
+      .recordset.map((r) => String((r as Record<string, unknown>)['name']))
+  ok((await enmascaradasDe('dbo.areas')).includes('rut'), `corroborado en sys.masked_columns: [${(await enmascaradasDe('dbo.areas')).join(', ')}]`)
+  const pol0 = (await sa.request().query(`SELECT name, is_enabled FROM sys.security_policies`)).recordset as unknown as { name: string; is_enabled: boolean }[]
+  ok(pol0.some((p) => p.is_enabled), `y el plano de FILA también: ${pol0.map((p) => `${p.name}(${p.is_enabled ? 'ON' : 'off'})`).join(', ')}`)
+
+  // ── P2b · la tabla ATADA por una vista-contrato: tiene que fallar con NUESTRO diagnóstico ──
+  seccion('P2b (#163·D2/D3) · sobre tabla con vista-contrato: ¿diagnostica, o repite el error opaco del motor?')
+  await sa.request().batch(`CREATE TABLE dbo.atada (area NVARCHAR(50) NOT NULL, rut NVARCHAR(20) NOT NULL, sueldo DECIMAL(18,2) NOT NULL);`)
+  await sa.request().batch(`CREATE VIEW dbo.vw_contrato_atada WITH SCHEMABINDING AS SELECT area, rut, sueldo FROM dbo.atada;`)
+  const enfAtada = compileFabric(POLICY, { ...TARGET, table: 'atada' })
+  const erroresAtada: string[] = []
+  for (const stmt of enfAtada.setupSQL) {
+    const r = await intentar(sa, stmt)
+    if (!r.ok) erroresAtada.push(r.error)
+  }
+  const diagnostico = erroresAtada.find((e) => e.includes('vergis:'))
+  ok(diagnostico !== undefined, `el fallo lo emite el preflight, no el motor: ${diagnostico ?? `(ninguno; errores: ${erroresAtada.join(' | ') || 'ninguno'})`}`)
+  ok(diagnostico?.includes('[dbo].[vw_contrato_atada]') === true, 'el diagnóstico NOMBRA el objeto que ata la columna')
+  ok(diagnostico?.includes('ORDEN') === true, 'y da la remediación medida, no un «revise su esquema»')
+  // CONTROL · el plano de FILA de esa tabla sí quedó: el corte es del plano de columna y nada más.
+  const polAtada = (await sa.request().query(`SELECT COUNT(*) AS n FROM sys.security_policies WHERE name = N'secpol_atada' AND is_enabled = 1`)).recordset[0] as Record<string, unknown>
+  ok(Number(polAtada['n']) === 1, 'CONTROL · el plano de FILA de la tabla atada SÍ quedó instalado (el corte es solo el de columna)')
+  ok((await enmascaradasDe('dbo.atada')).length === 0, 'CONTROL · y ninguna columna quedó enmascarada a medias')
+
+  // ── P2c · la remediación que el mensaje promete, MEDIDA ────────────────────────────────────
+  // Un mensaje de error que promete una salida sin que nadie la haya corrido es una conjetura con
+  // cara de instrucción. Acá se corre: máscara primero, vista-contrato después.
+  seccion('P2c · la remediación que el diagnóstico promete: ¿de verdad funciona el orden inverso?')
+  await sa.request().batch(`CREATE TABLE dbo.ordenada (area NVARCHAR(50) NOT NULL, rut NVARCHAR(20) NOT NULL, sueldo DECIMAL(18,2) NOT NULL);`)
+  const enfOrden = compileFabric(POLICY, { ...TARGET, table: 'ordenada' })
+  const fallidasOrden: string[] = []
+  for (const stmt of enfOrden.setupSQL) {
+    const r = await intentar(sa, stmt)
+    if (!r.ok) fallidasOrden.push(r.error)
+  }
+  ok(fallidasOrden.length === 0, `1) el plano completo entra sobre la tabla libre${fallidasOrden.length ? ` — ${fallidasOrden.join(' | ')}` : ''}`)
+  const vistaDespues = await intentar(sa, `CREATE VIEW dbo.vw_contrato_ordenada WITH SCHEMABINDING AS SELECT area, rut, sueldo FROM dbo.ordenada;`)
+  ok(vistaDespues.ok, `2) y la vista-contrato se crea DESPUÉS, sobre la columna ya enmascarada${vistaDespues.ok ? '' : ` — ${vistaDespues.error}`}`)
+  ok((await enmascaradasDe('dbo.ordenada')).includes('rut'), 'CONTROL · la máscara sigue puesta con la vista-contrato encima')
+  hallazgo('REMEDIACIÓN MEDIDA: no es incompatibilidad, es orden — máscara primero, vista-contrato después.')
 
   // ── Los dos sujetos: sin ellos no se distingue «discrimina» de «esconde para todos» ─────────
   // Los LOGIN son de SERVIDOR: sobreviven al DROP DATABASE, así que el bootstrap los tira primero

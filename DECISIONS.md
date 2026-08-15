@@ -5,9 +5,22 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 |
 
 ---
+
+## D-30 · 2026-08-14 — El plano de columna se corrige y se DIAGNOSTICA; la vista-contrato ajena no se toca
+
+- **Bifurcación**: el arnés T-SQL local midió que el `ADD MASKED` de #163 no se instala si un objeto `SCHEMABINDING` referencia la columna — el caso de las vistas-contrato que la instancia real usa. Tres caminos sobre la mesa (los tres quedaron escritos en `NEXT.md` para que César decidiera): **(a)** enmascarar solo sobre la vista de máscara y sacar el DDM; **(b)** que el setup tire y recree la vista-contrato; **(c)** declarar la combinación no soportada y fallar ruidoso.
+- **Decidido: (c) mejorado — se diagnostica con la remediación medida**, y se descartan (a) y (b) por razones distintas:
+  - **(b) se descarta por autoridad, no por dificultad.** La vista-contrato es artefacto **de la instancia**: su forma es un contrato con sus consumidores, y puede tener índices. Que el Producto la tire y la recree —aunque sepa reconstruirla desde `sys.sql_modules`— es apropiarse de un objeto ajeno, y un fallo a mitad deja a la instancia sin su contrato. La frontera de `CLAUDE.md` aplica adentro del DDL, no solo al despliegue.
+  - **(a) se descarta porque cambia la promesa de seguridad sin decirlo.** El DDM es la defensa en profundidad contra quien **esquiva** la vista de máscara; la vista honra al claim. Sacar el DDM deja la tabla base en claro para todo principal con `SELECT`. Que hoy sea **inerte** para el serving (medido: con `UNMASK` el principal ve el valor igual) no lo vuelve inútil — lo vuelve inútil *para ese principal*.
+- **Y aparecieron dos defectos que ninguno de los tres caminos contemplaba**, porque nadie los había medido:
+  - **El guard de idempotencia no guardaba.** T-SQL compila el batch entero antes de ejecutarlo y `DROP MASKED` se valida en compilación, así que `IF EXISTS … ALTER … DROP MASKED` **fallaba sobre toda columna sin máscara**. Como ese statement encabeza el setup (tira-y-recrea), **toda instalación nueva** del plano de columna fallaba en su primera sentencia. Corregido moviendo el `ALTER` dentro de `EXEC(...)`.
+  - **No es incompatibilidad, es ORDEN.** Medido: la máscara sobre una columna libre se acepta, y la vista-contrato se crea después sobre la columna ya enmascarada. Lo imposible es alterar la columna con el objeto ya atado. Por eso el mensaje de error no dice «no soportado»: dice qué hacer, y esa salida **está corrida en el arnés** (P2c), no prometida.
+- **El error del preflight es RAISERROR severidad 16 —falla ruidosa— y no un aviso**: el plano de FILA ya quedó instalado (va antes en `setupSQL`), así que lo que corta es exactamente el plano de columna. Un install parcial y silencioso es lo que produjo este defecto en primer lugar.
+- **Lo que el propio arreglo casi reintroduce, y quedó como test de regresión**: la primera versión del preflight miraba también la dependencia de **objeto**, y como la security policy de fila que el mismo setup instala es `SCHEMABINDING`, se disparaba contra ella — habría roto toda instalación con reglas de columna. Lo destapó el arnés en su primera corrida, no una relectura.
+- **Costo de revertir**: bajo y acotado a `packages/policy/src/fabric.ts` — dos funciones y una línea del ensamblado de `setupSQL`, con sus tests de SQL exacto. Nada desplegado: no hay versión publicada que lo lleve.
 
 ## D-29 · 2026-08-14 — El esquema del Producto admite Z: la corrección se publica sin capacidades nuevas
 

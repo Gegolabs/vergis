@@ -543,7 +543,7 @@ describe('Fabric · #163 H2 · enmascaramiento por columna (DDM nativo)', () => 
     const enf = compileFabric(polConRegla(), FAB_TARGET)
     expect(enf.teardownSQL).toEqual([
       `IF EXISTS (SELECT 1 FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'[dbo].[areas]') AND name = N'rut')\n` +
-        `    ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] DROP MASKED;`,
+        `    EXEC(N'ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] DROP MASKED;');`,
       `DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`,
       `DROP FUNCTION IF EXISTS [dbo].[fn_pol_areas];`,
     ])
@@ -629,6 +629,82 @@ describe('Fabric · #163 H2 · enmascaramiento por columna (DDM nativo)', () => 
     const settings = settingsForInjections(enf.injections, claims)
     expect(emulateFabricRows(enf, settings, rows)[0].rut).toBe(MASK_VALUE) // motor: enmascarado
     expect(applyPolicy(enf.policy, claims, rows)[0].rut).toBe('11.111.111-1') // oráculo: en claro
+  })
+})
+
+// === #163 · el plano de columna, corregido contra un MOTOR (no contra la lectura del manual) ====
+//
+// Los tres defectos que siguen no se dedujeron: los devolvió un motor T-SQL real
+// (`scripts/tsql-lab-proof.ts`, SQL Server 2022 en contenedor), cada uno con su control. Se asientan
+// acá como aserciones de SQL exacto porque un hallazgo que solo vive en el log de una corrida se
+// pierde en la primera relectura.
+describe('Fabric · #163 · plano de columna corregido (medido contra motor)', () => {
+  const REGLA: ColumnRule = { column: 'rut', claim: 've_pii', action: 'mask' }
+  const pol = (rules: ColumnRule[] = [REGLA]): Policy => ({
+    predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+    combine: 'and',
+    default: 'deny',
+    columnRules: rules,
+  })
+
+  it('el guard del DROP MASKED difiere la compilación con EXEC — sin esto fallaba TODA instalación nueva', () => {
+    // T-SQL compila el batch entero antes de ejecutarlo, y `DROP MASKED` se valida en compilación:
+    // colgando el ALTER del `IF`, el batch falla sobre una columna sin máscara ANTES de evaluar el
+    // guard. Como este statement encabeza el setup (tira-y-recrea), el plano de columna no instalaba
+    // en su primera sentencia. Medido: «The column 'rut' does not have a data masking function».
+    const enf = compileFabric(pol(), FAB_TARGET)
+    const drop = enf.teardownSQL.find((s) => s.includes('DROP MASKED'))!
+    expect(drop).toContain("EXEC(N'ALTER TABLE")
+    expect(drop).toMatch(/IF EXISTS \(SELECT 1 FROM sys\.masked_columns/)
+    // el ALTER NO puede quedar colgando del IF: es exactamente el modo de falla que se corrigió
+    expect(drop).not.toMatch(/\)\n\s+ALTER TABLE/)
+  })
+
+  it('el preflight nombra los objetos SCHEMABINDING que atan la columna, y falla ruidoso', () => {
+    // El motor rechaza con «one or more objects access this column»: no nombra al culpable ni dice
+    // qué hacer. El preflight diagnostica antes, con los objetos y con la remediación MEDIDA — no es
+    // incompatibilidad, es orden (la máscara primero, la vista-contrato después).
+    const enf = compileFabric(pol(), FAB_TARGET)
+    const pre = enf.setupSQL.find((s) => s.includes('sql_expression_dependencies'))
+    expect(pre).toBeDefined()
+    expect(pre).toContain('is_schema_bound_reference = 1')
+    expect(pre).toContain('RAISERROR')
+    expect(pre).toContain('ORDEN') // la remediación, no un «revise su esquema»
+    // va ANTES del ADD MASKED (diagnosticar tarde no sirve) y DESPUÉS del plano de fila (que sí instala)
+    const iPre = enf.setupSQL.findIndex((s) => s.includes('sql_expression_dependencies'))
+    const iAdd = enf.setupSQL.findIndex((s) => s.includes('ADD MASKED'))
+    const iPol = enf.setupSQL.findIndex((s) => s.startsWith('CREATE SECURITY POLICY'))
+    expect(iPol).toBeLessThan(iPre)
+    expect(iPre).toBeLessThan(iAdd)
+  })
+
+  it('REGRESIÓN · el preflight NO mira la dependencia de OBJETO: la propia security policy es SCHEMABINDING', () => {
+    // Lo destapó el arnés, no una relectura: la versión ingenua sumaba `referenced_minor_id = 0`, y
+    // como la SECURITY POLICY de fila que el mismo setup acaba de instalar es schema-bound, el
+    // preflight se disparaba contra ella. Falso positivo que habría roto TODA instalación con reglas
+    // de columna — el defecto que este cambio venía a arreglar, reintroducido por el arreglo.
+    // Medido: un objeto schema-bound deja una fila por CADA columna que referencia, así que la
+    // dependencia de columna alcanza y la de objeto solo agrega ruido.
+    const enf = compileFabric(pol(), FAB_TARGET)
+    const pre = enf.setupSQL.find((s) => s.includes('sql_expression_dependencies'))!
+    expect(pre).not.toContain('referenced_minor_id = 0')
+    expect(pre).toContain("COLUMNPROPERTY(OBJECT_ID(N'[dbo].[areas]'), N'rut', 'ColumnId')")
+    // y el nombre que reporta se acota igual: solo quien ata la columna enmascarada
+    expect(pre.match(/COLUMNPROPERTY/g)).toHaveLength(2) // el IF y el STRING_AGG, ambos acotados
+  })
+
+  it('varias columnas → un solo preflight que las nombra a todas', () => {
+    const enf = compileFabric(pol([REGLA, { column: 'sueldo', claim: 've_rem', action: 'mask' }]), FAB_TARGET)
+    const pre = enf.setupSQL.filter((s) => s.includes('sql_expression_dependencies'))
+    expect(pre).toHaveLength(1)
+    expect(pre[0]).toContain("N'rut'")
+    expect(pre[0]).toContain("N'sueldo'")
+  })
+
+  it('CONTROL NEGATIVO: sin reglas de columna no se emite preflight — el SQL sigue siendo el de siempre', () => {
+    const sinReglas = compileFabric(parseAudience(QW04_AUDIENCE), FAB_TARGET)
+    expect(sinReglas.setupSQL.join('\n')).not.toContain('sql_expression_dependencies')
+    expect(sinReglas.setupSQL).toHaveLength(4)
   })
 })
 
@@ -867,7 +943,7 @@ describe('Fabric · #163 H6 · vista de máscara evaluada por request (el claim 
     expect(enf.teardownSQL).toEqual([
       `DROP VIEW IF EXISTS [dbo].[vw_mask_areas];`,
       `IF EXISTS (SELECT 1 FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'[dbo].[areas]') AND name = N'rut')\n` +
-        `    ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] DROP MASKED;`,
+        `    EXEC(N'ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] DROP MASKED;');`,
       `DROP SECURITY POLICY IF EXISTS [dbo].[secpol_areas];`,
       `DROP FUNCTION IF EXISTS [dbo].[fn_pol_areas];`,
     ])
