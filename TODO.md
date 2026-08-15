@@ -58,6 +58,14 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   **El costo dejó de ser el argumento**: capacidad F2 pay-as-you-go **pausada por defecto** —mismo
   modelo que la VM desasignada—, del orden de un dólar por sesión de medición. **Trial NO**: muere a
   los 60 días y se lleva el terreno. Las decisiones de gasto e infraestructura siguen siendo suyas.
+  **Encogido el 2026-08-14 con el terreno T-SQL local** (`npm run lab:proof`, PR #190): la premisa
+  —«no hay dónde medir lo que toca Fabric»— era **falsa para la semántica del lenguaje**, y ahí se
+  midieron y corrigieron los tres defectos del plano de columna (#163) y se destrabó #164. **Sigue
+  haciendo falta**, sin urgencia, para lo que solo Fabric contesta: **SKU**, permisos de un service
+  principal concreto, **costo** de enforcement, plano de control, OneLake/`Files/`, jobs, contrato
+  `_logs/` y correlación carga↔corrida. Criterio nuevo que conviene fijar cuando se levante: **el
+  bootstrap del terreno Fabric debe levantar la MISMA forma que el arnés local**, para que la única
+  diferencia entre los dos sea el motor.
 
 ### Decisiones y acciones de César (2026-08-08, ronda de decisiones del cluster 004)
 
