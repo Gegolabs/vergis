@@ -50,8 +50,26 @@ el compose de la instancia apuntaba ahí — ver `DECISIONS.md` D-28.)
 
 ## El aterrizaje: rama + PR
 
-**Todo cambio de código del Producto aterriza por rama y Pull Request contra `main`.** El merge es acto
-de César; el agente entrega el PR con sus gates corridos y **cierra el issue que atendió**.
+**Todo cambio de código del Producto aterriza por rama y Pull Request contra `main`.** El agente entrega
+el PR con sus gates corridos, **cierra el issue que atendió** y **mergea lo que está confirmado**.
+
+**El merge de lo confirmado es nuestro** (decisión de César, 2026-08-16 — deroga para este proyecto el
+default de `git-repo-management`, que reserva el merge al humano). *Confirmado* tiene un significado
+exacto y no es «me parece que quedó»: **gates verdes, CI verde, y evidencia medida de que el problema
+que el PR dice resolver quedó resuelto**. Con eso, pedir el merge le devuelve un trámite, no una
+decisión — y el pasivo se acumula por un clic.
+
+Lo que **no** se mergea solo, porque ahí sí hay decisión y no trámite:
+
+| Caso | Por qué sube a César |
+|---|---|
+| El PR **no tiene la medición** que respalde su promesa | Mergear afirmaría más de lo medido (Ley, Norma 7) |
+| Diseño abierto — el PR elige un camino entre varios vivos | La bifurcación es suya; el PR es el material para decidirla |
+| Toca **gasto**, o **comunicación saliente** a un tercero | Nunca fue del agente (`RESOURCES.md`, §«La frontera») |
+| **PR de otra persona** | El acto es suyo; nuestro entregable es el veredicto comentado |
+
+Si al ver un merge considera que no correspondía, revierte — revertir es barato y el PR conserva la
+conversación entera. Es la misma economía que ya rige para el cierre de issues.
 
 **El cierre del issue es nuestro, no del autor** (decisión de César, 2026-08-14 — deroga para este
 proyecto el default de `ww:work`/`ww:repo`, que reserva el cierre al autor). No se puede esperar a que

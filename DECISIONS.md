@@ -5,9 +5,16 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna |
 
 ---
+
+## D-31 · 2026-08-16 — El merge de lo confirmado deja de subir a César
+
+- **Bifurcación**: `CLAUDE.md` decía «el merge es acto de César», y la sesión de hoy terminó pidiéndole el merge de #196 —un PR con typecheck, 2125 tests, build y CI verdes, corrido además contra el motor real—. Su corrección, textual: *«no quiero que me preguntes más por hacer merge a soluciones que fueron confirmadas resuelven un problema»*.
+- **Decidido: el agente mergea lo confirmado**, y *confirmado* queda definido para que no se estire: gates verdes, CI verde y **evidencia medida** de que el problema quedó resuelto. Sin la medición no hay merge — mergear sin ella sería afirmar más de lo medido, que es lo que la Norma 7 persigue.
+- **Por qué la línea queda ahí y no más allá**: lo que sube a César es lo que **es** decisión suya —gasto, comunicación saliente a un tercero, una bifurcación de diseño todavía viva, un PR ajeno—, no lo que solo es un clic. Es la misma economía que ya regía para el cierre de issues desde el 2026-08-14: el pasivo no se acumula por un trámite, y si al verlo considera que no correspondía, revierte.
+- **Costo de revertir**: bajo. La norma vive en un párrafo de `CLAUDE.md`; volver atrás es restaurarlo. Los merges hechos bajo ella conservan su PR y su historia, y `git revert` sigue disponible.
 
 ## D-30 · 2026-08-14 — El plano de columna se corrige y se DIAGNOSTICA; la vista-contrato ajena no se toca
 
