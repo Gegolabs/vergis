@@ -19,7 +19,11 @@
     "start": "node dist/serve-rls.mjs",
     "lab:up": "docker run -d --platform linux/amd64 --name vergis-tsql-lab -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=Vergis!Lab2026' -e MSSQL_PID=Developer -p 11433:1433 mcr.microsoft.com/mssql/server:2022-latest",
     "lab:down": "docker rm -f vergis-tsql-lab",
-    "lab:proof": "tsx scripts/tsql-lab-proof.ts"
+    "lab:proof": "tsx scripts/tsql-lab-proof.ts",
+    "fab:resume": "az fabric capacity resume --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB",
+    "fab:pause": "az fabric capacity suspend --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB",
+    "fab:state": "az fabric capacity show --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB --query state -o tsv",
+    "fab:proof": "tsx scripts/fabric-lab-proof.ts"
   },
   "license": "AGPL-3.0-or-later",
   "devDependencies": {
