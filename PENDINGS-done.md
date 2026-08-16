@@ -139,6 +139,17 @@ cerrar.
   *La premisa que la sostenía —«no hay dónde medirlo»— era falsa: el compilador emite T-SQL y un
   motor T-SQL cabe en un contenedor (`npm run lab:proof`).*
   `reg 2026-08-13 · cerrado 2026-08-14`
+- **La imagen 0.17.0 se verificó solo en arm64** — el `docker pull` del cierre bajó la variante de
+  esta máquina, así que la de **amd64 —la que corre en la VM del operador— no se había ejecutado
+  nunca**: la diferencia entre «el CI dice que la construyó» y «alguien la corrió».
+  **Cerrado 2026-08-16 en el mismo acto en que se detectó (un minuto), con su control:**
+  `docker run --platform linux/amd64 … uname -m` → `x86_64`; **sin** forzar plataforma → `aarch64`;
+  y `docker manifest inspect` declara las dos arquitecturas (más las dos entradas `unknown`, que son
+  el SBOM y la provenance de buildx). El control es lo que lo vuelve concluyente: sin la corrida
+  nativa al lado, un `x86_64` no distingue «corrió amd64» de «Docker ignoró el flag».
+  *Se registró y se saldó el mismo día: queda acá porque el hallazgo —que un `pull` verifica una sola
+  arquitectura— vale para el próximo corte de versión.*
+  `reg 2026-08-16 · cerrado 2026-08-16`
 
 ## Vencidas sin veredicto
 
