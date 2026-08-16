@@ -34,6 +34,14 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **El arnés T-SQL no corre en ningún gate, y un arnés que solo corre cuando alguien se acuerda se
+  pudre** — `scripts/tsql-lab-proof.ts` queda fuera de `npm test` **a propósito** (la suite es
+  hermética y sin Docker) y fuera del CI. La consecuencia es previsible: el compilador Fabric puede
+  cambiar y el arnés seguir en verde por no haberse corrido, que es exactamente el estado del que
+  este arnés nos sacó. **Lo que NO se sabe todavía**: si el runner de GitHub aguanta la imagen de SQL
+  Server (amd64, ~1,5 GB, arranque de ~40 s) dentro del presupuesto del workflow — no medido. Camino
+  probable: job propio, opcional, disparado por cambios en `packages/policy/**`. `reg 2026-08-16`
+
 - **El frente de authz dejó cuatro cosas sin medir — quedan DOS, y ya no por falta de terreno**
   (*encogido el 2026-08-14 con el arnés T-SQL local; la premisa «ninguna se puede medir sin terreno
   vivo» resultó falsa para la mitad*):
