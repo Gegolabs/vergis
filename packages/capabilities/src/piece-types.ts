@@ -151,6 +151,8 @@ export interface ResolvedNode {
   metricField?: string
   /** `distribution` multi-métrica: 2+ series agrupadas (barras). Presente ⇒ modo agrupado. */
   metricsSpec?: { field: string; label: string }[]
+  /** `distribution` agrupado: apila las series en vez de yuxtaponerlas (#203). */
+  stacked?: boolean
   /** `distribution`: criterio de orden de las categorías, ya normalizado por compose (#81). */
   sortSpec?: ChartSort
   orientation?: string
