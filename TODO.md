@@ -66,6 +66,17 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   `_logs/` y correlación carga↔corrida. Criterio nuevo que conviene fijar cuando se levante: **el
   bootstrap del terreno Fabric debe levantar la MISMA forma que el arnés local**, para que la única
   diferencia entre los dos sea el motor.
+  **LEVANTADO el 2026-08-16** (PR #196) — tenant ultraBASE, RG `rg-vergis-fabric-lab`, capacidad
+  **F2 pausable**, workspace `vergis-fabric-lab`, warehouse `vergislab`, SP de laboratorio; se corre
+  con `npm run fab:resume && npm run fab:proof && npm run fab:pause` y está declarado en
+  `RESOURCES.md`. El criterio de «la misma forma que el arnés local» se cumplió. **El Trial no hizo
+  falta** —el tenant ya tenía Fabric habilitado y licencia— y sigue descartado. Costo **medido**:
+  US$0,18/CU-hora ⇒ US$0,36/h encendida.
+  **Sigue abierta, y por dos cosas concretas, no por el terreno:** (1) la medición de #164 corrida
+  ahí con su control positivo; (2) barrer una por una las partidas de `PENDINGS.md` cuya única traba
+  era «no hay dónde medirlo». Los otros cuatro criterios de aceptación del issue están cumplidos.
+  **Y ya rindió**: la primera corrida encontró que la vista de máscara publicada en 0.16.0 **no sirve
+  en Fabric** — issue **#197**, con la causa aislada. `act 2026-08-16`
 
 ### Decisiones y acciones de César (2026-08-08, ronda de decisiones del cluster 004)
 
