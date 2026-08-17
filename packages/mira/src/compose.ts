@@ -116,6 +116,8 @@ export interface ResolvedNode {
   metricField?: string
   /** `distribution` multi-métrica: 2+ series agrupadas. Presente ⇒ modo agrupado. */
   metricsSpec?: { field: string; label: string }[]
+  /** `distribution` agrupado: apila las series en vez de yuxtaponerlas (#203). */
+  stacked?: boolean
   /** `distribution`: criterio de orden de las categorías, ya normalizado (#81). */
   sortSpec?: ChartSort
   orientation?: string
@@ -310,6 +312,8 @@ export function composePiece(
       dimension?: string
       metric?: string
       metrics?: { field?: string; label?: string }[]
+      /** #203 · apila las series en vez de yuxtaponerlas (solo modo agrupado). */
+      stacked?: boolean
       orientation?: string
       sort?: string
       format?: string
@@ -331,6 +335,7 @@ export function composePiece(
         dimensionField,
         metricsSpec,
         sortSpec,
+        stacked: d.stacked === true,
         orientation: d.orientation,
         format: d.format,
         title: d.title,
