@@ -16,7 +16,7 @@
   ],
   "osvVulnerabilityAlerts": true,
   "constraints": {
-    "npm": "^10.9.8"
+    "npm": "^10.9.9"
   },
   "rangeStrategy": "bump",
   "labels": [
