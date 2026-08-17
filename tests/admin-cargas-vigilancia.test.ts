@@ -113,8 +113,46 @@ describe('aviso de coherencia · contrato _logs/', () => {
 
   it('bajo el umbral no avisa: una corrida sin log es un accidente, no una conducta', () => {
     expect(avisoContratoLogs(SLOT, { medida: 'fresca', corridasSinLog: CORRIDAS_SIN_LOG_AVISO - 1 })).toBe('')
-    expect(avisoContratoLogs(SLOT, { medida: 'fresca' })).toBe('')
+    // MEDIDO Y CONFORME: cero corridas sin log ⇒ silencio legítimo. Éste es el estado que antes
+    // resultaba indistinguible de «jamás medido», y el que sigue siendo silencioso a propósito.
+    expect(avisoContratoLogs(SLOT, { medida: 'fresca', corridasSinLog: 0 })).toBe('')
+  })
+
+  // ── #200 · el tercer estado ────────────────────────────────────────────────
+  // GOLDEN RE-BENDECIDO, con su delta declarado: hasta este cambio, los dos casos de abajo
+  // afirmaban `.toBe('')` — o sea que la ausencia de medición se renderizaba igual que el
+  // cumplimiento. Ese assert codificaba el defecto de #200, no la conducta deseada.
+  it('CON vigilancia pero SIN la cuenta, lo dice: la no-medición deja de leerse como cumplimiento', () => {
+    const html = avisoContratoLogs(SLOT, { medida: 'fresca' })
+    expect(html).toContain('Sin medición del contrato')
+    expect(html).toContain('no se afirma que cumpla')
+    // No es una falla: se pinta como advertencia, no como error.
+    expect(html).not.toContain('msg err')
+  })
+
+  it('un slot FUERA del contrato (log:false) sigue en silencio: no prometió medir nada', () => {
+    // Su cuenta está ausente con razón. Avisar sería acusarlo de no medir algo que nadie le pidió.
+    const sinLog = { ...SLOT, log: false } as unknown as typeof SLOT
+    expect(avisoContratoLogs(sinLog, { medida: 'fresca' })).toBe('')
+  })
+
+  it('SIN vigilancia sigue en silencio: eso es «instancia sin vigilante», no «sin medición»', () => {
+    // La frontera del arreglo, y es deliberada: con el vigilante apagado la consola debe ser la
+    // página de siempre (regresión cero). El caso «vigilante encendido y slot nunca observado» ya
+    // tiene su estado propio, `medida: 'ninguna'`, con su banner.
     expect(avisoContratoLogs(SLOT, undefined)).toBe('')
+  })
+
+  it('cuando la medición falló, el aviso explica por qué — sin inventar la causa', () => {
+    const html = avisoContratoLogs(SLOT, { medida: 'ninguna', lastError: 'token vencido' })
+    expect(html).toContain('El último intento de medición falló')
+    expect(html).toContain('token vencido')
+  })
+
+  it('el motivo del fallo va ESCAPADO: es texto de terreno que termina en HTML', () => {
+    const html = avisoContratoLogs(SLOT, { medida: 'ninguna', lastError: '<img src=x onerror=alert(1)>' })
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
   })
 })
 
