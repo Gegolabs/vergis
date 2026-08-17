@@ -526,16 +526,24 @@ async function renderDistributionGrouped(
   const fmt = labelFormat(node.format)
   const colors = seriesColors(tokens, metrics.length)
   const nSeries = Math.max(1, metrics.length)
-  const width = horizontal ? 360 : Math.max(320, rows.length * 26 * nSeries)
+  // #203 · apilado: UNA barra por categoría ⇒ el ancho no escala con el nº de series.
+  const stacked = node.stacked === true
+  const width = horizontal ? 360 : Math.max(320, rows.length * 26 * (stacked ? 1 : nSeries))
   // Barras agrupadas ocupan más: el alto (horizontal) escala con categorías × series, acotado.
-  const height = horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * nSeries)) : 260
+  const height = horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * (stacked ? 1 : nSeries))) : 260
   // Anti-colisión (#97): acá el paso lo marca la SUB-barra (categoría × serie), no la categoría, y el
   // orden de `nums` es CORRELATIVO de izquierda a derecha (categoría × serie) — el que pide `assignLanes`.
   const nums = rows.flatMap((r) => metrics.map((m) => Number(r[m.field]) || 0))
   const texts = nums.map((v) => vtFormat(v, fmt))
-  const wanted: LabelMode = horizontal ? 'single' : labelMode(texts, barStepPx(width, rows.length, nSeries))
-  const domain = labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
-  const mode: LabelMode = wanted === 'lanes' && !domain ? 'single' : wanted
+  const wanted: LabelMode = horizontal ? 'single' : labelMode(texts, barStepPx(width, rows.length, stacked ? 1 : nSeries))
+  // ⚠️ #203 · En APILADO no se rotulan los segmentos ni se fija el dominio, y las dos cosas son la
+  // misma razón: `labelledDomain` y `assignLanes` razonan sobre valores INDIVIDUALES puestos lado a
+  // lado, y apilados lo que manda es la SUMA por categoría — un dominio calculado sobre el máximo
+  // individual recortaría la barra, y un rótulo por segmento cae dentro de un área que no controlamos
+  // y se funde con el vecino de arriba. Se deja que Vega escale por el total (`stack: 'zero'`) y el
+  // valor de cada segmento lo dice el TOOLTIP (#208), que no compite por espacio.
+  const domain = stacked ? undefined : labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
+  const mode: LabelMode = stacked ? 'none' : wanted === 'lanes' && !domain ? 'single' : wanted
   const lanes = mode === 'lanes' && domain ? assignLanes(nums.map((v) => markTopPx(v, domain, height))) : []
   const values = rows.flatMap((r, ri) =>
     metrics.map((m, si) => {
@@ -565,7 +573,13 @@ async function renderDistributionGrouped(
     width,
     height,
     data: { values },
-    encoding: horizontal ? { y: cat, x: quant, yOffset: offset, color } : { x: cat, y: quant, xOffset: offset, color },
+    encoding: stacked
+      ? horizontal
+        ? { y: cat, x: { ...quant, stack: 'zero' as const }, color }
+        : { x: cat, y: { ...quant, stack: 'zero' as const }, color }
+      : horizontal
+        ? { y: cat, x: quant, yOffset: offset, color }
+        : { x: cat, y: quant, xOffset: offset, color },
     // Un rótulo POR SUB-BARRA: la capa de texto hereda el encoding posicional y el offset de serie.
     layer: [
       { mark: { type: 'bar', cornerRadiusEnd: 2 }, encoding: { description: { field: TOOLTIP_FIELD, type: 'nominal' as const } } },
