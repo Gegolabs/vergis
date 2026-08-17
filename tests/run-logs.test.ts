@@ -284,3 +284,40 @@ describe('run-logs · conteo de corridas sin log (#162·§5)', () => {
     expect(contarCorridasSinLog(runs, [logDe(runs[0]!), logDe(runs[1]!), entry('Files/code/_logs/notas.txt')])).toBe(0)
   })
 })
+
+describe('run-logs · el separador ASCII ya no fabrica un archivo inexistente (#194)', () => {
+  it('EL CASO DEL DEFECTO: el guion ASCII separaba a medias e inventaba el nombre', () => {
+    const out = parseRunFileOutcomes('[intake] ✖ fallido: x.xlsx - no se pudo abrir')
+    // Antes: { file: 'x.xlsx - no se pudo abrir' } — archivo inventado y causa perdida.
+    expect(out).toEqual([{ file: 'x.xlsx', outcome: 'fallido', motivo: 'no se pudo abrir' }])
+  })
+
+  it('LA REGRESIÓN QUE MÁS IMPORTA: un guion sin espacios NO corta el nombre', () => {
+    // Los nombres reales de esta familia vienen cargados de guiones. Cortar por el primero
+    // destrozaría todos los archivos de intake.
+    const out = parseRunFileOutcomes('[intake] ✔ procesado: oc-17473580-distributions-details-11-08-2026.xlsx')
+    expect(out).toEqual([{ file: 'oc-17473580-distributions-details-11-08-2026.xlsx', outcome: 'procesado' }])
+  })
+
+  it('un nombre con guiones Y motivo por ASCII corta solo en el separador con espacios', () => {
+    const out = parseRunFileOutcomes('[intake] ✖ fallido: oc-17473580-details-11-08-2026.xlsx - hoja ausente')
+    expect(out).toEqual([
+      { file: 'oc-17473580-details-11-08-2026.xlsx', outcome: 'fallido', motivo: 'hoja ausente' },
+    ])
+  })
+
+  it('la RAYA manda: un motivo que contiene " - " no le gana el corte al separador canónico', () => {
+    const out = parseRunFileOutcomes('[intake] ✖ fallido: x.xlsx — rango A1 - B2 vacío')
+    expect(out).toEqual([{ file: 'x.xlsx', outcome: 'fallido', motivo: 'rango A1 - B2 vacío' }])
+  })
+
+  it('sin separador de ninguna clase, el desenlace sigue contando sin motivo', () => {
+    const out = parseRunFileOutcomes('[intake] ⚠ saltado: y.xlsx')
+    expect(out).toEqual([{ file: 'y.xlsx', outcome: 'saltado' }])
+  })
+
+  it('en `procesado` el motivo se ignora, también por la vía ASCII', () => {
+    const out = parseRunFileOutcomes('[intake] ✔ procesado: z.xlsx - lo que sea')
+    expect(out).toEqual([{ file: 'z.xlsx', outcome: 'procesado' }])
+  })
+})

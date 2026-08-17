@@ -198,6 +198,34 @@ const OUTCOME_RE = /^(✔|⚠|✖)️?\s+(procesado|saltado|fallido)\s*:\s*(.+)$
 const SEP_MOTIVO = '—'
 
 /**
+ * Tolerancia al guion ASCII **con espacios a ambos lados** (#194). La raya no está en el teclado y
+ * la ASCII sí, así que el escritor la equivoca fácil; antes, esa línea calzaba a medias y el lector
+ * devolvía `file: "x.xlsx - motivo"` — un archivo **inventado** y la causa **perdida**, sin una sola
+ * señal. Fabricar un dato y descartar la causa es exactamente el defecto que este contrato existe
+ * para cerrar, ocurriendo dentro del contrato mismo.
+ *
+ * Dos precauciones que definen la forma del arreglo:
+ *
+ *  1. **Exige los espacios.** Un guion pelado NO separa: los nombres reales de esta familia vienen
+ *     cargados de guiones (`oc-17473580-distributions-details-11-08-2026.xlsx`) y cortar por el
+ *     primero los destrozaría. El separador es ` - `, no `-`.
+ *  2. **La raya manda.** Solo se busca el ASCII cuando NO hay raya en la línea, de modo que un motivo
+ *     que contenga ` - ` jamás le gane el corte al separador canónico.
+ *
+ * Se eligió tolerar en vez de rechazar la línea: rechazarla también pierde el desenlace —y el
+ * desenlace es un hecho observado—, mientras que tolerar recupera archivo, resultado y motivo.
+ */
+const SEP_MOTIVO_ASCII = ' - '
+
+/** Índice y largo del separador archivo↔motivo, o `-1` si la línea no declara motivo. */
+function cortaMotivo(resto: string): { corte: number; largo: number } {
+  const raya = resto.indexOf(SEP_MOTIVO)
+  if (raya >= 0) return { corte: raya, largo: SEP_MOTIVO.length }
+  const ascii = resto.indexOf(SEP_MOTIVO_ASCII)
+  return ascii >= 0 ? { corte: ascii, largo: SEP_MOTIVO_ASCII.length } : { corte: -1, largo: 0 }
+}
+
+/**
  * Desenlaces por archivo declarados en el texto de un log de corrida — PURO, sin IO.
  *
  * Reglas, todas por el mismo principio: una línea que no calza la gramática NO EXISTE (jamás se
@@ -226,10 +254,10 @@ export function parseRunFileOutcomes(logText: string): FileOutcome[] {
     const [, marcador, palabra, resto] = m as unknown as string[]
     const outcome = OUTCOME_POR_MARCADOR[marcador!]
     if (!outcome || outcome !== palabra) continue
-    const corte = resto!.indexOf(SEP_MOTIVO)
+    const { corte, largo } = cortaMotivo(resto!)
     const file = (corte >= 0 ? resto!.slice(0, corte) : resto!).trim().replace(/^.*[/\\]/, '')
     if (!file) continue
-    const motivo = corte >= 0 ? resto!.slice(corte + SEP_MOTIVO.length).trim() : ''
+    const motivo = corte >= 0 ? resto!.slice(corte + largo).trim() : ''
     const fo: FileOutcome = { file, outcome }
     if (motivo && outcome !== 'procesado') fo.motivo = motivo
     if (!porArchivo.has(file)) orden.push(file)
