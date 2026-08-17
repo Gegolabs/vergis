@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus, type TokenSource } from '@vergis/capabilities'
+import { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus, asUtcIso, type TokenSource } from '@vergis/capabilities'
 
 const tokens: TokenSource = { getToken: async () => ({ token: 'BEARER123', expiresAt: Number.MAX_SAFE_INTEGER }) }
 
@@ -197,5 +197,54 @@ describe('intake-onelake · listado que distingue la AUSENCIA del vacío (#161·
     expect(await createOneLakeReader(tokens, { fetch: listFetch(200, PATHS) }).list(target, 'Files/intake/oc')).toEqual([
       { path: 'Files/intake/oc/a.xlsx', isDirectory: false, size: 12, lastModified: '2026-08-13T08:00:00.000Z' },
     ])
+  })
+})
+
+describe('intake-onelake · el timestamp de Fabric llega SIN designador de zona (#195)', () => {
+  it('marca como UTC la cadena sin designador — que es lo que Fabric entrega', () => {
+    // Valor real observado en una corrida del SJD de finanzas: sin `Z`, pese a llamarse `startTimeUtc`.
+    expect(asUtcIso('2026-08-16T19:16:37.5960281')).toBe('2026-08-16T19:16:37.5960281Z')
+  })
+
+  it('respeta el valor que YA trae zona — el día que Fabric lo corrija, esto no hace nada', () => {
+    expect(asUtcIso('2026-08-16T19:16:37Z')).toBe('2026-08-16T19:16:37Z')
+    expect(asUtcIso('2026-08-16T19:16:37z')).toBe('2026-08-16T19:16:37z')
+    expect(asUtcIso('2026-08-16T15:16:37-04:00')).toBe('2026-08-16T15:16:37-04:00')
+    expect(asUtcIso('2026-08-16T15:16:37-0400')).toBe('2026-08-16T15:16:37-0400')
+  })
+
+  it('la ausencia sigue siendo ausencia (no fabrica una marca)', () => {
+    expect(asUtcIso(undefined)).toBeUndefined()
+    expect(asUtcIso(null)).toBeUndefined()
+    expect(asUtcIso('   ')).toBeUndefined()
+  })
+
+  it('EL TEST QUE HABRÍA CAZADO EL DEFECTO: el instante deja de depender del huso del host', () => {
+    // Sin normalizar, `Date.parse` lee la cadena como hora LOCAL ⇒ el instante se corre con el offset
+    // del proceso, y `resolveRunLog` compara contra un nombre de archivo que SÍ es UTC por contrato.
+    const crudo = '2026-08-16T19:16:37.596'
+    const esperado = Date.parse('2026-08-16T19:16:37.596Z')
+    expect(Date.parse(asUtcIso(crudo)!)).toBe(esperado)
+    // Y el control negativo: la lectura cruda solo coincide si el host YA está en UTC.
+    const offsetMin = new Date('2026-08-16T19:16:37.596Z').getTimezoneOffset()
+    if (offsetMin !== 0) expect(Date.parse(crudo)).not.toBe(esperado)
+  })
+
+  it('listInstances normaliza AMBOS extremos de la corrida', async () => {
+    const instancia = {
+      status: 'Completed',
+      startTimeUtc: '2026-08-16T19:16:37.5960281',
+      endTimeUtc: '2026-08-16T19:20:01.1234567',
+    }
+    const fake = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ value: [instancia] }),
+      text: async () => '',
+    })) as unknown as typeof fetch
+    const st = createFabricJobStatus(tokens, { fetch: fake })
+    const runs = await st.listInstances('ws', 'item')
+    expect(runs[0]!.startedAt).toBe('2026-08-16T19:16:37.5960281Z')
+    expect(runs[0]!.endedAt).toBe('2026-08-16T19:20:01.1234567Z')
   })
 })

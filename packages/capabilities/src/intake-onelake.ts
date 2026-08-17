@@ -254,6 +254,26 @@ interface FabricJobInstance {
   failureReason?: { message?: string; errorCode?: string } | null
 }
 
+/**
+ * Fabric entrega `startTimeUtc`/`endTimeUtc` **sin designador de zona** (`2026-08-16T19:16:37.5960281`),
+ * pese al nombre. Una cadena date-time sin offset la parsea ECMAScript como **hora LOCAL**, así que
+ * `Date.parse` sobre el valor crudo desplaza la marca por el offset del host — y `resolveRunLog`,
+ * que compara contra el timestamp del nombre del log (UTC por contrato), pierde la correlación:
+ * medido sobre la MISMA corrida real, `TZ=UTC` da `match` y `TZ=America/Santiago` da `sin-log` (#195).
+ *
+ * Se normaliza **en la frontera**, que es donde vive el conocimiento del quirk: aguas abajo el
+ * contrato es «ISO con zona» y nadie más tiene que saber de esto. Si el valor YA trae designador
+ * (`Z` o `±HH:MM`) se respeta tal cual — el día que Fabric lo corrija, esto deja de hacer nada.
+ */
+export function asUtcIso(raw: string | null | undefined): string | undefined {
+  const s = (raw ?? '').trim()
+  if (!s) return undefined
+  // ¿ya trae zona? `Z`/`z` al final, o un ±HH:MM / ±HHMM tras la parte de hora.
+  if (/(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(s)) return s
+  // Sin designador ⇒ Fabric ya lo dio en UTC (lo dice el nombre del campo): se marca como tal.
+  return `${s}Z`
+}
+
 const RUN_STATUSES: ReadonlySet<string> = new Set<RunStatus>([
   'Completed', 'Failed', 'InProgress', 'NotStarted', 'Cancelled', 'Deduped',
 ])
@@ -272,8 +292,9 @@ export function createFabricJobStatus(tokens: TokenSource, opts: { fetch?: Fetch
       }
       const body = (await res.json().catch(() => ({}))) as { value?: FabricJobInstance[] }
       const runs: RunRecord[] = (body.value ?? []).map((j) => {
-        const rec: RunRecord = { startedAt: j.startTimeUtc ?? '', status: toRunStatus(j.status) }
-        if (j.endTimeUtc) rec.endedAt = j.endTimeUtc
+        const rec: RunRecord = { startedAt: asUtcIso(j.startTimeUtc) ?? '', status: toRunStatus(j.status) }
+        const endedAt = asUtcIso(j.endTimeUtc)
+        if (endedAt) rec.endedAt = endedAt
         if (j.failureReason?.message) rec.error = j.failureReason.message
         return rec
       })
