@@ -189,6 +189,42 @@ export function themeChartSvg(svg: string, varMap: Record<string, string>): stri
 /** Campo sintético que lleva el rótulo YA formateado server-side (#80). Vega solo lo pinta. */
 const LABEL_FIELD = '__label'
 
+/**
+ * Campo sintético con el texto del TOOLTIP (#208), compuesto server-side.
+ *
+ * El rótulo de valor **no siempre cabe**: `labelMode` y `assignLanes` existen porque en un gráfico
+ * denso hay que ocultar rótulos para que no se fundan, y el resultado es un dato que se dibuja y no
+ * se puede leer — que fue justo lo que reportó el usuario. El tooltip lo hace legible sin competir
+ * por espacio ni cambiar la composición.
+ *
+ * **Se compone acá, no en Vega, y el valor que muestra es el MISMO `vtFormat` del rótulo impreso**:
+ * así el hover y la etiqueta no pueden discrepar, que es la contradicción que introduce un tooltip
+ * cableado por su cuenta.
+ */
+const TOOLTIP_FIELD = '__tip'
+
+/**
+ * Espeja a `<title>` el `aria-label` de las marcas de dato.
+ *
+ * MEDIDO, no supuesto: el canal `description` de vega-lite hace que el renderer SVG emita
+ * `aria-label="<texto>"` en el `<path>` de la marca — pero **el navegador no muestra `aria-label` al
+ * pasar el mouse**; el tooltip nativo lo da un hijo `<title>`. Se emite entonces el `<title>` y se
+ * CONSERVA el `aria-label`, que es lo que lee un lector de pantalla: la misma frase sirve a los dos.
+ *
+ * Nativo a propósito: sin JS, sin runtime de Vega en el cliente y sin estado que sincronizar.
+ * Acotado a `<path>` con `aria-roledescription` de marca, para no tocar los `<title>` de la página
+ * ni los elementos de eje y leyenda.
+ */
+export function svgTitlesDesdeAria(svg: string): string {
+  return svg.replace(
+    /<path([^>]*?)aria-label="([^"]*)"([^>]*?)\/>/g,
+    (tag, pre: string, texto: string, post: string) =>
+      /aria-roledescription="(bar|symbol|point|line)"/.test(tag)
+        ? `<path${pre}aria-label="${texto}"${post}><title>${texto}</title></path>`
+        : tag,
+  )
+}
+
 /** Campo sintético con el CARRIL del rótulo (0 = bajo, 1 = alto) en el modo `lanes` (#97). */
 const LABEL_LANE_FIELD = '__lane'
 
@@ -433,8 +469,8 @@ export async function renderDistribution(
   const lanes = mode === 'lanes' && domain ? assignLanes(nums.map((v) => markTopPx(v, domain, height))) : []
   const values = rows.map((r, i) =>
     mode === 'lanes'
-      ? { ...r, [LABEL_FIELD]: texts[i], [LABEL_LANE_FIELD]: lanes[i] }
-      : { ...r, [LABEL_FIELD]: texts[i] },
+      ? { ...r, [LABEL_FIELD]: texts[i], [LABEL_LANE_FIELD]: lanes[i], [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} — ${texts[i]}` }
+      : { ...r, [LABEL_FIELD]: texts[i], [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} — ${texts[i]}` },
   )
   const quant = { field: metric, type: 'quantitative' as const, title: null, ...(domain ? { scale: { domain } } : {}) }
   // `sort: null` ⇒ manda el orden de las filas, ya resuelto por applyChartSort.
@@ -447,14 +483,14 @@ export async function renderDistribution(
     data: { values },
     encoding: horizontal ? { y: cat, x: quant } : { x: cat, y: quant },
     layer: [
-      { mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar } },
+      { mark: { type: 'bar', cornerRadiusEnd: 2, color: tokens.chartBar }, encoding: { description: { field: TOOLTIP_FIELD, type: 'nominal' as const } } },
       ...labelLayers(horizontal, tokens, mode),
     ],
     config: chartAxisConfig(tokens),
   }
   // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
   // puro posterior, así que no contamina el caché ni lo invalida.
-  const svg = themeChartSvg(await cachedSvg(spec), vars)
+  const svg = svgTitlesDesdeAria(themeChartSvg(await cachedSvg(spec), vars))
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
 
@@ -504,7 +540,12 @@ async function renderDistributionGrouped(
   const values = rows.flatMap((r, ri) =>
     metrics.map((m, si) => {
       const k = ri * nSeries + si
-      const base = { [dim]: r[dim], serie: m.label, valor: nums[k], [LABEL_FIELD]: texts[k] }
+      // #208 · el tooltip nombra la SERIE además de la categoría: en agrupado, saber «cuál barra»
+      // es justo lo que el rótulo no alcanza a decir cuando se ocultan por colisión.
+      const base = {
+        [dim]: r[dim], serie: m.label, valor: nums[k], [LABEL_FIELD]: texts[k],
+        [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} · ${m.label} — ${texts[k]}`,
+      }
       return mode === 'lanes' ? { ...base, [LABEL_LANE_FIELD]: lanes[k] } : base
     }),
   )
@@ -526,12 +567,15 @@ async function renderDistributionGrouped(
     data: { values },
     encoding: horizontal ? { y: cat, x: quant, yOffset: offset, color } : { x: cat, y: quant, xOffset: offset, color },
     // Un rótulo POR SUB-BARRA: la capa de texto hereda el encoding posicional y el offset de serie.
-    layer: [{ mark: { type: 'bar', cornerRadiusEnd: 2 } }, ...labelLayers(horizontal, tokens, mode)],
+    layer: [
+      { mark: { type: 'bar', cornerRadiusEnd: 2 }, encoding: { description: { field: TOOLTIP_FIELD, type: 'nominal' as const } } },
+      ...labelLayers(horizontal, tokens, mode),
+    ],
     config: chartAxisConfig(tokens),
   }
   // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
   // puro posterior, así que no contamina el caché ni lo invalida.
-  const svg = themeChartSvg(await cachedSvg(spec), vars)
+  const svg = svgTitlesDesdeAria(themeChartSvg(await cachedSvg(spec), vars))
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}${note}</section>`
 }
 
@@ -657,6 +701,10 @@ export async function renderSeries(
         serie: s.label,
         valor: v,
         [LABEL_FIELD]: Number.isFinite(v) ? vtFormat(v, fmt) : '',
+        // #208 · en una curva el rótulo se muestra SOLO en los puntos que `shown` deja pasar
+        // (`__show`), así que la mayoría de los puntos no dice su valor por ningún otro medio: acá
+        // el tooltip no es comodidad, es la única lectura del punto.
+        [TOOLTIP_FIELD]: `${String(r[x] ?? '')} · ${s.label} — ${Number.isFinite(v) ? vtFormat(v, fmt) : 's/d'}`,
         [LABEL_LANE_FIELD]: lanes[si],
         __show: shown.has(i) ? 1 : 0,
       })
@@ -681,7 +729,10 @@ export async function renderSeries(
     width: 640,
     height: 240,
     data: { values },
-    layer: [{ mark: { type: 'line', point: true } }, ...labelLayersSeries],
+    layer: [
+      { mark: { type: 'line', point: true }, encoding: { description: { field: TOOLTIP_FIELD, type: 'nominal' as const } } },
+      ...labelLayersSeries,
+    ],
     encoding: {
       // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
       x: { field: x, type: 'ordinal', sort: null, title: null },
@@ -692,7 +743,7 @@ export async function renderSeries(
   }
   // El LRU cachea el SVG crudo (su clave ya incluye los tokens); la apertura a CSS vars es un paso
   // puro posterior, así que no contamina el caché ni lo invalida.
-  const svg = themeChartSvg(await cachedSvg(spec), vars)
+  const svg = svgTitlesDesdeAria(themeChartSvg(await cachedSvg(spec), vars))
   return `<section class="chart">${node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''}${svg}</section>`
 }
 
