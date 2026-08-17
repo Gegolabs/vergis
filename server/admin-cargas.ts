@@ -215,10 +215,31 @@ export function vigilanciaBanner(v: SlotVigilancia | undefined): string {
  * que es la verdad, y esa verdad es cara.
  */
 export function avisoContratoLogs(slot: IntakeSlot, v: SlotVigilancia | undefined): string {
-  const n = v?.corridasSinLog ?? 0
-  if (n < CORRIDAS_SIN_LOG_AVISO) return ''
+  // TRES estados, no dos (#200). El `?? 0` anterior colapsaba «no se midió» sobre «se midió y
+  // cumple»: los dos salían como silencio, y el silencio caía del lado optimista. En un tablero cuyo
+  // propósito es que las cargas dejen de fallar sin que nadie se entere, ésa es la lectura más cara.
+  //
+  // El aviso de no-medición tiene DOS fronteras, y las dos son deliberadas — cada una la exige un
+  // test que existía antes que este arreglo:
+  //
+  //  · **Sin `v`** no es «sin medición», es **instancia sin vigilante cableado**: ahí la consola
+  //    tiene que ser la página de siempre (regresión cero, criterio 4 del hito). Con el vigilante
+  //    encendido el dep siempre entrega un `SlotVigilancia`, y el caso «nunca observado» ya tiene
+  //    su estado propio con su banner: `medida: 'ninguna'`.
+  //  · **Sin directorio `_logs/`** (`log: false`) el slot **no participa del contrato**: su cuenta
+  //    está ausente con razón, y avisar sería acusar de no medir algo que nadie prometió medir.
+  //
+  // Lo que queda en medio —slot dentro del contrato, con vigilancia, y sin cuenta— es el hueco que
+  // nadie reportaba, y es el que este aviso cubre.
   const dir = slotRunLogsDir(slot)
-  return `<p class="msg err">⚠ Este slot no cumple el contrato <code>_logs/</code>: las últimas ${n} corridas terminadas no dejaron log correlacionable${dir ? ` en <code>${escapeHtml(dir)}</code>` : ''}. Sin log por corrida no hay causa por archivo: el desenlace de cada carga queda en «sin informe» y el usuario que subió no recibe motivo. Corregir el job para que escriba su log al terminar (<code>docs/contrato-ingesta-logs.md</code>).</p>`
+  if (!dir || v === undefined) return ''
+  const n = v.corridasSinLog
+  if (n === undefined) {
+    const err = v.lastError ? ` El último intento de medición falló: ${escapeHtml(v.lastError)}.` : ''
+    return `<p class="sub" style="${AVISO}">⚠ Sin medición del contrato <code>_logs/</code> en este slot: no se ha observado si sus corridas dejan log, así que <b>no se afirma que cumpla</b>.${err}</p>`
+  }
+  if (n < CORRIDAS_SIN_LOG_AVISO) return ''
+  return `<p class="msg err">⚠ Este slot no cumple el contrato <code>_logs/</code>: las últimas ${n} corridas terminadas no dejaron log correlacionable en <code>${escapeHtml(dir)}</code>. Sin log por corrida no hay causa por archivo: el desenlace de cada carga queda en «sin informe» y el usuario que subió no recibe motivo. Corregir el job para que escriba su log al terminar (<code>docs/contrato-ingesta-logs.md</code>).</p>`
 }
 
 /** Badge por desenlace (#162·§3.4). Familia visual de `badge(RunStatus)`: verde listo, rojo falla,
