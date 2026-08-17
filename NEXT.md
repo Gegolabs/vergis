@@ -1,113 +1,87 @@
 # NEXT — Vergis
 
-**0.17.0 publicada** (2026-08-14) — CHANGELOG, tag `v0.17.0`, imagen multi-arch y GitHub Release.
-Cuatro issues cerrados (#182 #183 #185 #163) y el plano de columna documentado en `docs/`; suite en
-**2125 tests**, typecheck y build verdes, `main` limpio y pusheado.
+**0.17.0 sigue siendo la versión publicada.** Esta sesión no cortó versión: levantó el **terreno
+Fabric propio** (#186) y con él midió que una capacidad **ya publicada** no funciona (#197).
 
 > **No hay trabajo en vuelo.** Este archivo no es un kit de retome pendiente: es el **estado** del
 > proyecto y el índice de lo que espera a César. `/ww:go` no tiene nada que reanudar acá — si buscas
 > en qué trabajar, la lista de abajo dice de quién es cada partida.
 
-**El despliegue es del operador**, con su control de cambio. Si pregunta, la respuesta es que tome
-**0.17.0** directamente. Ver `CLAUDE.md` §«La frontera» y `DECISIONS.md` D-28.
+**El despliegue es del operador**, con su control de cambio. Si pregunta, la respuesta sigue siendo
+que tome **0.17.0**. Ver `CLAUDE.md` §«La frontera» y `DECISIONS.md` D-28.
 
-**⚠ Lo primero que hay que decirle al operador**, y ya está en el Release y en el CHANGELOG: el
-parseo de `domains.yaml` se volvió **estricto** (#183). Una entrada de `stewards:` que no sea correo
-válido ni `group:<slug>` **falla al arrancar**. Es deseable —era una autorización que la instancia
-creía tener—, pero se revisa **antes** del despliegue, no después.
+**⚠ Lo primero que hay que decirle al operador** sigue vigente y ahora tiene compañía: el parseo de
+`domains.yaml` se volvió **estricto** (#183) y una entrada de `stewards:` inválida falla al arrancar
+— se revisa **antes** del despliegue. Y lo nuevo: **el plano de columna de 0.16.0/0.17.0 no protege
+columnas en Fabric** (#197). Qué se le dice y cuándo es decisión de César: es comunicación saliente.
 
-## Lo que cambió cómo se trabaja: el terreno T-SQL propio
+## Lo que cambió cómo se trabaja: ya no hay excusa para nada que toque Fabric
 
-`npm run lab:up && npm run lab:proof && npm run lab:down`. Un motor real en contenedor, local, gratis
-y sin tocar infraestructura de nadie, que aplica **el DDL que emite `compileFabric`** — uno que
-escriba su propio SQL se mide a sí mismo.
+```bash
+export VERGIS_FAB_SUB=b9ce0759-1cf3-4be9-af83-149c926fd584
+npm run fab:resume && npm run fab:proof && npm run fab:pause
+```
 
-**La premisa que sostenía siete pendientes —«no hay dónde medir lo que toca Fabric»— es falsa para la
-semántica del lenguaje.** El compilador emite T-SQL, y un motor T-SQL cabe en un contenedor. De ahí
-salieron los tres defectos de #163; ninguno se dedujo.
+Terreno propio en tenant **ultraBASE**, desconectado del cliente, datos sintéticos, capacidad **F2
+pausada por defecto** (US$0,36/h encendida; una sesión ≈ un dólar). Declarado en `RESOURCES.md`,
+runbook en `scripts/README-fabric-lab.md`.
 
-**La asimetría que NO se puede olvidar al citar un resultado de ahí:** un **negativo** refuta también
-para Fabric; un **positivo NO garantiza Fabric**. Está escrito en la cabecera del script y en
-`scripts/README-tsql-lab.md` para no depender de que alguien se acuerde.
+**Las dos asimetrías, que van en sentidos opuestos y no se pueden confundir al citar:**
+
+| Arnés | Un **negativo** | Un **positivo** |
+|---|---|---|
+| `lab:proof` — T-SQL local, gratis | refuta también para Fabric | **no** garantiza Fabric |
+| `fab:proof` — Fabric real, cuesta | definitivo para Fabric | vale para **este SKU y este rol** |
+
+**El corolario que el primer día dejó, y que ninguna doc tenía:** que el motor **acepte** el DDL no
+significa que el artefacto **sirva**. El `CREATE VIEW` de la máscara pasa en verde y todo `SELECT`
+sobre ella falla. Un arnés que solo aplicara el setup y mirara `sys` habría dado verde entero.
 
 ## Lo que sigue abierto, y de quién es
 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
-| **#186** — terreno Fabric propio | **César** (gasto + tenant) | Vivo, mejor delimitado, **menos urgente**: ya no bloquea corregir defectos publicados |
-| **#164** — el allow-all sin columna rehén | Nuestro, **pero gated por Fabric** | La forma **es válida en T-SQL**, medida con control positivo. Falta verla pasar en Fabric: emitirla antes sería la Norma 7 al revés |
+| **#197** — la vista de máscara no sirve en Fabric | **César** decide el rediseño; la medición ya está | **Bifurcación viva**: la alternativa que funciona (variable local + `CASE`) **no cabe en una `VIEW`**. Candidatos: función escalar, tabla-función, o mover la discriminación fuera del artefacto |
+| **El aviso al operador** sobre #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente |
+| **Capacidades Trial FTL64 y PP3** en ultraBASE | **César** (gasto) | *Active* en Chile Central, con `arbol-lab-smoke-test` y `arbol-lab-qw04`. No las tocamos; declaradas en `RESOURCES.md` |
+| **#186** — terreno Fabric | Nuestro | **Levantado**; quedan 2 de 6 criterios: la medición de #164 corrida ahí, y barrer el pasivo que decía «no hay dónde medirlo» |
+| **#164** — el allow-all sin columna rehén | Nuestro, **y ya no gated** | La traba dejó de ser estructural. **No medido todavía**, y no se da por hecho |
 | **PR #175** — digest de `caddy:2` | El reloj | `test` ✓ `review` ✓; cuelga `renovate/stability-days`. Cuando el cooldown de 14 días lo libere, mergea directo. **No se salta** |
-| **`VERGIS_CSRF_SECRET` en QA** y los **permisos del SP** sobre dos items del motor | César | Dos actos de instancia |
+| **`VERGIS_CSRF_SECRET` en QA** | César | Acto de instancia |
 | **El ojo humano** al header del theme `default` | César | — |
-| **Publicar `CONTRIBUTING.md`** | César | Renombrar el `.draft.md` *es* el acto; la ventana del dual licensing se cierra con el primer PR externo sin acuerdo |
+| **Publicar `CONTRIBUTING.md`** | César | Renombrar el `.draft.md` *es* el acto |
 
-**El dato de instancia que más rinde por lo que cuesta:** *¿el service principal de serving tiene
-`UNMASK`?* El **mecanismo** ya está medido —sin él, ni el sujeto con el claim ve el valor; con él, la
-vista discrimina por claim—. Lo que falta es una **consulta**, no un frente.
-
-## #186 — qué queda y con qué criterio nuevo
-
-Solo lo que Fabric contesta: **SKU**, permisos de un service principal concreto, **costo** de
-enforcement, plano de control, **OneLake/`Files/`**, jobs, contrato `_logs/`, correlación carga↔corrida
-(#161/#162) y los gates manuales de 0.14.0.
-
-Sigue en pie lo decidido: terreno **desconectado** del cliente, datos **sintéticos**, capacidad **F2
-pausada** (≈US$0,36/h, una sesión ≈ un dólar), **NO Trial**.
-
-**Criterio que el issue no tenía y conviene fijar al levantarlo:** el bootstrap del terreno Fabric
-debe levantar **la misma forma** que el arnés local, para que la única diferencia entre los dos sea
-el motor. Un banco que además difiere en el esquema mide dos cosas a la vez y no distingue cuál falló.
-
-## La ventana de terreno vivo del cliente — encogida
-
-`az vm start -g rg-arbol-qw04 -n vm-vergis-qa` (~1 min) contra `ws-arbol-qa`, medir, apagar. **Se le
-cayeron dos de las cuatro preguntas** (el `ADD MASKED` sobre vista-contrato y la forma de #164 ya
-tienen respuesta en la familia T-SQL). Queda:
-
-1. **¿El SP de serving tiene `UNMASK`?** — control obligatorio, misma sesión: consulta a la tabla
-   **sin** vista.
-2. **¿El SKU acepta las formas que acá pasaron?** — los positivos no viajan solos.
-3. El **costo de enforcement por columna**, de paso.
-
-El gate no es el tamaño de la factura —es modesto— sino que **el gasto es decisión de César**, y que
-esa infraestructura vive en el tenant del cliente. El runbook está en la skill `mira-ops`, que se
-ejecuta **con el sombrero de operador**, desde el repo del lab, no desde acá.
+**Las dos consultas de instancia que más rinden por lo que cuestan**, y deciden si #197 muerde hoy:
+*¿algún PI nombra una `vw_mask_*`?* y *¿con qué rol de workspace corre el SP de serving?* Son
+consultas, no frentes.
 
 ## Normas que rigen y no se re-litigan
 
 | Norma | Dónde vive |
 |---|---|
 | **Rama + PR siempre** (nunca commit directo de código en `main`); la historia del repo **no** la deroga | `CLAUDE.md` · skill `git-repo-management` |
-| **La frontera Producto↔operador**: publicamos versión + changelog + aviso; el deploy es del operador | `CLAUDE.md` · `DECISIONS.md` D-28 · preámbulo del `CHANGELOG.md` |
-| **El cierre del issue es nuestro** — el autor reabre si no correspondía. El cierre no afirma más de lo medido | `CLAUDE.md` · skill `ww:repo` (Paso 6) |
-| **El esquema admite Z** (corrección sin capacidad nueva) | `DECISIONS.md` D-29 · preámbulo del `CHANGELOG.md` |
-| **El experimento lo corre quien publica**; la operación de un tercero corrobora, jamás mide por nosotros | Ley, **Norma 7** · corolario «quién corre el experimento» |
+| **El merge de lo CONFIRMADO es nuestro** — gates + CI + evidencia medida. Sin medición no hay merge | `CLAUDE.md` · `DECISIONS.md` **D-31** |
+| **La frontera Producto↔operador**: publicamos versión + changelog + aviso; el deploy es del operador | `CLAUDE.md` · `DECISIONS.md` D-28 |
+| **El cierre del issue es nuestro** — el autor reabre si no correspondía. El cierre no afirma más de lo medido | `CLAUDE.md` · skill `ww:repo` |
+| **El esquema admite Z** (corrección sin capacidad nueva) | `DECISIONS.md` D-29 |
+| **El experimento lo corre quien publica**; la operación de un tercero corrobora, jamás mide por nosotros | Ley, **Norma 7** |
 
 ## Terreno ya recorrido — no reintentar
 
-- **«No hay dónde medir lo que toca Fabric»** — falso para la semántica T-SQL. Sigue siendo cierto
-  para SKU, permisos, costo y plano de control.
-- **Tirar y recrear la vista-contrato de la instancia** para poder enmascarar — descartado **por
-  autoridad, no por dificultad** (`DECISIONS.md` D-30): es artefacto suyo, su forma es un contrato con
-  sus consumidores, puede tener índices, y un fallo a mitad la deja sin él.
+- **«No hay dónde medir lo que toca Fabric»** — falso, y ahora por los dos lados: falso para la
+  semántica T-SQL desde el 2026-08-14 (`lab:proof`), y falso para el SKU desde el 2026-08-16
+  (`fab:proof`). **La excusa se acabó entera.**
+- **El Trial de Fabric** — descartado dos veces: muere a los 60 días y se lleva el terreno, y además
+  **no hacía falta** (el tenant ultraBASE ya tenía Fabric habilitado y licencia).
+- **Copiar datos del cliente al terreno** — descartado: el arnés mide **formas**, no datos, y una
+  copia arrastra responsabilidad sin aportar verificación.
+- **Bajar el rol del SP como mitigación de `UNMASK`** — no sirve como se esperaba: la revocación
+  **no tomó efecto en 6,5 min** de sondeo. Qué la destraba no está medido (ficha en `PENDINGS.md`).
+- **Creer la primera lectura tras cambiar un rol de workspace** — envenenó una medición de esta
+  sesión: el primer veredicto sobre `UNMASK` fue el opuesto al correcto.
+- **Tirar y recrear la vista-contrato de la instancia** — descartado **por autoridad, no por
+  dificultad** (`DECISIONS.md` D-30).
 - **Sacar el DDM y enmascarar solo en la vista** — descartado: cambiaría la promesa de seguridad sin
-  decirlo. Que hoy sea inerte para el serving no lo vuelve inútil, lo vuelve inútil *para ese principal*.
-- **Guardar un `DROP MASKED` con `IF EXISTS` a secas** — no guarda: T-SQL compila el batch antes de
-  ejecutarlo. El `ALTER` va dentro de `EXEC(...)`.
-- **Mirar la dependencia de OBJETO en el preflight de máscara** — falso positivo: la propia security
-  policy de fila es `SCHEMABINDING`. Solo dependencias de **columna**. Hay test de regresión.
-- **Esperar el despliegue del cliente para medir algo nuestro** (#139) — la medición era local. La
-  causa era el orden de cableado del boot; arreglado en 0.16.1 sin depender del orden.
-- **Subproceso para aislar el render Vega** — descartado con medición: el permission model de Node 22
-  **no cubre la red**.
-- **Migrar los specs del canon a `docs/`** — no se hace: el libro es **GNU FDL v1.3** y no mezcla con
-  la AGPL de este repo. Se cita, no se copia (`docs/canon.md`).
-- **Enmascarar en ClickHouse** — no hay dónde: ese back-end no controla la proyección.
-- **Reconocer la vista de máscara por el prefijo `vw_mask_`** — falsificable por cualquiera con
-  `CREATE VIEW`. El reconocimiento exige corroboración en `sys`.
-- **Worktrees para paralelizar subagentes en este repo** — un worktree nuevo no trae `node_modules` y
-  los gates no corren. El reparto que funcionó fue por **conjuntos de archivos disjuntos**.
-- **`git add -A` con `NEXT.md` sucio** — se lleva el kit de retome dentro de un PR de código. Pasó en
-  esta sesión (#190) y se corrigió con `--amend`. `NEXT.md` vive en disco y no se commitea.
+  decirlo. Y hoy además la vista no sirve en Fabric.
 
-<!-- /ww:finish · 2026-08-16 · HEAD 1c93ce4 · estado, no residuo: 0.17.0 publicada y sin trabajo en vuelo -->
+<!-- /ww:finish · 2026-08-16 · HEAD 0687da5 -->

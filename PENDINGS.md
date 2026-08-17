@@ -34,29 +34,60 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **Revocar un rol de workspace en Fabric NO toma efecto de inmediato, y no se sabe qué lo destraba**
+  — medido el 2026-08-16: subir el SP de `Viewer` a `Member` cambió el resultado en la **primera**
+  lectura (t+0s); bajarlo de `Member` a `Viewer` **no tomó efecto en 6,5 minutos de sondeo continuo**
+  (14 lecturas, el principal siguió viendo el valor real). La máscara se observó recién **después de
+  recrear tabla y política**, así que hay dos candidatos —el tiempo o la re-aplicación del DDL— y
+  **cuál de los dos NO está medido**. Importa por dos vías: (a) es un asimetría de seguridad
+  —conceder privilegio es instantáneo, quitarlo no—; (b) **envenenó una medición de esta misma
+  sesión**: el primer veredicto sobre `UNMASK` fue el opuesto al correcto y se publicó como hallazgo
+  antes de que tres corridas seguidas lo desmintieran. El experimento que falta es barato: bajar el
+  rol y sondear con TTL largo **sin** tocar el DDL. `reg 2026-08-16`
+- **Ningún registro del repo declaraba dos capacidades Fabric vivas en el tenant propio** — al
+  levantar el terreno aparecieron, *Active* en Chile Central, una capacidad **Trial FTL64**
+  (`Trial-20260525T022032Z-…`, iniciada el 2026-05-25) y una **PP3 «Premium Per User - Reserved»**,
+  con los workspaces `arbol-lab-smoke-test` y `arbol-lab-qw04`. **No se tocaron** y quedaron
+  declaradas en `RESOURCES.md`. Consumen presupuesto o licencia y **la decisión de qué hacer con
+  ellas es de César** (gasto). Se anota acá porque el hallazgo es del agente, no encargo suyo.
+  `reg 2026-08-16`
+- **Dos consultas de instancia deciden si #197 es LATENTE o ACTIVO, y ninguna está hecha** — (a)
+  ¿algún PI de la instancia nombra una `vw_mask_*`? Si ninguno la usa, el defecto no está mordiendo
+  hoy; (b) ¿con qué **rol de workspace** corre el service principal de serving? Eso decide si el
+  cinturón DDM le muerde (`Viewer`) o si lee la tabla en claro (`Member`). **Las dos son consultas
+  contra la instancia, no frentes**, y viven del lado del operador. Sin ellas, la severidad de #197
+  está acotada por arriba y por abajo pero no fijada. `reg 2026-08-16`
+
 - **El arnés T-SQL no corre en ningún gate, y un arnés que solo corre cuando alguien se acuerda se
   pudre** — `scripts/tsql-lab-proof.ts` queda fuera de `npm test` **a propósito** (la suite es
   hermética y sin Docker) y fuera del CI. La consecuencia es previsible: el compilador Fabric puede
   cambiar y el arnés seguir en verde por no haberse corrido, que es exactamente el estado del que
   este arnés nos sacó. **Lo que NO se sabe todavía**: si el runner de GitHub aguanta la imagen de SQL
   Server (amd64, ~1,5 GB, arranque de ~40 s) dentro del presupuesto del workflow — no medido. Camino
-  probable: job propio, opcional, disparado por cambios en `packages/policy/**`. `reg 2026-08-16`
+  probable: job propio, opcional, disparado por cambios en `packages/policy/**`. **Y desde el
+  2026-08-16 son DOS los arneses fuera de todo gate**: `fabric-lab-proof.ts` está aún más lejos del
+  CI —exige capacidad prendida, credenciales y plata—, así que para él la vía no es un job sino una
+  **cadencia declarada**: cuándo se corre y quién se acuerda. Sin eso, el terreno que costó levantar
+  se pudre igual que el local. `reg 2026-08-16 · act 2026-08-16`
 
 - **El frente de authz dejó cuatro cosas sin medir — quedan DOS, y ya no por falta de terreno**
   (*encogido el 2026-08-14 con el arnés T-SQL local; la premisa «ninguna se puede medir sin terreno
   vivo» resultó falsa para la mitad*):
-  (a) **¿el SP de serving tiene `UNMASK`?** — el **mecanismo** está medido: sin `UNMASK`, la rama «en
-  claro» de la vista devuelve el default del DDM y **ni el sujeto con el claim ve el valor**; con
-  `UNMASK` la vista discrimina por claim, con su control de que no es un no-op. Lo que queda es un
-  dato de instancia: **qué permisos tiene ESE service principal**. Se responde con una consulta, no
-  con un frente. (b) **RESUELTA y peor de lo que se temía**: el `ADD MASKED` no entra sobre una tabla
+  (a) **¿el SP de serving tiene `UNMASK`?** — **CORREGIDA el 2026-08-16 contra Fabric real: el
+  mecanismo que esta ficha daba por medido NO OCURRE en Fabric.** La disyuntiva «sin `UNMASK` la
+  rama en claro devuelve el default / con `UNMASK` la vista discrimina» describe la semántica
+  T-SQL; en Fabric **la vista no se puede consultar en absoluto** (#197), así que ninguna de las dos
+  ramas se alcanza. Lo que sí quedó medido: **`UNMASK` lo decide el ROL del workspace** — `Member`
+  lee el valor real, `Viewer` lee la máscara. Queda un dato de instancia, y sigue siendo **una
+  consulta, no un frente**: con qué rol corre el SP de serving de la instancia. (b) **RESUELTA y peor de lo que se temía**: el `ADD MASKED` no entra sobre una tabla
   con vista-contrato — es **orden**, no incompatibilidad, y el motor lo rechazaba sin nombrar al
   culpable. Corregido con preflight diagnosticado; ver #163 y `DECISIONS.md` D-30. (c) el **costo de
-  enforcement** por columna sigue siendo de Fabric (#186). (d) el bit `is_schema_bound` según el
-  driver: se aceptan `1`/`true`/`'1'` y **cualquier otra cosa cae al cubo que no hereda** —
-  fail-closed ruidoso, pero si un driver devolviera algo inesperado, vistas-contrato hoy servibles
-  dejarían de serlo. **Sigue sin medir**, y ahora sí se puede: el arnés tiene un driver real.
-  `reg 2026-08-13 · act 2026-08-14`
+  enforcement** por columna sigue abierto, pero **ya no por falta de terreno**: el terreno Fabric
+  propio existe (#186, `npm run fab:proof`) y el costo es una medición pendiente, no un frente.
+  (d) el bit `is_schema_bound` **quedó medido el 2026-08-16 contra Fabric por driver real**:
+  `sys.security_policies` devolvió `is_schema_bound: true` —booleano, el caso que el código ya
+  acepta—. Vale para **este driver (`mssql`) y este SKU**; otro driver sigue sin medir.
+  `reg 2026-08-13 · act 2026-08-16`
 - **Miranda deja de muestrear los objetos que NO estén en el policy store** — consecuencia del
   escudo de columna (#163·H9) y de su lectura estricta de «sin política ⇒ no se sondea». Es
   coherente con la doctrina del nodo (dato sin política no se sirve) y es fail-closed, **pero si el
@@ -83,7 +114,11 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   para ambos, pero esto es un **positivo**, y un positivo no garantiza el SKU. Emitir la forma nueva
   antes de verla pasar en Fabric sería exactamente la Norma 7 al revés. Lo construido
   (`schemaDependencies`) **mitiga y no resuelve**: vuelve legible la dependencia, no la quita.
-  `reg 2026-08-13 · act 2026-08-14`
+  **La traba dejó de ser estructural el 2026-08-16**: el terreno Fabric propio existe y se corre con
+  `npm run fab:resume && npm run fab:proof && npm run fab:pause`, sin infraestructura de nadie y por
+  el orden de un dólar. **No se midió todavía y no se da por hecho.** Lo que sí quedó medido y toca
+  de cerca: la row policy que emite el compilador **discrimina** en Fabric (2 grupos ⇒ 2 filas; sin
+  grupos ⇒ 0), con `is_schema_bound = 1` corroborado. `reg 2026-08-13 · act 2026-08-16`
 - **El render de gráficos: queda un residuo que ninguna capa detiene** — un exploit de Vega que haga
   E/S **sin pasar por su loader** (p. ej. vía una dependencia transitiva) atraviesa el gate
   declarativo y el loader que niega. Es justo lo que cubriría un subproceso, y el subproceso se
