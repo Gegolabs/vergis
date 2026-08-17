@@ -96,7 +96,7 @@ export type { SlotObservation, MedidaCalidad, SlotAlertReason, SlotWatchState, S
 export type { IntakeSlot, IntakeMetaField, IntakeMetaOption, IntakeCatalog, IntakeMetaType, IntakeFromFilename, IntakeTarget, IntakeTrigger, ValidateResult, ValidateMetaResult, DeriveResult } from './intake'
 export { credentialProviderFor, resolveAuthMode, SCOPE_ONELAKE, SCOPE_FABRIC } from './aad-token'
 export type { CredentialProvider, TokenSource, AccessToken, AuthMode, CredentialSource, SqlAuth, CredentialProviderOpts } from './aad-token'
-export { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus } from './intake-onelake'
+export { createOneLakeIntake, createOneLakeReader, createFabricJobs, createFabricJobStatus, asUtcIso } from './intake-onelake'
 export type { OneLakeIntake, OneLakeReader, OneLakeListingReader, OneLakeListing, OneLakeEntry, FabricJobs, FabricJobStatus } from './intake-onelake'
 export { deriveRevertPlan, executeRevertPlan, revertManifestName, buildRevertManifest } from './intake-revert'
 export type { RevertPlan, RevertDeps, RevertRef, RevertResult, ClaveAccion } from './intake-revert'
