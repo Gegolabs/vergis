@@ -93,6 +93,25 @@ export type {
   EpochProvider,
 } from './sqlite'
 export {
+  ControlLease,
+  SingleControlPlane,
+  createControlPlane,
+  resolveControlPlaneConfig,
+  controlLeaseFile,
+  CONTROL_LEASE_FILENAME,
+  DEFAULT_RENEW_MS,
+  DEFAULT_STALE_MS,
+} from './control-lease'
+export type {
+  ControlMode,
+  ControlPlane,
+  ControlPlaneConfig,
+  ControlLeaseOptions,
+  ControlLeaseRecord,
+  ControlLeaseStatus,
+  ControlLeaseReason,
+} from './control-lease'
+export {
   parseMasterDataConfig,
   pkColumn,
   coerceValue,
