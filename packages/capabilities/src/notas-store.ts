@@ -1,5 +1,12 @@
 import { randomUUID, createHash } from 'node:crypto'
-import { openSqliteDb, persistSqliteDb, type SqlDb } from './sqlite'
+import {
+  openSqliteDb,
+  persistSqliteDb,
+  sqliteControlStatus,
+  type SqlDb,
+  type SqliteControlOptions,
+  type SqliteControlStatus,
+} from './sqlite'
 
 /**
  * `NotasStore` — el store de la CAPA DE NOTAS (vergis#84): la familia de lo que una persona dice
@@ -299,6 +306,12 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_comparticion_receptor ON comparticion (receptor)`,
 ]
 
+/**
+ * Versión del esquema de este store, escrita como `PRAGMA user_version`. Toda migración que altere el
+ * esquema la incrementa EN EL MISMO COMMIT; abrir un archivo con una versión mayor se niega.
+ */
+export const NOTAS_SCHEMA_VERSION = 1
+
 // ── Impl. SQLite ───────────────────────────────────────────────────────────────────────────────
 export class SqliteNotasStore implements NotasStore {
   private constructor(
@@ -307,8 +320,8 @@ export class SqliteNotasStore implements NotasStore {
   ) {}
 
   /** `file` null → DB en memoria (tests). Si el archivo existe, se carga. */
-  static async open(file: string | null): Promise<SqliteNotasStore> {
-    const db = await openSqliteDb(file)
+  static async open(file: string | null, control: SqliteControlOptions = {}): Promise<SqliteNotasStore> {
+    const db = await openSqliteDb(file, { ...control, schemaVersion: NOTAS_SCHEMA_VERSION })
     db.run(IMPRESION_DDL)
     db.run(NOTA_DDL)
     db.run(NOTA_LLAVE_DDL)
@@ -320,6 +333,11 @@ export class SqliteNotasStore implements NotasStore {
 
   private persist(): void {
     persistSqliteDb(this.db, this.file)
+  }
+
+  /** Estado del plano de escritura de este store (esquema, época, degradado). */
+  controlStatus(): SqliteControlStatus | undefined {
+    return sqliteControlStatus(this.db)
   }
 
   private rows(sql: string, params: unknown[] = []): Record<string, unknown>[] {
@@ -680,7 +698,7 @@ function comparticionRow(r: Record<string, unknown>): Comparticion {
  * Selector del store por entorno (la costura del swap): `VERGIS_NOTES_DB` → archivo SQLite embebido;
  * sin él, `<baseDir>/notas.sqlite`.
  */
-export async function openNotasStore(baseDir: string): Promise<NotasStore> {
+export async function openNotasStore(baseDir: string, control: SqliteControlOptions = {}): Promise<NotasStore> {
   const file = process.env['VERGIS_NOTES_DB'] ?? `${baseDir.replace(/\/$/, '')}/notas.sqlite`
-  return SqliteNotasStore.open(file)
+  return SqliteNotasStore.open(file, control)
 }
