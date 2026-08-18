@@ -100,34 +100,50 @@ confía en lo que devolvió el cliente: corrobora con `OBJECT_ID`.
 **3 · `az fabric capacity resume` se cuelga.** El recurso queda `Active` y el CLI no vuelve. Verificar
 con `npm run fab:state` en vez de esperar al comando.
 
-## El experimento que espera ventana: P6 (#197)
+## Lo que la ventana del 2026-08-18 midió (P6 y P7)
 
-**Está construido y no se ha corrido.** Se dice con esas palabras porque la diferencia importa: lo
-que falta no es diseñarlo, es una ventana de capacidad encendida — del orden de un dólar.
+Corrida completa contra el SKU F2, capacidad encendida y pausada en la misma sesión. **Dos preguntas
+que llevaban semanas trabadas quedaron respondidas, y una tercera sigue sin responder.**
 
-#197 dejó aislado que lo que Fabric rechaza es `SESSION_CONTEXT()` **dentro de un `CASE` sobre un
-scan de tabla**, y que la alternativa medida que sí funciona —materializar el claim en una variable
-local— **no cabe dentro de una `VIEW`**. Por eso el plano de columna hay que rediseñarlo, no
-parchearlo, y por eso la pregunta que queda solo la contesta el motor:
+### P6 (#197) · La vista de máscara SÍ es expresable en Fabric
 
-> ¿Existe alguna forma de expresar la discriminación por claim **dentro de una vista** que el SKU de
-> Fabric acepte **y sirva**?
+| Candidata | ¿Acepta? | ¿Sirve? | ¿Discrimina? | Veredicto |
+|---|---|---|---|---|
+| **C1** · CTE escalar + `CROSS JOIN` | ✅ | ✅ | ✅ | **Viable** |
+| **C2** · `CROSS APPLY (VALUES …)` | ✅ | ✅ | ✅ | **Viable** |
+| **C3** · sin `CASE` (`NULLIF`/`IIF`) | ❌ | — | — | Descartada |
 
-P6 pone en riesgo tres candidatas: **C1** CTE escalar + `CROSS JOIN`, **C2** `CROSS APPLY (VALUES …)`,
-**C3** sin `CASE` (`NULLIF`/`IIF`). Las tres se prueban como consulta **y** como vista creada y
-consultada — porque #197 nace justamente de que *aceptar el DDL no es servir*.
+Con el claim `ve_pii` las vistas devuelven el RUT real; sin él, `***`. Los dos controles corrieron en
+la misma sesión: el **positivo** (la sesión responde) y el **negativo** (la forma ACTUAL sigue
+fallando, o sea que el diagnóstico de #197 sigue en pie y no cambió el motor bajo nuestros pies).
 
-Sus dos controles van en la misma sesión y no son adorno:
+**El control de discriminación se agregó DESPUÉS de la primera corrida, y ésa es la lección.** La
+primera pasada declaró C1 y C2 «viables» habiendo medido solo que la vista se crea y se consulta —
+que es justamente el error que #197 vino a corregir, con otra cara. Una vista que se consulta pero
+devuelve lo mismo con y sin el claim no protege nada y habría pasado el filtro. **«Consultable» no
+es «sirve»; sirve es «discrimina».**
 
-| Control | Qué pasa si falta |
-|---|---|
-| **Positivo** — una consulta trivial responde | Un `RECHAZADA` no distingue «el SKU no lo admite» de «la sesión estaba rota» |
-| **Negativo** — la forma ACTUAL sigue fallando | Si de pronto pasa, cambió el motor y el diagnóstico entero de #197 hay que rehacerlo, no celebrarlo |
+### P7 (#164) · La columna puede dejar de ser rehén
 
-**Que las tres fallen es un resultado válido**, no una corrida perdida: diría que la vista de máscara
-no es expresable en Fabric y que la protección de columna tiene que vivir en otro lado. Y hasta que
-esto corra, **el compilador no se toca**: emitir una forma nueva sin verla pasar en el SKU es
-exactamente lo que produjo #197.
+- `CREATE FUNCTION` **sin parámetro**: aceptado.
+- `ADD FILTER PREDICATE` **sin argumento**: aceptado — la columna deja de ser rehén.
+- **Y no es un deny silencioso**: con la policy instalada la tabla sigue sirviendo sus 2 filas.
+  Cambiar un andamiaje por una policy que niega todo sería peor que el problema original.
+- `sys.security_policies` corrobora: `is_enabled: true`, `is_schema_bound: true`.
+- Variante (c), argumento **constante**: también aceptada — hay camino de respaldo.
+- **Control positivo en la misma sesión**: la forma actual (función CON columna) se acepta.
+
+### Lo que esta ventana NO respondió
+
+**P5 (#163) — si el service principal de serving tiene `UNMASK`.** Falta `FAB_SP_TOKEN`: el secreto
+del SP vive fuera del repo y no estaba en la máquina. El arnés lo declara y **no lo cuenta como
+verde**, que es lo correcto — medir `UNMASK` con la cuenta de un admin humano no contesta nada,
+porque un admin siempre lo tiene.
+
+### Lo que sigue valiendo de la asimetría
+
+Estos positivos valen para **este SKU (F2) y este rol**. No se generalizan a cualquier instancia: el
+rol del workspace decide `UNMASK`, y eso ya está medido como variable (Member vs Viewer).
 
 ## Lo que este terreno NO hace, por decisión
 
