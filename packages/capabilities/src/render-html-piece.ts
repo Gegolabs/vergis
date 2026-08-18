@@ -109,6 +109,10 @@ export const renderHtmlPiece: Capability = {
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
     if (hasTable && !print) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
+    // #209 · El buscador de los filtros de bandeja. Es local por construcción (el catálogo ya viaja
+    // completo en el HTML) y no depende del runtime de tabla: un dashboard sin tablas también tiene
+    // filtros. En papel no va: ahí no hay quién escriba.
+    if (trayFilters && !print) tail += `<script>${TRAY_FILTER_SEARCH_SOURCE}</script>`
     // La capa de NOTAS va DESPUÉS del runtime de tabla: decora un tbody que ya existe y se engancha
     // a sus re-renders. Su contexto viaja como JSON (endpoints + CSRF + recorte), nunca interpolado
     // en el script — el recorte lo escribe el usuario y no puede acabar como código.
@@ -288,8 +292,34 @@ const FILTER_CHIPS_CSS = `
  * CSS de la sección de filtros server-side de la bandeja. Reusa las clases `.faceta*` que ya estila
  * cada theme; solo agrega lo propio del LINK (los filtros de #82 navegan, no marcan un checkbox).
  */
+/**
+ * #209 · Cuántas opciones de un filtro de bandeja se muestran antes de plegar el resto.
+ *
+ * El pedido del cliente fue «un límite de opciones a la vez por filtro + search». La medición previa
+ * matizó el síntoma y conviene dejarla escrita: `.faceta-options` YA acota su alto a 220px con
+ * scroll interno en los dos themes, así que un filtro nunca ocupó literalmente la columna entera.
+ * Lo que sí ocurre es que N filtros suman N franjas de 220px, y que dentro de un catálogo de 47
+ * opciones la que se busca se encuentra scrolleando a ciegas. De ahí las DOS piezas: plegar (baja la
+ * suma de alturas) y buscar (alcanza lo plegado sin scrollear).
+ *
+ * 12 es el tope: entra en los 220px sin scroll interno, así que un filtro plegado no anida dos
+ * mecanismos de scroll — que es la forma clásica de que el de adentro se coma la rueda del de afuera.
+ */
+export const FILTER_VISIBLE_MAX = 12
+
 const TRAY_FILTERS_CSS = `
 .faceta-options .vflt-opt{display:block;padding:0;text-transform:none;letter-spacing:0}
+.vflt-search{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:4px 8px;margin:0 0 6px;color:var(--fg,#1f2937);background:var(--bg,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px}
+.vflt-allbox{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
+.vflt-showall{display:block;font-size:11px;color:var(--green,#2563eb);cursor:pointer;margin:0 0 6px;text-decoration:underline}
+.vflt-extra{display:none}
+.vflt-allbox:checked ~ .faceta-options .vflt-extra{display:block}
+.vflt-allbox:checked ~ .vflt-showall{display:none}
+.faceta-options .vflt-opt.vflt-hit{display:block}
+.faceta-options .vflt-opt.vflt-miss{display:none}
+.vflt-nohit{display:none;font-size:11px;color:var(--fg-dim,#64748b);padding:2px 0}
+.faceta.vflt-empty .vflt-nohit{display:block}
+@media print{.vflt-search,.vflt-showall,.vflt-nohit{display:none!important}}
 .faceta-options .vflt-opt a{display:flex;gap:8px;align-items:center;font-size:13px;padding:4px 2px;color:var(--fg,#1f2937);text-decoration:none}
 .faceta-options .vflt-opt a:hover{color:var(--green,#2563eb)}
 .faceta-options .vflt-opt .vflt-box{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex:0 0 14px;border:1px solid var(--border,#94a3b8);border-radius:3px;font-size:10px;line-height:1}
@@ -360,15 +390,21 @@ function renderFilterChips(filters: FilterResolved[], activePage: string | undef
 function renderTrayFilters(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>): string {
   return filters
     .map((f) => {
+      const grande = f.options.length > FILTER_VISIBLE_MAX
+      let visibles = 0
       const opts = f.options
         .map((v) => {
           const on = f.selected.includes(v)
+          // #209 · Una opción SELECCIONADA nunca se pliega: esconder la propia selección del usuario
+          // es peor que la lista larga — deja de poder ver, y de poder quitar, lo que él eligió.
+          const extra = grande && !on && visibles >= FILTER_VISIBLE_MAX
+          if (!extra) visibles++
           // Multi: el link alterna ESE valor. Single: elegir reemplaza la selección previa.
           const href = on
             ? fltHref(activePage, carry, flt, { id: f.id, value: v })
             : fltHref(activePage, carry, flt, f.multi ? undefined : { id: f.id }, { id: f.id, value: v })
           return (
-            `<label class="vflt-opt${on ? ' on' : ''}">` +
+            `<label class="vflt-opt${on ? ' on' : ''}${extra ? ' vflt-extra' : ''}" data-v="${escapeHtml(v.toLowerCase())}">` +
             `<a href="${escapeHtml(href)}" role="checkbox" aria-checked="${on}">` +
             `<span class="vflt-box">${on ? '✓' : ''}</span> ${escapeHtml(v)}</a></label>`
           )
@@ -377,13 +413,58 @@ function renderTrayFilters(filters: FilterResolved[], activePage: string | undef
       const clear = f.selected.length
         ? `<a class="faceta-clear" href="${escapeHtml(fltHref(activePage, carry, flt, { id: f.id }))}">limpiar</a>`
         : ''
+      // #209 · Buscador LOCAL: el catálogo ya viaja completo en el HTML (las opciones son links
+      // server-rendered), así que alcanzar una opción fuera del tope no necesita ningún endpoint. Y
+      // como cada aplicación de filtro re-renderiza la página entera, el catálogo cascadeado por
+      // `depends_on` nace fresco con el HTML — no hay caché client-side que invalidar.
+      const buscador = grande
+        ? `<input type="search" class="vflt-search" placeholder="Buscar entre ${f.options.length}…"` +
+          ` aria-label="Buscar en ${escapeHtml(f.label)}" oninput="vfltSearch(this)">`
+        : ''
+      // El plegado es CSS-only (un checkbox + hermano general), mismo patrón que el colapso de la
+      // bandeja: sin JS el botón sigue funcionando y ninguna opción queda inalcanzable. El buscador
+      // sí necesita JS, y su ausencia degrada a «no filtra», nunca a «no se puede llegar».
+      const restantes = f.options.length - visibles
+      const verTodas =
+        grande && restantes > 0
+          ? `<input type="checkbox" class="vflt-allbox" id="vflt-all-${escapeHtml(f.id)}">` +
+            `<label class="vflt-showall" for="vflt-all-${escapeHtml(f.id)}">Ver las ${restantes} restantes</label>`
+          : ''
       const body = f.options.length
-        ? `<div class="faceta-options">${opts}</div>`
+        ? `${buscador}${verTodas}<div class="faceta-options">${opts}</div><div class="vflt-nohit">Ninguna opción coincide.</div>`
         : `<div class="tray-empty">Sin opciones para la selección actual.</div>`
       return `<div class="faceta" data-flt="${escapeHtml(f.id)}"><div class="faceta-title">${escapeHtml(f.label)}${clear}</div>${body}</div>`
     })
     .join('')
 }
+
+/**
+ * #209 · Buscador local de un filtro de bandeja.
+ *
+ * Filtra sobre TODAS las opciones, incluidas las plegadas por el tope: un buscador que solo alcanza
+ * lo ya visible no resuelve nada — el caso que lo pidió es justamente llegar a la opción número 40
+ * de 47. Por eso el `.vflt-hit` gana sobre `.vflt-extra` en la hoja.
+ *
+ * Con la caja vacía se restaura el estado de reposo (plegado incluido) en vez de dejar todo abierto:
+ * si no, buscar una vez desplegaría el filtro para siempre.
+ */
+const TRAY_FILTER_SEARCH_SOURCE = `
+function vfltSearch(input){
+  var faceta = input.closest ? input.closest('.faceta') : null;
+  if(!faceta) return;
+  var q = (input.value||'').trim().toLowerCase();
+  var opts = faceta.querySelectorAll('.vflt-opt');
+  var hits = 0;
+  for(var i=0;i<opts.length;i++){
+    var o = opts[i];
+    o.classList.remove('vflt-hit','vflt-miss');
+    if(!q){ continue; }
+    if((o.getAttribute('data-v')||'').indexOf(q) >= 0){ o.classList.add('vflt-hit'); hits++; }
+    else { o.classList.add('vflt-miss'); }
+  }
+  faceta.classList.toggle('vflt-empty', !!q && hits === 0);
+}
+`
 
 /** CSS de la columna de acciones de drill (links por fila + menú cuando hay varias). */
 const DRILL_ACTIONS_CSS = `
