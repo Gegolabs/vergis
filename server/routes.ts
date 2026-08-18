@@ -55,22 +55,63 @@ export interface RouteDeps {
   /** Conteo para /healthz (sin slugs ni mensajes — healthz corre sin gate y se mantiene reducido).
    * null = el motor no distingue servibilidad por PI (clickhouse). */
   healthSummary?: () => { total: number; serving: number } | null
+  /**
+   * PLANO DE CONTROL del nodo. Un nodo sin control **sirve lecturas** y no escribe nada: sus lazos de
+   * fondo están desarmados y sus mutaciones se rechazan con 409 nombrando al activo.
+   *
+   * AUSENTE ⇒ el nodo siempre controla, que es la superficie de antes de que el plano existiera: fase
+   * `serving` y mutaciones aceptadas. Así un despliegue de un solo nodo y todo test previo se comportan
+   * exactamente igual.
+   */
+  control?: {
+    hasControl: () => boolean
+    /** Quién es el activo, para el mensaje del 409 (titular observado + época). */
+    activeHolder: () => string
+  }
 }
+
+/** Métodos que no mutan: los únicos que un nodo sin control puede atender en superficie de gestión. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export function createRequestHandler(deps: RouteDeps): RequestListener {
+  /** ¿Este nodo tiene el plano de control? Sin la dep, sí — la superficie de un nodo suelto no cambia. */
+  const hasControl = (): boolean => deps.control?.hasControl() ?? true
+  /**
+   * Gate de MUTACIÓN de las superficies de gestión (administración, config por-PI, notas, Miranda,
+   * intake). Un nodo en standby no escribe: aceptar la mutación sería volcar su snapshot rancio encima
+   * de lo que el activo lleva escrito. El 409 **nombra al activo** para que quien lo recibe sepa dónde
+   * sí se puede escribir, en vez de leer «conflicto» y no saber con qué.
+   */
+  const mutacionSinControl = (req: IncomingMessage, res: ServerResponse): boolean => {
+    if (SAFE_METHODS.has((req.method ?? 'GET').toUpperCase()) || hasControl()) return false
+    fail(
+      res,
+      409,
+      `Este nodo está en espera (standby): no tiene el plano de control y por eso no escribe. ` +
+        `El nodo activo es ${deps.control?.activeHolder() ?? 'otro nodo'}. Reintenta contra el activo.`,
+    )
+    return true
+  }
   return (req, res) => {
     const url = (req.url ?? '/').split('?')[0]
     if (url === '/healthz') {
       // Distingue ARRANCANDO (nada evaluado aún → 503) de N-de-M DEGRADADOS (el proceso está sano y
-      // sirve el resto → 200, ok:false). Solo CONTEOS: healthz corre sin gate y se mantiene reducido
-      // (sin slugs ni mensajes de error).
+      // sirve el resto → 200, ok:false) de EN ESPERA (standby: sano, sirve lecturas, no controla).
+      // Solo CONTEOS: healthz corre sin gate y se mantiene reducido (sin slugs ni mensajes de error).
+      //
+      // `standby` es HTTP 200 y NO relaja `serving`: el predicado del conmutador y del poller de cortes
+      // es `HTTP 200 ∧ phase=serving ∧ pis.serving=N`, y un standby **no debe** satisfacerlo — rutear
+      // tráfico de escritura a un nodo que responde 409 sería peor que no rutear nada. Precedencia:
+      // `starting` (nada evaluado) → `standby` (no controla) → `degraded` → `serving`. Un standby con
+      // PIs degradados sigue delatando su degradación en `ok:false` y en los conteos de `pis`.
       const ready = deps.isReady()
       const pis = deps.healthSummary?.() ?? null
       const degraded = pis ? pis.total - pis.serving : 0
+      const phase = !ready ? 'starting' : !hasControl() ? 'standby' : degraded ? 'degraded' : 'serving'
       res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: ready && degraded === 0, engine: deps.engine, phase: !ready ? 'starting' : degraded ? 'degraded' : 'serving', ...(pis ? { pis } : {}) }))
+      res.end(JSON.stringify({ ok: ready && degraded === 0, engine: deps.engine, phase, ...(pis ? { pis } : {}) }))
       return
     }
     // A10 · gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).
@@ -92,12 +133,16 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // ADMINISTRACIÓN — gateada por rol DENTRO del handler. Va antes del gate `ready` (no sirve dato gobernado).
     const admin = deps.getAdmin()
     if (admin && (url === '/admin' || url.startsWith('/admin/'))) {
+      // La administración es la superficie de escritura gobernada (incluida la ingesta de archivos):
+      // sin control, su mutación se rechaza ANTES de que el handler toque el store.
+      if (mutacionSinControl(req, res)) return
       admin.tryHandle(req, res).catch((e) => fail(res, 500, `Error en Administración: ${errMsg(e)}`))
       return
     }
     // Configuración por-PI — gateada por rol de PI dentro del handler.
     const piConfig = deps.getPiConfig()
     if (piConfig && /^\/[^/]+\/config(?:\/|$)/.test(url)) {
+      if (mutacionSinControl(req, res)) return
       piConfig
         .tryHandle(req, res)
         .then((handled) => {
@@ -111,6 +156,7 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // flag apagado `getMiranda` es undefined/null → `/miranda*` cae al slug-lookup normal → 404 de hoy.
     const miranda = deps.getMiranda?.() ?? null
     if (miranda && (url === '/miranda' || url.startsWith('/miranda/'))) {
+      if (mutacionSinControl(req, res)) return
       miranda
         .tryHandle(req, res)
         .then((handled) => {
@@ -125,6 +171,7 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // del handler (que aplica su propio gate de artefacto).
     const notas = deps.getNotas?.() ?? null
     if (notas && (url === '/impresiones' || url.startsWith('/impresiones/'))) {
+      if (mutacionSinControl(req, res)) return
       notas
         .tryHandle(req, res)
         .then((handled) => {
@@ -140,6 +187,7 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     const blockedReason = (report: Report): string | null => deps.piBlocked?.(report) ?? null
     // Rutas de notas ATADAS A UN PI: necesitan el PI descubierto (por eso van tras el gate `ready`).
     if (notas && /^\/[^/]+\/(imprimir|notas|comentarios)$/.test(url)) {
+      if (mutacionSinControl(req, res)) return
       notas
         .tryHandle(req, res)
         .then((handled) => {
