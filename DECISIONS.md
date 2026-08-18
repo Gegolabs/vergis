@@ -5,9 +5,22 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados |
 
 ---
+
+## D-40 · 2026-08-18 — `bindColumn` se RETIRA del contrato en vez de aceptarse e ignorarse (#164)
+
+- **Bifurcación**: con el allow-all ya sin ancla, ¿qué pasa con `FabricTarget.bindColumn`? Tres caminos: ignorarlo en silencio (retrocompatible), conservarlo como escape hatch que emite la forma vieja, o retirarlo del contrato (rompe a quien lo pase).
+- **Decidido**: **retirarlo**, con guarda de transición que rompe con remediación. César delegó la decisión pidiendo criterio de excelencia, y la Regla 1 la contesta: si nada estuviera implementado, un allow-all no declararía columna alguna — el campo es andamiaje de una limitación que ya no existe, y el proyecto sigue pre-launch (un beta tester es piloto controlado). El escape hatch se descartó por no tener necesidad medida: la forma sin columna pasó en **los dos motores** que el back-end sirve, no en uno. Y no se ignora en silencio porque el silencio le dejaría creer al aplicador que su ancla sigue en pie.
+- **Costo de revertir**: bajo — reponer el campo y la rama de codegen vieja; nada desplegado depende del retiro.
+
+## D-39 · 2026-08-18 — El CHANGELOG de #164 INDICA los pasos de migración, no los sugiere
+
+- **Bifurcación**: los 34 `ADD FILTER PREDICATE` desplegados conservan su ancla. ¿El changelog lo declara como opcional, lo recomienda, o lo indica como acción a ejecutar?
+- **Decidido**: **indicarlo**, con sus pasos y su verificación, dejando el *cuándo* al control de cambio del operador. Es de César: él observó que el criterio de excelencia no decide la interacción con terceros, y que ahí lo correcto es indicar —más que sugerir— las acciones que aseguran que el valor entregado no corra riesgo. Lo que lo vuelve obligatorio en este caso: el cambio **apaga un aviso**. El compilador declara lo que emite, no lo instalado, así que hasta re-aplicar, un `grant: all` reporta cero dependencias mientras su columna sigue atada en el motor — el gate de regresión de terreno del operador quedaba ciego sobre un bloqueo real, sin que nadie se lo dijera.
+- **Costo de revertir**: nulo — es texto del CHANGELOG, aún sin versión cortada.
+- **Consecuencia fuera del proyecto**: la observación se elevó a enmienda de la Regla 1 de `ww:wingcoding` (repo `protocolos`, PR #1). **No se mergea desde acá**: el Reglamento lo escribe César.
 
 ## D-38 · 2026-08-18 — La ventana de capacidad se aprovecha entera: P7 (#164) se agrega ANTES de encender
 
