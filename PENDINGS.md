@@ -34,12 +34,14 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **La medición de #164 NO está en el arnés de Fabric, y es lo primero que hay que agregarle** — la
-  pregunta de ese issue (¿acepta Fabric un `ADD FILTER PREDICATE` cuya función no recibe columna?) se
-  corrió a mano en el contenedor T-SQL (PR #190), **no como paso de `fab:proof`**. El arnés de Fabric
-  hoy tiene P5 (#163) y P6 (#197, agregado el 2026-08-17) pero no ésta, así que la próxima ventana de
-  capacidad —que es gasto y se decide una vez— contestaría dos preguntas pudiendo contestar tres.
-  Trabajo chico; el valor está en que se haga **antes** de encender, no después. `reg 2026-08-17`
+- ~~**La medición de #164 NO está en el arnés de Fabric**~~ — **SALDADO 2026-08-18**: es P7 de
+  `fab:proof` (PR #219) y ya corrió contra el SKU. Resultado en el comentario de #164
+- **El secreto del SP de laboratorio no está en la máquina, y por eso P5 (#163) sigue sin respuesta**
+  — la ventana del 2026-08-18 corrió sin `FAB_SP_TOKEN`, así que la pregunta «¿el service principal de
+  serving tiene `UNMASK`?» quedó igual de abierta que antes. El arnés lo declara y no lo cuenta como
+  verde, que es lo correcto, pero significa que **la próxima ventana también lo desperdicia** si nadie
+  regenera el secreto antes (`POST /applications/{objectId}/addPassword` de Graph, ver `RESOURCES.md`).
+  Regenerarlo toca credenciales, así que no se hizo por cuenta propia. `reg 2026-08-18`
 - **El eslabón «renombrar en la consola → catálogo servido» de #207 no tiene test de integración** —
   está medido que el override no se congela en el memo del escáner y que sobrevive al reinicio del
   nodo (SQLite en disco), pero la cadena *POST → `refreshDisplayNames()` → `discover()`* solo está

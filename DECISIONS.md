@@ -5,9 +5,15 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos |
 
 ---
+
+## D-38 · 2026-08-18 — La ventana de capacidad se aprovecha entera: P7 (#164) se agrega ANTES de encender
+
+- **Bifurcación**: César autorizó correr el experimento. ¿Encender y correr solo P6, o agregar primero la medición de #164 —que estaba anotada como pendiente— y contestar dos preguntas en una ventana?
+- **Decidido**: agregar P7 antes de encender. El costo de la ventana es por sesión, no por experimento: encender dos veces para dos preguntas que caben en una es gasto puro. Lo confirmó el propio pedido de César («todos»).
+- **Costo de revertir**: nulo — el arnés crece, no cambia comportamiento del Producto.
 
 ## D-37 · 2026-08-17 — Los PRs de bot en cooldown NO se aterrizan, aunque sus otros checks estén verdes
 
