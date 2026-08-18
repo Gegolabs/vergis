@@ -1,4 +1,12 @@
-import { openSqliteDb, persistSqliteDb, selectAll, type SqlDb } from './sqlite'
+import {
+  openSqliteDb,
+  persistSqliteDb,
+  selectAll,
+  sqliteControlStatus,
+  type SqlDb,
+  type SqliteControlOptions,
+  type SqliteControlStatus,
+} from './sqlite'
 
 /**
  * Quién administra la plataforma — el rol de aplicación «admin». Es autorización de ACCIÓN (puede
@@ -117,6 +125,13 @@ export function adminRemove(db: SqlDb, email: string): void {
   if (target.seed) db.run(`INSERT OR IGNORE INTO admin_seed_removed (email) VALUES (?)`, [e])
 }
 
+/**
+ * Versión del esquema de este store, escrita como `PRAGMA user_version`. Toda migración que altere
+ * el esquema la incrementa EN EL MISMO COMMIT; abrir un archivo con una versión mayor que esta se
+ * niega (ver cabecera de `sqlite.ts`).
+ */
+export const ADMIN_SCHEMA_VERSION = 1
+
 // ─── Store embebido enfocado (un db solo de admins). El consolidado vive en GovernanceStore. ──
 export class SqliteAdminStore implements AdminStore {
   private constructor(
@@ -124,11 +139,20 @@ export class SqliteAdminStore implements AdminStore {
     private file: string | null,
   ) {}
 
-  static async open(file: string | null, seedEmails: string[] = []): Promise<SqliteAdminStore> {
-    const db = await openSqliteDb(file)
+  static async open(
+    file: string | null,
+    seedEmails: string[] = [],
+    control: SqliteControlOptions = {},
+  ): Promise<SqliteAdminStore> {
+    const db = await openSqliteDb(file, { ...control, schemaVersion: ADMIN_SCHEMA_VERSION })
     ensureAdminTable(db, seedEmails)
     persistSqliteDb(db, file)
     return new SqliteAdminStore(db, file)
+  }
+
+  /** Estado del plano de escritura de este store (esquema, época, degradado). */
+  controlStatus(): SqliteControlStatus | undefined {
+    return sqliteControlStatus(this.db)
   }
 
   async isAdmin(email: string | undefined): Promise<boolean> {
