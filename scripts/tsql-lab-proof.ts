@@ -299,6 +299,35 @@ async function main(): Promise<void> {
     await intentar(sa, `DROP SECURITY POLICY IF EXISTS dbo.secpol_const; DROP FUNCTION IF EXISTS dbo.fn_pol_const;`)
   }
 
+  // ── P3b · el allow-all que EMITE el compilador tras el rediseño de #164 ─────────────────────
+  //
+  // P3 midió la forma a mano. Esto mide LO QUE SALE DE `compileFabric`, que es lo único que autoriza
+  // a cerrar #164: entre una y otra puede haber diferencias que nadie eligió (nombres, tipos, orden
+  // de sentencias), y ese hueco es exactamente el que produjo #197 en el plano de columna.
+  seccion('P3b (#164) · el allow-all EMITIDO por el compilador, aplicado tal cual sale')
+  await intentar(sa, `DROP SECURITY POLICY IF EXISTS dbo.secpol_publica; DROP FUNCTION IF EXISTS dbo.fn_pol_publica;`)
+  await intentar(sa, `DROP TABLE IF EXISTS dbo.publica_emit;
+    CREATE TABLE dbo.publica_emit (id INT NOT NULL, nombre NVARCHAR(50) NOT NULL);
+    INSERT INTO dbo.publica_emit (id, nombre) VALUES (1, N'uno'), (2, N'dos');`)
+  const enfPub = compileFabric({ public: true }, { schema: 'dbo', table: 'publica_emit' })
+  let pubOk = true
+  for (const [i, stmt] of enfPub.setupSQL.entries()) {
+    const r = await intentar(sa, stmt)
+    if (!ok(r.ok, `[${i + 1}/${enfPub.setupSQL.length}] ${stmt.split('\n')[0].slice(0, 72)}${r.ok ? '' : ` — ${r.error}`}`)) pubOk = false
+  }
+  if (pubOk) {
+    // No es deny mudo: la tabla sigue sirviendo sus filas con la policy instalada.
+    const filas = (await sa.request().query('SELECT id FROM dbo.publica_emit')).recordset.length
+    ok(filas === 2, `con el allow-all EMITIDO instalado la tabla sigue sirviendo sus 2 filas: ${filas}`)
+    // EL CONTROL QUE DECIDE #164: la columna deja de ser rehén. Con la policy vieja este ALTER se
+    // rechazaba por la dependencia de SCHEMABINDING; si ahora pasa, el rehén se soltó de verdad.
+    const alter = await intentar(sa, `ALTER TABLE dbo.publica_emit ALTER COLUMN nombre NVARCHAR(80) NOT NULL;`)
+    ok(alter.ok, `ALTER sobre una columna de negocio con la policy INSTALADA: ${alter.ok ? 'ACEPTADO — la columna NO es rehén' : `rechazado — ${alter.error}`}`)
+    // Y el compilador lo declara: ninguna dependencia de esquema aportada por el allow-all.
+    ok(enfPub.schemaDependencies.length === 0, `schemaDependencies del allow-all: ${JSON.stringify(enfPub.schemaDependencies)} (vacío = nada atado)`)
+  }
+  await intentar(sa, `DROP SECURITY POLICY IF EXISTS dbo.secpol_publica_emit; DROP FUNCTION IF EXISTS dbo.fn_pol_publica_emit; DROP TABLE IF EXISTS dbo.publica_emit;`)
+
   // ── P4 · El DIFERENCIAL: el emulador que sostiene la suite vs el motor ──────────────────────
   seccion('P4 · diferencial emulador ↔ motor (el emulador sostiene 2000+ tests; nadie lo había contrastado con un motor)')
   const CASOS: { nombre: string; claims: ClaimSet }[] = [
