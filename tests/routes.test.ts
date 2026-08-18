@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createRequestHandler, type RouteDeps } from '../server/routes'
 import type { Report } from '../server/discovery'
 
-const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
+const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
 
 function mkReq(url: string, method = 'GET', headers: Record<string, string> = {}): IncomingMessage {
   return { url, method, headers } as unknown as IncomingMessage

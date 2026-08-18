@@ -6,7 +6,7 @@ import { createRequestHandler, type RouteDeps } from '../server/routes'
 import { PdfUnavailableError } from '../server/pdf'
 import type { Report } from '../server/discovery'
 
-const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
+const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
 const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]) // "%PDF-"
 
 function mkReq(url: string, method = 'GET', headers: Record<string, string> = {}): IncomingMessage {

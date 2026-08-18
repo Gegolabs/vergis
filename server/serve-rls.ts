@@ -251,7 +251,23 @@ function specPaths(): string[] {
 const viewLineage = new Map<string, string[]>()
 // Descubrimiento (memoizado) + gate de gobernanza fail-closed: extraído y testeado en ./discovery.
 // `discovery.rebuild()` (validate-before-swap) lo fuerza tras un hot-reload de gobierno.
-const discovery = createDiscovery({ store, engine: ENGINE as 'clickhouse' | 'fabric', servingCaps: SERVING_CAPS, specPaths, resolveBases: (t) => viewLineage.get(t) })
+// #207 · Mapa VIVO de nombres visibles sobrescritos (código de PI → nombre). Se siembra al arrancar
+// desde el gobierno y lo refresca la propia consola al renombrar: por eso un renombre se ve en el
+// acto y NO exige desplegar, que es el roce entero del issue. Es un espejo de lectura, no la verdad:
+// la verdad está en `pi_display_name` del store, y este mapa se re-deriva de ahí.
+const displayNameOverrides = new Map<string, string>()
+/** Re-siembra el mapa desde el gobierno. Se asigna donde el store existe; hasta entonces es un no-op
+ *  y el catálogo sirve los nombres del spec — nunca falla el serving por un renombre. */
+let refreshDisplayNames: () => Promise<void> = async () => {}
+
+const discovery = createDiscovery({
+  store,
+  engine: ENGINE as 'clickhouse' | 'fabric',
+  servingCaps: SERVING_CAPS,
+  specPaths,
+  resolveBases: (t) => viewLineage.get(t),
+  displayNameOverride: (code) => displayNameOverrides.get(code),
+})
 const discover = discovery.discover
 const visibleFor = discovery.visibleFor
 
@@ -1049,6 +1065,21 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       processes: sourceReg.processes,
       processOutputs: sourceReg.processOutputs,
     })
+    // #207 · Ahora que el store existe, el refresco del mapa de nombres visibles es real. Se siembra
+    // de inmediato para que el catálogo nazca con los renombres ya aplicados, sin esperar al primer
+    // POST de la consola.
+    refreshDisplayNames = async (): Promise<void> => {
+      try {
+        const rows = await govStore.listDisplayNames()
+        displayNameOverrides.clear()
+        for (const [code, name] of Object.entries(rows)) displayNameOverrides.set(code, String(name))
+      } catch (e) {
+        // Fail-safe: sin overrides se sirve el nombre del spec. Un renombre que no se ve es un roce;
+        // un catálogo que no se sirve por culpa del renombre sería un incidente.
+        console.warn(`[vergis-rls] no se pudieron leer los nombres visibles sobrescritos: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    await refreshDisplayNames()
     const adminStore = govStore
     // Gobierno de PI (frente A): expone el store al gate de artefacto + config de ACL (flag-guarded).
     governance = govStore
@@ -1756,8 +1787,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       gov: govStore,
       resolve: (slug) => {
         const r = discover().find((x) => x.slug === slug)
-        return r ? { code: r.code, name: r.name } : undefined
+        return r ? { code: r.code, name: r.name, specName: r.specName } : undefined
       },
+      onDisplayNameChange: () => void refreshDisplayNames(),
       identityOf: (h) => identityFor(h as GateHeaders),
       roleOf: piManagementRole,
       ceilingFor: async (code) => {
