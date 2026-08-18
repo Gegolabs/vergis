@@ -3,7 +3,7 @@ import { VERGIS_VERSION_LABEL } from './version'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
-import { TABLE_INTERACTIVE_CSS, TRAY_CSS } from './piece-css'
+import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
 import { renderInteractiveScript } from './interactive-script'
@@ -40,7 +40,7 @@ export const renderHtmlPiece: Capability = {
     // sin re-compilar Vega en el browser (el contrato del motor es SVG server-side).
     const chartVars = chartVarMap(chartTokens)
     const carry = carryCtx ?? {}
-    const signals: RenderSignals = { interactiveTable: false, drillActions: false }
+    const signals: RenderSignals = { interactiveTable: false, drillActions: false, magnitude: false }
     const flt = fltCarry ?? {}
     const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, print: !!print, carry, signals, fltQ: fltQuery(flt) }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
@@ -88,7 +88,7 @@ export const renderHtmlPiece: Capability = {
     if (!print) {
       // El shell del Inspector se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
       // Controles solo cuando `interactive`; si no, `''` (y el tab muestra su empty-state).
-      body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable, !!notas) + body
+      body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable, !!notas, signals.magnitude) + body
       if (interactive) tail += renderInteractiveScript(interactive)
     }
     // CSS al TOPE del body, ANTES del contenido (evita FOUC: en tablas grandes el navegador
@@ -103,6 +103,7 @@ export const renderHtmlPiece: Capability = {
     if (chips) css += FILTER_CHIPS_CSS
     if (trayFilters) css += TRAY_FILTERS_CSS
     if (descargarSection) css += TRAY_PDF_CSS
+    if (signals.magnitude) css += MAGNITUDE_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (print) css += PRINT_TRUNC_CSS
     if (css) body = `<style>${css}</style>` + body
@@ -608,8 +609,18 @@ function renderTrayShell(
   controlesHasMachinery = true,
   hasTable = false,
   hasNotas = false,
+  hasMagnitude = false,
 ): string {
   const active = activePalette || (palettes && palettes[0]?.id) || ''
+  // #210 · El color de magnitud es una preferencia de LECTURA, no un contrato de negocio: vive con
+  // la paleta, en Apariencia, apagado por defecto y persistido por reporte. Solo aparece si el
+  // documento tiene tabla — un interruptor que no enciende nada es peor que su ausencia.
+  const magnitud = hasMagnitude
+    ? `<div class="faceta faceta-appearance"><div class="faceta-title">Color de magnitud</div>` +
+      `<div class="faceta-options"><label><input type="checkbox" id="vergis-magnitude"` +
+      ` onchange="document.documentElement.dataset.magnitude=this.checked?'on':'off';try{localStorage.setItem('vergis:magnitude:'+location.pathname,this.checked?'1':'0')}catch(e){}">` +
+      ` Sombrear las celdas numéricas según su magnitud</label></div></div>`
+    : ''
   let appearance = ''
   if (palettes && palettes.length > 1) {
     const radios = palettes
@@ -629,7 +640,8 @@ function renderTrayShell(
   // ya usan paleta y anotaciones: localStorage + re-aplicación al cargar.
   const restore =
     `<script>(function(){try{var p=localStorage.getItem('vergis:palette:'+location.pathname);if(p){document.documentElement.dataset.palette=p;var r=document.querySelector('input[name=vergis-palette][value="'+p+'"]');if(r)r.checked=true;}}catch(e){}` +
-    `try{var t=localStorage.getItem('vergis:tray:'+location.pathname);if(t!==null){var c=document.getElementById('vergis-tray-toggle');if(c)c.checked=(t==='1');}}catch(e){}})();</script>`
+    `try{var t=localStorage.getItem('vergis:tray:'+location.pathname);if(t!==null){var c=document.getElementById('vergis-tray-toggle');if(c)c.checked=(t==='1');}}catch(e){}` +
+    `try{var m=localStorage.getItem('vergis:magnitude:'+location.pathname);if(m==='1'){document.documentElement.dataset.magnitude='on';var mc=document.getElementById('vergis-magnitude');if(mc)mc.checked=true;}}catch(e){}})();</script>`
   // Pie de la bandeja (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
   // Pie del inspector: versión del PI (instancia) + versión de Mira (motor) — pistas DISTINTAS.
   const footer =
@@ -679,7 +691,7 @@ function renderTrayShell(
     `</div>` +
     `<div class="tray-panel tray-panel-controles"><div class="tray-sections">${notasKit}${controlesBody}</div></div>` +
     `<div class="tray-panel tray-panel-guardados"><div class="tray-saved">${guardadosBody}</div></div>` +
-    `<div class="tray-panel tray-panel-config">${appearance}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
+    `<div class="tray-panel tray-panel-config">${appearance}${magnitud}<div class="tray-actions"><button type="button" class="tray-print" onclick="window.print()">Imprimir</button></div></div>` +
     // Pie COMÚN a los 3 tabs (fuera de los paneles) → siempre visible, pegado al fondo.
     footer +
     `</aside>` +

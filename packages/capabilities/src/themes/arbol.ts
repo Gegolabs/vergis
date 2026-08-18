@@ -100,6 +100,8 @@ export const arbolTheme: Theme = {
     --fg: #ebdbb2; --fg-dim: #a89984;
     --green: #b8bb26; --yellow: #fabd2f; --red: #fb4934;
     --blue: #83a598; --orange: #fe8019; --purple: #d3869b; --gray: #a89984;
+    /* #210 · rampa del color de magnitud: el ACENTO del theme, nunca roja. */
+    --mag-h: 61; --mag-s: 55%;
     /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
     ${chartVarDeclarations(CHART_TOKENS_BY_PALETTE['gruvbox'])}
   }
@@ -108,6 +110,8 @@ export const arbolTheme: Theme = {
     --fg: #3c3836; --fg-dim: #7c6f64;
     --green: #79740e; --yellow: #b57614; --red: #9d0006;
     --blue: #076678; --orange: #af3a03; --purple: #8f3f71; --gray: #7c6f64;
+    /* #210 · rampa del color de magnitud: el ACENTO del theme, nunca roja. */
+    --mag-h: 57; --mag-s: 60%;
     /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
     ${chartVarDeclarations(CHART_TOKENS_BY_PALETTE['claro'])}
   }
@@ -116,6 +120,8 @@ export const arbolTheme: Theme = {
     --fg: #1a1a1a; --fg-dim: #64748b;
     --green: #16a34a; --yellow: #d97706; --red: #dc2626;
     --blue: #2563eb; --orange: #ea580c; --purple: #9333ea; --gray: #64748b;
+    /* #210 · rampa del color de magnitud: el ACENTO del theme, nunca roja. */
+    --mag-h: 142; --mag-s: 50%;
     /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
     ${chartVarDeclarations(CHART_TOKENS_BY_PALETTE['blanco'])}
   }
