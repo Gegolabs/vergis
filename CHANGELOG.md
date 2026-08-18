@@ -21,8 +21,8 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.18.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
-| `0.18` | Flota al último patch de la serie 0.18 | Producción que quiere correcciones sin capacidades nuevas |
+| `0.19.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.19` | Flota al último patch de la serie 0.19 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
 | `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
@@ -34,10 +34,19 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
-## Sin publicar (en `main`)
+## 0.19.0 — 2026-08-18
 
-Lo que sigue está mergeado y **todavía no tiene versión cortada**: un operador no puede tomarlo hasta
-que se publique un tag.
+**El plano de columna vuelve a proteger, el gobierno deja de secuestrar columnas, y dos planos del
+despliegue por anillos quedan puestos sin cablear.** Cuatro issues (#197 #164 #220 #222), de dos
+frentes de trabajo distintos.
+
+**Lo que un operador necesita decidir con esto:** las dos primeras son **correcciones de algo que hoy
+no cumple lo que promete** —la máscara por sujeto no protegía a nadie en Fabric, y el gobierno de una
+tabla pública bloquea `ALTER` sobre una columna de negocio elegida por accidente—; las dos últimas
+**no cambian el comportamiento de un nodo suelto**. No hay migraciones que correr a mano. Hay
+variables de entorno nuevas, todas con default y ninguna obligatoria. **Hay un cambio de contrato**
+(`bindColumn`) y **una acción de migración que no es opcional para obtener el efecto de #164** —
+ambos dichos abajo con sus pasos.
 
 ### Dos planos del despliegue por anillos versionados, puestos y **todavía no cableados** (#220, #222)
 
