@@ -49,6 +49,42 @@ modo singular queda **intacto** (cero cambios a specs existentes).
 - **Cota top-N** (`CHART_MAX_BARS = 30`): colapsa el resto en «(otros)» sumando **cada serie por
   separado** — el total de cada serie se conserva. El criterio de corte es el mismo `sort` de abajo.
 
+### Series desde una COLUMNA (formato largo)
+
+`metrics` es formato **ancho**: una columna por serie, con etiquetas fijas escritas en el YAML. Sirve
+cuando las series se conocen al escribir el spec. **No sirve cuando las series salen del dato** — un
+año que el usuario elige en runtime, un tipo que aparece o desaparece según el filtro. Para eso está
+`series: <campo>`, el formato **largo**: cada fila es `(categoría, serie, valor)`.
+
+```yaml
+- distribution:
+    dimension: data.cruce.mes          # la categoría
+    metric: data.cruce.total           # UNA columna de valor
+    series: zona                       # las series salen de los VALORES de esta columna
+    stacked: true
+    title: "Entregas por zona"
+```
+
+- **`series` y `metrics` son mutuamente excluyentes** (`distribution-series-metrics-collision`): son
+  dos orígenes de series a la vez. En largo la métrica es una sola y viaja en `metric`.
+- **`series` es un campo pelado** del dataset de `dimension`, como las entradas de `metrics`. Un
+  campo colgante se rechaza (`distribution-series-field-dangling`): un typo no falla solo — produce
+  UNA serie llamada `undefined` con todo el total adentro, o sea un gráfico que se ve bien y miente.
+- **El render es el mismo** que el del modo ancho. El pliegue largo→ancho ocurre en `compose`, así
+  que apilado, rótulos, cota top-N y `sort` se comportan idéntico en los dos modos por construcción,
+  no por dos implementaciones mantenidas de acuerdo.
+- **El orden lo manda el SQL** en las dos dimensiones: las categorías y las series salen en orden de
+  aparición de las filas. Misma tesis que `chrono` — el calendario lo conoce el `ORDER BY`.
+- **Cota de series** (`CHART_MAX_SERIES = 8`): sobre 8 valores distintos, el excedente se colapsa en
+  una serie «(otras)» que suma. El techo es el tamaño de la paleta categórica: por encima los colores
+  se ciclan y dos series distintas se dibujan iguales, que es peor que agregarlas explícitamente. El
+  total de cada categoría se conserva.
+- **Celdas ausentes valen 0** y los pares `(categoría, serie)` repetidos se **suman** — un par
+  repetido es una agregación incompleta en el SQL, y quedarse con el último perdería filas sin decirlo.
+- **`sort: value:<serie>` se acepta pero NO se valida** en modo largo: las series no existen sin los
+  datos, así que no hay lista contra la cual verificar el token al validar el spec. Si no matchea
+  ninguna serie derivada, el orden cae a `magnitude` — el mismo default de un spec sin `sort`.
+
 ### `sort` — orden declarable de las categorías
 
 Vocabulario **cerrado**; el default (ausente) es `magnitude`, que es el contrato histórico: un spec
