@@ -65,7 +65,8 @@ Lo que **no** se mergea solo, porque ahí sí hay decisión y no trámite:
 |---|---|
 | El PR **no tiene la medición** que respalde su promesa | Mergear afirmaría más de lo medido (Ley, Norma 7) |
 | Diseño abierto — el PR elige un camino entre varios vivos | La bifurcación es suya; el PR es el material para decidirla |
-| Toca **gasto**, o **comunicación saliente** a un tercero | Nunca fue del agente (`RESOURCES.md`, §«La frontera») |
+| Toca **gasto por encima del presupuesto declarado** | Bajo el techo de `POLICIES.md` el agente actúa sin consultar y lo asienta; **por encima se detiene y pide** |
+| Toca **comunicación saliente** a un tercero | Nunca fue del agente — es su voz y su relación, y ningún presupuesto la cubre |
 | **PR de otra persona** | El acto es suyo; nuestro entregable es el veredicto comentado |
 
 Si al ver un merge considera que no correspondía, revierte — revertir es barato y el PR conserva la
@@ -94,6 +95,19 @@ sesión. La ausencia de instrucción no es autorización para commitear directo.
 
 Regla general y su porqué: skill `git-repo-management` §«El aterrizaje: rama + PR». Procedimiento
 end-to-end del issue público: `/ww:work` scope `external`.
+
+## Lo autorizado por adelantado: `POLICIES.md`
+
+**Este proyecto tiene autorizaciones permanentes declaradas por César, y viven en `POLICIES.md`.**
+Se lee al arrancar cualquier trabajo que pueda gastar: **lo que cae bajo una política vigente NO se
+consulta** —consultarlo le devuelve un trámite que él ya resolvió— y **lo que la excede se detiene y
+se pide**, jamás se ejecuta para avisar después.
+
+Vigente hoy: **POL-01**, presupuesto de recursos externos con costo. El caso que más aparece acá es
+la capacidad F2 del terreno Fabric propio (US$0,36/h): **entra, y se corre sin preguntar**. La del
+tenant del cliente no entra jamás — ahí el gate nunca fue la plata, sino la frontera de arriba.
+
+El consumo se asienta en `POLICIES-ledger.md`, que nace con el primer gasto.
 
 ## Los gates
 

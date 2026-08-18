@@ -16,6 +16,19 @@ se revisa **antes** del despliegue; (2) **el plano de columna no protege columna
 incluye 0.18.0 (#197). Qué se le dice y cuándo es decisión de César: es comunicación saliente. Ficha
 en `PENDINGS.md`.
 
+## Lo que cambió cómo se trabaja (2): el gasto chico ya no se pregunta
+
+**Este proyecto tiene `POLICIES.md`** — el canónico donde César declara lo que autorizó de antemano.
+Vigente **POL-01**: pote de **US$50/mes** para recursos externos con costo, con techo de **US$10 por
+acto**. La regla: **lo que cae bajo el techo NO se consulta** —consultarlo le devuelve un trámite que
+él ya resolvió— y **lo que lo excede se detiene y se pide**, nunca se ejecuta para avisar después.
+
+**Efecto concreto para el trabajo que sigue:** encender la capacidad F2 del terreno propio
+(US$0,36/h, ≈US$1 la sesión) **se hace sin preguntar** y se asienta en `POLICIES-ledger.md`, que nace
+con el primer gasto. Lo que **sigue siendo de César** no cambió, y la distinción es la que importa:
+`FAB_SP_TOKEN` es una **credencial**, no un gasto — ahí el gate nunca fue la plata. Y nada del tenant
+**del cliente** entra jamás, cueste lo que cueste.
+
 ## Lo que cambió cómo se trabaja: ya no hay excusa para nada que toque Fabric
 
 ```bash
@@ -53,8 +66,8 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 | **#197** — la vista de máscara no sirve en Fabric | **Nuestro**: la medición ya está, falta el rediseño | **Ya no es bifurcación a ciegas.** Medido el 18-ago: **C1** (CTE escalar + `CROSS JOIN`) y **C2** (`CROSS APPLY (VALUES …)`) aceptan, sirven **y discriminan**; C3 (sin `CASE`) rechazada. Falta cambiar `packages/policy/src/fabric.ts` y **re-correr `fab:proof` con la forma que emita el compilador**, no con el SQL a mano de P6 |
 | **#164** — el allow-all sin columna rehén | **Nuestro**, medido | `ADD FILTER PREDICATE` **sin argumento: ACEPTADO** en el SKU, con control positivo y verificando que la tabla siga sirviendo sus filas (no deny silencioso). Falta el codegen. **Dos decisiones son de César**: qué pasa con `bindColumn` en la API (contrato que las instancias consumen) y si la instancia re-aplica los 34 `ADD FILTER PREDICATE` desplegados |
 | **El aviso al operador** de 0.18.0 + #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente. Ficha con el contenido exacto en `PENDINGS.md` |
-| **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
-| **#186** — terreno Fabric | Nuestro | Levantado y ya rindió. Queda **un** criterio: barrer las partidas de `PENDINGS.md` cuya única traba era «no hay dónde medirlo» |
+| **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial, **no** gasto: POL-01 no lo cubre) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
+| **#186** — terreno Fabric | Nuestro | Levantado y ya rindió. Queda **un** criterio: barrer las partidas de `PENDINGS.md` cuya única traba era «no hay dónde medirlo». **La ventana que ese barrido necesita ya no se pide**: entra bajo POL-01 |
 | **Capacidades Trial FTL64 y PP3** en ultraBASE | **César** (gasto) | *Active* en Chile Central, con `arbol-lab-smoke-test` y `arbol-lab-qw04`. No las tocamos; declaradas en `RESOURCES.md` |
 | **PRs #175 y #201** — digests de `caddy:2` y `python:3.12-slim` | El reloj | `test` ✓ `review` ✓; cuelga `renovate/stability-days`. Cuando el cooldown de 14 días los libere, mergean directo. **No se salta** |
 | **`VERGIS_CSRF_SECRET` en QA** | César | Acto de instancia |
@@ -64,6 +77,22 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 **Las dos consultas de instancia que más rinden por lo que cuestan**, y deciden si #197 muerde hoy:
 *¿algún PI nombra una `vw_mask_*`?* y *¿con qué rol de workspace corre el SP de serving?* Son
 consultas, no frentes.
+
+## El hilo abierto de la práctica: el canónico nuevo todavía no se consume solo
+
+`POLICIES.md` quedó registrado en el Reglamento (`ww:wingworking`), enumerado por `ww:start` y con la
+excepción de gasto corregida en `ww:deuda` §Paso 4 — que decía «Gasto» fuera de todo mandato **sin
+excepción** y era citada por `ww:work` como la lista vigente.
+
+**Lo que NO está hecho, y se dice con esas palabras:** el Reglamento promete que *«lo que cae bajo una
+política vigente deja de aparecer en el bloque Decisiones de `/ww:work`»*, y **ninguna skill implementa
+esa lectura**. En Vergis funciona **por otra vía** —el `CLAUDE.md` del proyecto lo ancla y se inyecta
+en toda sesión—, así que la mitigación es local y la promesa es general. Ficha en `PENDINGS.md`
+(`reg 2026-08-18`); lo barato es que el paso de enumeración de `/ww:work` lea el archivo y filtre.
+
+**Cambios sin sellar en `protocolos` que NO son de esta sesión:** `sov/skills/asimilacion/SKILL.md` y
+`skills/go/SKILL.md`. Fenómeno **W-01, ocurrencia 22** (registrada). No se juzgan ni se sellan desde
+acá; el commit de esta sesión fue por ruta explícita.
 
 ## Normas que rigen y no se re-litigan
 
@@ -100,4 +129,4 @@ consultas, no frentes.
 - **Sacar el DDM y enmascarar solo en la vista** — descartado: cambiaría la promesa de seguridad sin
   decirlo. Y la vista, hasta que se rediseñe, no sirve en Fabric.
 
-<!-- /ww:finish · 2026-08-18 · HEAD 2a52eeb -->
+<!-- /ww:next · 2026-08-18 · HEAD ea7c457 -->

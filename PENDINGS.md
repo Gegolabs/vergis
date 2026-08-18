@@ -276,6 +276,20 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Práctica / entorno (fuera del árbol de Vergis)
 
+- **`/ww:work` no consume `POLICIES.md`, y el Reglamento ya promete que sí** — al registrar el
+  canónico se escribió en `ww:wingworking` que *«lo que cae bajo una política vigente deja de
+  aparecer en el bloque Decisiones»*, y **ninguna skill implementa esa lectura**: verificado con
+  `grep -rl POLICIES` sobre el plugin `ww`, el único archivo que lo nombra es el Reglamento mismo
+  (más `ww:start`, que lo agrega a su Tier 2 de lectura). Hoy funciona en Vergis **por otra vía** —
+  el `CLAUDE.md` del proyecto lo ancla y se inyecta en toda sesión—, así que la mitigación es local y
+  la promesa es general: en un proyecto que declare `POLICIES.md` sin nombrarlo en su `CLAUDE.md`,
+  la vista seguiría subiéndole al principal lo que él ya autorizó. **Es una afirmación del Reglamento
+  que hoy no se cumple sola**, y se anota con esas palabras en vez de darla por hecha (Norma 6).
+  Lo barato: que el Paso de enumeración de `/ww:work` lea `POLICIES.md` del proyecto y filtre.
+  `reg 2026-08-18`
+
+
+
 - **✅ RESUELTO (2026-08-13) — `~/evals-finaliza/` es repo git local, sin remoto** (decisión de
   César: se aplicó la recomendación). `git init` + commit inicial `68b2785`: 12 archivos, 992
   líneas — la clave del espécimen, las 3 rondas anonimizadas, las 2 corridas en seco, los 2 juicios
