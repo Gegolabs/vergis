@@ -21,7 +21,11 @@ import type { Engine } from './config'
 export interface Report {
   code: string
   slug: string
+  /** Nombre visible EFECTIVO: el override del gobierno si lo hay, si no el del spec (#207). */
   name: string
+  /** Nombre que trae el spec, SIN override. La consola lo necesita para poder decir «este nombre
+   *  está sobrescrito, el del spec es X» — sin eso, el override es un misterio para quien lea el YAML. */
+  specName: string
   specPath: string
   tables: string[]
   /** Conexiones (`database_ref`) que las data-entries del PI referencian — la verificación de
@@ -43,6 +47,16 @@ export interface DiscoveryDeps {
    * que `canAccess` herede la política de las bases para una vista-contrato sin entrada propia
    * (issue #54). Ausente o sin entrada → sin herencia (deny, como siempre). */
   resolveBases?: (table: string) => string[] | undefined
+  /**
+   * #207 · Nombre visible sobrescrito en el gobierno, por código de PI. Referencia VIVA: se consulta
+   * en CADA `discover()`, fuera del escáner memoizado, para que renombrar en la consola no exija
+   * invalidar el caché de specs ni reiniciar el nodo — que es exactamente el roce que el issue abre.
+   *
+   * La fuente del YAML no se toca: el override GANA sobre `identity.display_name` y la consola dice
+   * que está sobrescrito. Dos fuentes con una regla explícita, en vez de un misterio para el que lea
+   * el spec.
+   */
+  displayNameOverride?: (piCode: string) => string | undefined
   log?: (msg: string) => void
 }
 
@@ -116,7 +130,8 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
         log(`[vergis-rls] '${p}' colisiona en slug '${slug}' con un PI ya descubierto — el segundo queda inalcanzable. Diferenciar identity.code.`)
       }
       const databaseRefs = [...new Set(Object.values(data).map((d) => d.params?.database_ref ?? '').filter(Boolean))]
-      out.push({ code, slug, name: spec.identity?.display_name ?? code, specPath: p, tables, databaseRefs })
+      const specName = spec.identity?.display_name ?? code
+      out.push({ code, slug, name: specName, specName, specPath: p, tables, databaseRefs })
     }
     return out
   }
@@ -156,5 +171,16 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
     return out
   }
 
-  return { discover: () => specReg.get(), rebuild: () => specReg.rebuild(), canAccess, visibleFor, diagnoseFor }
+  // El override se aplica AL SALIR del escáner, no adentro: así el memo del escaneo de specs sigue
+  // valiendo (leer el disco es lo caro) y el nombre sobrescrito es siempre fresco. El `slug` NO se
+  // recalcula — sale de `identity.code`, así que renombrar jamás mueve una URL ya repartida (#207).
+  const withOverride = (rows: Report[]): Report[] => {
+    const ov = deps.displayNameOverride
+    if (!ov) return rows
+    return rows.map((r) => {
+      const name = ov(r.code)
+      return name ? { ...r, name } : r
+    })
+  }
+  return { discover: () => withOverride(specReg.get()), rebuild: () => specReg.rebuild(), canAccess, visibleFor, diagnoseFor }
 }
