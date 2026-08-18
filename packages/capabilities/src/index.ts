@@ -57,6 +57,7 @@ export {
   normalizeEntityRef,
   substrateHash,
   llaveDeFila,
+  NOTAS_SCHEMA_VERSION,
 } from './notas-store'
 export type {
   NotasStore,
@@ -72,8 +73,25 @@ export type {
   CrearNotaInput,
   ComentarioResumen,
 } from './notas-store'
-export { openSqliteDb, persistSqliteDb, selectAll } from './sqlite'
-export type { SqlDb, SqlStmt } from './sqlite'
+export {
+  openSqliteDb,
+  persistSqliteDb,
+  selectAll,
+  sqliteControlStatus,
+  sqliteDegradedStores,
+  sqliteAnyDegraded,
+  SqliteSchemaTooNewError,
+  SqliteEpochFencedError,
+  SqliteConcurrentWriteError,
+} from './sqlite'
+export type {
+  SqlDb,
+  SqlStmt,
+  SqliteControlOptions,
+  SqliteOpenOptions,
+  SqliteControlStatus,
+  EpochProvider,
+} from './sqlite'
 export {
   parseMasterDataConfig,
   pkColumn,
@@ -85,6 +103,7 @@ export {
   SqliteMasterDataStore,
   createDwhMasterDataStore,
   MasterDataConflict,
+  MASTER_DATA_SCHEMA_VERSION,
 } from './master-data-store'
 export type { MasterDataStore, MasterDataRow } from './master-data-store'
 export { createDwhPublisher, replicaTable, replicaStagingTable, masterDataPublishPlan } from './master-data-publish'
@@ -107,9 +126,9 @@ export { createFabricScheduler, createFabricEngineClient } from './fabric-engine
 export type { FabricScheduler, EngineResolver } from './fabric-engine'
 export { createFabricItemAuthoring, AuthoringError, AuthoringDenied, AuthoringConflict, AuthoringUnknown } from './fabric-authoring'
 export type { ItemAuthoringClient, ItemDeclaration, ItemDefinition, DefinitionPart } from './fabric-authoring'
-export { SqliteAdminStore, AdminLockout } from './admin-roles'
+export { SqliteAdminStore, AdminLockout, ADMIN_SCHEMA_VERSION } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
-export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION, PI_DISPLAY_NAME_MAX } from './governance-store'
+export { SqliteGovernanceStore, GovernanceConflict, SCHEMA_VERSION, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION, PI_DISPLAY_NAME_MAX } from './governance-store'
 export type { PiDisplayName } from './governance-store'
 export type {
   GovernanceStore,

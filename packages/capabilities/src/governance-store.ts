@@ -1,4 +1,12 @@
-import { openSqliteDb, persistSqliteDb, selectAll, type SqlDb } from './sqlite'
+import {
+  openSqliteDb,
+  persistSqliteDb,
+  selectAll,
+  sqliteControlStatus,
+  type SqlDb,
+  type SqliteControlOptions,
+  type SqliteControlStatus,
+} from './sqlite'
 import {
   adminAdd,
   adminIsAdmin,
@@ -51,6 +59,19 @@ import {
  * Las siguientes fases agregan tablas (pi_grant, pi_governance, pi_demanda, source…, ingestion_run)
  * a este mismo store y seam.
  */
+
+/**
+ * Versión del esquema del store de gobierno, escrita como `PRAGMA user_version` en cada apertura de
+ * escritura. **Toda migración que altere el esquema la incrementa en el mismo commit**, y el CHANGELOG
+ * declara si rompe la compatibilidad hacia atrás: abrir un archivo con una versión MAYOR que esta se
+ * niega (ver cabecera de `sqlite.ts`). Un archivo con `user_version = 0` es de antes de este esquema
+ * declarado y se ADOPTA — se respalda una vez y se estampa la versión 1.
+ *
+ * Regla de migraciones: dentro de la ventana de versiones que un operador puede tener instaladas, las
+ * migraciones son ADITIVAS y compatibles hacia atrás (`ensureColumns`); una incompatible exige bump de
+ * esta constante para que ninguna herramienta pueda instalar hacia atrás sin darse cuenta.
+ */
+export const SCHEMA_VERSION = 1
 
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/
 const now = (): string => new Date().toISOString()
@@ -980,8 +1001,12 @@ export class SqliteGovernanceStore implements GovernanceStore {
     private file: string | null,
   ) {}
 
-  static async open(file: string | null, seed: GovernanceSeed = {}): Promise<SqliteGovernanceStore> {
-    const db = await openSqliteDb(file)
+  static async open(
+    file: string | null,
+    seed: GovernanceSeed = {},
+    control: SqliteControlOptions = {},
+  ): Promise<SqliteGovernanceStore> {
+    const db = await openSqliteDb(file, { ...control, schemaVersion: SCHEMA_VERSION })
     ensureAdminTable(db, seed.admins ?? [])
     db.run(GROUP_DDL)
     db.run(MEMBER_DDL)
@@ -1036,6 +1061,16 @@ export class SqliteGovernanceStore implements GovernanceStore {
 
   private persist(): void {
     persistSqliteDb(this.db, this.file)
+  }
+
+  /**
+   * Estado del plano de escritura de este store: versión de esquema soportada y la del archivo, época
+   * del plano de control, y si el handle quedó degradado por haber detectado otro escritor. Es la
+   * fuente de la que un reporte de salud o el contrato operativo derivan su condición — acá se expone,
+   * no se decide qué hace el server con ella.
+   */
+  controlStatus(): SqliteControlStatus | undefined {
+    return sqliteControlStatus(this.db)
   }
 
   /**
