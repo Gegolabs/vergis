@@ -281,15 +281,19 @@ que no son redundantes** — cada uno cubre lo que el otro no:
 Que el consumidor consulte la vista y no la tabla es decisión de **arquitectura de instancia** (qué
 objeto nombra el spec), no del emisor: el compilador la emite y la declara.
 
-> ⚠ **Medido contra Fabric el 2026-08-16: la vista de máscara NO SIRVE en Fabric Warehouse.** El
-> `CREATE VIEW` se acepta y `sys` la lista, pero **todo `SELECT` sobre ella falla** con
-> `Unsupported data type error` — la causa, aislada con tres controles, es `SESSION_CONTEXT()`
-> **dentro de un `CASE`** sobre un scan de tabla. Todo lo que esta sección dice del artefacto
-> «vista de máscara» describe su **diseño**, y ese diseño **está abierto**: ver **#197**. Lo que
-> sigue vigente sin reservas es el DDM y todo lo de `SCHEMABINDING`.
+> **Medido contra Fabric el 2026-08-18: la vista de máscara SIRVE y DISCRIMINA en Fabric
+> Warehouse** (SKU F2, rol admin), con el SQL que **emite el compilador**. Lo que hizo falta fue
+> rediseñar **de dónde viene el claim**: los claims del request se materializan una vez en una
+> fuente escalar de una fila (`CROSS APPLY (VALUES …)`) y el `CASE` de cada columna lee esa fuente.
+> Llamar a `SESSION_CONTEXT()` inline dentro del `CASE`, sobre el scan, es lo que Fabric rechaza —
+> ese era **#197**, y así se cerró.
 >
-> Corolario que la sección no tenía: **que el motor acepte el DDL no significa que el artefacto
-> sirva.** La verificación de un artefacto lo **consulta**; mirar `sys` no alcanza.
+> **Lo que la medición del 2026-08-16 dejó dicho, y sigue siendo la lección**: el `CREATE VIEW` de
+> la forma vieja se aceptaba y `sys` la listaba, pero **todo `SELECT` sobre ella fallaba** con
+> `Unsupported data type error`. **Que el motor acepte el DDL no significa que el artefacto
+> sirva** — y su hermana, aprendida al medir el rediseño: **que la vista se consulte no significa
+> que discrimine.** La verificación de un artefacto lo consulta *y* compara con y sin el claim;
+> mirar `sys` no alcanza y «devolvió filas» tampoco.
 
 ### La dependencia que decide si la capacidad sirve
 
@@ -301,8 +305,9 @@ objeto nombra el spec), no del emisor: el compilador la emite y la declara.
 - Si **lo tiene**, la vista discrimina por claim como se diseñó — y el DDM queda **inerte para ese
   principal**, que es lo esperable: su papel es cubrir a los demás.
 
-**En Fabric hoy no ocurre ninguna de las dos**, porque la vista no se puede consultar (#197). La
-disyuntiva de arriba describe la semántica T-SQL, que es donde se midió.
+**En Fabric la disyuntiva ya aplica** desde que la vista sirve (#197, 2026-08-18): cuál de las dos
+ramas ocurre depende de si el principal de serving tiene `UNMASK`, y **eso sigue sin medirse** para
+el SP de serving (P5 del arnés). Mientras no se mida, lo prudente es asumir la rama degradada.
 
 **Qué decide `UNMASK` en Fabric, medido el 2026-08-16:** el **rol del workspace** del principal.
 Con rol `Member` el service principal lee el valor **real** de la tabla; con rol `Viewer` lee la

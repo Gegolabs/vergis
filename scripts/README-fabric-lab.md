@@ -75,7 +75,7 @@ de **este SKU** en **este momento**, y Fabric se mueve.
 | Pregunta | Respuesta medida | Control que la sostiene |
 |---|---|---|
 | ¿Acepta Fabric las 9 sentencias de `compileFabric`? | **Sí, las 9** | `sys.masked_columns` y `sys.security_policies` corroboran la instalación |
-| ¿La **vista de máscara** se puede consultar? | **No — falla siempre** (`Unsupported data type error`) | La columna no enmascarada de la MISMA vista sí pasa |
+| ¿La **vista de máscara** se puede consultar? | **No — falla siempre** (`Unsupported data type error`). *Cierto de la forma de entonces; el rediseño de #197 la volvió consultable — ver la ventana del 18-ago abajo* | La columna no enmascarada de la MISMA vista sí pasa |
 | ¿Por qué falla? | `SESSION_CONTEXT()` **dentro de un `CASE`** sobre un scan de tabla | Tres controles: `CASE` sin `SESSION_CONTEXT` pasa · `SESSION_CONTEXT` sin `CASE` con `FROM` tabla pasa · variable local + `CASE` pasa |
 | ¿La row policy discrimina? | **Sí** | Sujeto con 2 grupos ve 2 filas; sujeto sin grupos ve 0 |
 | ¿El SP tiene `UNMASK`? | **Depende del ROL del workspace**: `Member` ve el valor real, `Viewer` ve la máscara | Se cambió el rol en ambos sentidos con el mismo SP |
@@ -132,6 +132,24 @@ es «sirve»; sirve es «discrimina».**
 - `sys.security_policies` corrobora: `is_enabled: true`, `is_schema_bound: true`.
 - Variante (c), argumento **constante**: también aceptada — hay camino de respaldo.
 - **Control positivo en la misma sesión**: la forma actual (función CON columna) se acepta.
+
+## Lo que la ventana del 2026-08-18 (segunda) midió: el rediseño de #197, ya en el compilador
+
+La ventana anterior dejó C1 y C2 declaradas viables **con SQL escrito a mano**. Esta corrió el SQL
+que **emite `compileFabric`** tras cambiar el codegen a la forma C2 — que es la única medición que
+autoriza a cerrar #197, porque entre el SQL de P6 y el emitido había una diferencia real y no
+controlada: P6 casteaba el claim a `VARCHAR(8000)` y el compilador emite `NVARCHAR(MAX)`.
+
+| Pregunta | Respuesta medida |
+|---|---|
+| ¿Fabric acepta las 9 sentencias con la vista C2? | **Sí, las 9** (P1) |
+| ¿La vista **emitida** se puede consultar? | **Sí** — `[{"area":"Comercial","rut":"•••"},…]` (P4) |
+| ¿**Discrimina** por claim? | **Sí** — con `ve_pii` devuelve el RUT real; sin él, el centinela (P4) |
+| ¿El `NVARCHAR(MAX)` del `CAST` estorba? | **No** — el diagnóstico que lo aislaba no llegó a correr porque la vista sirvió |
+
+**Lo que esto cierra y lo que no.** Cierra que la vista de máscara del Producto **sirve y protege**
+en el SKU F2. No cierra P5: sigue sin medirse si el service principal de serving tiene `UNMASK`, y
+mientras no se mida, lo que un SP `Viewer` vea por esta vista sigue siendo el DDM de la tabla.
 
 ### Lo que esta ventana NO respondió
 

@@ -156,6 +156,13 @@ function columnType(value: string): string {
   return value
 }
 
+/** Alias de la TABLA dentro de la vista de máscara: califica la proyección para que ningún nombre de
+ *  claim pueda volverse ambiguo contra una columna real. */
+const ROW_ALIAS = 'vergis_row'
+
+/** Alias de la fuente escalar que materializa los claims del request (forma C2 de #197). */
+const CLAIMS_ALIAS = 'vergis_claims'
+
 /** Lee el SESSION_CONTEXT de un claim como NVARCHAR(MAX). */
 function sessionRead(claim: string): string {
   return `CAST(SESSION_CONTEXT(N'${settingForClaim(claim)}') AS NVARCHAR(MAX))`
@@ -450,13 +457,23 @@ function buildMaskView(
   }
   const name = ident('maskViewName', target.maskViewName ?? `vw_mask_${table}`)
   const qView = `[${schema}].[${name}]`
+  // FORMA C2 (#197, medida contra el SKU el 2026-08-18 — `fab:proof` §P6): los claims se materializan
+  // UNA VEZ en una fuente escalar de UNA fila (`CROSS APPLY (VALUES …)`) y el `CASE` de cada columna
+  // lee ESA fuente. No es estilo. La forma anterior llamaba a `SESSION_CONTEXT` inline dentro del
+  // `CASE`, sobre el scan: Fabric ACEPTA ese `CREATE VIEW` y falla en CADA `SELECT` — el DDL en verde
+  // nunca fue la medición (ese es el defecto que #197 nombra). Lo que decide no es el `CASE` sino de
+  // DÓNDE viene el claim: materializado en una fuente de una fila pasa; evaluado contra el scan, no.
+  // C1 (CTE escalar + `CROSS JOIN`) mide igual de bien; se elige C2 porque el alias vive dentro del
+  // `FROM` y no obliga a que un `WITH` encabece el cuerpo de la vista.
+  const claimList = [...new Set([...byColumn.values()].flat())]
+  const claimRead = (claim: string) => `[${CLAIMS_ALIAS}].[${claim}]`
   const projection = columns.map((col) => {
     const claims = byColumn.get(col)
-    if (claims === undefined) return `        [${col}]`
+    if (claims === undefined) return `        [${ROW_ALIAS}].[${col}]`
     // MISMO transporte que el predicado de fila: `SESSION_CONTEXT` + guard `<> ''`. El claim se honra
     // por PRESENCIA (igual que en el IR): su VALOR no se compara con nada y jamás se interpola — lo
     // único que viaja al SQL es el NOMBRE del setting, que es identificador validado.
-    const guard = claims.map((c) => `${sessionRead(c)} <> N''`).join(' AND ')
+    const guard = claims.map((c) => `${claimRead(c)} <> N''`).join(' AND ')
     // El tipo de una columna ENMASCARADA es obligatorio, y NO cae al default `NVARCHAR(4000)` como el
     // parámetro del predicado: las dos ramas del `CASE` tienen que dar el MISMO tipo que la tabla, y
     // asumir texto sobre una columna `INT` haría que el motor intentara convertir el centinela a `INT`
@@ -474,15 +491,22 @@ function buildMaskView(
       })
     }
     const sentinel = maskSentinel(col, declared)
-    return `        CASE WHEN ${guard} THEN [${col}] ELSE ${sentinel} END AS [${col}]`
+    return `        CASE WHEN ${guard} THEN [${ROW_ALIAS}].[${col}] ELSE ${sentinel} END AS [${col}]`
   })
+  // La tabla va aliaseada y la proyección CALIFICADA por el alias: sin eso, un claim que se llame
+  // igual que una columna de la tabla volvería ambigua la referencia y el `CREATE VIEW` fallaría —
+  // por un nombre que el emisor no elige. Con alias, el nombre del claim no puede chocar con nada.
+  const claimSource =
+    `    CROSS APPLY (VALUES (\n` +
+    claimList.map((c) => `        ${sessionRead(c)}`).join(',\n') +
+    `\n    )) AS [${CLAIMS_ALIAS}] (${claimList.map((c) => `[${c}]`).join(', ')})`
   return {
     name,
     qualifiedName: qView,
     columns,
     maskedColumns: [...byColumn.keys()],
     claimsByColumn: Object.fromEntries(byColumn),
-    createSQL: `CREATE VIEW ${qView}\nAS\n    SELECT\n${projection.join(',\n')}\n    FROM ${qTable};`,
+    createSQL: `CREATE VIEW ${qView}\nAS\n    SELECT\n${projection.join(',\n')}\n    FROM ${qTable} AS [${ROW_ALIAS}]\n${claimSource};`,
     dropSQL: `DROP VIEW IF EXISTS ${qView};`,
   }
 }
