@@ -100,6 +100,35 @@ confía en lo que devolvió el cliente: corrobora con `OBJECT_ID`.
 **3 · `az fabric capacity resume` se cuelga.** El recurso queda `Active` y el CLI no vuelve. Verificar
 con `npm run fab:state` en vez de esperar al comando.
 
+## El experimento que espera ventana: P6 (#197)
+
+**Está construido y no se ha corrido.** Se dice con esas palabras porque la diferencia importa: lo
+que falta no es diseñarlo, es una ventana de capacidad encendida — del orden de un dólar.
+
+#197 dejó aislado que lo que Fabric rechaza es `SESSION_CONTEXT()` **dentro de un `CASE` sobre un
+scan de tabla**, y que la alternativa medida que sí funciona —materializar el claim en una variable
+local— **no cabe dentro de una `VIEW`**. Por eso el plano de columna hay que rediseñarlo, no
+parchearlo, y por eso la pregunta que queda solo la contesta el motor:
+
+> ¿Existe alguna forma de expresar la discriminación por claim **dentro de una vista** que el SKU de
+> Fabric acepte **y sirva**?
+
+P6 pone en riesgo tres candidatas: **C1** CTE escalar + `CROSS JOIN`, **C2** `CROSS APPLY (VALUES …)`,
+**C3** sin `CASE` (`NULLIF`/`IIF`). Las tres se prueban como consulta **y** como vista creada y
+consultada — porque #197 nace justamente de que *aceptar el DDL no es servir*.
+
+Sus dos controles van en la misma sesión y no son adorno:
+
+| Control | Qué pasa si falta |
+|---|---|
+| **Positivo** — una consulta trivial responde | Un `RECHAZADA` no distingue «el SKU no lo admite» de «la sesión estaba rota» |
+| **Negativo** — la forma ACTUAL sigue fallando | Si de pronto pasa, cambió el motor y el diagnóstico entero de #197 hay que rehacerlo, no celebrarlo |
+
+**Que las tres fallen es un resultado válido**, no una corrida perdida: diría que la vista de máscara
+no es expresable en Fabric y que la protección de columna tiene que vivir en otro lado. Y hasta que
+esto corra, **el compilador no se toca**: emitir una forma nueva sin verla pasar en el SKU es
+exactamente lo que produjo #197.
+
 ## Lo que este terreno NO hace, por decisión
 
 - **No copia datos de ninguna instancia**, ni anonimizados. El arnés mide **formas**, no datos, y una
