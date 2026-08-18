@@ -21,8 +21,8 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.17.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
-| `0.17` | Flota al último patch de la serie 0.17 | Producción que quiere correcciones sin capacidades nuevas |
+| `0.18.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.18` | Flota al último patch de la serie 0.18 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
 | `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
@@ -33,6 +33,59 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 **El despliegue es del operador de la instancia, no del Producto.** Acá se publica la versión y se
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
+
+## 0.18.0 — 2026-08-17
+
+**Cuatro afordancias que el lector maneja, y una que deja de exigir un despliegue.** Cinco issues
+(#203 #207 #209 #210, más el arnés de #197), los cuatro primeros nacidos de pedidos del cliente en la
+weekly del 14-ago de una instancia real. Tests 2155 → 2203.
+
+- **Las series de un `distribution` pueden salir de una COLUMNA** (#203, pieza 2). `metrics[]` es
+  formato ancho con etiquetas fijas: sirve cuando las series se conocen al escribir el spec, y no
+  sirve cuando salen del dato — el caso de PI-25, donde las series son (año × tipo), el año lo elige
+  el usuario en runtime, y hubo que pre-plegar seis columnas en el SQL. `series: <campo>` agrega el
+  formato **largo**: cada fila es `(categoría, serie, valor)`. El pliegue largo→ancho vive en
+  `compose`, así que el render agrupado se reutiliza **entero** — apilado, rótulos, cota top-N y
+  `sort` se comportan idéntico en los dos modos por construcción, no por dos implementaciones que
+  haya que mantener de acuerdo. Cota de 8 series (el tamaño de la paleta: por encima los colores se
+  ciclan y dos series distintas se dibujan iguales), con el excedente agregado en «(otras)».
+- **El color de magnitud de las tablas es del LECTOR, y su rampa deja de ser roja** (#210). Pintaba
+  `hsl(8, 75%, L%)` —hue 8 es rojo— oscureciendo a medida que el valor crecía: *la cifra más grande
+  era la más roja*. En un informe de negocio el rojo significa «malo», no «mucho»; el cliente lo leyó
+  así y la instancia terminó retirando los 44 `colorscale` de sus 7 specs, porque apagar la feature
+  entera era la única salida que existía. Ahora la celda emite su **posición** en la rampa y el color
+  solo se pinta con el interruptor de la bandeja, **apagado por defecto** y persistido por reporte.
+  La rampa la fija el theme. `colorscale` del spec conserva un rol honesto: **acota** las columnas
+  candidatas; lo que pierde es el poder de encender, que pasa al lector.
+- **Los filtros de bandeja con catálogo grande se pliegan y se buscan** (#209). Tope de 12 opciones
+  visibles más un buscador local. El plegado es **CSS-only** —un checkbox y una regla de hermano
+  general—, así que **sin JS ninguna opción queda inalcanzable**; el buscador sí necesita JS y
+  degrada a «no filtra», nunca a «no se puede llegar». Una opción **seleccionada nunca se pliega**:
+  esconder la propia selección del usuario es peor que la lista larga. La medición previa corrigió la
+  premisa y conviene saberlo: `.faceta-options` ya acotaba su alto a 220px con scroll, así que *un*
+  filtro nunca ocupó la columna entera — lo que pesa es que N filtros suman N franjas, y que dentro
+  de 47 opciones la que se busca se encuentra scrolleando a ciegas.
+- **El nombre visible de un PI se edita sin desplegar** (#207). `identity.display_name` vive en el
+  YAML: cambiarlo exigía editar el archivo y desplegarlo, o sea que renombrar un reporte era una
+  operación de ingeniería. Ahora se edita desde la configuración del PI, con el gate de colaborador
+  —el mismo que la demanda de frescura—. El override vive en el gobierno y **gana** sobre el spec,
+  pero el nombre del YAML se conserva y la consola dice que está sobrescrito, contra qué, y quién lo
+  hizo: un override mudo convertiría el spec en una fuente que miente para el que lo lee. **La URL no
+  se mueve**, y no por cuidado sino por construcción — el slug sale de `identity.code`, jamás del
+  nombre.
+
+### Lo que NO trae, y se dice con esas palabras
+
+- **#197 sigue abierto y su defecto sigue vivo.** La vista de máscara que emite el plano de columna
+  se crea en Fabric y **ningún `SELECT` sobre ella funciona**. Esta versión **no lo arregla**: agrega
+  el experimento que decide el rediseño (`fab:proof` · P6, tres formas candidatas con sus controles),
+  y no toca el compilador hasta que ese experimento corra contra el SKU. Emitir una forma nueva sin
+  verla pasar es exactamente lo que produjo el defecto.
+- **Sin migraciones, sin env nuevo.** La tabla `pi_display_name` la crea el propio arranque
+  (`CREATE TABLE IF NOT EXISTS`), como el resto del gobierno.
+- **Capacidades sin verificar contra motor vivo:** ninguna de esta versión toca el motor. Lo que
+  queda sin evidencia es de otra naturaleza y está dicho en cada issue — que las afordancias nuevas
+  resuelvan el roce **para quien lo reportó** lo demuestra su uso, no la suite.
 
 ## 0.17.0 — 2026-08-14
 
