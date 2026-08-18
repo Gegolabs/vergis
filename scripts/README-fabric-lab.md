@@ -151,6 +151,21 @@ controlada: P6 casteaba el claim a `VARCHAR(8000)` y el compilador emite `NVARCH
 en el SKU F2. No cierra P5: sigue sin medirse si el service principal de serving tiene `UNMASK`, y
 mientras no se mida, lo que un SP `Viewer` vea por esta vista sigue siendo el DDM de la tabla.
 
+### P8 (#164) · el allow-all emitido, y el control que decide
+
+P7 midió la **forma** a mano; P8 aplica el `setupSQL` que sale de `compileFabric` tras el rediseño y
+hace la pregunta que el issue plantea y que ninguna corrida había hecho:
+
+| Pregunta | Respuesta medida |
+|---|---|
+| ¿Acepta el SKU las 4 sentencias del allow-all sin columna? | **Sí** |
+| ¿Sigue sirviendo sus filas (no es deny mudo)? | **Sí**, 2 de 2 |
+| Con la policy **instalada**, ¿se puede `ALTER` una columna de negocio? | **Sí — la columna NO es rehén** |
+| ¿Qué declara `schemaDependencies`? | **`[]`** — el allow-all no ata nada |
+
+El mismo control corrió antes en el arnés **local** (`lab:proof` §P3b) y dio lo mismo. Son los dos
+motores que el back-end sirve.
+
 ### Lo que esta ventana NO respondió
 
 **P5 (#163) — si el service principal de serving tiene `UNMASK`.** Falta `FAB_SP_TOKEN`: el secreto

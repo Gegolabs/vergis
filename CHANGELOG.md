@@ -34,6 +34,57 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
+## Sin publicar (en `main`)
+
+Lo que sigue está mergeado y **todavía no tiene versión cortada**: un operador no puede tomarlo hasta
+que se publique un tag.
+
+### El plano de columna vuelve a proteger en Fabric (#197)
+
+La **vista de máscara** (`vw_mask_<tabla>`) se creaba en Fabric y **ningún `SELECT` sobre ella
+funcionaba**: el plano que hace que una columna sensible se sirva *a quien corresponde* no protegía a
+nadie, y lo que quedaba en pie era el DDM de la tabla, que enmascara para todos. Corregido: los
+claims del request se materializan en una fuente escalar de una fila y el `CASE` de cada columna lee
+esa fuente, en vez de llamar a `SESSION_CONTEXT()` sobre el scan.
+
+**Medido** contra el SKU F2 con el SQL que emite el compilador: la vista se crea, sirve y
+**discrimina** por claim. **Lo que sigue sin medirse**: si el service principal de serving tiene
+`UNMASK`. Sin ese permiso, la rama «en claro» de la vista recibe el default del DDM y **ni el sujeto
+con el claim ve el valor** — es dirección segura, pero no es lo que la capacidad promete.
+
+### El `grant: all` deja de tomar rehén a una columna de negocio (#164)
+
+**Qué cambia.** La security policy de una tabla `grant: all` ya no ancla en una columna de datos: la
+función del predicado no recibe parámetro y el `ADD FILTER PREDICATE` va sin argumento. Antes,
+`WITH SCHEMABINDING` convertía esa columna en dependencia dura y **bloqueaba cualquier `ALTER` sobre
+ella** — una columna elegida por accidente por el aplicador (`barcode`, `n_guia`, `anio_mes`,
+`especie`, `tipo_material`, `pais_destino` en la instancia de referencia).
+
+Medido en los dos motores con el SQL emitido, incluido el control que decide: **con la policy
+instalada, el `ALTER` sobre una columna de negocio ahora se acepta**.
+
+**Qué hay que hacer, y no es opcional para obtener el efecto.** Los artefactos ya desplegados siguen
+funcionando exactamente igual —la apertura sigue siendo apertura, ninguna fila cambia de visibilidad—
+pero **conservan su ancla**: la columna sigue siendo rehén en el motor hasta que la policy se
+regenere y se re-aplique. Para cada tabla `grant: all`:
+
+1. **Regenerar** el DDL de push-down con esta versión del Producto.
+2. **Re-aplicar** el `setupSQL` completo de esa tabla. El setup dropea la policy anterior antes de
+   crear la nueva, así que la liberación ocurre en ese acto y no hace falta nada más.
+3. **Verificar** con un `ALTER` sobre una columna de negocio de la tabla: si pasa, el ancla se soltó.
+
+**Y una advertencia que hay que leer aunque no se re-aplique todavía:** el compilador declara sus
+dependencias de esquema (`schemaDependencies`) según lo que **emite**, no según lo que hay
+instalado. Con esta versión, un `grant: all` reporta **cero** dependencias. Si la policy vieja sigue
+desplegada, su columna **sigue atada en el motor y ya no aparece en ese reporte** — o sea que el gate
+de regresión de terreno dejará de advertirlo y el bloqueo volvería a descubrirse con un `ALTER`
+rechazado, que es exactamente como se descubrió la primera vez. **Mientras no se re-aplique, no
+confiar en ese reporte para las tablas `grant: all`.**
+
+**Cambio de contrato:** `FabricTarget.bindColumn` fue **retirado**. Un aplicador que todavía lo pase
+recibe un error de compilación con su remediación —no se ignora en silencio, porque el silencio le
+dejaría creer que su ancla sigue en pie.
+
 ## 0.18.0 — 2026-08-17
 
 **Cuatro afordancias que el lector maneja, y una que deja de exigir un despliegue.** Cinco issues
