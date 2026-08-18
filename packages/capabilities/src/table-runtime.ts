@@ -390,10 +390,14 @@ function vergisSavedViews(opts){
 
 const DOM_GLUE = `
 function vtEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+/* #210 · espejo EXACTO de magnitudeVar (render-table): emite la POSICION en la rampa, no un color.
+   El color lo pinta el CSS solo con data-magnitude="on" en el documento, y la rampa sale del theme.
+   Si las dos implementaciones divergen, una tabla hidratada por el runtime y la misma tabla SSR se
+   pintan distinto — el mismo modo de falla que ya cuida vtNKey. */
 function vtColorBg(value, range){
   if(!range || isNaN(value) || range.max===range.min) return '';
-  var t=(value-range.min)/(range.max-range.min); var light=Math.round(95 - t*45);
-  return ' style="background:hsl(8,75%,'+light+'%)"';
+  var t=(value-range.min)/(range.max-range.min);
+  return ' style="--mag:'+t.toFixed(4)+'"';
 }
 function vtCell(col, r){
   var raw=r[col.field]; var text=vtFormat(raw, col.format);
