@@ -11,7 +11,7 @@ export { validateSpec, validateAnchors, collectDataRefs, collectDrills } from '.
 export type { MiraSpec, MiraDataset, MiraAnchor, MiraControl, MiraFilter, Drillthrough } from './dsl/validate'
 export { applyNotas } from './notas'
 export type { ResolverComentarios, ComentariosPorLlave } from './notas'
-export { composePiece, resolvePath, aggregate, normalizeDrills, parseChartSort } from './compose'
+export { composePiece, resolvePath, aggregate, normalizeDrills, parseChartSort, foldSeriesColumn, CHART_MAX_SERIES, OTHER_SERIES_LABEL } from './compose'
 export type { ResolvedNode, DatasetResult, TableColumn, Aggregation, Drill, ChartSort } from './compose'
 export { checkFreshness, parseIsoDuration } from './freshness'
 export type { FreshnessVerdict } from './freshness'

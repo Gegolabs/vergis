@@ -312,6 +312,8 @@ export function composePiece(
       dimension?: string
       metric?: string
       metrics?: { field?: string; label?: string }[]
+      /** #203 · modo LONG: las series salen de los valores de ESTA columna, no del YAML. */
+      series?: string
       /** #203 · apila las series en vez de yuxtaponerlas (solo modo agrupado). */
       stacked?: boolean
       orientation?: string
@@ -325,6 +327,27 @@ export function composePiece(
     // MISMO dataset (campos pelados, no rutas data.*). El orden de las categorías y la cota top-N los
     // resuelve el render (por la suma de las series). No se pre-ordena acá (la validación exige que
     // metric y metrics no coexistan).
+    // #203 · modo LONG: las series salen de una COLUMNA (`series`), no de etiquetas estáticas del
+    // YAML. Es el caso de las series que solo se conocen en runtime (un año que elige el usuario,
+    // un tipo que aparece en los datos). Se pliega ACÁ a formato wide y el render agrupado se
+    // reutiliza ENTERO: mismo apilado, mismos rótulos, misma cota top-N, mismo `sort`. Un segundo
+    // renderer para el mismo dibujo sería drift garantizado.
+    if (typeof d.series === 'string' && d.series !== '') {
+      const valueField = stripData(String(d.metric ?? '')).split('.')[1] ?? ''
+      const folded = foldSeriesColumn(results[dataset]?.rows ?? [], dimensionField, d.series, valueField)
+      const sortSpec = parseChartSort(d.sort, folded.metricsSpec)
+      return {
+        type: 'distribution',
+        rows: folded.rows,
+        dimensionField,
+        metricsSpec: folded.metricsSpec,
+        sortSpec,
+        stacked: d.stacked === true,
+        orientation: d.orientation,
+        format: d.format,
+        title: d.title,
+      }
+    }
     if (Array.isArray(d.metrics) && d.metrics.length > 0) {
       const metricsSpec = d.metrics.map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
       const rows = [...(results[dataset]?.rows ?? [])]
@@ -436,6 +459,74 @@ export function parseChartSort(
   }
   const desc = token.startsWith('-')
   return { kind: 'field', field: desc ? token.slice(1) : token, desc }
+}
+
+/**
+ * Cota de series del modo LONG (#203): sobre este nº de valores distintos en la columna de series,
+ * el resto se colapsa en una serie «(otras)» que suma. Sin cota, una columna con 200 valores
+ * distintos produce 200 series de colores ciclados — ilegible, y en apilado además indistinguible.
+ * El techo es 8 porque es el tamaño de la paleta categórica: sobre eso los colores se repiten y dos
+ * series distintas se dibujan iguales, que es peor que agregarlas explícitamente.
+ */
+export const CHART_MAX_SERIES = 8
+
+/** Etiqueta de la serie agregada cuando la columna excede `CHART_MAX_SERIES`. */
+export const OTHER_SERIES_LABEL = '(otras)'
+
+/**
+ * Pliega formato LARGO → ANCHO para el `distribution` en modo `series: <campo>` (#203).
+ *
+ * Cada fila de entrada es `(categoría, serie, valor)`; la salida es una fila por categoría con una
+ * columna por serie, que es exactamente lo que consume el render agrupado. Decisiones selladas:
+ *
+ * - **El orden manda el SQL**, en las dos dimensiones: las categorías salen en orden de aparición y
+ *   las series también. No se ordena alfabéticamente — el `ORDER BY` es quien conoce el calendario,
+ *   misma tesis que `chrono`.
+ * - **Las claves de salida son sintéticas** (`__s0`, `__s1`, …) y el valor de la columna viaja como
+ *   `label`. Un valor de serie usado como nombre de campo podría colisionar con el campo de
+ *   dimensión o con el de la métrica y pisar el dato en silencio.
+ * - **Los pares repetidos se SUMAN.** Un `(categoría, serie)` que aparece dos veces es una
+ *   agregación incompleta en el SQL; quedarse con el último valor perdería filas sin decirlo.
+ * - **La celda ausente es 0**, no vacía: en un apilado, un hueco y un cero se dibujan igual, y el
+ *   0 es lo que hace cuadrar el total de la barra.
+ */
+export function foldSeriesColumn(
+  rows: Record<string, unknown>[],
+  dimField: string,
+  seriesField: string,
+  valueField: string,
+  maxSeries: number = CHART_MAX_SERIES,
+): { rows: Record<string, unknown>[]; metricsSpec: { field: string; label: string }[]; capped: boolean } {
+  // Series y categorías en orden de aparición (el SQL manda).
+  const seriesOrder: string[] = []
+  const catOrder: string[] = []
+  for (const r of rows) {
+    const sv = String(r[seriesField] ?? '')
+    if (!seriesOrder.includes(sv)) seriesOrder.push(sv)
+    const cv = String(r[dimField] ?? '')
+    if (!catOrder.includes(cv)) catOrder.push(cv)
+  }
+  const capped = seriesOrder.length > maxSeries
+  const kept = capped ? seriesOrder.slice(0, maxSeries) : seriesOrder
+  const labels = capped ? [...kept, OTHER_SERIES_LABEL] : kept
+  const metricsSpec = labels.map((label, i) => ({ field: `__s${i}`, label }))
+  const keyOf = new Map<string, string>(kept.map((label, i) => [label, `__s${i}`]))
+  const otherKey = `__s${kept.length}`
+
+  const byCat = new Map<string, Record<string, unknown>>()
+  for (const cat of catOrder) {
+    const row: Record<string, unknown> = { [dimField]: cat }
+    for (const m of metricsSpec) row[m.field] = 0
+    byCat.set(cat, row)
+  }
+  for (const r of rows) {
+    const row = byCat.get(String(r[dimField] ?? ''))
+    if (!row) continue
+    const key = keyOf.get(String(r[seriesField] ?? '')) ?? (capped ? otherKey : undefined)
+    if (key === undefined) continue
+    row[key] = (Number(row[key]) || 0) + (Number(r[valueField]) || 0)
+  }
+  return { rows: [...byCat.values()], metricsSpec, capped }
 }
 
 /** sort token: "-campo" (desc), "campo" (asc); "metric"/"-metric" → campo de métrica. */
