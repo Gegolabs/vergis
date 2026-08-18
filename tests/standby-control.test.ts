@@ -12,6 +12,23 @@ import type { Report } from '../server/discovery'
  * El predicado del conmutador de anillos y del poller de cortes es `HTTP 200 ∧ phase=serving ∧
  * pis.serving=N`, y un nodo en espera **no debe** satisfacerlo — rutearle tráfico sería mandar
  * escrituras a un nodo que responde 409. `standby` es un estado NUEVO, no un aflojamiento del viejo.
+ *
+ * ⚠️ **Qué mide hoy el control negativo de este frente, y por qué NO mide lo que medía ayer.** La
+ * medición que motivó todo esto observaba dos nodos sin tráfico pisándose el archivo de gobierno **en
+ * silencio**: el archivo alternaba entre el mundo de uno y el del otro, sin un error ni un log. Ese
+ * síntoma **ya no se reproduce**, ni siquiera desactivando el plano de control (`VERGIS_CONTROL=single`)
+ * — porque el fencing de escritura concurrente que llegó antes lo convirtió en un **fallo ruidoso**:
+ * el escritor atrasado aborta y queda `degraded`. El mérito se reparte, y conviene decirlo para que
+ * nadie se lo cobre al frente equivocado: **el fencing evita que el pisotón pase inadvertido; el
+ * gating de lazos evita que se intente**.
+ *
+ * Consecuencia práctica para quien vuelva a correr el arnés de dos nodos: el discriminador ya no es
+ * «¿alterna el archivo en silencio?» sino **«¿cuántos nodos declaran `serving`, y cuántos abortos por
+ * escritura concurrente aparecen en los logs?»**. Con el plano de control apagado: dos nodos en
+ * `serving` —un conmutador con el predicado de arriba rutearía a cualquiera— y abortos en el que se
+ * quedó atrás. Con el plano encendido: uno `serving`, uno `standby`, cero abortos, y el mundo del
+ * standby **nunca aterriza** en el archivo. Un control negativo que se juzgue por el síntoma viejo
+ * daría un falso verde y nadie sabría por qué.
  */
 
 const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
