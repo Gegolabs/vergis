@@ -39,6 +39,33 @@ cambio lo decide quien opera esa instancia.
 Lo que sigue está mergeado y **todavía no tiene versión cortada**: un operador no puede tomarlo hasta
 que se publique un tag.
 
+### Dos planos del despliegue por anillos versionados, puestos y **todavía no cableados** (#220, #222)
+
+**Qué traen.** El store embebido gana un **plano de escritura único** —gate de versión de esquema por
+`PRAGMA user_version`, y fencing que aborta el volcado si el archivo vigente cambió bajo el handle— y
+el Producto gana un **plano de control único**: un lease sobre `${VERGIS_OUT}/control.lease.json` con
+época, relevo por staleness y release ordenado, de modo que cuando dos nodos convivan durante una
+promoción, **exactamente uno** posee el control y quién lo posee es un hecho verificable en un
+archivo.
+
+**Qué NO cambia para quien opera hoy, y es lo que importa leer:** los dos planos existen y **nada los
+invoca todavía**. Los lazos de fondo, la fase `standby` de `healthz`, el 409 de mutaciones sin
+control y el bloque `control` del contrato llegan en frentes posteriores. Un nodo suelto se comporta
+**igual que antes**; `VERGIS_CONTROL=single` lo declara explícitamente y `lease` es el default de la
+caja. No hay migración que correr ni env que agregar.
+
+**Dos cosas que sí conviene saber antes de que la serie cierre:**
+
+- Un archivo de store que declare una **versión de esquema mayor** que la soportada se **rechaza al
+  abrir**, sin tocarlo — la incompatibilidad aparece en el pre-flight, no después de conmutar. Un
+  archivo en versión `0` se adopta como legado y se respalda una vez a `<archivo>.pre-<versión>.bak`.
+- El lease asume **un host con FS local** (rename atómico y relojes del mismo kernel). Está declarado
+  en el propio módulo y acota dónde este mecanismo vale.
+
+Variables nuevas, ambas con default y ninguna obligatoria: `VERGIS_CONTROL`
+(`lease` | `single`), `VERGIS_LEASE_STALE_MS` (10 000) y `VERGIS_LEASE_RENEW_MS` (2 000). Un valor
+desconocido en `VERGIS_CONTROL` **lanza** en vez de asumir.
+
 ### El plano de columna vuelve a proteger en Fabric (#197)
 
 La **vista de máscara** (`vw_mask_<tabla>`) se creaba en Fabric y **ningún `SELECT` sobre ella
