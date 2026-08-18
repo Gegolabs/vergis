@@ -321,6 +321,26 @@ export class SqliteNotasStore implements NotasStore {
 
   /** `file` null → DB en memoria (tests). Si el archivo existe, se carga. */
   static async open(file: string | null, control: SqliteControlOptions = {}): Promise<SqliteNotasStore> {
+    return new SqliteNotasStore(await SqliteNotasStore.openDb(file, control), file)
+  }
+
+  /**
+   * Reabre el store DESDE DISCO con otras opciones de plano de control y recién entonces cambia el
+   * handle vivo (validate-before-swap). Lo usa el nodo que toma o suelta el control: su snapshot en
+   * memoria queda rancio en cuanto otro nodo escribe el archivo. Ver `SqliteGovernanceStore.reopen`.
+   */
+  async reopen(control: SqliteControlOptions = {}): Promise<void> {
+    const fresh = await SqliteNotasStore.openDb(this.file, control)
+    const previo = this.db
+    this.db = fresh
+    try {
+      previo.close()
+    } catch {
+      /* cerrar el handle viejo es higiene, no parte del contrato del swap */
+    }
+  }
+
+  private static async openDb(file: string | null, control: SqliteControlOptions): Promise<SqlDb> {
     const db = await openSqliteDb(file, { ...control, schemaVersion: NOTAS_SCHEMA_VERSION })
     db.run(IMPRESION_DDL)
     db.run(NOTA_DDL)
@@ -328,7 +348,7 @@ export class SqliteNotasStore implements NotasStore {
     db.run(COMPARTICION_DDL)
     db.run(ENTREGA_DDL)
     for (const ix of INDEXES) db.run(ix)
-    return new SqliteNotasStore(db, file)
+    return db
   }
 
   private persist(): void {
@@ -698,7 +718,7 @@ function comparticionRow(r: Record<string, unknown>): Comparticion {
  * Selector del store por entorno (la costura del swap): `VERGIS_NOTES_DB` → archivo SQLite embebido;
  * sin él, `<baseDir>/notas.sqlite`.
  */
-export async function openNotasStore(baseDir: string, control: SqliteControlOptions = {}): Promise<NotasStore> {
+export async function openNotasStore(baseDir: string, control: SqliteControlOptions = {}): Promise<SqliteNotasStore> {
   const file = process.env['VERGIS_NOTES_DB'] ?? `${baseDir.replace(/\/$/, '')}/notas.sqlite`
   return SqliteNotasStore.open(file, control)
 }
