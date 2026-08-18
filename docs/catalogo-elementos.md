@@ -189,6 +189,29 @@ grafica, la plataforma decide CÓMO se ve.
 - **Invariante de los juegos de tokens de un theme**: `chartBar` es el color de la primera serie. Así
   el mapa hex→variable asigna los mismos nombres bajo cualquier paleta activa.
 
+## 4·bis · Color de magnitud en tablas — afordancia del lector
+
+El sombreado de una celda según su magnitud es **preferencia de lectura, no contrato de negocio**:
+misma familia que orden, filtro, export y columnas fijas. El spec declara QUÉ dato; la plataforma
+decide CÓMO se manipula.
+
+- **Nace apagado.** La celda emite su posición en la rampa (`--mag`, 0..1) y el color solo se pinta
+  con `data-magnitude="on"` en el documento. El interruptor vive en la bandeja, junto a la paleta, y
+  persiste por reporte en `localStorage` — mismo mecanismo que ya usan paleta y anotaciones.
+- **La rampa la fija el theme** (`--mag-h` / `--mag-s`), y **nunca es roja**. En un informe de
+  negocio el rojo significa *malo*, no *mucho*; una escala de magnitud tiene que leerse como
+  magnitud. Señalar bueno/malo es una escala **divergente** anclada en un punto de referencia — otro
+  concepto, y ése sí tendría que declararlo el spec.
+- **Qué columnas son candidatas**: las numéricas. `colorscale: true` en una columna **acota** las
+  candidatas a las declaradas, así que la intención del autor del spec no se pierde — lo que pierde
+  es el poder de **encenderlo**, que pasa al lector.
+- **El interruptor no aparece si ninguna columna resultó rampeable.** Un control que no enciende
+  nada es peor que su ausencia.
+
+Antecedente: la rampa anterior era `hsl(8, 75%, L%)` —hue 8 es rojo— oscureciendo al crecer el
+valor, o sea *la cifra más grande era la más roja*. El cliente lo leyó como negatividad y pidió
+retirarlo; la instancia sacó los 44 `colorscale` de sus 7 specs.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de

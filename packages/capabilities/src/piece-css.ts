@@ -74,6 +74,18 @@ export const TABLE_INTERACTIVE_CSS = `
 /** CSS de la bandeja común: tabs (Controles·Guardados·Config) + panel de filtros guardados.
  *  Se inyecta una vez por documento cuando hay bandeja (dashboard o tabla). Variables del theme
  *  con fallback claro → sirve en arbol y default. */
+export const MAGNITUDE_CSS = `
+/* #210 · Color de magnitud. Nace APAGADO: la celda trae su posicion en la rampa (--mag, 0..1) y el
+   color solo se pinta con data-magnitude="on" en el documento — el interruptor de la bandeja.
+   La rampa la fija el THEME (--mag-h / --mag-s), con un fallback neutro. NUNCA roja: en un informe
+   de negocio el rojo significa «malo», no «mucho», y una escala de magnitud tiene que leerse como
+   magnitud. Señalar bueno/malo es una escala DIVERGENTE anclada en una referencia — otro concepto,
+   y ese si tendria que declararlo el spec. */
+:root{--mag-h:214;--mag-s:70%}
+:root[data-magnitude="on"] td[style*="--mag"]{background:hsl(var(--mag-h) var(--mag-s) calc(95% - var(--mag) * 45%))}
+@media print{:root[data-magnitude="on"] td[style*="--mag"]{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+`
+
 export const TRAY_CSS = `
 .tray{display:flex;flex-direction:column}
 /* «Volver al catálogo» (#136): primera entrada de la bandeja, enlace discreto al índice (/). */
