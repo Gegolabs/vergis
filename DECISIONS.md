@@ -5,9 +5,45 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) |
 
 ---
+
+## D-37 · 2026-08-17 — Los PRs de bot en cooldown NO se aterrizan, aunque sus otros checks estén verdes
+
+- **Bifurcación**: #175 y #201 tenían `test` y `review` en verde y solo `renovate/stability-days` en `PENDING`. ¿Aterrizarlos igual, o esperar?
+- **Decidido**: esperar. `minimumReleaseAge: "14 days"` es política de supply chain del proyecto, no preferencia, y su objeto son exactamente las dependencias de terceros como un digest de Docker. Se comentó en cada PR que no hay nada que corregir: solo falta tiempo. La única excepción declarada (`osvVulnerabilityAlerts`) no aplica — son bumps de rutina sin alerta asociada.
+- **Costo de revertir**: nulo — se mergean cuando el check pase a verde.
+
+## D-36 · 2026-08-17 — El compilador de Fabric NO se toca por #197: se entrega el experimento
+
+- **Bifurcación**: #197 dejó el defecto aislado y la forma alternativa es deducible (materializar el claim antes del `CASE`). ¿Implementar el rediseño, o construir solo el experimento?
+- **Decidido**: solo el experimento (P6 en `fab:proof`, PR #217). La forma que funciona en SQL Server **no garantiza Fabric** —es la asimetría que este mismo issue documentó—, y emitir una forma nueva sin verla pasar en el SKU es literalmente lo que produjo el defecto. Correr P6 exige encender la capacidad F2, y eso es **gasto**: no lo decide el agente.
+- **Costo de revertir**: nulo — no se cambió comportamiento. El experimento está en el árbol esperando ventana.
+
+## D-35 · 2026-08-17 — `colorscale` del spec no se elimina: cambia de significado a «acota candidatas»
+
+- **Bifurcación**: #210 pide que el color de magnitud deje de ser decisión del spec. Tres caminos: quitar la clave (rompe specs), dejarla como no-op silencioso, o darle un rol nuevo.
+- **Decidido**: rol nuevo — `colorscale: true` **acota** las columnas candidatas al color; el poder de **encender** pasa al lector. Racional: quitarla rompería specs de instancias por una razón de presentación, y un no-op silencioso dejaría el spec diciendo algo que ya no ocurre — la peor de las tres, porque no falla.
+- **Costo de revertir**: bajo — es una condición en `magnitudeColumns` con su suite.
+
+## D-34 · 2026-08-17 — El override del nombre visible gana sobre el spec, y se declara como override
+
+- **Bifurcación**: #207 §1, «¿dónde queda la verdad?» cuando el YAML y el gobierno traen nombres distintos.
+- **Decidido**: gana el gobierno, **pero** el nombre del spec se conserva (`Report.specName`) y la consola dice que está sobrescrito, contra qué y por quién. Restaurar **borra** la fila en vez de guardar el nombre del spec — guardarlo congelaría el de hoy y una edición posterior del YAML no se vería nunca más.
+- **Costo de revertir**: medio — hay tabla nueva (`pi_display_name`), pero borrarla vuelve todo al nombre del spec sin pérdida.
+
+## D-33 · 2026-08-17 — El pliegue largo→ancho de #203 vive en `compose`, no en un segundo renderer
+
+- **Bifurcación**: para `series: <campo>` (formato largo), ¿un camino de render propio o plegar a la forma que el render agrupado ya consume?
+- **Decidido**: plegar en `compose`. Un segundo renderer tendría que replicar apilado, rótulos anti-colisión, cota top-N y el vocabulario de `sort`, y las dos copias divergirían en la primera corrección. Así los dos modos se comportan idéntico **por construcción**.
+- **Costo de revertir**: bajo — es una rama en `composePiece` con su función pura testeada.
+
+## D-32 · 2026-08-17 — Se corta y publica 0.18.0 (CHANGELOG + version + tag + imagen)
+
+- **Bifurcación**: dejar los cuatro frentes en `main` sin versión, o cortar 0.18.0.
+- **Decidido**: cortar y publicar. Sin versión, lo único que un operador puede consumir es el último commit de `main` — y entonces mergear *es* desplegar, que es lo que la frontera de `CLAUDE.md` existe para impedir (D-28). El CHANGELOG declara explícitamente que **#197 sigue vivo y esta versión no lo arregla**.
+- **Costo de revertir**: bajo — el tag se puede re-cortar; **nada desplegado**: qué versión corre cada instancia y cuándo entra lo decide quien la opera.
 
 ## D-31 · 2026-08-16 — El merge de lo confirmado deja de subir a César
 

@@ -34,6 +34,24 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **La medición de #164 NO está en el arnés de Fabric, y es lo primero que hay que agregarle** — la
+  pregunta de ese issue (¿acepta Fabric un `ADD FILTER PREDICATE` cuya función no recibe columna?) se
+  corrió a mano en el contenedor T-SQL (PR #190), **no como paso de `fab:proof`**. El arnés de Fabric
+  hoy tiene P5 (#163) y P6 (#197, agregado el 2026-08-17) pero no ésta, así que la próxima ventana de
+  capacidad —que es gasto y se decide una vez— contestaría dos preguntas pudiendo contestar tres.
+  Trabajo chico; el valor está en que se haga **antes** de encender, no después. `reg 2026-08-17`
+- **El eslabón «renombrar en la consola → catálogo servido» de #207 no tiene test de integración** —
+  está medido que el override no se congela en el memo del escáner y que sobrevive al reinicio del
+  nodo (SQLite en disco), pero la cadena *POST → `refreshDisplayNames()` → `discover()`* solo está
+  cubierta por lectura: exige el server levantado, como `serve-rls-proof.ts`. Es exactamente la clase
+  de eslabón donde el frente vecino (#139) ya encontró un fallo real —la observación del boot corría
+  antes del registro de los watches—, así que no es celo. `reg 2026-08-17`
+- **Las facetas client-side (`interactions.filters`) no recibieron el tope+buscador de #209** — el
+  frente cubrió los filtros **server-side** de la bandeja, que es donde estaba el caso medido (47
+  opciones con cascada). Las facetas son otra superficie y **no fueron lo reportado**, así que esto no
+  es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
+  aparece, nace issue propio. `reg 2026-08-17`
+
 - **Revocar un rol de workspace en Fabric NO toma efecto de inmediato, y no se sabe qué lo destraba**
   — medido el 2026-08-16: subir el SP de `Viewer` a `Member` cambió el resultado en la **primera**
   lectura (t+0s); bajarlo de `Member` a `Viewer` **no tomó efecto en 6,5 minutos de sondeo continuo**
