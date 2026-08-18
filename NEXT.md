@@ -1,19 +1,20 @@
 # NEXT — Vergis
 
-**0.17.0 sigue siendo la versión publicada.** Esta sesión no cortó versión: levantó el **terreno
-Fabric propio** (#186) y con él midió que una capacidad **ya publicada** no funciona (#197).
+**0.18.0 es la versión publicada** (tag `v0.18.0`, imagen construida). Trae cuatro afordancias que
+maneja el lector —#203 #207 #209 #210—, sin migraciones que correr a mano y sin env nuevo.
 
 > **No hay trabajo en vuelo.** Este archivo no es un kit de retome pendiente: es el **estado** del
 > proyecto y el índice de lo que espera a César. `/ww:go` no tiene nada que reanudar acá — si buscas
 > en qué trabajar, la lista de abajo dice de quién es cada partida.
 
-**El despliegue es del operador**, con su control de cambio. Si pregunta, la respuesta sigue siendo
-que tome **0.17.0**. Ver `CLAUDE.md` §«La frontera» y `DECISIONS.md` D-28.
+**El despliegue es del operador**, con su control de cambio. Si pregunta, la respuesta es que tome
+**0.18.0**. Ver `CLAUDE.md` §«La frontera» y `DECISIONS.md` D-28.
 
-**⚠ Lo primero que hay que decirle al operador** sigue vigente y ahora tiene compañía: el parseo de
-`domains.yaml` se volvió **estricto** (#183) y una entrada de `stewards:` inválida falla al arrancar
-— se revisa **antes** del despliegue. Y lo nuevo: **el plano de columna de 0.16.0/0.17.0 no protege
-columnas en Fabric** (#197). Qué se le dice y cuándo es decisión de César: es comunicación saliente.
+**⚠ Lo primero que hay que decirle al operador**, y sigue sin decirse: (1) el parseo de
+`domains.yaml` es **estricto** desde #183 — una entrada de `stewards:` inválida falla al arrancar, y
+se revisa **antes** del despliegue; (2) **el plano de columna no protege columnas en Fabric**, y eso
+incluye 0.18.0 (#197). Qué se le dice y cuándo es decisión de César: es comunicación saliente. Ficha
+en `PENDINGS.md`.
 
 ## Lo que cambió cómo se trabaja: ya no hay excusa para nada que toque Fabric
 
@@ -26,6 +27,12 @@ Terreno propio en tenant **ultraBASE**, desconectado del cliente, datos sintéti
 pausada por defecto** (US$0,36/h encendida; una sesión ≈ un dólar). Declarado en `RESOURCES.md`,
 runbook en `scripts/README-fabric-lab.md`.
 
+**Higiene de la ventana, medida el 2026-08-18 y que conviene repetir:** la pausa va en un
+`trap EXIT/INT/TERM`, no en acordarse — así la capacidad se apaga aunque el script reviente. Y
+ningún comando `az` depende del default del CLI, que en esta máquina apunta al tenant **del
+cliente**: se pasa `--subscription` explícito y se puede **verificar** decodificando el `tid` del
+token emitido (debe dar `41eb660f…`, no `8c1604ef…`).
+
 **Las dos asimetrías, que van en sentidos opuestos y no se pueden confundir al citar:**
 
 | Arnés | Un **negativo** | Un **positivo** |
@@ -33,20 +40,23 @@ runbook en `scripts/README-fabric-lab.md`.
 | `lab:proof` — T-SQL local, gratis | refuta también para Fabric | **no** garantiza Fabric |
 | `fab:proof` — Fabric real, cuesta | definitivo para Fabric | vale para **este SKU y este rol** |
 
-**El corolario que el primer día dejó, y que ninguna doc tenía:** que el motor **acepte** el DDL no
-significa que el artefacto **sirva**. El `CREATE VIEW` de la máscara pasa en verde y todo `SELECT`
-sobre ella falla. Un arnés que solo aplicara el setup y mirara `sys` habría dado verde entero.
+**Los dos corolarios que este terreno dejó, y que ninguna doc tenía:** que el motor **acepte** el DDL
+no significa que el artefacto **sirva** — el `CREATE VIEW` de la máscara pasa en verde y todo
+`SELECT` falla. Y su hermano, aprendido el 2026-08-18 corrigiendo un experimento propio a medio
+medir: **que una vista se consulte no significa que discrimine**. Una vista que devuelve lo mismo con
+y sin el claim pasa los dos filtros anteriores y no protege nada.
 
 ## Lo que sigue abierto, y de quién es
 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
-| **#197** — la vista de máscara no sirve en Fabric | **César** decide el rediseño; la medición ya está | **Bifurcación viva**: la alternativa que funciona (variable local + `CASE`) **no cabe en una `VIEW`**. Candidatos: función escalar, tabla-función, o mover la discriminación fuera del artefacto |
-| **El aviso al operador** sobre #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente |
+| **#197** — la vista de máscara no sirve en Fabric | **Nuestro**: la medición ya está, falta el rediseño | **Ya no es bifurcación a ciegas.** Medido el 18-ago: **C1** (CTE escalar + `CROSS JOIN`) y **C2** (`CROSS APPLY (VALUES …)`) aceptan, sirven **y discriminan**; C3 (sin `CASE`) rechazada. Falta cambiar `packages/policy/src/fabric.ts` y **re-correr `fab:proof` con la forma que emita el compilador**, no con el SQL a mano de P6 |
+| **#164** — el allow-all sin columna rehén | **Nuestro**, medido | `ADD FILTER PREDICATE` **sin argumento: ACEPTADO** en el SKU, con control positivo y verificando que la tabla siga sirviendo sus filas (no deny silencioso). Falta el codegen. **Dos decisiones son de César**: qué pasa con `bindColumn` en la API (contrato que las instancias consumen) y si la instancia re-aplica los 34 `ADD FILTER PREDICATE` desplegados |
+| **El aviso al operador** de 0.18.0 + #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente. Ficha con el contenido exacto en `PENDINGS.md` |
+| **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
+| **#186** — terreno Fabric | Nuestro | Levantado y ya rindió. Queda **un** criterio: barrer las partidas de `PENDINGS.md` cuya única traba era «no hay dónde medirlo» |
 | **Capacidades Trial FTL64 y PP3** en ultraBASE | **César** (gasto) | *Active* en Chile Central, con `arbol-lab-smoke-test` y `arbol-lab-qw04`. No las tocamos; declaradas en `RESOURCES.md` |
-| **#186** — terreno Fabric | Nuestro | **Levantado**; quedan 2 de 6 criterios: la medición de #164 corrida ahí, y barrer el pasivo que decía «no hay dónde medirlo» |
-| **#164** — el allow-all sin columna rehén | Nuestro, **y ya no gated** | La traba dejó de ser estructural. **No medido todavía**, y no se da por hecho |
-| **PR #175** — digest de `caddy:2` | El reloj | `test` ✓ `review` ✓; cuelga `renovate/stability-days`. Cuando el cooldown de 14 días lo libere, mergea directo. **No se salta** |
+| **PRs #175 y #201** — digests de `caddy:2` y `python:3.12-slim` | El reloj | `test` ✓ `review` ✓; cuelga `renovate/stability-days`. Cuando el cooldown de 14 días los libere, mergean directo. **No se salta** |
 | **`VERGIS_CSRF_SECRET` en QA** | César | Acto de instancia |
 | **El ojo humano** al header del theme `default` | César | — |
 | **Publicar `CONTRIBUTING.md`** | César | Renombrar el `.draft.md` *es* el acto |
@@ -68,20 +78,26 @@ consultas, no frentes.
 
 ## Terreno ya recorrido — no reintentar
 
-- **«No hay dónde medir lo que toca Fabric»** — falso, y ahora por los dos lados: falso para la
-  semántica T-SQL desde el 2026-08-14 (`lab:proof`), y falso para el SKU desde el 2026-08-16
-  (`fab:proof`). **La excusa se acabó entera.**
+- **«No hay dónde medir lo que toca Fabric»** — falso por los dos lados: para la semántica T-SQL
+  desde el 2026-08-14 (`lab:proof`), y para el SKU desde el 2026-08-16 (`fab:proof`).
+- **«La discriminación por claim no cabe dentro de una `VIEW` en Fabric»** — **refutado el
+  2026-08-18**. Era cierto de la forma con variable local (`DECLARE`), y de ahí se generalizó de más:
+  C1 y C2 la expresan dentro de una vista y funcionan. Lo que decide no es el `CASE` sino **de dónde
+  viene el claim** — materializado en una fuente escalar de una fila pasa; evaluado inline contra el
+  scan, no. C3 lo confirma: no usa `CASE` y también la rechaza.
 - **El Trial de Fabric** — descartado dos veces: muere a los 60 días y se lleva el terreno, y además
   **no hacía falta** (el tenant ultraBASE ya tenía Fabric habilitado y licencia).
 - **Copiar datos del cliente al terreno** — descartado: el arnés mide **formas**, no datos, y una
   copia arrastra responsabilidad sin aportar verificación.
 - **Bajar el rol del SP como mitigación de `UNMASK`** — no sirve como se esperaba: la revocación
   **no tomó efecto en 6,5 min** de sondeo. Qué la destraba no está medido (ficha en `PENDINGS.md`).
-- **Creer la primera lectura tras cambiar un rol de workspace** — envenenó una medición de esta
-  sesión: el primer veredicto sobre `UNMASK` fue el opuesto al correcto.
+- **Creer la primera lectura tras cambiar un rol de workspace** — envenenó una medición: el primer
+  veredicto sobre `UNMASK` fue el opuesto al correcto.
+- **Declarar viable una forma de vista por verla «crear y consultar»** — insuficiente, y casi se
+  publica así el 18-ago: falta el control de que **discrimine** con y sin el claim.
 - **Tirar y recrear la vista-contrato de la instancia** — descartado **por autoridad, no por
   dificultad** (`DECISIONS.md` D-30).
 - **Sacar el DDM y enmascarar solo en la vista** — descartado: cambiaría la promesa de seguridad sin
-  decirlo. Y hoy además la vista no sirve en Fabric.
+  decirlo. Y la vista, hasta que se rediseñe, no sirve en Fabric.
 
-<!-- /ww:finish · 2026-08-16 · HEAD 0687da5 -->
+<!-- /ww:finish · 2026-08-18 · HEAD 2a52eeb -->

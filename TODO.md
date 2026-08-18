@@ -72,9 +72,10 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   `RESOURCES.md`. El criterio de «la misma forma que el arnés local» se cumplió. **El Trial no hizo
   falta** —el tenant ya tenía Fabric habilitado y licencia— y sigue descartado. Costo **medido**:
   US$0,18/CU-hora ⇒ US$0,36/h encendida.
-  **Sigue abierta, y por dos cosas concretas, no por el terreno:** (1) la medición de #164 corrida
-  ahí con su control positivo; (2) barrer una por una las partidas de `PENDINGS.md` cuya única traba
-  era «no hay dónde medirlo». Los otros cuatro criterios de aceptación del issue están cumplidos.
+  **Sigue abierta por UNA cosa, no por dos** *(actualizado 2026-08-18)*: barrer una por una las
+  partidas de `PENDINGS.md` cuya única traba era «no hay dónde medirlo». **La medición de #164 ya se
+  corrió** —es P7 de `fab:proof`, ventana del 2026-08-18, PR #219— con su control positivo y el
+  control de que la tabla siga sirviendo filas. Los otros cuatro criterios ya estaban cumplidos.
   **Y ya rindió**: la primera corrida encontró que la vista de máscara publicada en 0.16.0 **no sirve
   en Fabric** — issue **#197**, con la causa aislada. `act 2026-08-16`
 
