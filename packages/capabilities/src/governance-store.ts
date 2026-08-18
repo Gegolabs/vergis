@@ -91,6 +91,13 @@ export interface PiGovernance {
   createdBy?: string
   createdAt?: string
 }
+/** #207 · Override del nombre visible de un PI, con su rastro de quién y cuándo. */
+export interface PiDisplayName {
+  piCode: string
+  displayName: string
+  updatedBy?: string
+  updatedAt?: string
+}
 export interface PiDemanda {
   piCode: string
   /** Frescura exigida, ISO-8601 duration (p.ej. `PT1H`, `P1D`, `P1W`). */
@@ -112,6 +119,12 @@ export interface PiGovStore {
   roleFor(piCode: string, email: string | undefined): Promise<PiRole | null>
   getDemanda(piCode: string): Promise<PiDemanda | null>
   setDemanda(piCode: string, maxAge: string, updatedBy?: string): Promise<void>
+  /** #207 · Nombre visible sobrescrito, o null si el PI usa el de su spec. */
+  getDisplayName(piCode: string): Promise<PiDisplayName | null>
+  /** Sobrescribe el nombre visible; `null` RESTAURA el del spec (borra el override). */
+  setDisplayName(piCode: string, displayName: string | null, updatedBy?: string): Promise<void>
+  /** Todos los overrides vigentes, por código de PI. Lo consume el mapa vivo del serving. */
+  listDisplayNames(): Promise<Record<string, string>>
 }
 
 export interface SourceRow {
@@ -652,6 +665,18 @@ const PI_DEMANDA_DDL = `CREATE TABLE IF NOT EXISTS pi_demanda (
   updated_by TEXT,
   updated_at TEXT
 );`
+/** #207 · Nombre visible sobrescrito de un PI. Tabla propia y no columna de `pi_governance`: el
+ *  gobierno lo bootstrapea el sistema al descubrir un PI, y un override es un acto DELIBERADO de una
+ *  persona — mezclarlos haría indistinguible «nunca se renombró» de «se renombró al mismo nombre». */
+/** Tope del nombre visible: cabe en el header y en un tab del navegador sin cortarse a la mitad. */
+export const PI_DISPLAY_NAME_MAX = 120
+
+const PI_DISPLAY_NAME_DDL = `CREATE TABLE IF NOT EXISTS pi_display_name (
+  pi_code TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  updated_by TEXT,
+  updated_at TEXT
+);`
 const SETTING_DDL = `CREATE TABLE IF NOT EXISTS platform_setting (
   skey TEXT PRIMARY KEY, svalue TEXT, updated_by TEXT, updated_at TEXT
 );`
@@ -964,6 +989,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(PI_GOV_DDL)
     db.run(PI_GRANT_DDL)
     db.run(PI_DEMANDA_DDL)
+    db.run(PI_DISPLAY_NAME_DDL)
     db.run(SETTING_DDL)
     db.run(SOURCE_DDL)
     ensureColumns(db, 'source', ['domain TEXT'])
@@ -1258,6 +1284,56 @@ export class SqliteGovernanceStore implements GovernanceStore {
       [piCode.trim(), age, normEmail(updatedBy) || null, now()],
     )
     this.persist()
+  }
+
+  async getDisplayName(piCode: string): Promise<PiDisplayName | null> {
+    const stmt = this.db.prepare(`SELECT pi_code, display_name, updated_by, updated_at FROM pi_display_name WHERE pi_code = ?`)
+    stmt.bind([piCode.trim()])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const r = stmt.getAsObject() as { pi_code: string; display_name: string; updated_by?: string; updated_at?: string }
+    stmt.free()
+    return {
+      piCode: String(r.pi_code),
+      displayName: String(r.display_name),
+      updatedBy: r.updated_by ?? undefined,
+      updatedAt: r.updated_at ?? undefined,
+    }
+  }
+
+  async setDisplayName(piCode: string, displayName: string | null, updatedBy?: string): Promise<void> {
+    const code = piCode.trim()
+    // `null` restaura el del spec BORRANDO la fila, no guardando el nombre del YAML: guardarlo
+    // congelaría el nombre de hoy y una edición posterior del spec no se vería nunca más.
+    if (displayName === null) {
+      this.db.run(`DELETE FROM pi_display_name WHERE pi_code = ?`, [code])
+      this.persist()
+      return
+    }
+    const name = displayName.trim()
+    if (!name) throw new Error('El nombre visible no puede quedar vacío. Para volver al del spec, use «restaurar».')
+    if (name.length > PI_DISPLAY_NAME_MAX) {
+      throw new Error(`El nombre visible no puede pasar de ${PI_DISPLAY_NAME_MAX} caracteres (recibió ${name.length}).`)
+    }
+    this.db.run(
+      `INSERT INTO pi_display_name (pi_code, display_name, updated_by, updated_at) VALUES (?,?,?,?)
+       ON CONFLICT(pi_code) DO UPDATE SET display_name=excluded.display_name, updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
+      [code, name, normEmail(updatedBy) || null, now()],
+    )
+    this.persist()
+  }
+
+  async listDisplayNames(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {}
+    const stmt = this.db.prepare(`SELECT pi_code, display_name FROM pi_display_name`)
+    while (stmt.step()) {
+      const r = stmt.getAsObject() as { pi_code: string; display_name: string }
+      out[String(r.pi_code)] = String(r.display_name)
+    }
+    stmt.free()
+    return out
   }
 
   // ── SourceRegistryStore (oferta + mapeos, frente B) ──

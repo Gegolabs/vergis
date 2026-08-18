@@ -82,7 +82,7 @@ describe('config · roster de preview (MIRANDA_PREVIEW_IDENTITIES)', () => {
 
 // Snapshot de superficie: con el flag apagado (getMiranda ausente/null) la superficie de rutas es
 // idéntica a hoy — `/miranda*` no existe (cae al 404 del slug-lookup normal).
-const REPORT: Report = { code: 'PI-1', slug: 'pi-1', name: 'X', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
+const REPORT: Report = { code: 'PI-1', slug: 'pi-1', name: 'X', specName: 'X', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
 function mkReq(url: string, method = 'GET'): IncomingMessage {
   return { url, method, headers: {} } as unknown as IncomingMessage
 }

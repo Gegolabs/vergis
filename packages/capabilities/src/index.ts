@@ -109,7 +109,8 @@ export { createFabricItemAuthoring, AuthoringError, AuthoringDenied, AuthoringCo
 export type { ItemAuthoringClient, ItemDeclaration, ItemDefinition, DefinitionPart } from './fabric-authoring'
 export { SqliteAdminStore, AdminLockout } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
-export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION } from './governance-store'
+export { SqliteGovernanceStore, GovernanceConflict, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION, PI_DISPLAY_NAME_MAX } from './governance-store'
+export type { PiDisplayName } from './governance-store'
 export type {
   GovernanceStore,
   GroupStore,

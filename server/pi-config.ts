@@ -27,14 +27,19 @@ import { page, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } f
 
 export interface PiConfigDeps {
   gov: GovernanceStore
-  /** slug → { code, name } del PI servible, o undefined si no existe/!servible. */
-  resolve: (slug: string) => { code: string; name: string } | undefined
+  /** slug → { code, name, specName } del PI servible, o undefined si no existe/!servible.
+   *  `name` es el EFECTIVO (con override); `specName` el que trae el YAML — la consola necesita los
+   *  dos para poder decir que un nombre está sobrescrito y contra qué (#207). */
+  resolve: (slug: string) => { code: string; name: string; specName?: string } | undefined
   identityOf: (headers: IncomingMessage['headers']) => { user?: string }
   /** Rol efectivo de gestión (incluye bootstrap + override admin); lo provee el server. */
   roleOf: (code: string, email: string | undefined) => Promise<PiRole | null>
   /** Ofertas de las fuentes de los insumos del PI (para el techo de la demanda). Opcional. */
   ceilingFor?: (code: string) => Promise<string[]>
   audit: (event: LogEventInput) => void
+  /** #207 · Aviso de que un nombre visible cambió: el serving refresca su mapa de overrides SIN
+   *  reiniciar. Sin esto, renombrar seguiría exigiendo un despliegue — que es el issue entero. */
+  onDisplayNameChange?: () => void
   secret: string
   brandTitle?: string
 }
@@ -51,7 +56,7 @@ export function createPiConfig(deps: PiConfigDeps): PiConfigHandler {
 
   async function tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '')
-    const m = path.match(/^\/([^/]+)\/config(?:\/(visibility|grant|grant\/remove|demanda))?$/)
+    const m = path.match(/^\/([^/]+)\/config(?:\/(visibility|grant|grant\/remove|demanda|nombre))?$/)
     if (!m) return false
     const target = deps.resolve(m[1].toLowerCase())
     if (!target) {
@@ -112,6 +117,18 @@ async function handleWrite(
   f: Record<string, string>,
   by: string,
 ): Promise<void> {
+  // #207 · Renombrar es el mismo tipo de acto que fijar la demanda —ajusta cómo se presenta el PI,
+  // no quién lo ve—, así que va con el mismo gate: colaborador o dueño. Cambiar visibilidad o
+  // compartir sigue siendo exclusivo del dueño.
+  if (op === 'nombre') {
+    if (!canCollaborate(role)) throw new Forbidden('Solo colaboradores/dueños editan el nombre visible.')
+    const restaurar = (f['restaurar'] ?? '') !== ''
+    const nuevo = restaurar ? null : (f['display_name'] ?? '')
+    await asValidation(deps.gov.setDisplayName(code, nuevo, by))
+    deps.onDisplayNameChange?.()
+    deps.audit({ type: 'pi-governance-write', op: 'nombre', pi: code, value: nuevo ?? '(restaurado del spec)', by })
+    return
+  }
   if (op === 'demanda') {
     if (!canCollaborate(role)) throw new Forbidden('Solo colaboradores/dueños editan la demanda.')
     const maxAge = f['max_age'] ?? ''
@@ -156,10 +173,17 @@ async function handleWrite(
   }
 }
 
-async function configPage(deps: PiConfigDeps, target: { code: string; name: string }, role: PiRole | null, token: string, msg?: string): Promise<string> {
+async function configPage(
+  deps: PiConfigDeps,
+  target: { code: string; name: string; specName?: string },
+  role: PiRole | null,
+  token: string,
+  msg?: string,
+): Promise<string> {
   const gov = await deps.gov.getPiGovernance(target.code)
   const grants = await deps.gov.listGrants(target.code)
   const demanda = await deps.gov.getDemanda(target.code)
+  const nombre = await deps.gov.getDisplayName(target.code)
   const groups = await deps.gov.listGroups()
   const owner = canGovern(role)
   const collab = canCollaborate(role)
@@ -202,6 +226,30 @@ async function configPage(deps: PiConfigDeps, target: { code: string; name: stri
     </form>
     <p class="sub">Público = cualquiera autenticado lo abre; <b>los datos siguen filtrados por RLS</b> (no es bypass).</p>`
 
+  // #207 · El override es EXPLÍCITO y visible: se dice que está sobrescrito, contra qué nombre del
+  // spec, y quién lo hizo. Un override mudo convierte el YAML en una fuente que miente para el que
+  // lo lee. La RUTA no aparece acá porque no se mueve: el slug sale de `identity.code`, no del
+  // nombre, así que los enlaces ya repartidos en Jira y correos siguen sirviendo.
+  const specName = target.specName ?? ''
+  const sobrescrito = !!nombre
+  const nomForm = `<h2>Nombre visible</h2>
+    <form method="post" action="/${target.code.toLowerCase()}/config/nombre" class="row${collab ? '' : ' ro'}">
+      <input type="hidden" name="_csrf" value="${token}">
+      <input name="display_name" value="${escapeHtml(nombre?.displayName ?? specName)}" maxlength="120" placeholder="Nombre con que se ve el PI" ${collab ? '' : 'readonly'}>
+      ${collab ? '<button class="add">Guardar</button>' : '<span class="sub">solo colaboradores</span>'}
+    </form>
+    ${
+      sobrescrito
+        ? `<p class="sub"><b>Este nombre está sobrescrito.</b> El del spec es «${escapeHtml(specName)}»${
+            nombre?.updatedBy ? ` · lo cambió ${escapeHtml(nombre.updatedBy)}` : ''
+          }${nombre?.updatedAt ? ` el ${escapeHtml(String(nombre.updatedAt).slice(0, 10))}` : ''}.${
+            collab
+              ? ` <form method="post" action="/${target.code.toLowerCase()}/config/nombre" class="inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="restaurar" value="1"><button class="del">Restaurar el del spec</button></form>`
+              : ''
+          }</p>`
+        : `<p class="sub">Sale del spec (<code>identity.display_name</code>). Editarlo acá lo sobrescribe sin desplegar; <b>la URL no cambia</b> — el enlace sale de <code>identity.code</code>.</p>`
+    }`
+
   const demForm = `<h2>Demanda de frescura</h2>
     <form method="post" action="/${target.code.toLowerCase()}/config/demanda" class="row${collab ? '' : ' ro'}">
       <input type="hidden" name="_csrf" value="${token}">
@@ -214,6 +262,7 @@ async function configPage(deps: PiConfigDeps, target: { code: string; name: stri
     `${target.name}`,
     `<p><a href="/${target.code.toLowerCase()}">← Volver al PI</a> · <span class="tag">${escapeHtml(ROLE_LABEL[role!] ?? '—')}</span></p>
      ${msg ? `<p class="msg err">${escapeHtml(msg)}</p>` : ''}
+     ${nomForm}
      ${visForm}
      <h2>Compartido con</h2>
      <table><thead><tr><th>Principal</th><th>Rol</th><th></th></tr></thead><tbody>${grantRows || `<tr><td colspan="3" class="sub">Sin compartir.</td></tr>`}</tbody></table>
