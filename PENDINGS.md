@@ -6,6 +6,17 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Operación / despliegue
 
+- **0.18.0 está publicada y NO se ha avisado al operador** — el tag `v0.18.0` está empujado y la
+  imagen construida (build en `success`), así que **nada quedó sin publicar**; lo que falta es el
+  aviso, y es lo que la frontera de `CLAUDE.md` pone de nuestro lado. **El acto es de César**: es
+  comunicación saliente a un tercero, nunca fue del agente. Lo que ese aviso tiene que decir, y es
+  la parte delicada: además de las cuatro afordancias (#203 #207 #209 #210, sin migraciones ni env
+  nuevo), **que #197 sigue vivo** — la vista de máscara se crea en Fabric y ningún `SELECT` sobre
+  ella funciona, también en 0.18.0. Si alguien lee «versión nueva» y asume que el plano de columna ya
+  protege, el aviso hizo daño en vez de bien. **No se sabe desde este repo qué versión corre hoy la
+  instancia** (es infra del operador): si viene de 0.16.x, el aviso debería nombrar el salto.
+  `reg 2026-08-18`
+
 - **Dos conjeturas del 0.15.0 SIGUEN sin verificar, y el deploy no las tocó** — de las cuatro que
   esperaban producción, el despliegue del 2026-08-11 saldó dos (#139·N2 siembra ✓, #151 reclasifica ✓)
   y **las otras dos no, porque no dependían del deploy sino de condiciones que PROD no tiene**:
