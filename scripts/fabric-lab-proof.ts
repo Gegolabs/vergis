@@ -237,6 +237,75 @@ async function main(): Promise<void> {
     await sp.close()
   }
 
+  // ── P6 · el rediseño de #197: ¿QUÉ forma expresa la discriminación por claim DENTRO de una vista?
+  //
+  // #197 dejó aislado que `SESSION_CONTEXT()` DENTRO de un `CASE` sobre un scan de tabla es lo que
+  // Fabric rechaza, y que la alternativa que sí funciona —materializar el claim en una variable
+  // local— NO CABE en una `VIEW`. De ahí que haga falta rediseñar y no parchear.
+  //
+  // Este experimento pone en riesgo las tres formas candidatas del rediseño. Está escrito para
+  // REFUTAR: si las tres fallan, ese resultado es tan válido como un verde — dice que la vista de
+  // máscara no es expresable en Fabric y que la protección de columna tiene que vivir en otro
+  // lado. Lo que NO se hace hasta que esto corra es cambiar el compilador: emitir una forma nueva
+  // sin verla pasar en el SKU sería exactamente lo que produjo #197.
+  //
+  // Los dos controles son obligatorios y van en la MISMA sesión:
+  //  · POSITIVO — una consulta trivial pasa (si no, nada de lo de abajo significa algo).
+  //  · NEGATIVO — la forma ACTUAL, la que #197 midió, sigue fallando. Si de pronto PASA, lo que
+  //    cambió es el motor y todo el diagnóstico de #197 hay que rehacerlo, no celebrarlo.
+  seccion('P6 (#197) · Formas candidatas para la vista de máscara en Fabric')
+  const CL: ClaimSet = { groups: ['Finanzas', 'Comercial'] } as ClaimSet
+  const SC = `CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS VARCHAR(8000))`
+
+  const ctrlPos = await leer(admin, CL, 'SELECT 1 AS uno')
+  if (!ok(ctrlPos !== null, 'CONTROL POSITIVO · la sesión responde una consulta trivial')) {
+    hallazgo('Sin control positivo, ningún resultado de P6 significa nada. P6 se aborta.')
+  } else {
+    const actual = await leer(admin, CL, `SELECT CASE WHEN ${SC} = 'true' THEN rut ELSE '***' END AS r FROM [dbo].[areas]`)
+    hallazgo(
+      actual === null
+        ? 'CONTROL NEGATIVO · la forma ACTUAL sigue fallando, como midió #197 — el diagnóstico sigue en pie'
+        : 'CONTROL NEGATIVO INESPERADO · la forma actual AHORA PASA. Cambió el motor: el diagnóstico de #197 hay que rehacerlo antes de usar nada de esto.',
+    )
+
+    // C1 · el claim se materializa en una fuente escalar de UNA fila y se une por CROSS JOIN. Es la
+    // traducción a sintaxis-de-vista del `DECLARE` que #197 ya midió funcionando.
+    const c1 = `WITH c AS (SELECT ${SC} AS v) SELECT CASE WHEN c.v = 'true' THEN t.rut ELSE '***' END AS r FROM [dbo].[areas] t CROSS JOIN c`
+    hallazgo(`C1 · CTE escalar + CROSS JOIN: ${(await leer(admin, CL, c1)) ? 'ACEPTADA' : 'RECHAZADA'}`)
+
+    // C2 · mismo espíritu, otra sintaxis: el planner puede tratarlas distinto y eso es justamente
+    // lo que no se puede saber leyendo.
+    const c2 = `SELECT CASE WHEN c.v = 'true' THEN t.rut ELSE '***' END AS r FROM [dbo].[areas] t CROSS APPLY (VALUES (${SC})) AS c(v)`
+    hallazgo(`C2 · CROSS APPLY (VALUES …): ${(await leer(admin, CL, c2)) ? 'ACEPTADA' : 'RECHAZADA'}`)
+
+    // C3 · sin `CASE`: si lo que el SKU rechaza es la construcción condicional sobre el scan y no
+    // `SESSION_CONTEXT` en sí, una forma sin CASE pasaría. Refuta o confirma el alcance del
+    // diagnóstico de #197, que es lo que decide cuánto del diseño hay que mover.
+    const c3 = `SELECT NULLIF(rut, IIF(${SC} = 'true', CAST(NULL AS VARCHAR(20)), rut)) AS r FROM [dbo].[areas]`
+    hallazgo(`C3 · sin CASE (NULLIF/IIF): ${(await leer(admin, CL, c3)) ? 'ACEPTADA' : 'RECHAZADA'}`)
+
+    // Una forma ACEPTADA como consulta todavía no es una vista: el CREATE VIEW puede rechazarla por
+    // su cuenta. Aceptar el DDL tampoco basta —#197 nace exactamente de esa confusión—, así que de
+    // las candidatas que pasen se crea la vista Y se la consulta.
+    for (const [nombre, cuerpo] of [['C1', c1], ['C2', c2], ['C3', c3]] as const) {
+      const vw = `[dbo].[v_p6_${nombre.toLowerCase()}]`
+      await intentar(admin, `DROP VIEW IF EXISTS ${vw}`)
+      const ddl = await intentar(admin, `CREATE VIEW ${vw} AS ${cuerpo}`)
+      if (!ddl.ok) {
+        hallazgo(`${nombre} · CREATE VIEW rechazado: ${ddl.error}`)
+        continue
+      }
+      const leida = await leer(admin, CL, `SELECT * FROM ${vw}`)
+      hallazgo(
+        leida
+          ? `${nombre} · vista CREADA y CONSULTABLE — candidata viable para el rediseño de #197`
+          : `${nombre} · vista creada pero el SELECT falla — el mismo modo de falla de #197: aceptar el DDL no es servir`,
+      )
+      await intentar(admin, `DROP VIEW IF EXISTS ${vw}`)
+    }
+    hallazgo('Ninguna candidata se lleva al compilador antes de verse pasar acá (Norma 7).')
+  }
+
   await admin.close()
   console.log(`\n${fallos === 0 ? '✅ Sin fallos' : `❌ ${fallos} fallo(s)`} · ${hallazgos} hallazgo(s) registrados\n`)
   process.exit(fallos === 0 ? 0 : 1)
