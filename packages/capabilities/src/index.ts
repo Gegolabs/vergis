@@ -24,6 +24,7 @@ export {
   svgTitlesDesdeAria,
 } from './render-chart'
 export type { TopNRank, LabelMode } from './render-chart'
+export { FILTER_VISIBLE_MAX } from './render-html-piece'
 export { TABLE_SSR_MAX_ROWS, TABLE_PRINT_MAX_ROWS } from './render-table'
 export { renderCsvPiece } from './render-csv-piece'
 export type { ResolvedNode, TableColumn, ChartSort, FilterResolved } from './piece-types'
