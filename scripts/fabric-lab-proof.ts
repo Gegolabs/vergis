@@ -296,14 +296,126 @@ async function main(): Promise<void> {
         continue
       }
       const leida = await leer(admin, CL, `SELECT * FROM ${vw}`)
-      hallazgo(
-        leida
-          ? `${nombre} · vista CREADA y CONSULTABLE — candidata viable para el rediseño de #197`
-          : `${nombre} · vista creada pero el SELECT falla — el mismo modo de falla de #197: aceptar el DDL no es servir`,
-      )
+      if (!leida) {
+        hallazgo(`${nombre} · vista creada pero el SELECT falla — el modo de falla de #197: aceptar el DDL no es servir`)
+        await intentar(admin, `DROP VIEW IF EXISTS ${vw}`)
+        continue
+      }
+      hallazgo(`${nombre} · vista CREADA y CONSULTABLE`)
+      // EL CONTROL QUE DECIDE, y sin el cual «consultable» no significa nada: ¿DISCRIMINA?
+      // Una vista que se consulta pero devuelve lo mismo con y sin el claim pasaría el paso de
+      // arriba y no protegería nada — que es exactamente el defecto que #197 vino a corregir, con
+      // otra cara. Se compara la MISMA vista bajo dos claims en la misma sesión.
+      const conClaim = await leer(admin, { groups: ['Finanzas', 'Comercial'], ve_pii: 'true' } as unknown as ClaimSet, `SELECT * FROM ${vw}`)
+      const sinClaim = await leer(admin, { groups: ['Finanzas', 'Comercial'] } as ClaimSet, `SELECT * FROM ${vw}`)
+      const a = JSON.stringify(conClaim)
+      const b = JSON.stringify(sinClaim)
+      if (conClaim === null || sinClaim === null) {
+        hallazgo(`${nombre} · el control de discriminación no pudo correr (una de las dos lecturas falló) — NO se declara viable`)
+      } else if (a === b) {
+        hallazgo(`${nombre} · NO DISCRIMINA: con y sin el claim devuelve lo mismo (${a}). Consultable pero inútil — no es candidata.`)
+      } else {
+        hallazgo(`${nombre} · DISCRIMINA por claim — con: ${a} · sin: ${b}`)
+        hallazgo(`${nombre} · CANDIDATA VIABLE para el rediseño de #197 (acepta, sirve y discrimina)`)
+      }
       await intentar(admin, `DROP VIEW IF EXISTS ${vw}`)
     }
     hallazgo('Ninguna candidata se lleva al compilador antes de verse pasar acá (Norma 7).')
+  }
+
+  // ── P7 · #164 en el SKU: ¿el FILTER PREDICATE puede NO recibir columna? ────────────────────
+  //
+  // #164 pide que un `grant: all` deje de anclar en una columna de datos: `WITH SCHEMABINDING` hace
+  // que la referencia sea una dependencia dura, así que el andamiaje de autorización toma REHÉN a
+  // una columna de negocio elegida por accidente (medido en una instancia: 9 de 10 columnas cayeron
+  // y `barcode` no).
+  //
+  // La forma sin columna ya se midió ACEPTADA en la familia T-SQL (PR #190, arnés local). Pero la
+  // asimetría manda y es la razón exacta de que esto corra acá: **un positivo local no garantiza
+  // Fabric**. Es el mismo error que produjo #197, en este mismo plano.
+  //
+  // Se replica la MISMA forma que el arnés local, para que la única diferencia entre los dos bancos
+  // sea el motor. Un banco que además difiere en el esquema mide dos cosas a la vez.
+  seccion('P7 (#164) · ¿acepta el SKU un FILTER PREDICATE cuya función no recibe columna?')
+  await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_p7_actual`)
+  await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_p7_sinparam`)
+  await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_p7_const`)
+  for (const f of ['fn_pol_p7_actual', 'fn_pol_p7_sinparam', 'fn_pol_p7_const']) {
+    await intentar(admin, `DROP FUNCTION IF EXISTS dbo.${f}`)
+  }
+  await intentar(admin, `DROP TABLE IF EXISTS dbo.publica_p7`)
+  const terrenoP7 = await intentar(
+    admin,
+    `CREATE TABLE dbo.publica_p7 (id INT NOT NULL, nombre VARCHAR(50) NOT NULL);
+     INSERT INTO dbo.publica_p7 (id, nombre) VALUES (1, 'uno'), (2, 'dos');`,
+  )
+  if (!ok(terrenoP7.ok, `terreno de P7 creado${terrenoP7.ok ? '' : ` — ${terrenoP7.error}`}`)) {
+    hallazgo('Sin terreno, P7 no mide nada. Se salta.')
+  } else {
+    // (a) CONTROL POSITIVO — la forma ACTUAL (función CON columna), mismo terreno y misma sesión.
+    // Sin esto, un rechazo de (b) no distingue «esta forma no se acepta» de «acá nada anda».
+    const fnActual = await intentar(
+      admin,
+      `CREATE FUNCTION dbo.fn_pol_p7_actual(@id INT) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`,
+    )
+    const polActual = fnActual.ok
+      ? await intentar(
+          admin,
+          `CREATE SECURITY POLICY dbo.secpol_p7_actual ADD FILTER PREDICATE dbo.fn_pol_p7_actual(id) ON dbo.publica_p7 WITH (STATE = ON);`,
+        )
+      : { ok: false as const, error: `(no se intentó: la función no se creó — ${fnActual.error})` }
+    ok(polActual.ok, `CONTROL POSITIVO · la forma ACTUAL (función CON columna) se acepta${polActual.ok ? '' : ` — ${polActual.error}`}`)
+    await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_p7_actual`)
+    await intentar(admin, `DROP FUNCTION IF EXISTS dbo.fn_pol_p7_actual`)
+
+    // (b) función SIN NINGÚN parámetro — lo que #164 quiere para no tomar rehén a una columna.
+    const fnSinParam = await intentar(
+      admin,
+      `CREATE FUNCTION dbo.fn_pol_p7_sinparam() RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`,
+    )
+    hallazgo(`(b) CREATE FUNCTION sin parámetro: ${fnSinParam.ok ? 'ACEPTADO' : `RECHAZADO — ${fnSinParam.error}`}`)
+    if (fnSinParam.ok) {
+      const polSinParam = await intentar(
+        admin,
+        `CREATE SECURITY POLICY dbo.secpol_p7_sinparam ADD FILTER PREDICATE dbo.fn_pol_p7_sinparam() ON dbo.publica_p7 WITH (STATE = ON);`,
+      )
+      hallazgo(
+        `(b) ADD FILTER PREDICATE sin argumento: ${polSinParam.ok ? 'ACEPTADO — la columna deja de ser rehén' : `RECHAZADO — ${polSinParam.error}`}`,
+      )
+      if (polSinParam.ok) {
+        // El control que impide cambiar un andamiaje por algo PEOR: una policy que instala y niega
+        // todo también «se acepta». #164 existe para quitar un rehén, no para fabricar un deny mudo.
+        const q = await intentar(admin, 'SELECT id FROM dbo.publica_p7')
+        const filas = q.ok ? (await admin.request().query('SELECT id FROM dbo.publica_p7')).recordset.length : -1
+        ok(filas === 2, `(b) con la policy sin columna instalada la tabla sigue sirviendo sus 2 filas (allow-all real, no deny silencioso): ${filas}`)
+        // Y la corroboración en `sys`: que el DDL pase no significa que el artefacto quedara.
+        const sys = await admin
+          .request()
+          .query(`SELECT name, is_enabled, is_schema_bound FROM sys.security_policies WHERE name = 'secpol_p7_sinparam'`)
+        hallazgo(`(b) sys.security_policies: ${JSON.stringify(sys.recordset)}`)
+      }
+      await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_p7_sinparam`)
+      await intentar(admin, `DROP FUNCTION IF EXISTS dbo.fn_pol_p7_sinparam`)
+    }
+
+    // (c) parámetro alimentado por CONSTANTE — la variante de respaldo que el issue nombra, por si
+    // (b) tropieza con algo propio del SKU.
+    const fnConst = await intentar(
+      admin,
+      `CREATE FUNCTION dbo.fn_pol_p7_const(@x INT) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`,
+    )
+    if (fnConst.ok) {
+      const polConst = await intentar(
+        admin,
+        `CREATE SECURITY POLICY dbo.secpol_p7_const ADD FILTER PREDICATE dbo.fn_pol_p7_const(1) ON dbo.publica_p7 WITH (STATE = ON);`,
+      )
+      hallazgo(`(c) ADD FILTER PREDICATE con argumento CONSTANTE: ${polConst.ok ? 'ACEPTADO' : `RECHAZADO — ${polConst.error}`}`)
+      await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_p7_const`)
+      await intentar(admin, `DROP FUNCTION IF EXISTS dbo.fn_pol_p7_const`)
+    } else {
+      hallazgo(`(c) CREATE FUNCTION con parámetro: RECHAZADO — ${fnConst.error}`)
+    }
+    await intentar(admin, `DROP TABLE IF EXISTS dbo.publica_p7`)
   }
 
   await admin.close()
