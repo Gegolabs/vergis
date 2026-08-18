@@ -908,10 +908,14 @@ describe('Fabric · #163 H6 · vista de máscara evaluada por request (el claim 
       `CREATE VIEW [dbo].[vw_mask_areas]\n` +
         `AS\n` +
         `    SELECT\n` +
-        `        [area],\n` +
-        `        CASE WHEN CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS NVARCHAR(MAX)) <> N'' THEN [rut] ELSE CAST(N'${MASK_VALUE}' AS NVARCHAR(20)) END AS [rut],\n` +
-        `        CASE WHEN CAST(SESSION_CONTEXT(N'vergis_claim_ve_rem') AS NVARCHAR(MAX)) <> N'' THEN [sueldo] ELSE CAST(0 AS DECIMAL(18,2)) END AS [sueldo]\n` +
-        `    FROM [dbo].[areas];`,
+        `        [vergis_row].[area],\n` +
+        `        CASE WHEN [vergis_claims].[ve_pii] <> N'' THEN [vergis_row].[rut] ELSE CAST(N'${MASK_VALUE}' AS NVARCHAR(20)) END AS [rut],\n` +
+        `        CASE WHEN [vergis_claims].[ve_rem] <> N'' THEN [vergis_row].[sueldo] ELSE CAST(0 AS DECIMAL(18,2)) END AS [sueldo]\n` +
+        `    FROM [dbo].[areas] AS [vergis_row]\n` +
+        `    CROSS APPLY (VALUES (\n` +
+        `        CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS NVARCHAR(MAX)),\n` +
+        `        CAST(SESSION_CONTEXT(N'vergis_claim_ve_rem') AS NVARCHAR(MAX))\n` +
+        `    )) AS [vergis_claims] ([ve_pii], [ve_rem]);`,
     )
     // la vista es la ÚLTIMA sentencia del setup (se apoya en la tabla ya gobernada) y viaja SOLA
     expect(enf.setupSQL[enf.setupSQL.length - 1]).toBe(enf.maskView?.createSQL)
@@ -1007,14 +1011,35 @@ describe('Fabric · #163 H6 · vista de máscara evaluada por request (el claim 
     expect(publica.maskView?.createSQL).toContain(`SESSION_CONTEXT(N'vergis_claim_ve_pii')`)
   })
 
+  it('un claim que se llama IGUAL que una columna no vuelve ambigua la vista: todo va calificado', () => {
+    // El emisor no elige los nombres de los claims ni los de las columnas: pueden chocar. Si la
+    // proyección no fuera calificada, `[area]` sería ambigua entre la tabla y la fuente de claims y
+    // el `CREATE VIEW` fallaría en el motor — por un nombre que nadie controla acá.
+    const enf = compileFabric(
+      polCol([{ column: 'rut', claim: 'area', action: 'mask' }]),
+      VIEW_TARGET,
+    )
+    const sql = enf.maskView!.createSQL
+    expect(sql).toContain(`        [vergis_row].[area],`) // la columna, del lado de la tabla
+    expect(sql).toContain(`CASE WHEN [vergis_claims].[area] <> N'' THEN [vergis_row].[rut]`) // el claim, del suyo
+    // ninguna referencia de columna queda desnuda dentro del SELECT
+    expect(sql).not.toMatch(/\n        \[(?!vergis_row\]|vergis_claims\])/)
+  })
+
   it('varias reglas sobre la MISMA columna → AND de los claims (hacen falta todos para verla en claro)', () => {
     const enf = compileFabric(
       polCol([REGLA_PII, { column: 'rut', claim: 've_rut', action: 'mask' }]),
       VIEW_TARGET,
     )
     expect(enf.maskView?.createSQL).toContain(
-      `CASE WHEN CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS NVARCHAR(MAX)) <> N'' AND ` +
-        `CAST(SESSION_CONTEXT(N'vergis_claim_ve_rut') AS NVARCHAR(MAX)) <> N'' THEN [rut]`,
+      `CASE WHEN [vergis_claims].[ve_pii] <> N'' AND [vergis_claims].[ve_rut] <> N'' THEN [vergis_row].[rut]`,
+    )
+    // y los DOS claims se materializan una sola vez cada uno en la fuente escalar (forma C2, #197)
+    expect(enf.maskView?.createSQL).toContain(
+      `    CROSS APPLY (VALUES (\n` +
+        `        CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS NVARCHAR(MAX)),\n` +
+        `        CAST(SESSION_CONTEXT(N'vergis_claim_ve_rut') AS NVARCHAR(MAX))\n` +
+        `    )) AS [vergis_claims] ([ve_pii], [ve_rut])`,
     )
     const soloUno = settingsForInjections(enf.injections, { groups: ['Producción'], ve_pii: ['si'] })
     expect(emulateFabricMaskView(enf, soloUno, FILAS)[0].rut).toBe(MASK_VALUE)

@@ -201,8 +201,45 @@ async function main(): Promise<void> {
     const scEnSelect = await leer(admin, CLAIMS, `SELECT area, CAST(SESSION_CONTEXT(N'vergis_claim_ve_pii') AS VARCHAR(8000)) AS v FROM [dbo].[areas]`)
     hallazgo(`Control · SESSION_CONTEXT en la lista SELECT con FROM tabla, sin CASE: ${scEnSelect ? 'PASA' : 'falla'}`)
     hallazgo('Los tres controles juntos aíslan la causa: SESSION_CONTEXT DENTRO de un CASE sobre un scan de tabla.')
+    // La forma emitida es C2 desde el rediseño de #197. Si AUN ASÍ falla, la diferencia contra el
+    // C2 que P6 midió pasando no es la forma: es el TIPO del CAST — P6 usó `VARCHAR(8000)` y el
+    // compilador emite `NVARCHAR(MAX)`, y Fabric Warehouse no soporta NVARCHAR. Este control lo
+    // aísla reescribiendo SOLO ese tipo sobre el MISMO DDL emitido. Es DIAGNÓSTICO, no una forma
+    // candidata: si pasa, lo que hay que cambiar en el compilador es `sessionRead`, y se vuelve a
+    // medir con lo emitido antes de afirmar nada.
+    const vwDx = `[dbo].[v_p4_dx_varchar]`
+    await intentar(admin, `DROP VIEW IF EXISTS ${vwDx}`)
+    const ddlDx = enf.maskView.createSQL
+      .replace(enf.maskView.qualifiedName, vwDx)
+      .replaceAll('AS NVARCHAR(MAX))', 'AS VARCHAR(8000))')
+    const dx = await intentar(admin, ddlDx)
+    if (!dx.ok) {
+      hallazgo(`Diagnóstico · el mismo DDL con VARCHAR(8000) tampoco CREA: ${dx.error} — la causa no es el tipo`)
+    } else {
+      const leidaDx = await leer(admin, CLAIMS, `SELECT * FROM ${vwDx}`)
+      hallazgo(
+        leidaDx
+          ? 'Diagnóstico · con VARCHAR(8000) la MISMA vista SÍ sirve: la causa es el NVARCHAR(MAX) de sessionRead, no la forma C2'
+          : 'Diagnóstico · con VARCHAR(8000) tampoco sirve: la causa no es el tipo del CAST',
+      )
+      await intentar(admin, `DROP VIEW IF EXISTS ${vwDx}`)
+    }
   } else {
     ok(true, `la vista responde: ${JSON.stringify(vista)}`)
+    // EL CONTROL QUE DECIDE (lección del 2026-08-18): que la vista se consulte no significa que
+    // DISCRIMINE. Una vista que devuelve lo mismo con y sin el claim pasa el `ok` de arriba y no
+    // protege nada — el defecto de #197 con otra cara. Se compara la MISMA vista bajo dos claims.
+    const conClaim = await leer(admin, { groups: ['Finanzas', 'Comercial'], ve_pii: 'true' } as unknown as ClaimSet, `SELECT area, rut FROM ${enf.maskView.name}`)
+    const sinClaim = await leer(admin, CLAIMS, `SELECT area, rut FROM ${enf.maskView.name}`)
+    if (conClaim === null || sinClaim === null) {
+      ok(false, 'el control de discriminación no pudo correr (una de las dos lecturas falló) — la vista NO se declara viable')
+    } else {
+      const a = JSON.stringify(conClaim)
+      const b = JSON.stringify(sinClaim)
+      if (!ok(a !== b, `la vista DISCRIMINA por claim — con: ${a} · sin: ${b}`)) {
+        hallazgo('Consultable pero inútil: con y sin el claim devuelve lo mismo. La máscara no honra al sujeto.')
+      }
+    }
   }
 
   // ── P5 · la pregunta de instancia, con el principal correcto ───────────────────────────────
