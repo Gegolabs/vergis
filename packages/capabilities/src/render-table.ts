@@ -23,6 +23,9 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const rows = node.rows ?? []
   const drills = opts.print ? [] : (node.drills ?? [])
   const ranges = colorscaleRanges(cols, rows)
+  // #210 · La señal la marca quien emite la feature: si ninguna columna resultó rampeable, no hay
+  // CSS que inyectar ni interruptor que ofrecer.
+  if (Object.keys(ranges).length > 0) opts.signals.magnitude = true
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
 
   // PRINT (D5): SIEMPRE estática y COMPLETA — el tope SSR de 500 es un contrato con el runtime JS, que
@@ -106,7 +109,7 @@ function renderTableBody(
         .map((c) => {
           const raw = r[c.field]
           const text = formatValue(raw, c.format)
-          const bg = c.colorscale ? colorscaleBg(Number(raw), ranges[c.field]) : ''
+          const bg = ranges[c.field] ? magnitudeVar(Number(raw), ranges[c.field]) : ''
           return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
@@ -138,8 +141,8 @@ function renderInteractiveTable(
     label: c.label ?? c.field,
     align: c.align ?? 'left',
     format: c.format,
-    colorscale: c.colorscale === true || undefined,
-    ranges: c.colorscale ? ranges[c.field] : undefined,
+    colorscale: ranges[c.field] ? true : undefined,
+    ranges: ranges[c.field],
     sortable: c.sortable !== false,
     searchable: c.searchable !== false,
     filter: c.filter,
@@ -190,8 +193,9 @@ function renderInteractiveTable(
 
 function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]): Record<string, { min: number; max: number }> {
   const ranges: Record<string, { min: number; max: number }> = {}
+  const candidatas = magnitudeColumns(cols, rows)
   for (const c of cols) {
-    if (!c.colorscale) continue
+    if (!candidatas.has(c.field)) continue
     // Loop en vez de `Math.min(...nums)` / `Math.max(...nums)`: el spread de un arreglo de cientos de
     // miles de filas revienta el stack (RangeError: too many arguments). El loop es O(n) sin ese límite.
     let min = Infinity
@@ -207,9 +211,49 @@ function colorscaleRanges(cols: TableColumn[], rows: Record<string, unknown>[]):
   return ranges
 }
 
-function colorscaleBg(value: number, range?: { min: number; max: number }): string {
+/**
+ * Columnas candidatas al color de magnitud (#210).
+ *
+ * El color de magnitud es una **afordancia de lectura**, de la misma familia que orden, filtro y
+ * export: el spec declara QUÉ dato, la plataforma decide CÓMO se manipula. Por eso la candidatura no
+ * la decide el spec sino el dato: toda columna cuyos valores son numéricos puede recibirlo.
+ *
+ * `colorscale: true` sobrevive con un rol distinto y honesto: **acota** las candidatas a las que el
+ * autor del spec consideró relevantes. Si ninguna columna lo declara, candidatas son todas las
+ * numéricas. En los dos casos el color nace APAGADO y lo enciende el lector desde la bandeja.
+ */
+export function magnitudeColumns(cols: TableColumn[], rows: Record<string, unknown>[]): Set<string> {
+  const declaradas = cols.filter((c) => c.colorscale).map((c) => c.field)
+  if (declaradas.length > 0) return new Set(declaradas)
+  const numericas = cols
+    .filter((c) => {
+      let vistos = 0
+      for (const r of rows) {
+        const v = r[c.field]
+        if (v == null || v === '') continue
+        if (Number.isNaN(Number(v))) return false
+        vistos++
+      }
+      return vistos > 0
+    })
+    .map((c) => c.field)
+  return new Set(numericas)
+}
+
+/**
+ * Posición del valor en la rampa de magnitud, como custom property — NO como color.
+ *
+ * Dos propiedades salen de emitir `--mag` en vez de un `background` resuelto:
+ *
+ * 1. **Nace apagado.** El color solo existe cuando el documento lleva `data-magnitude="on"`, que es
+ *    el interruptor de la bandeja. Un `background` inline no se puede apagar sin re-renderizar, que
+ *    es exactamente por qué el lector no tenía salida cuando la semántica del color no le calzaba.
+ * 2. **La rampa la decide el theme, no esta función.** El hue y la saturación son variables CSS del
+ *    theme. La rampa roja cableada acá (`hsl(8, …)` — hue 8 es rojo) es la que hizo leer «la cifra
+ *    más grande es la más MALA» en un informe donde solo significaba «la más grande».
+ */
+function magnitudeVar(value: number, range?: { min: number; max: number }): string {
   if (!range || Number.isNaN(value) || range.max === range.min) return ''
   const t = (value - range.min) / (range.max - range.min)
-  const light = Math.round(95 - t * 45)
-  return ` style="background:hsl(8,75%,${light}%)"`
+  return ` style="--mag:${t.toFixed(4)}"`
 }

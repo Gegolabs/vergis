@@ -213,4 +213,8 @@ export interface RenderSignals {
   interactiveTable: boolean
   /** Hay celdas de acciones de drill (`vt-actions`) → requiere DRILL_ACTIONS_CSS. */
   drillActions: boolean
+  /** Hay al menos una celda con color de magnitud emitido (#210) → requiere MAGNITUDE_CSS y el
+   *  interruptor de la bandeja. La marca quien la emite: un interruptor que no enciende nada es
+   *  peor que su ausencia, y una tabla ESTÁTICA también puede traer magnitud. */
+  magnitude: boolean
 }
