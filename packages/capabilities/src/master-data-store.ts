@@ -1,5 +1,13 @@
 import sql from 'mssql'
-import { openSqliteDb, persistSqliteDb, selectAll, type SqlDb } from './sqlite'
+import {
+  openSqliteDb,
+  persistSqliteDb,
+  selectAll,
+  sqliteControlStatus,
+  type SqlDb,
+  type SqliteControlOptions,
+  type SqliteControlStatus,
+} from './sqlite'
 import { pkColumn, type MasterDataColumn, type MasterDataEntity } from './master-data'
 import type { SqlConnectionProfile } from './execute-sql-dwh'
 import { credentialProviderFor } from './aad-token'
@@ -40,6 +48,12 @@ const fromStorage = (c: MasterDataColumn, v: unknown): string | number | boolean
 /** Nombre físico de la tabla embebida de una entidad. id validado por el parser → seguro interpolar. */
 const localTable = (entity: MasterDataEntity): string => `md_${entity.id}`
 
+/**
+ * Versión del esquema de este store, escrita como `PRAGMA user_version`. Toda migración que altere el
+ * esquema la incrementa EN EL MISMO COMMIT; abrir un archivo con una versión mayor se niega.
+ */
+export const MASTER_DATA_SCHEMA_VERSION = 1
+
 // ─── Impl. embebida (SQLite) ────────────────────────────────────────────────
 export class SqliteMasterDataStore implements MasterDataStore {
   private constructor(
@@ -48,8 +62,12 @@ export class SqliteMasterDataStore implements MasterDataStore {
   ) {}
 
   /** Abre la DB y materializa una tabla por entidad (idempotente). */
-  static async open(file: string | null, entities: MasterDataEntity[]): Promise<SqliteMasterDataStore> {
-    const db = await openSqliteDb(file)
+  static async open(
+    file: string | null,
+    entities: MasterDataEntity[],
+    control: SqliteControlOptions = {},
+  ): Promise<SqliteMasterDataStore> {
+    const db = await openSqliteDb(file, { ...control, schemaVersion: MASTER_DATA_SCHEMA_VERSION })
     for (const e of entities) {
       const cols = e.columns
         .map((c) => `${c.name} ${sqlType(c)}${c.pk ? ' PRIMARY KEY' : ''}${c.required && !c.pk ? ' NOT NULL' : ''}`)
@@ -58,6 +76,11 @@ export class SqliteMasterDataStore implements MasterDataStore {
     }
     persistSqliteDb(db, file)
     return new SqliteMasterDataStore(db, file)
+  }
+
+  /** Estado del plano de escritura de este store (esquema, época, degradado). */
+  controlStatus(): SqliteControlStatus | undefined {
+    return sqliteControlStatus(this.db)
   }
 
   async list(entity: MasterDataEntity): Promise<MasterDataRow[]> {
