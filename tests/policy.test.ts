@@ -258,7 +258,7 @@ describe('Compilador de policy · codegen Fabric (predicado TVF + SECURITY POLIC
     expect(tx.teardownSQL).toEqual(plain.teardownSQL) // teardown NO se envuelve
   })
   it('PI público (grant: all) → SECURITY POLICY allow-all (función sin WHERE), no null', () => {
-    const enf = compilePolicyToFabric({ rls: 'public' }, { ...FAB_TARGET, bindColumn: 'area' }, BIND)
+    const enf = compilePolicyToFabric({ rls: 'public' }, FAB_TARGET, BIND)
     const setup = enf.setupSQL.join('\n')
     expect(setup).toContain('SELECT 1 AS vergis_allowed;') // sin WHERE → allow-all
     expect(setup).not.toMatch(/SELECT 1 AS vergis_allowed\s*\n\s*WHERE/)
@@ -467,13 +467,26 @@ describe('Compilador de policy · property test (Fabric ≡ IR de referencia ≡
 describe('Fabric · dependencias de esquema declaradas (#164)', () => {
   // El issue mide el daño: 9 de 10 columnas de un hecho cayeron sin resistencia y `barcode` no,
   // porque la security policy del `grant: all` estaba anclada en ella — una columna elegida por
-  // accidente. Esto NO quita la dependencia; la vuelve LEGIBLE antes del ALTER.
-  it('`grant: all` declara la columna que toma rehén, y es andamiaje: la función la ignora', () => {
-    const enf = compileFabric({ public: true }, { schema: 'dbo', table: 'fct_plantacion', bindColumn: 'barcode' })!
-    expect(enf.schemaDependencies).toEqual(['barcode'])
-    // El SQL sigue siendo el mismo allow-all: la declaración no cambia el artefacto.
-    expect(enf.setupSQL.join('\n')).toContain('SELECT 1 AS vergis_allowed;')
-    expect(enf.setupSQL.join('\n')).toContain('ADD FILTER PREDICATE')
+  // accidente. El allow-all ya NO ancla en ninguna: la dependencia no se declara mejor, se quita.
+  it('`grant: all` NO toma rehén a ninguna columna: la función no recibe parámetro', () => {
+    const enf = compileFabric({ public: true }, { schema: 'dbo', table: 'fct_plantacion' })!
+    expect(enf.schemaDependencies).toEqual([]) // la columna de negocio queda libre
+    const setup = enf.setupSQL.join('\n')
+    // La forma exacta que los dos motores midieron aceptada (SQL Server 2022 y el SKU F2 de Fabric)
+    expect(setup).toContain('CREATE FUNCTION [dbo].[fn_pol_fct_plantacion]()')
+    expect(setup).toContain('ADD FILTER PREDICATE [dbo].[fn_pol_fct_plantacion]() ON [dbo].[fct_plantacion]')
+    // sigue siendo apertura EXPLÍCITA y gobernada: la policy existe y permite toda fila
+    expect(setup).toContain('SELECT 1 AS vergis_allowed;')
+    expect(setup).toContain('WITH (STATE = ON)')
+    // y ninguna columna de la tabla aparece dentro del predicado
+    expect(setup).not.toMatch(/ADD FILTER PREDICATE \[dbo\]\.\[fn_pol_fct_plantacion\]\(\w/)
+  })
+
+  it('un target que todavía pasa `bindColumn` no se ignora en silencio: rompe con remediación', () => {
+    // El silencio le dejaría creer al aplicador que su ancla sigue en pie. Guarda de transición.
+    expect(() =>
+      compileFabric({ public: true }, { schema: 'dbo', table: 'fct_plantacion', bindColumn: 'barcode' } as never),
+    ).toThrow(/bindColumn/)
   })
 
   it('la policy gobernada declara sus columnas de criterio (ahí la dependencia SÍ es semántica)', () => {
@@ -571,11 +584,9 @@ describe('Fabric · #163 H2 · enmascaramiento por columna (DDM nativo)', () => 
     // una regla SOBRE la columna de criterio no la duplica
     expect(compileFabric(polConRegla([{ column: 'area', claim: 've_pii', action: 'mask' }]), FAB_TARGET).schemaDependencies).toEqual(['area'])
     // y el plano de columna es ortogonal al de fila: una policy PÚBLICA también enmascara
-    const publica = compileFabric(
-      { public: true, columnRules: [REGLA_RUT] },
-      { ...FAB_TARGET, bindColumn: 'area' },
-    )
-    expect(publica.schemaDependencies).toEqual(['area', 'rut'])
+    const publica = compileFabric({ public: true, columnRules: [REGLA_RUT] }, FAB_TARGET)
+    // solo la ENMASCARADA: el allow-all ya no aporta dependencia (#164)
+    expect(publica.schemaDependencies).toEqual(['rut'])
     expect(publica.setupSQL.join('\n')).toContain(`ALTER COLUMN [rut] ADD MASKED WITH`)
   })
 
@@ -1006,7 +1017,7 @@ describe('Fabric · #163 H6 · vista de máscara evaluada por request (el claim 
     expect(conValor.sql).not.toContain('OR 1=1')
     expect(conValor.params.find((p) => p.name === 'vergis_sc_1')?.value).toBe("x' OR 1=1--")
     // un PI PÚBLICO con columna sensible también inyecta: los planos son ortogonales
-    const publica = compileFabric({ public: true, columnRules: [REGLA_PII] }, { ...VIEW_TARGET, bindColumn: 'area' })
+    const publica = compileFabric({ public: true, columnRules: [REGLA_PII] }, VIEW_TARGET)
     expect(publica.injections).toEqual([{ setting: 'vergis_claim_ve_pii', claim: 've_pii' }])
     expect(publica.maskView?.createSQL).toContain(`SESSION_CONTEXT(N'vergis_claim_ve_pii')`)
   })

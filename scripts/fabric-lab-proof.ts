@@ -455,7 +455,50 @@ async function main(): Promise<void> {
     await intentar(admin, `DROP TABLE IF EXISTS dbo.publica_p7`)
   }
 
+  // ── P8 · #164 con lo que EMITE el compilador, y el control que decide: ¿se suelta el rehén? ──
+  //
+  // P7 midió la FORMA a mano. Esto aplica el `setupSQL` que sale de `compileFabric` tras el
+  // rediseño, y sobre todo hace la pregunta que el issue plantea y que ninguna corrida había
+  // hecho: con la policy INSTALADA, ¿se puede alterar una columna de negocio? Con la forma anterior
+  // eso se rechazaba por la dependencia de `SCHEMABINDING` — y así se descubrió el problema, con un
+  // ALTER rechazado en una instancia. Si acá pasa, el rehén se soltó de verdad.
+  seccion('P8 (#164) · el allow-all EMITIDO, y el ALTER que antes se rechazaba')
+  await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_publica_emit`)
+  await intentar(admin, `DROP FUNCTION IF EXISTS dbo.fn_pol_publica_emit`)
+  await intentar(admin, `DROP TABLE IF EXISTS dbo.publica_emit`)
+  const terrenoP8 = await intentar(
+    admin,
+    `CREATE TABLE dbo.publica_emit (id INT NOT NULL, nombre VARCHAR(50) NOT NULL);
+     INSERT INTO dbo.publica_emit (id, nombre) VALUES (1, 'uno'), (2, 'dos');`,
+  )
+  if (!ok(terrenoP8.ok, `terreno de P8 creado${terrenoP8.ok ? '' : ` — ${terrenoP8.error}`}`)) {
+    hallazgo('Sin terreno, P8 no mide nada. Se salta.')
+  } else {
+    const enfPub = compileFabric({ public: true }, { schema: 'dbo', table: 'publica_emit' })
+    let pubOk = true
+    for (const [i, stmt] of enfPub.setupSQL.entries()) {
+      const r = await intentar(admin, stmt)
+      if (!ok(r.ok, `[${i + 1}/${enfPub.setupSQL.length}] ${stmt.split('\n')[0].slice(0, 68)}${r.ok ? '' : ` — ${r.error}`}`)) pubOk = false
+    }
+    if (pubOk) {
+      const q = await intentar(admin, 'SELECT id FROM dbo.publica_emit')
+      const filas = q.ok ? (await admin.request().query('SELECT id FROM dbo.publica_emit')).recordset.length : -1
+      ok(filas === 2, `con el allow-all EMITIDO instalado la tabla sigue sirviendo sus 2 filas: ${filas}`)
+      const alter = await intentar(admin, `ALTER TABLE dbo.publica_emit ALTER COLUMN nombre VARCHAR(80) NOT NULL;`)
+      ok(alter.ok, `ALTER sobre una columna de negocio con la policy INSTALADA: ${alter.ok ? 'ACEPTADO — la columna NO es rehén' : `rechazado — ${alter.error}`}`)
+      ok(enfPub.schemaDependencies.length === 0, `schemaDependencies del allow-all: ${JSON.stringify(enfPub.schemaDependencies)} (vacío = nada atado)`)
+      const sysP8 = await admin
+        .request()
+        .query(`SELECT name, is_enabled, is_schema_bound FROM sys.security_policies WHERE name = 'secpol_publica_emit'`)
+      hallazgo(`sys.security_policies del emitido: ${JSON.stringify(sysP8.recordset)}`)
+    }
+    await intentar(admin, `DROP SECURITY POLICY IF EXISTS dbo.secpol_publica_emit`)
+    await intentar(admin, `DROP FUNCTION IF EXISTS dbo.fn_pol_publica_emit`)
+    await intentar(admin, `DROP TABLE IF EXISTS dbo.publica_emit`)
+  }
+
   await admin.close()
+
   console.log(`\n${fallos === 0 ? '✅ Sin fallos' : `❌ ${fallos} fallo(s)`} · ${hallazgos} hallazgo(s) registrados\n`)
   process.exit(fallos === 0 ? 0 : 1)
 }

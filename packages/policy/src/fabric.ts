@@ -70,9 +70,6 @@ export interface FabricTarget {
   tableColumns?: string[]
   /** Nombre de la vista de máscara; default derivado de la tabla (`vw_mask_<tabla>`). */
   maskViewName?: string
-  /** Columna a la que bindear el predicado allow-all de una policy PÚBLICA (la función la ignora).
-   *  Requerida solo para `grant: all` (que no declara dimensión); para gobernadas se ignora. */
-  bindColumn?: string
   /**
    * Envuelve `setupSQL` en una transacción (`SET XACT_ABORT ON; BEGIN TRANSACTION; … COMMIT;`) para que
    * el DROP+CREATE sea ATÓMICO: el DDL toma locks Sch-M hasta el commit → una query concurrente BLOQUEA
@@ -563,26 +560,40 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
 
   // PÚBLICO (grant: all) → artefacto ALLOW-ALL: la policy EXISTE y permite TODA fila (función
   // SIN `WHERE`). Así "público" se manifiesta en el motor y "sin policy" = sin gobierno (no público).
-  // Necesita una columna para el bindeo sintáctico del FILTER PREDICATE — la función la ignora.
+  //
+  // SIN COLUMNA (#164): la función no recibe NINGÚN parámetro y el predicado se ata sin argumento.
+  // `WITH SCHEMABINDING` convierte cada columna referenciada en dependencia dura, así que atar el
+  // allow-all a una columna de datos tomaba REHÉN a una columna de negocio elegida por accidente —
+  // medido en una instancia: 9 de 10 columnas se pudieron retirar y `barcode` no, porque la policy
+  // colgaba de ella. No referenciar ninguna es lo único que quita el rehén de raíz.
+  //
+  // MEDIDO ACEPTADO en los DOS motores que este back-end sirve, no en uno: SQL Server 2022 (arnés
+  // local, PR #190) y el SKU F2 de Fabric (`fab:proof` §P7, 2026-08-18), en ambos casos con control
+  // positivo en la misma sesión y verificando que la tabla SIGA sirviendo sus filas — una policy que
+  // instala y niega todo también «se acepta», y cambiar un andamiaje por un deny mudo sería peor que
+  // el problema original.
   if (isPublic(policy)) {
-    if (!target.bindColumn) {
+    // Guarda de transición: un aplicador que todavía pase `bindColumn` está pidiendo el artefacto
+    // que tomaba rehén a la columna, y ese artefacto ya no se emite. Se le dice, en vez de ignorarlo
+    // en silencio: el silencio le dejaría creer que su ancla sigue en pie. Se retira cuando ninguna
+    // instancia lo pase (issue #164).
+    if ((target as { bindColumn?: unknown }).bindColumn !== undefined) {
       throw new VergisError({
         error: 'policy/compile',
-        code: 'public-no-bindcolumn',
+        code: 'public-bindcolumn-retirado',
         path: 'bindColumn',
-        message: `La policy pública de '${table}' necesita 'bindColumn' (columna existente) para el FILTER PREDICATE allow-all.`,
-        remediation: `Pasar target.bindColumn (cualquier columna de la tabla; la función la ignora).`,
+        value: (target as { bindColumn?: unknown }).bindColumn,
+        message: `El allow-all de '${table}' ya no ancla en una columna: 'bindColumn' fue retirado del contrato (#164).`,
+        remediation: `Quitar target.bindColumn. El predicado se emite sin argumento y ninguna columna queda atada por SCHEMABINDING.`,
       })
     }
-    const bindCol = ident('bindColumn', target.bindColumn)
-    const colType = columnType(target.columnTypes?.[bindCol] ?? DEFAULT_COLUMN_TYPE)
     const createFunctionPub =
-      `CREATE FUNCTION ${q(fnName)}(@${bindCol} ${colType})\n` +
+      `CREATE FUNCTION ${q(fnName)}()\n` +
       `    RETURNS TABLE\n    WITH SCHEMABINDING\n    AS RETURN\n` +
       `        SELECT 1 AS vergis_allowed;` // SIN WHERE → allow-all (apertura explícita gobernada)
     const createPolicyPub =
       `CREATE SECURITY POLICY ${q(polName)}\n` +
-      `    ADD FILTER PREDICATE ${q(fnName)}(${bindCol}) ON ${qTable}\n    WITH (STATE = ON);`
+      `    ADD FILTER PREDICATE ${q(fnName)}() ON ${qTable}\n    WITH (STATE = ON);`
     return {
       prefix: SETTINGS_PREFIX,
       setupSQL: wrapSetup([...teardownSQL, createFunctionPub, createPolicyPub, ...maskSetup]),
@@ -592,12 +603,16 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
       injections: columnClaims.map((claim) => ({ setting: settingForClaim(claim), claim })),
       policy,
       maskView,
-      // ANDAMIAJE, no criterio: la función ignora este argumento (issue #164). Se declara para que
-      // el gate de regresión de terreno sepa que esta columna está atada antes de intentar el ALTER.
-      // Las enmascaradas se suman por la MISMA finalidad y por un lazo distinto: este enforcement es
-      // dueño de un atributo de esa columna (su máscara), así que retirarla o alterarla exige pasar
-      // por acá. Sin esta declaración la dependencia volvería a descubrirse en producción.
-      schemaDependencies: [...new Set([bindCol, ...maskedCols])],
+      // El allow-all ya NO aporta dependencias (#164): su función no referencia ninguna columna.
+      // Quedan solo las ENMASCARADAS, y por un lazo distinto: este enforcement es dueño de un
+      // atributo de esa columna (su máscara), así que retirarla o alterarla exige pasar por acá.
+      //
+      // ⚠ Lo que esta lista NO puede saber: si la instancia todavía tiene DESPLEGADA una policy de
+      // la forma anterior, su columna sigue atada en el motor y acá ya no aparece — el compilador
+      // declara lo que EMITE, no lo que hay instalado. La liberación ocurre al regenerar y
+      // re-aplicar (el setup dropea la policy vieja antes de crear la nueva). Va dicho en el
+      // CHANGELOG con esas palabras, porque el gate de regresión de terreno lee esta lista.
+      schemaDependencies: [...new Set(maskedCols)],
     }
   }
 
