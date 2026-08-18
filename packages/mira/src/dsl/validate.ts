@@ -185,6 +185,30 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   for (const d of pieces.flatMap((pc) => collectDistributions(pc))) {
     const hasMetrics = Array.isArray(d['metrics']) && (d['metrics'] as unknown[]).length > 0
     const hasMetric = d['metric'] != null
+    // #203 · modo LONG: `series: <campo>` deriva las series de una COLUMNA, así que la métrica es
+    // UNA sola (`metric`) y las etiquetas salen del dato. Es el complemento del modo wide, no una
+    // variante suya: declarar los dos es pedir dos orígenes de series a la vez.
+    const hasSeriesCol = typeof d['series'] === 'string' && d['series'] !== ''
+    if (hasSeriesCol && hasMetrics) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'distribution-series-metrics-collision',
+        path: 'piece -> distribution.series',
+        value: d['series'] as never,
+        message: `Un gráfico distribution declara 'series' (las series salen de una columna) y 'metrics' (las series son columnas del YAML) a la vez; son mutuamente excluyentes.`,
+        remediation: `Dejar solo 'series: <campo>' con 'metric: data.<dataset>.<campo>' (formato largo), o solo 'metrics: [{ field, label }, ...]' (formato ancho).`,
+      })
+    }
+    if ('series' in d && !hasSeriesCol) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'distribution-series-not-field',
+        path: 'piece -> distribution.series',
+        value: (d['series'] ?? null) as never,
+        message: `El 'series' de un gráfico distribution debe ser el NOMBRE de una columna del dataset; recibió ${JSON.stringify(d['series'] ?? null)}.`,
+        remediation: `Escribir 'series: <campo>' (campo pelado del dataset de dimension, no una ruta data.*).`,
+      })
+    }
     // `metric` (una serie) y `metrics` (varias, agrupadas) son mutuamente excluyentes.
     if (hasMetric && hasMetrics) {
       throw new VergisError({
@@ -241,6 +265,24 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         }
       }
     }
+    // Modo LONG: `series` es un campo pelado del dataset de `dimension`, igual que las entradas de
+    // `metrics`, y el barrido de refs tampoco lo alcanza. Un typo acá no falla: produce UNA serie
+    // llamada 'undefined' con todo el total adentro — un gráfico que se ve bien y miente.
+    if (hasSeriesCol) {
+      const dsName = stripDataRef(String(d['dimension'])).split('.')[0]
+      const cds = dsName ? s.data[dsName] : undefined
+      const field = String(d['series'])
+      if (cds?.shape?.fields && !(field in cds.shape.fields)) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'distribution-series-field-dangling',
+          path: 'piece -> distribution.series',
+          value: field,
+          message: `La columna de series '${field}' no está declarada en data.${dsName}.shape.fields.`,
+          remediation: `Declarar '${field}' en shape.fields de '${dsName}' o corregir la columna de series.`,
+        })
+      }
+    }
     // `sort` (#81): vocabulario CERRADO — `magnitude` (default e implícito) · `chrono` (manda el
     // ORDER BY del SQL) · `value:<serie>` (una serie declarada, por label o por field). En modo mono
     // se acepta además el token legacy `-campo`/`campo`. Un `value:` colgante ordenaría por un campo
@@ -258,7 +300,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         })
       }
       const known = raw === 'magnitude' || raw === 'chrono' || raw.startsWith('value:')
-      if (hasMetrics && !known) {
+      if ((hasMetrics || hasSeriesCol) && !known) {
         // El token legacy `-campo` NUNCA tuvo efecto en el modo agrupado (el encoding ordenaba por
         // la suma de series): aceptarlo en silencio sería prometer un orden que no ocurre.
         throw new VergisError({
@@ -266,11 +308,14 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
           code: 'distribution-sort-unknown',
           path: 'piece -> distribution.sort',
           value: raw,
-          message: `El 'sort' '${raw}' no pertenece al vocabulario de un distribution agrupado (metrics).`,
+          message: `El 'sort' '${raw}' no pertenece al vocabulario de un distribution multi-serie (${hasSeriesCol ? 'series' : 'metrics'}).`,
           remediation: `Usar 'magnitude' (por la suma de las series, default), 'chrono' (el orden del SQL) o 'value:<serie>' con el label o el field de una de las series declaradas.`,
         })
       }
-      if (raw.startsWith('value:')) {
+      // En modo LONG las series NO se conocen sin los datos: validar `value:<serie>` acá exigiría
+      // adivinar qué valores traerá la columna. Se acepta, y si no matchea ninguna serie derivada
+      // `parseChartSort` cae a `magnitude` — el mismo default que un spec sin `sort`.
+      if (raw.startsWith('value:') && !hasSeriesCol) {
         const name = raw.slice('value:'.length)
         const candidates = hasMetrics
           ? (d['metrics'] as { field?: unknown; label?: unknown }[]).flatMap((m) =>
