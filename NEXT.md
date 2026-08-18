@@ -3,6 +3,12 @@
 **0.18.0 es la versión publicada** (tag `v0.18.0`, imagen construida). Trae cuatro afordancias que
 maneja el lector —#203 #207 #209 #210—, sin migraciones que correr a mano y sin env nuevo.
 
+**En `main` y SIN publicar** (2026-08-18, tarde): **#197** —la vista de máscara ya sirve y discrimina
+en Fabric— y **#164** —el allow-all dejó de tomar rehén a una columna de negocio; `bindColumn` salió
+del contrato—. Los dos con su medición contra motor y con entrada de CHANGELOG escrita bajo «Sin
+publicar». **El corte de versión no se hizo**, y la razón consta: `main` trae además #220 y #222, de
+otra sesión, que ésta no midió — y una versión declara *qué trae*.
+
 > **No hay trabajo en vuelo.** Este archivo no es un kit de retome pendiente: es el **estado** del
 > proyecto y el índice de lo que espera a César. `/ww:go` no tiene nada que reanudar acá — si buscas
 > en qué trabajar, la lista de abajo dice de quién es cada partida.
@@ -63,8 +69,9 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
-| **#197** — la vista de máscara no sirve en Fabric | **Nuestro**: la medición ya está, falta el rediseño | **Ya no es bifurcación a ciegas.** Medido el 18-ago: **C1** (CTE escalar + `CROSS JOIN`) y **C2** (`CROSS APPLY (VALUES …)`) aceptan, sirven **y discriminan**; C3 (sin `CASE`) rechazada. Falta cambiar `packages/policy/src/fabric.ts` y **re-correr `fab:proof` con la forma que emita el compilador**, no con el SQL a mano de P6 |
-| **#164** — el allow-all sin columna rehén | **Nuestro**, medido | `ADD FILTER PREDICATE` **sin argumento: ACEPTADO** en el SKU, con control positivo y verificando que la tabla siga sirviendo sus filas (no deny silencioso). Falta el codegen. **Dos decisiones son de César**: qué pasa con `bindColumn` en la API (contrato que las instancias consumen) y si la instancia re-aplica los 34 `ADD FILTER PREDICATE` desplegados |
+| ~~**#197**~~ — la vista de máscara no sirve en Fabric | — | **CERRADO** (PR #221). Forma C2 en el compilador, medida con el SQL **emitido**: la vista sirve **y discrimina**. Falta solo P5 (`UNMASK` del SP) |
+| ~~**#164**~~ — el allow-all sin columna rehén | — | **CERRADO** (PR #223). Predicado sin argumento, medido en **los dos motores** con el SQL emitido y con el control que decide: el `ALTER` sobre una columna de negocio **con la policy instalada, ACEPTADO**. `bindColumn` retirado del contrato (D-40) |
+| **Cortar y publicar la versión** que trae #197 y #164 | **César decide el corte** | `main` tiene los dos, más dos PRs ajenos (#220 plano de escritura SQLite, #222 plano de control) que **esta sesión no midió**. Una versión declara *qué trae*, y no se puede declarar lo que no se verificó — ver abajo |
 | **El aviso al operador** de 0.18.0 + #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente. Ficha con el contenido exacto en `PENDINGS.md` |
 | **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial, **no** gasto: POL-01 no lo cubre) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
 | **#186** — terreno Fabric | Nuestro | Levantado y ya rindió. Queda **un** criterio: barrer las partidas de `PENDINGS.md` cuya única traba era «no hay dónde medirlo». **La ventana que ese barrido necesita ya no se pide**: entra bajo POL-01 |
@@ -129,4 +136,16 @@ acá; el commit de esta sesión fue por ruta explícita.
 - **Sacar el DDM y enmascarar solo en la vista** — descartado: cambiaría la promesa de seguridad sin
   decirlo. Y la vista, hasta que se rediseñe, no sirve en Fabric.
 
-<!-- /ww:next · 2026-08-18 · HEAD ea7c457 -->
+## Lo que esta sesión dejó medido y no hay que volver a preguntar
+
+- **La vista de máscara SÍ discrimina en Fabric** con la forma C2 emitida por el compilador. El
+  `NVARCHAR(MAX)` del `CAST` **no** estorba (el diagnóstico que lo aislaba no llegó a correr).
+- **El allow-all sin columna suelta el rehén de verdad**: con la policy instalada, el `ALTER` sobre
+  una columna de negocio **se acepta** — en SQL Server 2022 y en el SKU F2. Ese control no existía en
+  ninguna corrida anterior; P7 medía la forma, no la consecuencia.
+- **La ventana cuesta ~US$0,01 por corrida** (2 min de F2). El pote de POL-01 está casi intacto:
+  US$0,04 de US$50. El costo dejó de ser un argumento para no medir.
+- **El `trap EXIT/INT/TERM` funciona y la ventana tiene que ser UN solo comando de shell** — si el
+  resume va en un comando y el proof en otro, el trap del primero pausa la capacidad antes de medir.
+
+<!-- /ww:next · 2026-08-18 · HEAD 41ad0a8 -->
