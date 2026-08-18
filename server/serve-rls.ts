@@ -63,7 +63,7 @@ import { fileURLToPath } from 'node:url'
 import { swapRecordInPlace, reloadLiveList } from './hot-reload'
 import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES } from './instance-config'
 import { type NavQuery } from './nav'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { resolve, join, dirname } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
@@ -99,6 +99,8 @@ import {
   createDwhMasterDataStore,
   createDwhPublisher,
   SqliteGovernanceStore,
+  createControlPlane,
+  resolveControlPlaneConfig,
   openNotasStore,
   llaveDeFila,
   canonicalKey,
@@ -131,8 +133,11 @@ import {
   type IngestionEngineClient,
   type MasterDataEntity,
   type PiRole,
+  type ControlLeaseReason,
   type NotasStore,
   type NotasRenderContext,
+  type SqliteControlOptions,
+  type SqliteNotasStore,
   type SqlConnectionProfile,
   type TokenSource,
   importIdentityMapFile,
@@ -151,7 +156,9 @@ import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
 import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
-import { createContractRegistry, createContractHandler } from './contract'
+import { createContractRegistry, createContractHandler, type ControlContract } from './contract'
+import { VERGIS_VERSION } from '../packages/capabilities/src/version'
+import { createBackgroundLoops } from './control-loops'
 import { createContractJournal } from './contract-delta'
 import { avatarMenu, csrfFactory } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
@@ -189,7 +196,14 @@ const REFRESH_MS = config.refreshMs
 // las recargas se anotan donde ocurren y los caveats viven colocados en el sitio que los posee. Nada de
 // esto es un arreglo que alguien mantenga a mano. El registro JAMÁS afecta el serving (ver contract.ts).
 const HOT_RELOAD = (process.env['VERGIS_HOT_RELOAD'] ?? '1') !== '0'
-const contract = createContractRegistry({ engine: ENGINE, hotReload: HOT_RELOAD })
+const contract = createContractRegistry({
+  engine: ENGINE,
+  hotReload: HOT_RELOAD,
+  // Bloque `control` (#210 · I6): un CLOSURE sobre las piezas vivas —lease, registro de lazos, guard de
+  // cada store—, no una copia. `controlContract` está declarada abajo (hoisting) y solo se invoca en el
+  // GET, cuando el plano ya existe.
+  control: () => controlContract(),
+})
 contract.envKeys(configEnvKeys())
 // Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
 // la instancia — el volumen de `VERGIS_OUT` (`config.outDir`, junto a `governance.sqlite`). La imagen es
@@ -203,6 +217,67 @@ const contractEnv: NodeJS.ProcessEnv = new Proxy(process.env, {
     return Reflect.get(target, prop, receiver)
   },
 })
+
+// --- PLANO DE CONTROL DEL NODO (#210 · I4) -----------------------------------------------------
+// EXACTAMENTE UN nodo escribe. Los stores embebidos se vuelcan COMPLETOS en cada persist, y los cinco
+// lazos de fondo (re-ingesta, purga, frescura, intake, reporte) escriben sin depender del tráfico: está
+// MEDIDO que dos nodos vivos sobre el mismo volumen alternan el archivo de gobierno entre sus dos
+// mundos, sin que llegue una sola petición, y que ninguno de los dos lo nota. De ahí que el control sea
+// un lease sobre el volumen (`control-lease.ts`) y que de él cuelguen tres cosas:
+//
+//   · los LAZOS — se arman al adquirir el control y se desarman al soltarlo (nunca al boot);
+//   · el MODO de apertura de cada store embebido — escritura con control, LECTURA sin él;
+//   · las MUTACIONES HTTP — 409 nombrando al activo cuando este nodo no controla (ver routes.ts).
+//
+// `VERGIS_CONTROL=single` devuelve el mundo del nodo suelto, idéntico al de siempre: sin archivo de
+// lease, sin heartbeat, control permanente. El default DE LA CAJA es `lease`, porque un operador que
+// levanta un segundo nodo con `single` pierde gobierno sin un log que se lo diga.
+//
+// El env se lee por `contractEnv` a propósito: así estas claves quedan registradas en `/contrato` sin
+// declararlas dos veces.
+const CONTROL_CONFIG = resolveControlPlaneConfig(contractEnv, config.outDir)
+/** Anillo que ejecuta este proceso (versión + digest). Informativo: viaja en el lease y en `/contrato`. */
+const RING_NAME = (contract.env('VERGIS_RING') ?? '').trim() || null
+const RING_DIGEST = (contract.env('VERGIS_RING_DIGEST') ?? '').trim() || null
+/** Identidad de este nodo como aspirante al lease: legible, y única por proceso. */
+const CONTROL_HOLDER = `vergis@${hostname()}/${process.pid}`
+/** Los lazos de fondo, declarados donde antes se armaban y armados solo con el control. */
+const loops = createBackgroundLoops()
+const plane = createControlPlane(CONTROL_CONFIG, {
+  holder: CONTROL_HOLDER,
+  ring: RING_NAME,
+  // UN intento por llamada: al arrancar, «hay un titular vivo» no es un fallo a reintentar — es la
+  // respuesta, y este nodo queda en standby. Reintentar es el trabajo del poller de relevo (abajo).
+  maxAttempts: 1,
+  onLost: (reason, detail) => void controlPerdido(reason, detail),
+})
+/**
+ * Opciones del plano de escritura para CADA store embebido. La época viaja como PROVEEDOR (`plane.epoch`),
+ * no como número: un relevo la sube y el próximo persist la estampa sin que nadie la copie a mano. El
+ * modo lo decide el control — sin control se abre en LECTURA, que es lo que vuelve imposible (y no solo
+ * improbable) que un standby vuelque su snapshot encima de lo que el activo escribió.
+ */
+const storeControl = (): SqliteControlOptions => ({
+  epoch: plane.epoch,
+  writer: CONTROL_HOLDER,
+  mode: plane.hasControl() ? 'write' : 'read',
+})
+// ADQUISICIÓN, antes de abrir un solo store: el modo de apertura depende de ella, y el gate de época del
+// store se negaría a abrir en escritura con la época de un titular anterior.
+const CONTROL_AL_ARRANCAR = await plane.acquire()
+if (CONTROL_AL_ARRANCAR) {
+  console.log(
+    `[control] control ADQUIRIDO (modo ${plane.mode} · época ${plane.status().epoch} · titular ${CONTROL_HOLDER}` +
+      `${RING_NAME ? ` · anillo ${RING_NAME}` : ''}): este nodo escribe y corre los lazos.`,
+  )
+} else {
+  const st = plane.status()
+  console.warn(
+    `[control] EN ESPERA (standby): el control lo tiene '${st.observedHolder ?? '(desconocido)'}' ` +
+      `(época ${st.observedEpoch ?? '?'}${st.reason ? ` · ${st.reason}` : ''}). Este nodo SIRVE LECTURAS, ` +
+      `abre sus stores en modo lectura, no arma un solo lazo y responde 409 a las mutaciones.`,
+  )
+}
 
 // Auto-chequeo de coherencia del despliegue (contrato Producto→Infra). Corre ANTES de leer specs,
 // políticas o config de gobierno: si un env referencia un path no montado, o el gobierno se pide con
@@ -437,10 +512,22 @@ if (ENGINE === 'clickhouse') {
       try { for (const b of BOUND) await bootstrapClickHouse(ADMIN, b.schema, b.enforcement); break }
       catch (e) { lastErr = e instanceof Error ? e.message : String(e); if (i === 59) throw e; await sleep(2000) }
     }
-    await ingestAll()
+    // El ingest del ARRANQUE es escritura igual que el del lazo: un nodo sin control no lo hace (dos
+    // TRUNCATE+INSERT concurrentes duplican filas). El standby sirve la réplica que dejó el activo, y
+    // `ready` no depende de esto — la readiness es del bootstrap del esquema, no de la carga.
+    if (plane.hasControl()) await ingestAll()
+    else console.warn('[control] ingesta del arranque OMITIDA: este nodo no tiene el control (sirve la réplica del activo).')
     ready = true; lastErr = null
   }
-  if (REFRESH_MS > 0) setInterval(() => void ingestAll().catch((e) => console.error('[vergis-rls] re-ingesta:', e)), REFRESH_MS)
+  // LAZO 1 · re-ingesta. Se DECLARA acá y lo arma el control (#210 · I4): la ingesta es TRUNCATE+INSERT,
+  // así que dos nodos ingestando el mismo dataset dejan filas duplicadas — el propio mutex de arriba lo
+  // dice para este proceso, y entre procesos el único mutex posible es el lease.
+  if (REFRESH_MS > 0)
+    loops.register({
+      name: 're-ingesta',
+      everyMs: REFRESH_MS,
+      tick: () => ingestAll().catch((e) => console.error('[vergis-rls] re-ingesta:', e)),
+    })
 } else {
   // --- Motor C: push-down a Fabric. La RLS nativa YA está aplicada en la fuente (fuera de banda).
   // No hay store, ni bootstrap, ni ingesta: se consulta la fuente directo, enforcing por SESSION_CONTEXT.
@@ -582,11 +669,16 @@ const identityFor = createIdentity(gateClaims, identityProjection, config.devIde
 // propio (`VERGIS_NOTES_DB`), abierto no-fatal: si falla, la capa queda deshabilitada con log y el
 // serving sigue intacto — una nota no vale una caída.
 let notasStore: NotasStore | null = null
+/** El MISMO store, con su tipo concreto: el relevo lo reabre y el contrato lee su plano de escritura. */
+let notasSqlite: SqliteNotasStore | null = null
 let notasHandler: NotasHandler | null = null
 // Gobierno de PI (autorización de ARTEFACTO, frente A). FLAG-GUARDED: con VERGIS_PI_ACL apagado el
 // índice/apertura siguen por acceso-a-datos (comportamiento vivo); encendido, gatean por la ACL del
 // PI (rol owner/collaborator/viewer) compuesta con la RLS de datos (que NUNCA se salta).
 let governance: SqliteGovernanceStore | null = null
+/** Store de data maestra EMBEBIDO (camino local/clickhouse). En `engine=fabric` la data maestra vive en
+ *  el DWH y este handle no existe — por eso es nullable y el relevo lo reabre solo si está. */
+let mdSqlite: SqliteMasterDataStore | null = null
 // Gobierno de dominio con referencia VIVA (issue #50): el admin y el catálogo leen ESTOS arreglos a
 // request-time; el hot-reload los re-puebla in-place (splice) — un dominio o slot nuevo entra sin restart.
 const domainsCfg: DomainDecl[] = [] // dominios declarados (también gatea «Gestión» en el avatar del catálogo)
@@ -871,6 +963,9 @@ const server = createServer(
     },
     healthSummary: () =>
       ENGINE === 'fabric' ? { total: piState.size, serving: [...piState.values()].filter((v) => v.ok).length } : null,
+    // PLANO DE CONTROL (#210 · I5): sin control, `healthz` declara `standby` (200, pero NO `serving`) y
+    // toda mutación de las superficies de gestión responde 409 nombrando al activo.
+    control: { hasControl: () => plane.hasControl(), activeHolder: () => activeHolderLabel() },
   }),
 )
 
@@ -879,7 +974,8 @@ const server = createServer(
 // Apertura NO-FATAL (mismo patrón que el resto de los stores embebidos): si el archivo no abre, la
 // capa queda deshabilitada con log y el nodo sigue sirviendo sus PIs. Una nota no vale una caída.
 try {
-  notasStore = await openNotasStore(contract.env('VERGIS_OUT') ?? tmpdir())
+  notasSqlite = await openNotasStore(contract.env('VERGIS_OUT') ?? tmpdir(), storeControl())
+  notasStore = notasSqlite
   const store = notasStore
   // Spec parseada por slug: la necesita el gate del comentario (para leer el `anchor` del dataset y
   // re-ejecutar su recuperación). Se lee a request-time desde el descubrimiento vivo — un spec
@@ -972,9 +1068,10 @@ try {
       console.error(`[vergis-notas] purga de retención falló: ${e2 instanceof Error ? e2.message : String(e2)}`)
     }
   }
-  const timerPurga = setInterval(() => void purga(), PURGA_INTERVALO_MS)
-  timerPurga.unref?.()
-  setTimeout(() => void purga(), 5000).unref?.() // tras el bootstrap del gobierno, no compitiendo con él
+  // LAZO 2 · purga de retención. Declarado, no armado: purgar es borrar, y borrar desde dos nodos sobre
+  // el mismo store es la peor versión del last-writer-wins. El primer tick sigue cayendo a los 5 s de
+  // armar — tras el bootstrap del gobierno, no compitiendo con él.
+  loops.register({ name: 'purga-retención', everyMs: PURGA_INTERVALO_MS, firstDelayMs: 5000, tick: purga })
 } catch (e) {
   console.error(`[vergis-rls] capa de notas deshabilitada: ${e instanceof Error ? e.message : String(e)}`)
 }
@@ -1057,14 +1154,24 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // tabla→fuente, procesos (con engine_ref al item del motor) y proceso→salidas. Declarativo: se
     // re-siembra en cada arranque (idempotente). Sin el archivo, el registro queda vacío (no hay frescura).
     const sourceReg = INSTANCE_CFG.sourceReg
-    const govStore = await SqliteGovernanceStore.open(GOVERNANCE_DB, {
-      admins: ADMIN_SEED,
-      groups: groupSeeds,
-      sources: sourceReg.sources,
-      tableSources: sourceReg.tableSources,
-      processes: sourceReg.processes,
-      processOutputs: sourceReg.processOutputs,
-    })
+    const govStore = await SqliteGovernanceStore.open(
+      GOVERNANCE_DB,
+      {
+        admins: ADMIN_SEED,
+        groups: groupSeeds,
+        sources: sourceReg.sources,
+        tableSources: sourceReg.tableSources,
+        processes: sourceReg.processes,
+        processOutputs: sourceReg.processOutputs,
+      },
+      storeControl(),
+    )
+    // P-238 · el handle del store de gobierno se publica AQUÍ MISMO, no 25 líneas más abajo: cualquier
+    // excepción en el medio dejaba a Miranda abriendo un SEGUNDO handle de escritura del mismo archivo
+    // (`governance ?? open(...)`), y dos handles del mismo archivo son dos escritores. Publicarlo en el
+    // acto de abrirlo cierra la ventana: si el `open` falla no hay handle que publicar, y si falla
+    // cualquier cosa después, Miranda reusa este.
+    governance = govStore
     // #207 · Ahora que el store existe, el refresco del mapa de nombres visibles es real. Se siembra
     // de inmediato para que el catálogo nazca con los renombres ya aplicados, sin esperar al primer
     // POST de la consola.
@@ -1081,8 +1188,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     }
     await refreshDisplayNames()
     const adminStore = govStore
-    // Gobierno de PI (frente A): expone el store al gate de artefacto + config de ACL (flag-guarded).
-    governance = govStore
+    // Gobierno de PI (frente A): el store ya quedó publicado en `governance` al abrirlo (ver P-238 arriba).
     piAclEnabled = ['1', 'true', 'on'].includes((process.env['VERGIS_PI_ACL'] ?? '').toLowerCase())
     defaultCollabGroups = (process.env['VERGIS_DEFAULT_COLLABORATOR_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     const defaultStewardGroups = (process.env['VERGIS_DEFAULT_STEWARD_GROUPS'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
@@ -1091,7 +1197,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     const useFabricStore = ENGINE === 'fabric' && connections
     const mdStore = useFabricStore
       ? createDwhMasterDataStore(connections)
-      : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities)
+      : await SqliteMasterDataStore.open(process.env['VERGIS_MASTER_DATA_DB'] ?? `${OUT}/master-data.sqlite`, entities, storeControl())
+    if (!useFabricStore) mdSqlite = mdStore as SqliteMasterDataStore // el handle embebido que el relevo reabre
     // Audit log LONGEVO (vive todo el proceso): modo file-only (retain:false) — append() no acumula
     // en RAM (crecía sin cota, una entrada por evento admin); la fuente de verdad es el archivo.
     const auditLog = new AppendOnlyLog(`${OUT}/admin-audit.log`, undefined, { retain: false })
@@ -1456,10 +1563,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         },
         { reconcile: reconcileAuto, reconcileDebounceMs, publicUrl: INSTANCE_CFG.publicUrl },
       )
-      setInterval(() => void loop.tick(), freshnessPollMs).unref?.()
-      setTimeout(() => void loop.tick(), 10_000).unref?.() // primer tick tras el bootstrap (patrón de la purga)
+      // LAZO 3 · frescura. El que la medición pilló escribiendo el store en cada vuelta sin una sola
+      // petición: observa el motor, proyecta, alerta y reconcilia cadencias. Todo eso es control.
+      loops.register({ name: 'frescura', everyMs: freshnessPollMs, firstDelayMs: 10_000, tick: () => loop.tick() })
       console.log(
-        `[vergis-rls] lazo de frescura activo (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
+        `[vergis-rls] lazo de frescura declarado (cada ${Math.round(freshnessPollMs / 1000)}s · reconcile ${reconcileAuto ? 'on' : 'off'} · ` +
           `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
       )
     }
@@ -1495,10 +1603,11 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       }
       if (fabricWiring.engine) deps.runs = watch.runs
       const loop = createIntakeLoop(deps, { publicUrl: INSTANCE_CFG.publicUrl, pollMs: intakeWatchMs })
-      setInterval(() => void loop.tick(), intakeWatchMs).unref?.()
-      setTimeout(() => void loop.tick(), 20_000).unref?.() // primer tick tras el bootstrap
+      // LAZO 4 · vigilancia de cargas. CONSUME archivos del landing: dos nodos vigilando el mismo slot
+      // procesarían dos veces la misma carga. Declarado; lo arma el control.
+      loops.register({ name: 'vigilancia-de-cargas', everyMs: intakeWatchMs, firstDelayMs: 20_000, tick: () => loop.tick() })
       console.log(
-        `[vergis-rls] vigilancia de cargas activa (cada ${Math.round(intakeWatchMs / 60_000)} min · ` +
+        `[vergis-rls] vigilancia de cargas declarada (cada ${Math.round(intakeWatchMs / 60_000)} min · ` +
           `${fabricWiring.engine ? 'landing + corridas' : 'solo landing: sin motor cableado'} · ` +
           `${notifySinks.length ? `avisos ${notifySinks.length} destino(s)` : 'avisos off'})`,
       )
@@ -1525,13 +1634,15 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       },
       { schedule: () => liveReportSchedule, timezone: tzHost, baseUrl: INSTANCE_CFG.publicUrl, freshnessPollMs, engineCabled: !!fabricWiring.engine },
     )
-    setInterval(() => void reportLoop.tick(), REPORT_CHECK_MS).unref?.()
-    setTimeout(() => void reportLoop.tick(), 15_000).unref?.() // catch-up al arrancar (ventana perdida)
+    // LAZO 5 · reporte periódico. Dos nodos con el lazo armado = dos correos del mismo latido, y el
+    // destinatario no tiene forma de saber cuál es el bueno. Declarado; lo arma el control. El primer
+    // tick a los 15 s hace el catch-up de la ventana perdida, igual que antes.
+    loops.register({ name: 'reporte-periódico', everyMs: REPORT_CHECK_MS, firstDelayMs: 15_000, tick: () => reportLoop.tick() })
     console.log(
       reportCfg
         ? `[vergis-rls] reporte periódico activo (${reportCfg.every === 'weekly' ? `semanal ${reportCfg.weekday ?? 'monday'}` : 'diario'} ` +
             `a las ${reportCfg.at} ${reportCfg.timezone ?? tzHost} · ${reportSinks.length} destino(s))`
-        : '[vergis-rls] reporte periódico en espera: sin `report:` declarado (el lazo está armado; declararlo en el yaml lo enciende sin restart)',
+        : '[vergis-rls] reporte periódico en espera: sin `report:` declarado (el lazo está declarado; declararlo en el yaml lo enciende sin restart)',
     )
     // ── Publicación de jobs en el motor (#107 fase 2 · §5 del diseño) ──────────────────────────
     // Se construye SOLO si están las piezas que la vuelven ejercible: plantillas declaradas por la
@@ -1810,7 +1921,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
 if (config.miranda.enabled) {
   try {
     // Store: reusa el de gobierno si existe; si no, abre uno (Miranda necesita persistir sesiones).
-    const govForMiranda = governance ?? (await SqliteGovernanceStore.open(GOVERNANCE_DB, { admins: ADMIN_SEED }))
+    const govForMiranda = governance ?? (await SqliteGovernanceStore.open(GOVERNANCE_DB, { admins: ADMIN_SEED }, storeControl()))
     // Catálogo (allowlist de probes) — config de instancia (JSON: lista o {catalog:[…]}).
     const catalog: CatalogEntry[] = (() => {
       const p = config.miranda.catalogPath
@@ -2035,16 +2146,216 @@ if (HOST) server.listen(PORT, HOST, listening)
 else server.listen(PORT, listening)
 
 // Cierre graceful: `docker stop` envía SIGTERM. Cerrar el server drena los requests en vuelo antes de
-// salir; el timeout evita colgar el shutdown si un request queda pegado.
+// salir; el timeout evita colgar el shutdown si un request queda pegado. El RELEASE ORDENADO del control
+// va primero: desarmar los lazos (esperando el tick en vuelo, que termina en un volcado) y solo entonces
+// dejar la marca de release, para que el sucesor adquiera sin pagar el stale window.
 process.on('SIGTERM', () => {
   console.log('[vergis-rls] SIGTERM — cerrando (drain de requests en vuelo)…')
   const t = setTimeout(() => process.exit(0), 10_000)
   t.unref()
-  server.close(() => {
-    clearTimeout(t)
-    process.exit(0)
+  void soltarControl('SIGTERM').finally(() => {
+    server.close(() => {
+      clearTimeout(t)
+      process.exit(0)
+    })
   })
 })
+contract.signal({ signal: 'SIGTERM', action: 'suelta el control (release ordenado) y cierra drenando los requests en vuelo' })
+
+// SIGUSR2 = «SUELTA EL CONTROL Y QUEDA EN STANDBY» (#210 · §4.1). Es la señal del handover de una
+// promoción: el nodo activo deja de escribir y de correr lazos, pero SIGUE SIRVIENDO — el conmutador
+// mueve el tráfico después, en su propio paso. Nada se reinicia y nada se cae: el corte de servicio que
+// esta ley quiere eliminar no ocurre porque el proceso no se va.
+process.on('SIGUSR2', () => {
+  console.log('[control] SIGUSR2 — soltando el control y quedando en standby (el serving no se interrumpe)…')
+  void soltarControl('SIGUSR2')
+})
+contract.signal({ signal: 'SIGUSR2', action: 'suelta el plano de control y queda en standby (sin interrumpir el serving)' })
+
+// ── El armado inicial de los lazos y el poller de relevo ───────────────────────────────────────────
+// Los lazos se declararon durante el arranque (cinco `loops.register`); recién acá se arman, y solo si
+// este nodo tiene el control. Un standby los deja declarados y desarmados: eso es lo que dice de sí
+// mismo en el log y en `/contrato`, en vez de callar.
+if (plane.hasControl()) {
+  loops.arm()
+  console.log(`[control] lazos ARMADOS (${loops.names().length}): ${loops.names().join(', ') || '(ninguno declarado)'}`)
+} else {
+  console.warn(
+    `[control] lazos DESARMADOS (${loops.names().length} declarado(s): ${loops.names().join(', ') || 'ninguno'}) — ` +
+      `este nodo no tiene el control. Ni observa, ni reconcilia, ni consume archivos, ni purga, ni reporta.`,
+  )
+}
+
+/** Etiqueta del titular observado, para el 409 de las mutaciones y para el log. */
+function activeHolderLabel(): string {
+  const st = plane.status()
+  if (st.held) return `este mismo nodo (${st.holder}, época ${st.epoch})`
+  if (!st.observedHolder) return 'desconocido (el archivo de lease no declara titular)'
+  return `'${st.observedHolder}' (época ${st.observedEpoch ?? '?'})`
+}
+
+/** Los stores embebidos vivos, con el nombre por el que se los nombra en el contrato y en el log. */
+function embeddedStores(): { name: string; reopen: (c: SqliteControlOptions) => Promise<void>; status: () => ReturnType<SqliteGovernanceStore['controlStatus']> }[] {
+  const out: { name: string; reopen: (c: SqliteControlOptions) => Promise<void>; status: () => ReturnType<SqliteGovernanceStore['controlStatus']> }[] = []
+  if (governance) out.push({ name: 'gobierno', reopen: (c) => governance!.reopen(c), status: () => governance!.controlStatus() })
+  if (notasSqlite) out.push({ name: 'notas', reopen: (c) => notasSqlite!.reopen(c), status: () => notasSqlite!.controlStatus() })
+  if (mdSqlite) out.push({ name: 'data-maestra', reopen: (c) => mdSqlite!.reopen(c), status: () => mdSqlite!.controlStatus() })
+  return out
+}
+
+/**
+ * Reabre los stores embebidos desde disco con el plano de escritura de AHORA. Devuelve el nombre del
+ * store que falló, o `null` si todos reabrieron. No lanza: quien la llama decide, y en el camino de
+ * tomar el control la decisión es soltarlo de vuelta — cero controladores antes que uno que escribe
+ * sobre un snapshot rancio.
+ */
+async function reabrirStores(): Promise<string | null> {
+  for (const st of embeddedStores()) {
+    try {
+      await st.reopen(storeControl())
+    } catch (e) {
+      console.error(`[control] no se pudo reabrir el store '${st.name}': ${e instanceof Error ? e.message : String(e)}`)
+      return st.name
+    }
+  }
+  return null
+}
+
+/**
+ * Hasta cuándo este nodo NO vuelve a aspirar al control (epoch ms). Lo fija el release explícito, y sin
+ * él el handover no existe: MEDIDO en el arnés de dos nodos — el propio nodo que acababa de soltar
+ * volvía a tomar el lease en la misma vuelta de su poller (la marca de release está justamente ahí para
+ * que el sucesor no espere el stale window, y el que la dejó la ve primero). `SIGUSR2` significa «queda
+ * en standby», así que se respeta una ventana de gracia del ancho del stale window: más que la cadencia
+ * de poll del candidato, y menos que el timeout de una promoción. Pasada la ventana, si el candidato
+ * nunca llegó a tomarlo, este nodo re-adquiere — que es el camino de vuelta que el diseño pide cuando la
+ * promoción expira.
+ */
+let noAspirarHasta = 0
+
+/** Suelta el control de forma ordenada: lazos desarmados (esperando el tick en vuelo) → release. */
+let soltando: Promise<void> | null = null
+function soltarControl(motivo: string): Promise<void> {
+  if (soltando) return soltando
+  soltando = (async () => {
+    try {
+      if (!plane.hasControl()) {
+        console.log(`[control] ${motivo}: este nodo ya estaba en standby (nada que soltar).`)
+        return
+      }
+      noAspirarHasta = Date.now() + CONTROL_CONFIG.staleMs
+      await loops.disarm()
+      console.log(`[control] ${motivo}: lazos desarmados (tick en vuelo esperado).`)
+      // Los stores embebidos NO acumulan escrituras: cada operación termina en su propio volcado, así
+      // que el «persist final» del release ordenado ES esperar el tick en vuelo — no hay buffer que
+      // vaciar. Reabrir en modo LECTURA es lo que garantiza que de acá en adelante este proceso no
+      // pueda volcar nada, ni por un camino que se nos haya pasado.
+      await plane.release()
+      const falló = await reabrirStores()
+      if (falló) {
+        console.error(
+          `[control] ${motivo}: el control quedó soltado pero el store '${falló}' NO se pudo reabrir en modo lectura. ` +
+            `Su handle sigue en escritura: un volcado suyo fallaría ruidoso contra el fencing, no en silencio.`,
+        )
+      }
+      console.log(
+        `[control] ${motivo}: control SOLTADO (época ${plane.status().epoch} conservada en la marca de release). Standby. ` +
+          `Este nodo no vuelve a aspirar al control por ${CONTROL_CONFIG.staleMs} ms, para que el sucesor lo tome.`,
+      )
+    } finally {
+      soltando = null
+    }
+  })()
+  return soltando
+}
+
+/** Se invoca cuando el lease se pierde SIN haberlo soltado (relevo ajeno, archivo ilegible, reloj raro). */
+let atendiendoPerdida = false
+async function controlPerdido(reason: ControlLeaseReason, detail: string): Promise<void> {
+  if (atendiendoPerdida) return
+  atendiendoPerdida = true
+  try {
+    console.error(`[control] CONTROL PERDIDO (${reason}): ${detail}. Desarmando lazos y pasando a standby.`)
+    await loops.disarm()
+    const falló = await reabrirStores()
+    if (falló) console.error(`[control] el store '${falló}' no se pudo reabrir en modo lectura tras perder el control.`)
+  } finally {
+    atendiendoPerdida = false
+  }
+}
+
+/**
+ * POLLER DE RELEVO — el único camino por el que un standby toma el control: cuando el activo dejó una
+ * marca de release (promoción ordenada) o cuando dejó de renovar (crash). El lease decide si corresponde;
+ * acá solo se pregunta, y se falla hacia CERO controladores: si los stores no reabren, se suelta.
+ */
+let intentandoRelevo = false
+async function intentarRelevo(): Promise<void> {
+  if (intentandoRelevo || plane.hasControl()) return
+  if (Date.now() < noAspirarHasta) return // ventana de gracia de un release explícito: es del sucesor
+  intentandoRelevo = true
+  try {
+    if (!(await plane.acquire())) return
+    console.log(`[control] RELEVO: control adquirido con la época ${plane.status().epoch}. Reabriendo stores desde disco…`)
+    const falló = await reabrirStores()
+    if (falló) {
+      console.error(`[control] RELEVO ABORTADO: el store '${falló}' no reabrió en escritura. Se suelta el control y se vuelve a standby.`)
+      await plane.release()
+      return
+    }
+    loops.arm()
+    console.log(`[control] RELEVO completo: lazos ARMADOS (${loops.names().join(', ') || 'ninguno declarado'}).`)
+  } finally {
+    intentandoRelevo = false
+  }
+}
+if (plane.mode === 'lease') {
+  // Cadencia = la de renovación: un poll es leer un JSON chico, y esperar más alargaría el hueco de
+  // control tras un crash sin comprar nada. El timer va `unref`: un standby esperando su turno no es
+  // razón para que el proceso no pueda terminar.
+  const relevo = setInterval(() => void intentarRelevo(), Math.max(500, CONTROL_CONFIG.renewMs))
+  relevo.unref?.()
+}
+
+/** El bloque `control` de `/contrato` (#210 · I6) — derivado de las piezas vivas, no declarado. */
+function controlContract(): ControlContract {
+  const st = plane.status()
+  return {
+    mode: plane.mode,
+    lease: {
+      holder: st.holder,
+      epoch: st.epoch,
+      renewedAt: st.lastRenewAt ?? null,
+      held: st.held,
+      ...(st.observedHolder !== undefined ? { observedHolder: st.observedHolder } : {}),
+      ...(st.observedEpoch !== undefined ? { observedEpoch: st.observedEpoch } : {}),
+      ...(st.reason ? { reason: st.reason } : {}),
+      ...(st.reasonDetail ? { reasonDetail: st.reasonDetail } : {}),
+      file: st.file,
+    },
+    // El digest lo declara la INSTALACIÓN (la herramienta de anillos): mientras no lo haga, `null` es la
+    // ausencia honesta — inventarlo desde la imagen sería afirmar una identidad que nadie verificó.
+    ring: { version: VERGIS_VERSION, digest: RING_DIGEST, name: RING_NAME },
+    loops: { armed: loops.armed(), detail: loops.status() },
+    store: embeddedStores().flatMap((s) => {
+      const cs = s.status()
+      if (!cs) return []
+      return [
+        {
+          name: s.name,
+          file: cs.file,
+          mode: cs.mode,
+          schemaSupported: cs.schemaSupported,
+          fileVersion: cs.fileVersion,
+          epoch: cs.epoch,
+          fileEpoch: cs.fileEpoch,
+          degraded: cs.degraded,
+          ...(cs.degradedReason ? { degradedReason: cs.degradedReason } : {}),
+        },
+      ]
+    }),
+  }
+}
 
 // Bootstrap del motor de serving EN SEGUNDO PLANO: el server ya escucha. `healthz` responde 503 hasta
 // `ready`; la Administración queda disponible sin esperar al motor. Retry INDEFINIDO con backoff: un
