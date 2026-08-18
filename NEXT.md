@@ -1,6 +1,6 @@
 # NEXT — Vergis
 
-**0.18.0 es la versión publicada** (tag `v0.18.0`, imagen construida). Trae cuatro afordancias que
+**0.19.0 es la versión publicada** (tag `v0.19.0`, 2026-08-18). Antes: 0.18.0. Trae cuatro afordancias que
 maneja el lector —#203 #207 #209 #210—, sin migraciones que correr a mano y sin env nuevo.
 
 **En `main` y SIN publicar** (2026-08-18, tarde): **#197** —la vista de máscara ya sirve y discrimina
@@ -71,7 +71,9 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 |---|---|---|
 | ~~**#197**~~ — la vista de máscara no sirve en Fabric | — | **CERRADO** (PR #221). Forma C2 en el compilador, medida con el SQL **emitido**: la vista sirve **y discrimina**. Falta solo P5 (`UNMASK` del SP) |
 | ~~**#164**~~ — el allow-all sin columna rehén | — | **CERRADO** (PR #223). Predicado sin argumento, medido en **los dos motores** con el SQL emitido y con el control que decide: el `ALTER` sobre una columna de negocio **con la policy instalada, ACEPTADO**. `bindColumn` retirado del contrato (D-40) |
-| **Cortar y publicar la versión** que trae #197 y #164 | **César decide el corte** | `main` tiene los dos, más dos PRs ajenos (#220 plano de escritura SQLite, #222 plano de control) que **esta sesión no midió**. Una versión declara *qué trae*, y no se puede declarar lo que no se verificó — ver abajo |
+| ~~**Cortar la versión**~~ | — | **HECHO: `v0.19.0` publicada** (PR #224, tag empujado, imagen construyéndose). Trae #197 #164 #220 #222. Los PRs ajenos resultaron del frente **arbol/lab**, que trabaja sobre un clon del mismo repo; su autor declaró qué midió y qué no |
+| **¿Entra el frente que CABLEA los planos de anillos?** | **César** | Existe, rebasado y verde (2275/2275), con dos nodos reales medidos: lazos de fondo, `standby` en `healthz`, 409 en mutaciones sin control, bloque `control` en `/contrato`. **Quedó fuera de 0.19.0 a propósito** (D-41): llegó después de la instrucción de cortar y cambia lo que el operador ve al desplegar. El frente arbol/lab espera su palabra; sale 0.20.0 detrás si dice que sí |
+| **El aviso al operador**, ahora de **0.19.0** | **César** | Comunicación saliente. Cambió de contenido: ya no es solo el parseo estricto de `domains.yaml` — ahora hay **cambio de contrato** (`bindColumn`) y una **migración no opcional** para obtener el efecto de #164, con su advertencia de aviso apagado. Todo escrito en el CHANGELOG |
 | **El aviso al operador** de 0.18.0 + #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente. Ficha con el contenido exacto en `PENDINGS.md` |
 | **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial, **no** gasto: POL-01 no lo cubre) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
 | **#186** — terreno Fabric | Nuestro | Levantado y ya rindió. Queda **un** criterio: barrer las partidas de `PENDINGS.md` cuya única traba era «no hay dónde medirlo». **La ventana que ese barrido necesita ya no se pide**: entra bajo POL-01 |

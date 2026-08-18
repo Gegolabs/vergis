@@ -9,6 +9,13 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-41 · 2026-08-18 — Se corta 0.19.0 SIN el frente que cablea los planos de anillos
+
+- **Bifurcación**: César instruyó «corta». Minutos después, el frente arbol/lab avisó que tenía listo, rebasado y verde (2275/2275, con medición de dos nodos reales) el frente que **invoca** los planos de #220/#222 —lazos de fondo, `standby` en `healthz`, 409 en mutaciones sin control, bloque `control` en `/contrato`— y ofreció mergearlo antes del corte. ¿Entra o espera?
+- **Decidido**: **espera**. César autorizó el corte **sin saber que ese frente existía**, y no es cosmético: cambia lo que un operador ve al desplegar. Meterlo ampliaría el alcance de lo autorizado, y esa decisión es suya. Con la espera, además, la línea del CHANGELOG —«los planos están puestos y nada los invoca todavía»— queda **exacta** en vez de nacer falsa. Sale en su propia versión si él lo quiere.
+- **Costo de revertir**: nulo — la rama del otro frente espera intacta; si César lo quiere publicado, sale 0.20.0 detrás.
+- **Coordinación acordada con arbol/lab, en los dos sentidos**: se avisa **antes** de abrir PR, no después de mergear. Nace de que hoy los dos frentes escribieron `gegolabs/vergis` sin saberlo (W-01, ocurrencias 24 y 25) — y de que el aviso tardío de #223 casi le cuesta un CI rojo a él.
+
 ## D-40 · 2026-08-18 — `bindColumn` se RETIRA del contrato en vez de aceptarse e ignorarse (#164)
 
 - **Bifurcación**: con el allow-all ya sin ancla, ¿qué pasa con `FabricTarget.bindColumn`? Tres caminos: ignorarlo en silencio (retrocompatible), conservarlo como escape hatch que emite la forma vieja, o retirarlo del contrato (rompe a quien lo pase).
