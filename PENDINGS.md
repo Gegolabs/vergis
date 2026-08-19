@@ -117,6 +117,16 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   durante una ventana de al menos 20 min después de tocarle el rol, así que **el experimento se
   planifica antes de tocar el plano de control, no después**. `reg 2026-08-19`
 
+- **El DDL del centinela de #238 se midió contra Fabric DESPUÉS de taggear 0.21.0, no antes** — el
+  orden estuvo mal y el resultado no lo arregla. La medición salió limpia (las 3 sentencias
+  aceptadas, idempotentes, descubrimiento y máscara corroborados en `sys`, control positivo del
+  instrumento en verde), pero **eso se supo 20 min después de empujar el tag**. Si Fabric hubiera
+  rechazado una sentencia, la versión publicada habría traído DDL inejecutable — exactamente el modo
+  de falla de #197, que este mismo emisor ya pagó una vez. **La regla que faltaba aplicar no es
+  nueva**: un mecanismo no se publica sin el experimento que lo pone en riesgo, y «publicar» empieza
+  en el tag, no en el aviso. El arnés del terreno (`fab:proof`) debería incluir el centinela para que
+  esto no dependa de que alguien se acuerde. `reg 2026-08-19`
+
 - **La conexión viva es una frontera de autorización, y el nodo sostiene un pool** — medido el
   2026-08-19 contra Fabric: una conexión ya abierta **nunca** vio el cambio de rol dentro de la
   ventana de sondeo (60 s tras conceder), mientras conexiones nuevas lo vieron en ≤11 s. **La
