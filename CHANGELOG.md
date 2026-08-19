@@ -21,8 +21,8 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.19.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
-| `0.19` | Flota al último patch de la serie 0.19 | Producción que quiere correcciones sin capacidades nuevas |
+| `0.20.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.20` | Flota al último patch de la serie 0.20 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
 | `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
@@ -34,9 +34,28 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
-## Sin publicar
+## 0.20.0 — 2026-08-18
 
-### El cableado que invoca los dos planos: un solo nodo escribe, el otro sirve lecturas (#210 · I4+I5+I6)
+**Los dos planos que 0.19.0 dejó puestos ya están cableados: con dos nodos vivos, exactamente uno
+escribe.** Un solo cambio (PR #225), y es el que vuelve utilizable lo que la versión anterior publicó
+inerte.
+
+**Lo que un operador tiene que saber para decidir:** un **nodo suelto se comporta igual que antes** y
+ninguna variable de entorno es obligatoria. Lo que cambia es qué pasa cuando **conviven dos** —durante
+una promoción, un recreate o un despliegue sin ventana—: aparece una fase nueva (`standby`), un código
+de rechazo nuevo (409) y el trabajo de fondo deja de correr en todos los nodos a la vez. Sin
+migraciones que correr a mano.
+
+> ⚠ **Una advertencia que no está en el cambio y sí en cómo se lo vigila.** Un nodo en `standby`
+> responde **HTTP 200 con `ok:true`** — sano, sirviendo lecturas, sin controlar. Cualquier chequeo que
+> juzgue por «¿responde?» lo dará por bueno: el `healthcheck` de `docker-compose.yml`, por ejemplo,
+> evalúa `r.ok` y marcará **healthy** a un nodo que no está sirviendo escrituras. Hoy no muerde
+> —`deploy/compose.reference.yml` no declara healthcheck y su `depends_on` no usa
+> `condition: service_healthy`— pero **muerde el día que algo enrute por salud**. El predicado
+> correcto, y está escrito en el propio código, es **`200 ∧ phase=serving ∧ pis.serving=N`**.
+> Detectado revisando este PR; no es un defecto suyo — ese healthcheck es anterior.
+
+### El cableado que invoca los dos planos: un solo nodo escribe, el otro sirve lecturas (PR #225 · #210 I4+I5+I6)
 
 **Esto cierra la frase de 0.19.0.** Ahí los dos planos quedaron *puestos y sin cablear* —era cierto de
 esa versión y su entrada no se toca—; este cambio es **el cableado**, y con él el lease deja de ser una
