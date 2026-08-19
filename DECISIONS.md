@@ -9,6 +9,14 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-42 · 2026-08-18 — Se corta 0.20.0, primera versión bajo custodia declarada
+
+- **Bifurcación**: César aprobó que el cableado entrara «con una 0.20.0 detrás». ¿Se mergea #225 y se corta, o se espera a que la serie de anillos cierre entera (faltan I7+I8: el conmutador del borde y la herramienta de anillos)?
+- **Decidido**: **mergear y cortar**. La instrucción era explícita, y el frente arbol quedó **bloqueado** por la custodia recién declarada — no puede mergear lo suyo, y I7+I8 apuntarían a una superficie que no existe en `main`. Esperar habría dejado su trabajo detenido sin ganar nada: 0.20.0 es publicable por sí sola (un nodo suelto se comporta igual que antes).
+- **Costo de revertir**: bajo — la versión anterior sigue publicada y es un pin válido; el `latest` se movería con un corte nuevo.
+- **Lo que este corte estrena**: es la **primera versión bajo la custodia** (`CLAUDE.md` §«La custodia»). El ciclo completo se ejerció el mismo día en que la norma nació — arbol avisó antes de abrir, no tocó el merge y declaró sus «sin medir»; este frente corrió los gates **por su mano** antes y después del merge, verificó la afirmación de «cero `bindColumn`» en vez de aceptarla, y agregó al CHANGELOG una advertencia que **no venía en el PR** (el healthcheck que da por sano a un `standby`).
+- **Y lo que el corte produjo**: el smoke de la imagen publicada encontró el **issue #228** — un arranque que falla después de adquirir el lease lo deja huérfano y sin marca de release. Es un camino de fallo que ninguna verificación previa ejercía, y apareció **porque** el custodio corre la imagen, no solo la suite.
+
 ## D-41 · 2026-08-18 — Se corta 0.19.0 SIN el frente que cablea los planos de anillos
 
 - **Bifurcación**: César instruyó «corta». Minutos después, el frente arbol/lab avisó que tenía listo, rebasado y verde (2275/2275, con medición de dos nodos reales) el frente que **invoca** los planos de #220/#222 —lazos de fondo, `standby` en `healthz`, 409 en mutaciones sin control, bloque `control` en `/contrato`— y ofreció mergearlo antes del corte. ¿Entra o espera?

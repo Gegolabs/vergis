@@ -1,6 +1,6 @@
 # NEXT — Vergis
 
-**0.19.0 es la versión publicada** (tag `v0.19.0`, 2026-08-18). Antes: 0.18.0. Trae cuatro afordancias que
+**0.20.0 es la versión publicada** (tag `v0.20.0`, 2026-08-18). Antes: 0.19.0 y 0.18.0, ambas del mismo día. Trae cuatro afordancias que
 maneja el lector —#203 #207 #209 #210—, sin migraciones que correr a mano y sin env nuevo.
 
 **En `main` y SIN publicar** (2026-08-18, tarde): **#197** —la vista de máscara ya sirve y discrimina
@@ -72,7 +72,8 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 | ~~**#197**~~ — la vista de máscara no sirve en Fabric | — | **CERRADO** (PR #221). Forma C2 en el compilador, medida con el SQL **emitido**: la vista sirve **y discrimina**. Falta solo P5 (`UNMASK` del SP) |
 | ~~**#164**~~ — el allow-all sin columna rehén | — | **CERRADO** (PR #223). Predicado sin argumento, medido en **los dos motores** con el SQL emitido y con el control que decide: el `ALTER` sobre una columna de negocio **con la policy instalada, ACEPTADO**. `bindColumn` retirado del contrato (D-40) |
 | ~~**Cortar la versión**~~ | — | **HECHO: `v0.19.0` publicada** (PR #224, tag empujado, imagen construyéndose). Trae #197 #164 #220 #222. Los PRs ajenos resultaron del frente **arbol/lab**, que trabaja sobre un clon del mismo repo; su autor declaró qué midió y qué no |
-| **CORTAR 0.20.0** ⟵ **el primer acto del retome** | **Nuestro, ya decidido** | César aprobó que el cableado entrara con una 0.20.0 detrás. **#225 ya está mergeado** (`7759491`) y los gates corridos por mí sobre el `main` integrado: **160 archivos · 2275 tests**, typecheck y build verdes. Falta solo el corte: CHANGELOG (la sección ya está escrita bajo «Sin publicar»), `package.json` → 0.20.0, tabla de tags, PR, CI, tag `v0.20.0`, y verificar el push de la imagen **en el log del workflow** |
+| ~~**Cortar 0.20.0**~~ | — | **HECHO: `v0.20.0` publicada** (PR #227, tag empujado, imagen verificada en el log: `:0.20.0` `:0.20` `:latest` `:sha-142d33a` sobre `sha256:…`). Primera versión bajo custodia declarada (D-42) |
+| **#228** — el lease queda huérfano si el arranque falla | **arbol** (el plano de control es suyo) | Detectado por el smoke de la imagen de 0.20.0: el nodo adquiere el lease **antes** de validar su config, y al morir por excepción **no deja marca de release**. La consecuencia (esperar la ventana de staleness) está **sin medir** — exige un arranque exitoso, o sea credenciales. Él tiene el arnés de dos nodos |
 | **El aviso al operador**, ahora de **0.19.0** | **César** | Comunicación saliente. Cambió de contenido: ya no es solo el parseo estricto de `domains.yaml` — ahora hay **cambio de contrato** (`bindColumn`) y una **migración no opcional** para obtener el efecto de #164, con su advertencia de aviso apagado. Todo escrito en el CHANGELOG |
 | **El aviso al operador** de 0.18.0 + #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente. Ficha con el contenido exacto en `PENDINGS.md` |
 | **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial, **no** gasto: POL-01 no lo cubre) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
@@ -169,4 +170,4 @@ healthcheck** (solo `depends_on` sin `condition: service_healthy`). Pero **muerd
 enrute por salud**, y el predicado correcto está escrito en el código: `200 ∧ phase=serving ∧
 pis.serving=N`. Conviene decirlo en el aviso de 0.20.0.
 
-<!-- /ww:next · 2026-08-18 · HEAD 7759491 -->
+<!-- /ww:next · 2026-08-18 · HEAD 142d33a -->
