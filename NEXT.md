@@ -28,7 +28,7 @@ reporte. Ejercido tres veces hoy (#225, #233 y el rechazo de #233 en su primera 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
 | **El aviso al operador de 0.20.1** | **César** | Comunicación saliente; ningún presupuesto la cubre. Es **el único canal que existe** hasta que la instancia corra ≥0.20.1. Contenido exacto en `PENDINGS.md` §Operación — cinco cosas, incluidas un **cambio de contrato** y una **migración no opcional** |
-| **`FAB_SP_TOKEN`** para responder P5 (#163) | **César** (credencial, **no** gasto: POL-01 no lo cubre) | Tres ventanas desperdiciadas ya. Con #197 corregido la pregunta **pesa más**: si el SP no tiene `UNMASK`, el DDM aplasta la rama en claro y la capacidad queda degradada **sin que nada lo grite** |
+| ~~**`FAB_SP_TOKEN`** para responder P5 (#163)~~ | **SALDADO 2026-08-19** | César dio mandato en sesión; secreto emitido con `--append` y guardado en `local/fabric-lab-sp.env`. **P5 respondida: el SP en `Viewer` lee EN CLARO** — el DDM le es inerte. Contradice el registro del 16-ago y **cuál de las dos describe el mecanismo no está medido** (ver `RESOURCES.md`) |
 | **PR #1 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding` | **César** | El Reglamento lo escribe él. Rama `wingcoding/deber-de-instruccion-al-tercero` |
 | **Cuenta de bot en GitHub** | **César** | Decidida para el **2026-08-19**. Hasta entonces todo escrito sale como `cobach`; regla interina en `TODO.md` |
 | **Publicar `CONTRIBUTING.md`** · **`VERGIS_CSRF_SECRET` en QA** · **el ojo humano al header del theme `default`** | **César** | Sin cambios |
