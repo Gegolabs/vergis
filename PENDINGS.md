@@ -6,16 +6,26 @@ la promoción PENDINGS→TODO se pide, no se toma.
 
 ## Operación / despliegue
 
-- **0.18.0 está publicada y NO se ha avisado al operador** — el tag `v0.18.0` está empujado y la
-  imagen construida (build en `success`), así que **nada quedó sin publicar**; lo que falta es el
-  aviso, y es lo que la frontera de `CLAUDE.md` pone de nuestro lado. **El acto es de César**: es
-  comunicación saliente a un tercero, nunca fue del agente. Lo que ese aviso tiene que decir, y es
-  la parte delicada: además de las cuatro afordancias (#203 #207 #209 #210, sin migraciones ni env
-  nuevo), **que #197 sigue vivo** — la vista de máscara se crea en Fabric y ningún `SELECT` sobre
-  ella funciona, también en 0.18.0. Si alguien lee «versión nueva» y asume que el plano de columna ya
-  protege, el aviso hizo daño en vez de bien. **No se sabe desde este repo qué versión corre hoy la
-  instancia** (es infra del operador): si viene de 0.16.x, el aviso debería nombrar el salto.
-  `reg 2026-08-18`
+- **0.20.1 está publicada y NO se ha avisado al operador** (*act 2026-08-18: la ficha decía 0.18.0 y
+  que #197 seguía vivo; las tres versiones del 18-ago volvieron falsas ambas cosas*) — tags
+  `v0.19.0`, `v0.20.0` y `v0.20.1` empujados con sus imágenes verificadas en el log del workflow.
+  **Nada quedó sin publicar**; falta el aviso, y **el acto es de César**: comunicación saliente a un
+  tercero, que ningún presupuesto cubre. Lo que ese aviso tiene que decir, y es más que antes:
+  (a) **#197 quedó corregido** — la vista de máscara ya sirve y **discrimina** en Fabric desde
+  0.19.0; (b) **cambio de contrato**: `FabricTarget.bindColumn` retirado (#164); (c) **una migración
+  que no es opcional** para obtener el efecto de #164 —regenerar y re-aplicar la security policy de
+  cada tabla `grant: all`— con su advertencia de **aviso apagado**: hasta re-aplicar, el compilador
+  reporta cero dependencias mientras la columna sigue atada en el motor; (d) la fase **`standby`** de
+  0.20.0, que da «sano» a un nodo que no sirve si el chequeo juzga por `r.ok`; (e) que **su producción
+  corre 0.18.0** —verificado por el frente arbol contra la VM viva—, o sea sin ninguna de estas
+  correcciones. `reg 2026-08-18`
+
+- **Las imágenes hasta 0.20.0 inclusive están MUDAS: no traen changelog ni labels** — el arreglo de
+  #229 entró después de ese corte, así que solo desde **0.20.1** la imagen contesta «¿qué exige
+  esto?» sin salir de la VM. Medido contra el registry: `:0.18.0`, `:0.19.0` y `:0.20.0` devuelven
+  `documentation` ausente. **Muerde justo en el salto vivo del operador** (0.18.0 → 0.20.x): para
+  ese tramo el **repo sigue siendo la fuente** y la imagen no ayuda. Se extingue solo cuando la
+  instancia corra ≥0.20.1. `reg 2026-08-18`
 
 - **Dos conjeturas del 0.15.0 SIGUEN sin verificar, y el deploy no las tocó** — de las cuatro que
   esperaban producción, el despliegue del 2026-08-11 saldó dos (#139·N2 siembra ✓, #151 reclasifica ✓)
@@ -45,6 +55,25 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **El `healthcheck` de `docker-compose.yml` juzga por `r.ok`, y desde 0.20.0 eso da «sano» a un nodo
+  que no sirve** — un nodo en `standby` responde **HTTP 200 con `ok:true`**, así que Docker lo marca
+  `healthy` sin que esté sirviendo escrituras. **Hoy no muerde**: `deploy/compose.reference.yml` no
+  declara healthcheck y su `depends_on` no usa `condition: service_healthy`. **Muerde el día que algo
+  enrute por salud**, y ese día se acerca con el conmutador de anillos. El predicado correcto ya
+  existe y está escrito en dos lados: en el código del Producto y en `Caddyfile.reference:49`
+  (`health_body "phase":"serving"`) — **`200 ∧ phase=serving ∧ pis.serving=N`**. Copiarlo al
+  compose es barato; el gemelo del lado del operador lo lleva el frente arbol (`P-239`).
+  `reg 2026-08-18`
+
+- **867 líneas de shell entrarán al repo sin linter en CI** — el PR #233 (borde de anillos) trae
+  `deploy/rollout/vergis-rollout` y `tests/fixtures/anillos/fake-docker.sh`, y el CI **no corre
+  `shellcheck`** (ni está instalado en la máquina de trabajo). Se sustituyó por `sh -n`, que **solo
+  atrapa errores de parseo** — no variables sin comillas, no `test` mal formado, no globbing
+  accidental. Sus 381 líneas de test con `fake-docker.sh` cubren bastante más que un linter, así que
+  no se pidió como condición de merge; queda anotado **para que nadie asuma que esa superficie está
+  linteada**. `reg 2026-08-18`
+
+
 - ~~**La medición de #164 NO está en el arnés de Fabric**~~ — **SALDADO 2026-08-18**: es P7 de
   `fab:proof` (PR #219) y ya corrió contra el SKU. Resultado en el comentario de #164
 - **El secreto del SP de laboratorio no está en la máquina, y por eso P5 (#163) sigue sin respuesta**
@@ -64,6 +93,12 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   opciones con cascada). Las facetas son otra superficie y **no fueron lo reportado**, así que esto no
   es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
   aparece, nace issue propio. `reg 2026-08-17`
+  **Tres ventanas desperdiciadas ya** (2026-08-18: la de la mañana y las dos de la tarde). Cada
+  corrida de `fab:proof` que pasa sin `FAB_SP_TOKEN` deja P5 sin responder y el arnés lo **declara**
+  en vez de darlo por verde, que es lo correcto — pero el costo se repite. Con #197 corregido la
+  pregunta **pesa más que antes**: ahora la vista sí discrimina, así que si el SP no tiene `UNMASK`,
+  la rama en claro la aplasta el DDM y la capacidad queda degradada **sin que nada lo grite**.
+  `act 2026-08-18`
 
 - **Revocar un rol de workspace en Fabric NO toma efecto de inmediato, y no se sabe qué lo destraba**
   — medido el 2026-08-16: subir el SP de `Viewer` a `Member` cambió el resultado en la **primera**
@@ -82,12 +117,14 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   declaradas en `RESOURCES.md`. Consumen presupuesto o licencia y **la decisión de qué hacer con
   ellas es de César** (gasto). Se anota acá porque el hallazgo es del agente, no encargo suyo.
   `reg 2026-08-16`
-- **Dos consultas de instancia deciden si #197 es LATENTE o ACTIVO, y ninguna está hecha** — (a)
-  ¿algún PI de la instancia nombra una `vw_mask_*`? Si ninguno la usa, el defecto no está mordiendo
-  hoy; (b) ¿con qué **rol de workspace** corre el service principal de serving? Eso decide si el
-  cinturón DDM le muerde (`Viewer`) o si lee la tabla en claro (`Member`). **Las dos son consultas
-  contra la instancia, no frentes**, y viven del lado del operador. Sin ellas, la severidad de #197
-  está acotada por arriba y por abajo pero no fijada. `reg 2026-08-16`
+- **Una consulta de instancia sigue abierta, y ya no es sobre la severidad de #197 sino sobre
+  `UNMASK`** (*act 2026-08-18: la ficha preguntaba si #197 era latente o activo; el defecto está
+  **corregido** desde 0.19.0, así que esa mitad caducó*) — lo que queda: **¿con qué rol de workspace
+  corre el service principal de serving?** Decide si el cinturón DDM le muerde (`Viewer`) o si lee la
+  tabla en claro (`Member`), y por lo tanto si la rama «en claro» de la vista sirve de algo. Es la
+  misma pregunta que P5 por otra vía, y **es una consulta contra la instancia, no un frente**.
+  Conserva valor la otra mitad, con otro sentido: **¿algún PI nombra una `vw_mask_*`?** — ya no mide
+  el daño, mide **a quién le sirve el arreglo**. `reg 2026-08-16 · act 2026-08-18`
 
 - **El arnés T-SQL no corre en ningún gate, y un arnés que solo corre cuando alguien se acuerda se
   pudre** — `scripts/tsql-lab-proof.ts` queda fuera de `npm test` **a propósito** (la suite es
@@ -107,10 +144,12 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   (a) **¿el SP de serving tiene `UNMASK`?** — **CORREGIDA el 2026-08-16 contra Fabric real: el
   mecanismo que esta ficha daba por medido NO OCURRE en Fabric.** La disyuntiva «sin `UNMASK` la
   rama en claro devuelve el default / con `UNMASK` la vista discrimina» describe la semántica
-  T-SQL; en Fabric **la vista no se puede consultar en absoluto** (#197), así que ninguna de las dos
-  ramas se alcanza. Lo que sí quedó medido: **`UNMASK` lo decide el ROL del workspace** — `Member`
-  lee el valor real, `Viewer` lee la máscara. Queda un dato de instancia, y sigue siendo **una
-  consulta, no un frente**: con qué rol corre el SP de serving de la instancia. (b) **RESUELTA y peor de lo que se temía**: el `ADD MASKED` no entra sobre una tabla
+  T-SQL. **Corregido otra vez el 2026-08-18: la disyuntiva VUELVE a aplicar en Fabric**, porque
+  #197 quedó resuelto y la vista ya se consulta y discrimina desde 0.19.0 — o sea que cuál de las dos
+  ramas ocurre **depende ahora sí** de si el SP tiene `UNMASK`, y eso sigue **sin medirse**. Lo que
+  quedó medido: **`UNMASK` lo decide el ROL del workspace** — `Member` lee el valor real, `Viewer`
+  lee la máscara. Queda un dato de instancia, y sigue siendo **una consulta, no un frente**: con qué
+  rol corre el SP de serving. Mientras no se mida, lo prudente es asumir la rama degradada. (b) **RESUELTA y peor de lo que se temía**: el `ADD MASKED` no entra sobre una tabla
   con vista-contrato — es **orden**, no incompatibilidad, y el motor lo rechazaba sin nombrar al
   culpable. Corregido con preflight diagnosticado; ver #163 y `DECISIONS.md` D-30. (c) el **costo de
   enforcement** por columna sigue abierto, pero **ya no por falta de terreno**: el terreno Fabric
@@ -136,20 +175,16 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   se anota porque el primer reporte de «Miranda no me deja consultar algo que sí puedo ver» va a
   venir de acá y conviene no diagnosticarlo desde cero. `reg 2026-08-13`
 
-- **La medición de #164 está hecha a MEDIAS, y la mitad que falta es la de Fabric** (*act 2026-08-14*)
-  — la forma **es válida en T-SQL**: el motor acepta la función sin parámetro, el `ADD FILTER
-  PREDICATE` sin argumento y la variante con constante, con su **control positivo** (la forma actual
-  pasa en el mismo terreno y la misma sesión) y verificando que la tabla siga sirviendo sus filas —
-  una policy que instala y **niega todo** también «se acepta», y sería peor que el problema original.
-  **Lo que falta es Fabric, y la asimetría manda**: un negativo de la familia T-SQL habría refutado
-  para ambos, pero esto es un **positivo**, y un positivo no garantiza el SKU. Emitir la forma nueva
-  antes de verla pasar en Fabric sería exactamente la Norma 7 al revés. Lo construido
-  (`schemaDependencies`) **mitiga y no resuelve**: vuelve legible la dependencia, no la quita.
-  **La traba dejó de ser estructural el 2026-08-16**: el terreno Fabric propio existe y se corre con
-  `npm run fab:resume && npm run fab:proof && npm run fab:pause`, sin infraestructura de nadie y por
-  el orden de un dólar. **No se midió todavía y no se da por hecho.** Lo que sí quedó medido y toca
-  de cerca: la row policy que emite el compilador **discrimina** en Fabric (2 grupos ⇒ 2 filas; sin
-  grupos ⇒ 0), con `is_schema_bound = 1` corroborado. `reg 2026-08-13 · act 2026-08-16`
+- **✅ RESUELTO (2026-08-18) — #164 medido en los dos motores y publicado en 0.19.0.** La ficha decía
+  «hecha a MEDIAS, falta Fabric», y eso dejó de ser cierto: el `ADD FILTER PREDICATE` sin argumento se
+  midió **aceptado en el SKU F2** con control positivo y verificando que la tabla siga sirviendo sus
+  filas (no deny silencioso), y después el codegen se midió **con el SQL emitido** en los dos motores
+  —SQL Server 2022 y Fabric— **con el control que el issue pedía y ninguna corrida había hecho**: con
+  la policy instalada, el `ALTER` sobre una columna de negocio **se acepta**. `schemaDependencies` de
+  un allow-all pasa a `[]`: la dependencia no se declara mejor, **se quita**. `bindColumn` retirado
+  del contrato (D-40). Lo construido antes (`schemaDependencies` como mitigación) cumplió su papel de
+  puente y ya no hace falta para el allow-all. Ver #164, PR #223.
+
 - **El render de gráficos: queda un residuo que ninguna capa detiene** — un exploit de Vega que haga
   E/S **sin pasar por su loader** (p. ej. vía una dependencia transitiva) atraviesa el gate
   declarativo y el loader que niega. Es justo lo que cubriría un subproceso, y el subproceso se
