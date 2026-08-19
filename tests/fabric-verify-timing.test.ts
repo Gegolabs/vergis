@@ -8,6 +8,9 @@
  * - E2 · H2: entre conexiones el costo es MAX, no suma (`Promise.all`). Secuencial daría ≥ 4 × L.
  * - E3 · H3: dentro de una conexión las 2 queries de sistema van EN PARALELO tras el fix. La versión
  *   secuencial daría ≥ 2 × L.
+ * - E4 · H4 (#238): el sondeo del centinela de desenmascarado viaja en LA MISMA ola que las dos
+ *   consultas de sistema. No es teoría: la primera versión de la implementación descubría los
+ *   schemas y LUEGO leía —dos olas—, y ningún test funcional lo habría notado. Dos olas darían ≥ 2 × L.
  *
  * El reloj no decide solo: cada experimento asevera además CONTADORES de invocación (una llamada por
  * conexión / por query), de modo que un verde por jitter afortunado no puede pasar.
@@ -16,6 +19,8 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   verifyFabricServability,
   createFabricSourceStateOf,
+  UNMASK_PROBE_SCHEMAS_SQL,
+  UNMASK_PROBE_EXPECTED,
   SYS_SECURITY_POLICIES_SQL,
   SYS_VIEW_LINEAGE_SQL,
   type VerifiablePi,
@@ -148,5 +153,31 @@ describe('arranque en frío de Motor C — escalamiento (issue #138·3)', () => 
       return { rows: [] as Record<string, unknown>[] }
     })
     await expect(createFabricSourceStateOf(execute)('wh')).rejects.toThrow('warehouse pausado')
+  })
+
+  it('E4 · #238 · el sondeo del centinela viaja en LA MISMA ola — no agrega una vuelta al arranque en frío', async () => {
+    // El defecto que este test previene ya ocurrió durante la implementación: una primera versión
+    // descubría los schemas con una consulta y LUEGO leía, convirtiendo una ola en dos. El costo no
+    // se nota en un test funcional —todo pasa igual— y sí en el arranque en frío de una instancia
+    // con muchas conexiones, que es justo lo que #138·3 acotó.
+    const execute = vi.fn(async (input: { database_ref: string; sql: string }) => {
+      await sleep(L)
+      if (input.sql === SYS_SECURITY_POLICIES_SQL) return { rows: [{ sch: 'dbo', tbl: 'saldos' }] as Record<string, unknown>[] }
+      if (input.sql === UNMASK_PROBE_SCHEMAS_SQL) return { rows: [{ sch: 'dbo' }] as Record<string, unknown>[] }
+      if (input.sql.includes('vergis_unmask_probe')) return { rows: [{ probe: UNMASK_PROBE_EXPECTED }] as Record<string, unknown>[] }
+      return { rows: [] as Record<string, unknown>[] }
+    })
+    const [state, ms] = await timed(() => createFabricSourceStateOf(execute, ['dbo'])('wh'))
+    console.log(`[E4] 4 queries (2 de sistema + 2 del centinela) en 1 conexión: ${ms.toFixed(1)} ms (L=${L} ms; dos olas darían ≥ ${2 * L} ms)`)
+    expect(state.unmask).toBe('capable')
+    expect(ms).toBeLessThan(1.8 * L) // UNA ola, no dos
+    expect(execute).toHaveBeenCalledTimes(4)
+  })
+
+  it('E4b · #238 · sin schemas declarados no se emite NI UNA consulta de centinela', async () => {
+    const execute = vi.fn(async () => ({ rows: [] as Record<string, unknown>[] }))
+    const state = await createFabricSourceStateOf(execute)('wh')
+    expect(state.unmask).toBeUndefined()
+    expect(execute).toHaveBeenCalledTimes(2) // exactamente las dos de siempre
   })
 })

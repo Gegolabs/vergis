@@ -21,8 +21,8 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.20.1` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
-| `0.20` | Flota al último patch de la serie 0.20 | Producción que quiere correcciones sin capacidades nuevas |
+| `0.21.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.21` | Flota al último patch de la serie 0.21 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
 | `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
@@ -81,6 +81,83 @@ responden 409 explícitos; las **lecturas se sirven todo el tiempo** y el servin
 **Límites declarados.** El plano de control asume **un host con FS local**. La sala de espera no cubre la
 muerte del propio borde. El smoke verifica el predicado de salud y el índice, no la ruta de cada PI:
 `/healthz` publica conteos, no slugs, y el invariante que sí se exige es `pis.serving == pis.total`.
+
+## 0.21.0 — 2026-08-19
+
+**⚠ Esta versión EXIGE algo nuevo de la instancia.** Un requisito de configuración que antes era
+implícito pasa a ser **cláusula del contrato**, verificada por el Producto: si no se cumple, los PIs
+con reglas de columna **no se sirven** y el motivo lo nombra. Léase la sección «Qué exige» antes de
+adoptarla.
+
+### La protección de columna no discriminaba para el sujeto que sirve (#238)
+
+**El defecto, medido:** la vista de máscara `vw_mask_<tabla>` devolvía **lo mismo con y sin el claim**
+cuando la consulta el principal de serving sin capacidad de desenmascarar. La vista lee la tabla, y
+el DDM enmascara **en esa lectura** — río arriba del `CASE`, que entonces elige correctamente entre
+dos valores ya enmascarados.
+
+**Consecuencia: `ve_pii` no concedía nada, y nada lo gritaba.** Una persona con derecho veía `xxxx`
+sin poder distinguirlo de «no traigo el claim».
+
+**No hay fuga.** Falla cerrado: se pierde una capacidad, no se filtra PII. Y **la instancia de
+referencia corre 0.18.0**, anterior a la vista de máscara, así que nunca consumió la superficie
+afectada. Alcanzó a **0.19.0, 0.20.0 y 0.20.1**, publicadas y no consumidas.
+
+**Lo que se corrigió no es el `CASE`: es la asignación de planos.** Hay dos planos de identidad y
+cada uno tiene una sola capa capaz de gobernarlo — la **persona** (claims, por consulta: RLS + vista)
+y el **principal de máquina** (roles y DDM, por conexión). El defecto fue **cablearlos en serie**
+sobre el mismo camino de lectura. El DDM **se conserva** con su papel real —cubrir a principales que
+no son Vergis—, y la decisión por persona vuelve entera a la capa que evalúa por consulta.
+
+### El centinela: la precondición se mide, y su ausencia es ruidosa
+
+El emisor instala `[<schema>].[vergis_unmask_probe]` cuando emite plano de columna: una fila, una
+columna enmascarada, un valor conocido por construcción. El gate de servibilidad lo sondea **por
+conexión** —la granularidad real de la capacidad, que se fija al conectar— y su lectura da **tres
+estados que nunca se colapsan**: valor esperado (capacidad presente), otro valor (capacidad **medida
+ausente**), o error (**no se pudo medir**, que jamás es veredicto).
+
+- El centinela es **compartido por schema** y **no se retira** con el teardown de una tabla; se
+  instala con **crear-si-falta**, nunca tira-y-recrea (`DECISIONS.md` D-46).
+- **Sin centinela instalado** el gate declara **indeterminación**, no veredicto: un PI que ya servía
+  conserva su veredicto sano y la remediación va escrita en el motivo (D-47).
+- El sondeo viaja en la **misma ola** de consultas del arranque en frío: no agrega latencia (D-48).
+
+**Diagnóstico gratis:** la vista enmascara con `•••` y el DDM con `xxxx`, **distintos a propósito**.
+Un `xxxx` visto a través de Mira significa *capacidad ausente*; un `•••`, *persona sin derecho*.
+
+### Qué exige esta versión
+
+> **El principal con el que Vergis se conecta debe poder leer el valor real de las columnas
+> gobernadas** — sus lecturas no deben pasar por la máscara del DDM.
+
+- **Cómo se concede es decisión del operador.** En Fabric, medido: lo decide el **rol del workspace**
+  (`Member` lee el valor real, `Viewer` lee la máscara). `GRANT UNMASK` granular **no está medido**
+  en Fabric.
+- **El Producto verifica la capacidad, no el mecanismo.** No pide un rol concreto: mide si la lectura
+  desenmascara.
+- **Hay que regenerar y re-aplicar la DDL de la política**: el centinela nace con ella. Hasta
+  entonces, un PI con reglas de columna que ya servía **sigue sirviendo** (indeterminación), y uno
+  nuevo queda no-servible con la causa nombrada.
+- **Verificación de que surtió efecto:** el PI con reglas de columna sirve, y un sujeto con el claim
+  ve el valor mientras uno sin el claim ve `•••`. Si ve `xxxx`, la capacidad **no** está concedida.
+
+⚠ **Y una advertencia que vale al operar el rol, medida el 2026-08-19:** conceder el rol propaga a
+una conexión nueva en **≤11 s**, pero **revocarlo no propagó en >20 min** (techo sin medir), y ni una
+conexión nueva ni un token nuevo lo destraban; una conexión ya abierta no lo ve nunca dentro de la
+ventana medida. **Conceder es casi inmediato; quitar, no.** Si se revoca, hay que reciclar el
+serving en vez de confiar en que el motor propague.
+
+### Lo que sigue sin medirse, dicho con esas palabras
+
+- Que `GRANT UNMASK` granular funcione en **Fabric** (sí está medido el rol de workspace).
+- Cuánto **dura** la staleness de revocación y qué la termina — solo hay cota inferior (>20 min).
+- Que la aptitud medida al conectar valga **toda** la vida de la conexión: medido a 60 s, no más.
+
+Lo que **sí** está medido, en el arnés local con la DDL emitida y control positivo: con la capacidad
+presente la vista **discrimina** por claim, y **ninguna de 9 construcciones T-SQL** —cómputo
+intermedio, `CROSS APPLY`, CTE, subconsulta, agregación, materialización en `#temp`— obtiene el valor
+real sin ella. Corrobora; no demuestra imposibilidad.
 
 ## 0.20.1 — 2026-08-18
 

@@ -5,9 +5,36 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados · 2026-08-19 · P5 medido, experimento del rol, y la implementación de #238 (diseño de Fable, ratificado por César) |
 
 ---
+
+## D-46 · 2026-08-19 — El centinela de #238 NO se retira en el `teardownSQL`
+
+- **Bifurcación**: el emisor es simétrico por doctrina —todo lo que el setup instala, el teardown lo desinstala— y hay un test que lo sostiene. ¿El centinela sigue esa simetría?
+- **Decidido**: **no**. El centinela es **compartido por schema**, no propiedad de una tabla: retirarlo al desinstalar la política de UNA tabla dejaría ciegas a todas las demás del mismo schema — el instrumento moriría por un acto que no lo nombra. Se expone `dropSQL` para el retiro explícito.
+- **Corolario que va en la misma línea**: su instalación es **crear-si-falta**, no tira-y-recrea. La forma habitual abriría una ventana en la que un sondeo concurrente lee una tabla ausente, y el gate lo traduciría a «no pude medir» — correcto pero ruidoso, y provocado por nosotros.
+- **Costo de revertir**: bajo (mover tres sentencias), pero reintroduce las dos ventanas.
+
+## D-47 · 2026-08-19 — «Centinela no instalado» es indeterminación, no veredicto
+
+- **Bifurcación**: el gate distingue veredicto definitivo de indeterminación. Un PI con reglas de columna en una instancia que **todavía no regeneró su DDL** no tiene centinela. ¿Eso es «no-servible» (definitivo) o «no pude medir»?
+- **Decidido**: **indeterminación**, con su remediación nombrada («regenera y re-aplica la DDL»). Un PI que YA servía conserva su veredicto sano; en frío queda no-servible. Apagar un PI sano por una migración pendiente sería castigar con un corte de servicio algo que no es una falla de gobierno sino una **ausencia de medición** — y la doctrina del gate ya separa esas dos cosas desde #52.
+- **Lo que NO se aflojó**: capacidad **medida ausente** (`incapable`) es veredicto **definitivo** y gana sobre un veredicto sano previo. Ningún camino afloja el fail-closed.
+- **Costo de revertir**: bajo (una condición), pero apagaría PIs sanos en toda instancia que no haya re-aplicado.
+
+## D-48 · 2026-08-19 — Los schemas del sondeo los pone el llamador, no se descubren en el motor
+
+- **Bifurcación**: el motor podía descubrir solo dónde vive el centinela con una consulta previa, o recibir los schemas del llamador (que ya tiene el policy store).
+- **Decidido**: **los pone el llamador**. Descubrirlos exigía una consulta previa, y eso convertía el arranque en frío en **dos olas** de round-trips en vez de una — justo el costo que #138·3 acotó. Y no es teoría: la primera versión de la implementación lo hizo así, ningún test funcional lo notó, y lo atrapó el test de tiempo. Quedó un test de regresión propio (E4).
+- **Costo de revertir**: bajo, y se paga en latencia de arranque en frío proporcional al número de conexiones.
+
+## D-49 · 2026-08-19 — La distinción de literales (`•••` vs `xxxx`) NO se escribe en el SQL emitido
+
+- **Bifurcación**: el diseño pedía documentar en el **header emitido de la vista** que el literal de la vista (`•••`) es deliberadamente distinto del que rinde el DDM (`xxxx`), para que el literal delate qué capa enmascaró.
+- **Decidido**: se documenta en el **tipo, la doc del contrato y el CHANGELOG**, y **no** en el SQL. `CREATE VIEW` tiene que encabezar su batch en T-SQL; anteponerle un comentario es aceptado por SQL Server pero **no está medido en Fabric**, y el emisor ya se quemó una vez publicando DDL que el motor acepta y después falla al consultar (#197). El valor de un comentario que nadie lee en runtime no justifica arriesgar la emisión.
+- **Es una desviación del diseño ratificado, y consta como tal.** Si se quiere el comentario, primero se mide en el SKU.
+- **Costo de revertir**: bajo — una línea en el emisor y una corrida de `fab:proof` que la mida.
 
 ## D-42 · 2026-08-18 — Se corta 0.20.0, primera versión bajo custodia declarada
 
