@@ -1,6 +1,9 @@
 # NEXT — Vergis
 
-**0.20.0 es la versión publicada** (tag `v0.20.0`, 2026-08-18). Antes: 0.19.0 y 0.18.0, ambas del mismo día. Trae cuatro afordancias que
+**0.20.1 es la versión publicada** (tag `v0.20.1`, 2026-08-18). Antes, el mismo día: 0.20.0, 0.19.0 y
+0.18.0. **Es la primera imagen que lleva sus propias instrucciones adentro** — `/app/CHANGELOG.md` y
+el label `documentation` anclado al tag (medido: `blob/v0.20.1`, no una rama móvil). Las anteriores
+siguen mudas, así que un runbook que recorra versiones intermedias trata el **repo como fuente**. Trae cuatro afordancias que
 maneja el lector —#203 #207 #209 #210—, sin migraciones que correr a mano y sin env nuevo.
 
 **En `main` y SIN publicar** (2026-08-18, tarde): **#197** —la vista de máscara ya sirve y discrimina
@@ -73,6 +76,7 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 | ~~**#164**~~ — el allow-all sin columna rehén | — | **CERRADO** (PR #223). Predicado sin argumento, medido en **los dos motores** con el SQL emitido y con el control que decide: el `ALTER` sobre una columna de negocio **con la policy instalada, ACEPTADO**. `bindColumn` retirado del contrato (D-40) |
 | ~~**Cortar la versión**~~ | — | **HECHO: `v0.19.0` publicada** (PR #224, tag empujado, imagen construyéndose). Trae #197 #164 #220 #222. Los PRs ajenos resultaron del frente **arbol/lab**, que trabaja sobre un clon del mismo repo; su autor declaró qué midió y qué no |
 | ~~**Cortar 0.20.0**~~ | — | **HECHO: `v0.20.0` publicada** (PR #227, tag empujado, imagen verificada en el log: `:0.20.0` `:0.20` `:latest` `:sha-142d33a` sobre `sha256:…`). Primera versión bajo custodia declarada (D-42) |
+| **#232** — el release no nombra sucesor | **arbol** | Levantado por este frente con su medición: el anillo que suelta el lease puede volver a ganarlo. Rollback medido en **3.019 ms** (≈207 ms sirviendo 200 con `phase=standby`, un request retenido 1.689 ms, **cero errores crudos**). **`17 bis` sigue viva**: la condición era corte cero *medido*, y 3 s no es cero — aunque sea mejor que los 3,8–11,6 s de errores duros del baseline. Medido con **0 PIs**; que escale a 9 es inferencia |
 | **#228** — el lease queda huérfano si el arranque falla | **arbol** (el plano de control es suyo) | Detectado por el smoke de la imagen de 0.20.0: el nodo adquiere el lease **antes** de validar su config, y al morir por excepción **no deja marca de release**. La consecuencia (esperar la ventana de staleness) está **sin medir** — exige un arranque exitoso, o sea credenciales. Él tiene el arnés de dos nodos |
 | **Cuenta de bot en GitHub** ⟵ **mañana 2026-08-19** | **César** (es su nombre) | Decidido hoy. Hasta que exista, **todo lo que los agentes escriben en GitHub queda registrado como `cobach`** — `gh` en esta máquina no tiene otra identidad. Mitigación vigente que **no la deroga**: firma de autoría al pie de cada escrito y `Co-Authored-By` en los commits. Ficha en `TODO.md` |
 | **El aviso al operador**, ahora de **0.20.0** | **César** | Comunicación saliente, y hoy **el único canal que existe**: se midió que las instrucciones no viajaban con la imagen (#229, ya corregido — el changelog va dentro y los labels apuntan a las notas). Contenido: cambio de contrato (`bindColumn`), la migración no opcional de #164, la fase `standby` que da «sano» a un nodo que no sirve si el chequeo juzga por `r.ok`, y que **su producción corre 0.18.0** — o sea sin la corrección de #197 |
@@ -171,4 +175,4 @@ healthcheck** (solo `depends_on` sin `condition: service_healthy`). Pero **muerd
 enrute por salud**, y el predicado correcto está escrito en el código: `200 ∧ phase=serving ∧
 pis.serving=N`. Conviene decirlo en el aviso de 0.20.0.
 
-<!-- /ww:next · 2026-08-18 · HEAD 5f499ef -->
+<!-- /ww:next · 2026-08-18 · HEAD 6455e82 -->
