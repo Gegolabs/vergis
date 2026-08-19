@@ -1,0 +1,111 @@
+# Vergis — CADDYFILE DE REFERENCIA (borde que conmuta y espera · issue #210 · I7).
+#
+# Acompaña a `compose.reference.yml`: una instancia lo COPIA a su repo de infraestructura como
+# `Caddyfile` (así lo monta el compose) y reemplaza los `<...>`. No se despliega tal cual.
+#
+# ¿Qué agrega este archivo sobre un reverse-proxy TLS normal? DOS listeners en el MISMO Caddy:
+#
+#   :443  (público, TLS)      → oauth2-proxy:4180 (SSO)
+#   :8079 (interno, sin TLS)  → el ANILLO ACTIVO, y la SALA DE ESPERA cuando no hay ninguno
+#
+# La cadena completa queda:
+#
+#   Caddy:443 (TLS) → oauth2-proxy:4180 (SSO) → Caddy:8079 (conmutador + espera) → vergis-<anillo>:8080
+#
+# ¿Por qué el conmutador vive en Caddy y no en otra parte? Porque es el ÚNICO componente que sobrevive
+# al acto de desplegar (medido: en un recreate del motor, oauth2-proxy solo propaga el error y nada
+# dentro del propio motor puede cubrir su propia ausencia). Conmutar es escribir una línea en
+# `rings/active.caddy` y recargar Caddy en caliente: sin DNS, sin alias móviles, sin tocar
+# oauth2-proxy — que es exactamente lo que no se puede tocar sin corte.
+#
+# El gate de identidad NO cambia: oauth2-proxy sigue inyectando `X-Forwarded-Email` y `x-gate-token`;
+# el conmutador solo proxya cabeceras. La superficie de seguridad es la misma que sin anillos.
+{
+	# El API de administración (localhost:2019 DENTRO del contenedor, default de Caddy) es lo que hace
+	# posible `caddy reload` sin bajar el proceso. No se publica al host: la herramienta de anillos la
+	# alcanza con `docker exec`, nunca por red.
+	#
+	# email <tu-correo>   # ACME: contacto para Let's Encrypt
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Opciones del anillo activo. Viven ACÁ —no en `rings/active.caddy`— a propósito: `active.caddy` es un
+# archivo de UNA LÍNEA de upstream que una herramienta reescribe en cada promoción, y la política de
+# salud/espera no debe poder cambiar por accidente en ese acto. Lo que conmuta es el destino; las
+# reglas del borde son del borde.
+(anillo_activo) {
+	# HEALTH CHECK ACTIVO — y el predicado es lo importante de todo este archivo:
+	#
+	#   sano  ⇔  HTTP 200  ∧  el cuerpo declara "phase":"serving"
+	#
+	# NUNCA «responde» y nunca «2xx a secas». Un nodo EN ESPERA (standby) responde 200 con `ok:true`
+	# POR DISEÑO: está sano, sirve lecturas y NO tiene el plano de control — sus mutaciones contestan
+	# 409. Rutear tráfico ahí sería peor que no rutear nada, y cualquier chequeo que juzgue por el
+	# código HTTP lo declararía sano. `health_body` es una regexp contra el cuerpo de `/healthz`.
+	health_uri /healthz
+	health_interval 1s
+	health_timeout 2s
+	health_status 2xx
+	health_body `"phase":"serving"`
+
+	# SALA DE ESPERA (tramo en que NO hay proceso sirviendo): Caddy RETIENE el request reintentando
+	# hasta que el health check declare sano a algún upstream. Cubre lo NO planificado —OOM, crash con
+	# `restart: unless-stopped`, arranque de un anillo frío— donde hoy el usuario ve 502.
+	# 90 s cubre con margen el arranque medido de un nodo (3,8–11,6 s) y el de una máquina cargada.
+	lb_try_duration 90s
+	lb_try_interval 500ms
+
+	# El tramo 8079→anillo no debe cortar un render largo antes que el proxy de arriba.
+	transport http {
+		read_timeout 300s
+		write_timeout 300s
+	}
+}
+
+# ---------------------------------------------------------------------------------------------------
+# CONMUTADOR + SALA DE ESPERA (listener interno). `expose`, JAMÁS `ports:` — mismo supuesto de red D2
+# que protege a `vergis:8080`: este listener no autentica, hereda la identidad que oauth2-proxy ya
+# inyectó. Publicarlo al host sería un bypass del SSO.
+:8079 {
+	# El upstream del anillo activo: UNA línea que la herramienta de anillos (`deploy/rollout/`)
+	# reescribe y recarga. Este archivo es el único que cambia en una promoción.
+	import /etc/caddy/rings/active.caddy
+
+	# Agotado `lb_try_duration` sin upstream sano, la degradación es honesta: 503 (no 200) con una
+	# página que se recarga sola, en vez del `server-not-found` crudo del navegador.
+	handle_errors {
+		@sin-anillo expression `{err.status_code} in [502, 503, 504]`
+		handle @sin-anillo {
+			root * /etc/caddy/edge
+			rewrite * /espera.html
+			header Cache-Control "no-store"
+			file_server {
+				status 503
+			}
+		}
+		handle {
+			respond "{err.status_code} {err.status_text}" {err.status_code}
+		}
+	}
+
+	log {
+		output stderr
+	}
+}
+
+# ---------------------------------------------------------------------------------------------------
+# INGRESS PÚBLICO (TLS). Único puerto publicado al host; todo lo demás vive en la red interna.
+<tu-dominio> {
+	encode zstd gzip
+
+	# El SSO sigue siendo el primer salto: la identidad se resuelve ANTES del conmutador, y el
+	# conmutador jamás la produce. Cambiar de anillo no toca este servicio.
+	reverse_proxy oauth2-proxy:4180 {
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}
+
+# • Generado con Wingworking

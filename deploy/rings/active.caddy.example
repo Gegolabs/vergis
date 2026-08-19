@@ -1,0 +1,10 @@
+# Anillo ACTIVO — este archivo lo REESCRIBE `deploy/rollout/vergis-rollout` en cada promoción.
+# Se copia como `rings/active.caddy` junto al compose (el borde lo monta en /etc/caddy/rings).
+#
+# Trae el servicio `vergis` del compose como destino inicial a propósito: una instancia recién copiada
+# sirve igual que siempre (un solo nodo, sin anillos), y la primera `promote` la mueve al primer anillo
+# versionado sin tocar nada más. No editar a mano: `vergis-rollout` deja respaldo (`active.caddy.bak`)
+# y valida la config antes de recargar.
+reverse_proxy vergis:8080 {
+	import anillo_activo
+}

@@ -1,0 +1,98 @@
+# PLANTILLA DE CONTENEDOR DE ANILLO — argumentos de `docker create` que `vergis-rollout install` usa
+# para crear cada anillo (issue #210 · I8). Se copia como `rings/ring.args` junto al compose.
+#
+# ¿Por qué un archivo de argumentos y no `docker compose`? Porque compose es dueño del ciclo de vida de
+# sus servicios y su forma de aplicar un cambio es RECREAR el contenedor — que es exactamente el corte
+# que los anillos eliminan. Los anillos viven fuera de compose para poder coexistir: dos versiones
+# arriba a la vez, una sirviendo y otra en espera.
+#
+# ⚠ ESTE ARCHIVO ES LA MISMA LISTA DE ENVS Y MONTAJES DEL SERVICIO `vergis` DE `compose.reference.yml`.
+# Si allá cambia un env o un volumen, acá también. Nada lo verifica por ti: es el precio de sacar los
+# nodos del ciclo de vida de compose. El motor sí verifica el contrato al arrancar
+# (`VERGIS_CONFIG_CHECK`, default strict): un env que apunte a un montaje que falta lo GRITA.
+#
+# FORMATO: un argumento por línea (las líneas que empiezan con `#` se ignoran). Se pasan a
+# `docker create` en este orden, antes del `<imagen>:<versión>`. NO poner acá `--name`, `--label
+# vergis.ring*`, `-e VERGIS_RING` ni `-e VERGIS_RING_DIGEST`: los pone la herramienta, y son la identidad
+# del anillo (versión + digest) que después declara `/contrato`.
+
+# --- Red e integración con el stack ----------------------------------------------------------------
+# La red del compose de la instancia (`docker network ls` para verla; suele ser <proyecto>_default).
+# El borde alcanza al anillo por su NOMBRE de contenedor dentro de esta red.
+--network
+mira_default
+--restart
+unless-stopped
+--init
+# Presupuesto de RAM por nodo, el mismo que declara el Producto. Dos anillos calientes (activo +
+# previo) caben en 8 GB con holgura.
+--memory
+1g
+# Rotación de logs: el driver por defecto crece sin tope y llena el disco de una VM chica.
+--log-driver
+json-file
+--log-opt
+max-size=10m
+--log-opt
+max-file=3
+
+# --- Secretos de la instancia (JAMÁS en git) --------------------------------------------------------
+--env-file
+/opt/vergis/vergis.env
+
+# --- Envs del contrato Producto→Infra (espejo del compose) ------------------------------------------
+-e
+VERGIS_ENGINE=fabric
+-e
+VERGIS_SPECS_DIR=/specs
+-e
+VERGIS_POLICIES=/policies/entidades.yaml
+-e
+VERGIS_IDENTITY_MAP=/identity/map.json
+-e
+VERGIS_OUT=/governance
+-e
+VERGIS_MASTER_DATA=/master-data/entidades.yaml
+-e
+VERGIS_DOMAINS=/domains.yaml
+-e
+VERGIS_GROUPS=/groups.yaml
+-e
+VERGIS_INTAKE=/intake/slots.yaml
+-e
+VERGIS_SOURCES=/sources.yaml
+-e
+VERGIS_PI_OWNERS=/pi-owners.yaml
+-e
+VERGIS_PDF_SERVICE_URL=http://vergis-pdf:9090
+# El plano de control: `lease` es el default DE LA CAJA y es lo que hace posible tener dos nodos vivos
+# sin que se pisen las escrituras. `single` (sin lease) solo tiene sentido con UN nodo — con anillos,
+# ponerlo sería invitar a dos escritores concurrentes.
+-e
+VERGIS_CONTROL=lease
+
+# --- Montajes de la instancia (los mismos del compose) ---------------------------------------------
+# Rutas ABSOLUTAS del host: `docker create` no resuelve rutas relativas como compose.
+-v
+/opt/vergis/specs:/specs:ro
+-v
+/opt/vergis/policies:/policies:ro
+-v
+/opt/vergis/identity:/identity:ro
+-v
+/opt/vergis/master-data:/master-data:ro
+# PERSISTENTE y COMPARTIDO por todos los anillos: acá viven governance.sqlite y el archivo de lease del
+# plano de control. Que sea el mismo directorio para todos los anillos es el punto: el lease solo puede
+# ordenar a quienes ven el mismo archivo.
+-v
+/opt/vergis/governance:/governance
+-v
+/opt/vergis/domains.yaml:/domains.yaml:ro
+-v
+/opt/vergis/groups.yaml:/groups.yaml:ro
+-v
+/opt/vergis/intake:/intake:ro
+-v
+/opt/vergis/sources.yaml:/sources.yaml:ro
+-v
+/opt/vergis/pi-owners.yaml:/pi-owners.yaml:ro

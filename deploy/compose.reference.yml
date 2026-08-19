@@ -13,6 +13,30 @@
 # referencia un archivo/carpeta que no montaste, o pides gobierno con VERGIS_OUT efímero, el arranque
 # lo GRITA (y en modo estricto aborta) en vez de degradar en silencio. Ajusta el rigor con
 # VERGIS_CONFIG_CHECK = strict (default) | warn | off.
+#
+# ═══ ANILLOS: DESPLEGAR SIN VENTANA DE MANTENIMIENTO (issue #210) ═════════════════════════════════
+#
+# Este archivo trae el borde que CONMUTA. Caddy expone un segundo listener interno (`:8079`) que apunta
+# al ANILLO ACTIVO mediante `rings/active.caddy` —un archivo de una línea— y retiene los requests en una
+# sala de espera cuando ningún nodo declara `"phase":"serving"`. Promover = escribir esa línea y
+# recargar Caddy en caliente: **oauth2-proxy no se toca en el acto**, y por eso el corte percibido es
+# cero. Ver `Caddyfile.reference` (el predicado de salud está ahí y es lo importante) y
+# `rollout/README.md` (la herramienta de ciclo de vida: install / promote / rollback / retire / prune /
+# status).
+#
+# Dos modos, ambos válidos con este mismo archivo:
+#
+#   · UN SOLO NODO (lo de siempre): el servicio `vergis` de abajo sirve, `rings/active.caddy` apunta a
+#     él (es su valor de fábrica) y desplegar sigue siendo un recreate —con su corte y su ventana—.
+#   · ANILLOS: los nodos NO los declara este compose. Los crea `vergis-rollout` como contenedores
+#     `vergis-<versión>` (`vergis-0-19-0`) desde `ghcr.io/gegolabs/vergis:<versión>`, con los MISMOS
+#     envs y montajes que el servicio de abajo — copiados una vez a `rollout/ring.args`. En este modo
+#     el servicio `vergis` se comenta (o se deja como último nodo pre-anillos hasta la primera
+#     promoción) y el borde deja de depender de él.
+#
+# ⚠ `rollout/ring.args` es la MISMA lista de envs y montajes del servicio `vergis`: si acá cambia un
+# env o un volumen, ahí también. Nada lo verifica por ti — es el precio de que los anillos vivan fuera
+# del ciclo de vida de compose (que es justamente lo que permite no recrearlos).
 services:
   vergis:
     # SIN digest a propósito: esta referencia es NUESTRA imagen y este archivo es la plantilla que
@@ -135,13 +159,19 @@ services:
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:latest@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561
     restart: unless-stopped
-    depends_on: [vergis]
+    # SIN `depends_on`: su upstream ya no es un servicio de este compose sino el CONMUTADOR del borde, y
+    # los anillos son contenedores que crea `vergis-rollout` fuera del ciclo de vida de compose. Un
+    # `depends_on: [caddy]` además cerraría un ciclo (caddy depende de este servicio).
     env_file: [oauth2.env]                  # OAUTH2_PROXY_CLIENT_SECRET + COOKIE_SECRET
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
       OAUTH2_PROXY_OIDC_ISSUER_URL: <https://tu-idp/issuer>
       OAUTH2_PROXY_CLIENT_ID: <client-id>
-      OAUTH2_PROXY_UPSTREAMS: http://vergis:8080
+      # CONMUTADOR, no el motor (issue #210 · I7): el upstream es el listener interno de Caddy, que
+      # rutea al anillo activo y retiene en la sala de espera cuando no hay ninguno. Este valor es lo
+      # ÚNICO que cambia respecto a un despliegue de un solo nodo, y **no se toca en una promoción** —
+      # tocarlo exigiría reiniciar el SSO, que es precisamente el corte que los anillos eliminan.
+      OAUTH2_PROXY_UPSTREAMS: http://caddy:8079
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
@@ -149,16 +179,40 @@ services:
       OAUTH2_PROXY_COOKIE_SECURE: "true"
     expose: ["4180"]
 
-  # Terminación TLS / reverse-proxy público. Genérico (Caddy); cualquier proxy con TLS sirve.
+  # Terminación TLS / reverse-proxy público Y CONMUTADOR DE ANILLOS (issue #210 · I7). Los dos roles
+  # viven en el mismo contenedor a propósito: es el único componente que sobrevive al acto de desplegar
+  # (medido), así que es el único que puede cubrir la ausencia del motor. Ver `Caddyfile.reference`.
+  #
+  # ⚠ El nombre del contenedor importa: la herramienta de anillos lo alcanza por `docker exec` para
+  # validar y recargar la config (`RINGS_EDGE`, default `caddy`). Si tu compose le pone otro nombre
+  # (prefijo del proyecto), pásalo por env a la herramienta.
   caddy:
     image: caddy:2@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     restart: unless-stopped
     depends_on: [oauth2-proxy]
+    # `:8079` NO se publica — `expose`, jamás `ports:`. Mismo supuesto de red D2 que protege a
+    # vergis:8080: el conmutador no autentica, hereda la identidad que oauth2-proxy ya inyectó.
+    # Publicarlo al host sería un bypass completo del SSO y de la RLS.
     ports: ["80:80", "443:443"]
+    expose: ["8079"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # El anillo activo: `rings/active.caddy` (una línea) + `rings/rings.json` (el registro). Montado
+      # `:ro` porque el borde solo LEE — quien escribe es `vergis-rollout` en el host, y después recarga
+      # Caddy en caliente. Copiar `deploy/rings/active.caddy.example` como `rings/active.caddy`.
+      - ./rings:/etc/caddy/rings:ro
+      # La sala de espera: HTML estático, sin red ni dependencias. Copiar `deploy/edge/espera.html`.
+      - ./edge:/etc/caddy/edge:ro
       - caddy_data:/data
       - caddy_config:/config
+    healthcheck:
+      # El borde SÍ juzga por HTTP: es un proxy, no un nodo con fases. Lo que jamás juzga por HTTP es la
+      # salud de un ANILLO — ese predicado exige `"phase":"serving"` y vive en el Caddyfile.
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   caddy_data:
