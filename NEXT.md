@@ -72,7 +72,7 @@ y sin el claim pasa los dos filtros anteriores y no protege nada.
 | ~~**#197**~~ — la vista de máscara no sirve en Fabric | — | **CERRADO** (PR #221). Forma C2 en el compilador, medida con el SQL **emitido**: la vista sirve **y discrimina**. Falta solo P5 (`UNMASK` del SP) |
 | ~~**#164**~~ — el allow-all sin columna rehén | — | **CERRADO** (PR #223). Predicado sin argumento, medido en **los dos motores** con el SQL emitido y con el control que decide: el `ALTER` sobre una columna de negocio **con la policy instalada, ACEPTADO**. `bindColumn` retirado del contrato (D-40) |
 | ~~**Cortar la versión**~~ | — | **HECHO: `v0.19.0` publicada** (PR #224, tag empujado, imagen construyéndose). Trae #197 #164 #220 #222. Los PRs ajenos resultaron del frente **arbol/lab**, que trabaja sobre un clon del mismo repo; su autor declaró qué midió y qué no |
-| **¿Entra el frente que CABLEA los planos de anillos?** | **César** | Existe, rebasado y verde (2275/2275), con dos nodos reales medidos: lazos de fondo, `standby` en `healthz`, 409 en mutaciones sin control, bloque `control` en `/contrato`. **Quedó fuera de 0.19.0 a propósito** (D-41): llegó después de la instrucción de cortar y cambia lo que el operador ve al desplegar. El frente arbol/lab espera su palabra; sale 0.20.0 detrás si dice que sí |
+| **CORTAR 0.20.0** ⟵ **el primer acto del retome** | **Nuestro, ya decidido** | César aprobó que el cableado entrara con una 0.20.0 detrás. **#225 ya está mergeado** (`7759491`) y los gates corridos por mí sobre el `main` integrado: **160 archivos · 2275 tests**, typecheck y build verdes. Falta solo el corte: CHANGELOG (la sección ya está escrita bajo «Sin publicar»), `package.json` → 0.20.0, tabla de tags, PR, CI, tag `v0.20.0`, y verificar el push de la imagen **en el log del workflow** |
 | **El aviso al operador**, ahora de **0.19.0** | **César** | Comunicación saliente. Cambió de contenido: ya no es solo el parseo estricto de `domains.yaml` — ahora hay **cambio de contrato** (`bindColumn`) y una **migración no opcional** para obtener el efecto de #164, con su advertencia de aviso apagado. Todo escrito en el CHANGELOG |
 | **El aviso al operador** de 0.18.0 + #197 | **César** | Comunicación saliente a un tercero: nunca fue del agente. Ficha con el contenido exacto en `PENDINGS.md` |
 | **P5 (#163)** — ¿el SP de serving tiene `UNMASK`? | **César** (credencial, **no** gasto: POL-01 no lo cubre) | Sigue **sin responder**: falta `FAB_SP_TOKEN` y el secreto del SP no está en la máquina. El arnés lo declara y no lo cuenta como verde. Si nadie lo regenera antes, **la próxima ventana también lo desperdicia** |
@@ -150,4 +150,23 @@ acá; el commit de esta sesión fue por ruta explícita.
 - **El `trap EXIT/INT/TERM` funciona y la ventana tiene que ser UN solo comando de shell** — si el
   resume va en un comando y el proof en otro, el trap del primero pausa la capacidad antes de medir.
 
-<!-- /ww:next · 2026-08-18 · HEAD 41ad0a8 -->
+## La custodia, que cambió cómo se trabaja este repo (2026-08-18)
+
+**`arbol` propone · `vergis` dispone · sin self-merge**, y el aviso previo antes de abrir PR va en los
+dos sentidos. Está en `CLAUDE.md` §«La custodia» (PR #226). Nació de que los dos frentes escribieron
+el repo la misma tarde sin saberlo — ninguno hizo nada prohibido; **faltaba el custodio**.
+
+**Qué significa en la práctica para la próxima sesión:** los PRs de arbol llegan y **los mergeamos
+nosotros**, después de correr los gates **por nuestra mano** y verificar que componen. Ya se ejerció
+una vez con #225 y funcionó: él avisó antes, no tocó el merge, y declaró sus «sin medir».
+
+## Lo que la revisión de #225 dejó anotado y NO está en ningún PR
+
+**El healthcheck de `docker-compose.yml` juzga por `r.ok`** —o sea, 200 = sano— y un nodo en
+**`standby` responde 200 con `ok:true`**. O sea que Docker considerará «healthy» a un nodo que **no
+está sirviendo**. Hoy no muerde: el `compose.reference.yml` que consume la instancia **no declara
+healthcheck** (solo `depends_on` sin `condition: service_healthy`). Pero **muerde el día que alguien
+enrute por salud**, y el predicado correcto está escrito en el código: `200 ∧ phase=serving ∧
+pis.serving=N`. Conviene decirlo en el aviso de 0.20.0.
+
+<!-- /ww:next · 2026-08-18 · HEAD 7759491 -->
