@@ -76,15 +76,19 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 - ~~**La medición de #164 NO está en el arnés de Fabric**~~ — **SALDADO 2026-08-18**: es P7 de
   `fab:proof` (PR #219) y ya corrió contra el SKU. Resultado en el comentario de #164
-- **✅ SALDADO (2026-08-19) — el secreto del SP ya está en la máquina y P5 (#163) quedó respondida.**
-  La ficha pedía «regenerar el secreto», y esa premisa era **falsa a medias**: la app tenía —y tiene—
-  una credencial vigente (`lab-186`, hasta 2028-08-16); lo perdido era **su valor**, que Entra solo
-  muestra al crearla. Se emitió una segunda (`lab-186-b`) **por mandato explícito de César en sesión**,
-  con `--append` para no borrar la primera, y vive en `local/fabric-lab-sp.env` (ver `RESOURCES.md`).
-  **Resultado de P5**: con el SP en rol `Viewer` —medido en vivo contra el plano de control— y control
-  positivo en verde, **el SP lee el RUT en claro**: el DDM es **inerte** para él y la única protección
-  de columna es la vista. **Contradice el registro del 2026-08-16**, y cuál de las dos mediciones
-  describe el mecanismo **no está medido** — ver la nota de `RESOURCES.md`.
+- **✅ SALDADO (2026-08-19) — el secreto del SP está en la máquina y P5 (#163) quedó respondida:
+  `Viewer` NO tiene `UNMASK`.** La ficha pedía «regenerar el secreto», y esa premisa era **falsa a
+  medias**: la app tenía una credencial vigente (`lab-186`); lo perdido era **su valor**. Se emitió
+  `lab-186-b` con `--append`, por mandato explícito de César en sesión; vive en
+  `local/fabric-lab-sp.env` (ver `RESOURCES.md`).
+  **Esta ficha afirmó primero lo contrario y se corrige el mismo día.** La corrida de la mañana midió
+  el SP en `Viewer` leyendo **en claro** y publicó «el DDM le es inerte». **Era residuo de la
+  revocación no propagada** del 16-ago: el experimento del rol de la tarde, con conexión nueva, token
+  nuevo y sin tocar DDL, midió el baseline **enmascarado**. El registro del 16-ago era el correcto.
+  **La lección, que vale más que el dato:** el arnés tenía su control positivo en verde y aun así
+  entregó un veredicto falso, porque **el control positivo prueba que la lectura ocurrió, no que la
+  premisa del sujeto sea la declarada**. `FAB_SP_ROLE=Viewer` era cierto en el plano de control y
+  falso en el plano de datos, y ningún control del arnés mira esa diferencia.
 
 - **El eslabón «renombrar en la consola → catálogo servido» de #207 no tiene test de integración** —
   está medido que el override no se congela en el memo del escáner y que sobrevive al reinicio del
@@ -98,18 +102,29 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
   aparece, nace issue propio. `reg 2026-08-17`
 
+- **La conexión viva es una frontera de autorización, y el nodo sostiene un pool** — medido el
+  2026-08-19 contra Fabric: una conexión ya abierta **nunca** vio el cambio de rol dentro de la
+  ventana de sondeo (60 s tras conceder), mientras conexiones nuevas lo vieron en ≤11 s. **La
+  autorización se fija al conectar.** Importa para el Producto y no solo para el arnés: el nodo de
+  serving sostiene conexiones reusadas, así que **revocarle un privilegio a un principal no surte
+  efecto sobre las conexiones que ya tenía abiertas** — y sumado a la staleness de revocación del
+  servicio, la ventana de privilegio residual es más larga que cualquiera de las dos por separado.
+  **No medido contra el Producto**, solo contra el arnés: cuánto viven las conexiones de su pool y si
+  las recicla es la pregunta que decide si esto muerde. `reg 2026-08-19`
+
 - **Revocar un rol de workspace en Fabric NO toma efecto de inmediato, y no se sabe qué lo destraba**
   — medido el 2026-08-16: subir el SP de `Viewer` a `Member` cambió el resultado en la **primera**
   lectura (t+0s); bajarlo de `Member` a `Viewer` **no tomó efecto en 6,5 minutos de sondeo continuo**
   (14 lecturas, el principal siguió viendo el valor real). La máscara se observó recién **después de
   recrear tabla y política**, así que hay dos candidatos —el tiempo o la re-aplicación del DDL— y
-  **cuál de los dos NO está medido**. **Subió de precio el 2026-08-19**: la corrida de `fab:proof` con
-  el SP en `Viewer` —rol verificado contra el plano de control— lo vio leer **en claro**, o sea el
-  resultado OPUESTO al del 16-ago bajo el mismo rol declarado. Este fenómeno es el candidato principal
-  a explicarlo (plano de control diciendo `Viewer` mientras el plano de datos sigue en `Member`), pero
-  **es conjetura**: el experimento que decide sigue siendo el mismo y sigue sin correrse. Mientras
-  tanto **hay dos mediciones contradictorias en el registro** y ninguna se puede preferir por
-  argumento. Importa por dos vías: (a) es un asimetría de seguridad
+  **cuál de los dos NO está medido**.
+  **ACOTADO el 2026-08-19 con el experimento del rol** (sin tocar DDL, tres vías en paralelo):
+  conceder propaga en **≤11 s** a una conexión nueva; **revocar NO propaga en >300 s**, y **ni una
+  conexión nueva ni un token de acceso nuevo la destraban** — o sea que la hipótesis del token
+  cacheado, que era el tercer candidato, queda **refutada**. Sigue sin medirse **cuánto dura** y
+  **qué la termina**: entre una lectura contaminada y una limpia pasaron ~4 h y una pausa de
+  capacidad, y cuál de las dos la cortó se desconoce. Ya cobró su primera víctima documentada — el
+  veredicto falso de P5 esa misma mañana. Importa por dos vías: (a) es un asimetría de seguridad
   —conceder privilegio es instantáneo, quitarlo no—; (b) **envenenó una medición de esta misma
   sesión**: el primer veredicto sobre `UNMASK` fue el opuesto al correcto y se publicó como hallazgo
   antes de que tres corridas seguidas lo desmintieran. El experimento que falta es barato: bajar el
