@@ -34,26 +34,35 @@ Desconectado del cliente, datos sintéticos, **capacidad pausada por defecto**. 
 | Warehouse | `vergislab` · `4e1a4b39-bf4e-4c2e-8d8c-e92dbe7b0714` |
 | Endpoint SQL | `b5towqozkz5ebe7ayhs6w67cdq-vei4k2srzm5efe57d5tj2a75by.datawarehouse.fabric.microsoft.com` |
 | Collation | `Latin1_General_100_BIN2_UTF8` — Fabric Warehouse no soporta `NVARCHAR` |
-| SP de serving (laboratorio) | `vergis-lab-serving-sp` · appId `9faa3c3c-27ca-44e5-ad18-8ce65e9e1b11` · objectId `38a06a01-8f44-4418-8174-9eae0ad7190b` · rol **`Viewer`** en el workspace — **medido en vivo el 2026-08-19** (`GET /v1/workspaces/{id}/roleAssignments`), no leído de este archivo. ⚠️ **La regla «el rol decide `UNMASK`» está CONTRADICHA — ver la nota de abajo** |
+| SP de serving (laboratorio) | `vergis-lab-serving-sp` · appId `9faa3c3c-27ca-44e5-ad18-8ce65e9e1b11` · objectId `38a06a01-8f44-4418-8174-9eae0ad7190b` · rol **`Viewer`** en el workspace — **medido en vivo el 2026-08-19** (`GET /v1/workspaces/{id}/roleAssignments`), no leído de este archivo. **El rol decide `UNMASK`** (`Member` sí, `Viewer` no) — pero **el cambio de rol no propaga simétricamente**: ver la nota de abajo antes de medir |
 
-> ⚠️ **`UNMASK` y el rol del workspace — lo medido y lo que NO se sabe.**
+> ⚠️ **`UNMASK` y el rol del workspace — medido, y con una asimetría que importa.**
 >
-> Este archivo declaraba, desde el 2026-08-16, que *«`Member` ve el valor real, `Viewer` ve la
-> máscara»*. **La corrida de `fab:proof` del 2026-08-19 midió lo contrario**: con el SP en rol
-> `Viewer` —verificado contra el plano de control en la misma sesión, no leído de acá—, control
-> positivo en verde (el SP vio sus 2 filas) y la columna corroborada como enmascarada en
-> `sys.masked_columns`, **el SP leyó el RUT en claro** (`33.333.333-3`). O sea: **el DDM es inerte
-> para él, y la única protección de columna es la vista**.
+> **`Viewer` NO tiene `UNMASK`; `Member` sí.** Medido el 2026-08-19 con conexión nueva y token nuevo,
+> control positivo en verde y sin tocar una sola sentencia DDL. Coincide con lo registrado el
+> 2026-08-16.
 >
-> **Cuál de las dos mediciones describe el mecanismo NO está medido**, y se dice con esas palabras.
-> Candidato principal, ya catalogado en `PENDINGS.md`: revocar un rol de workspace en Fabric **no
-> toma efecto de inmediato** —bajar de `Member` a `Viewer` no tomó efecto en 6,5 min de sondeo—, así
-> que el plano de control puede decir `Viewer` mientras el plano de datos sigue tratándolo como
-> `Member`. Eso explicaría el resultado de hoy sin refutar el de agosto 16, pero **es conjetura hasta
-> que alguien la mida**.
+> **Pero el cambio de rol no propaga simétricamente, y eso es lo que hay que saber antes de creerle
+> a cualquier medición de `UNMASK`:**
 >
-> **Mientras tanto, lo prudente es asumir que el SP de serving SÍ lee en claro** — es el supuesto que
-> falla del lado seguro para el diseño de la protección de columna.
+> | Acto | Propagación medida |
+> |---|---|
+> | **Conceder** (`Viewer` → `Member`) | **≤11 s** a una conexión nueva con token nuevo |
+> | **Revocar** (`Member` → `Viewer`) | **>300 s** — y **ni una conexión nueva ni un token nuevo la destraban** |
+> | **Cualquiera de los dos, sobre una conexión YA ABIERTA** | **nunca** dentro de la ventana medida (60 s de sondeo) |
+>
+> **La conexión viva es una frontera dura: la autorización se fija al conectar.** Un pool que sostiene
+> conexiones conserva el privilegio del momento en que las abrió.
+>
+> **La trampa que esto arma, y que ya cobró una víctima el mismo 2026-08-19:** una corrida midió el SP
+> en `Viewer` leyendo **en claro** y se publicó como veredicto. Era **residuo de la revocación no
+> propagada** de tres días antes. Cuánto dura esa staleness y qué la termina **no está medido** —solo
+> su cota inferior, >5 min—; entre la lectura contaminada y la limpia pasaron ~4 h y una pausa de
+> capacidad, y cuál de las dos la cortó se desconoce.
+>
+> **Regla operativa que sale de esto:** una medición de `UNMASK` solo vale si el rol **no cambió
+> recientemente**, o si se hizo sobre un principal que nunca tuvo el rol superior. Un rol recién
+> bajado miente a favor del privilegio.
 >
 > **Instrumentos que NO sirven para esto** (medido el 2026-08-19, para que nadie los reintente):
 > `fn_my_permissions(NULL,'DATABASE')` devuelve `[]` incluso para permisos que el principal
