@@ -59,6 +59,8 @@ export class SqliteMasterDataStore implements MasterDataStore {
   private constructor(
     private db: SqlDb,
     private file: string | null,
+    /** Entidades con las que se abrió: las re-materializa `reopen()` (el DDL es idempotente). */
+    private entities: MasterDataEntity[] = [],
   ) {}
 
   /** Abre la DB y materializa una tabla por entidad (idempotente). */
@@ -67,6 +69,25 @@ export class SqliteMasterDataStore implements MasterDataStore {
     entities: MasterDataEntity[],
     control: SqliteControlOptions = {},
   ): Promise<SqliteMasterDataStore> {
+    return new SqliteMasterDataStore(await SqliteMasterDataStore.openDb(file, entities, control), file, entities)
+  }
+
+  /**
+   * Reabre el store DESDE DISCO con otras opciones de plano de control y recién entonces cambia el
+   * handle vivo (validate-before-swap). Ver `SqliteGovernanceStore.reopen`.
+   */
+  async reopen(control: SqliteControlOptions = {}): Promise<void> {
+    const fresh = await SqliteMasterDataStore.openDb(this.file, this.entities, control)
+    const previo = this.db
+    this.db = fresh
+    try {
+      previo.close()
+    } catch {
+      /* cerrar el handle viejo es higiene, no parte del contrato del swap */
+    }
+  }
+
+  private static async openDb(file: string | null, entities: MasterDataEntity[], control: SqliteControlOptions): Promise<SqlDb> {
     const db = await openSqliteDb(file, { ...control, schemaVersion: MASTER_DATA_SCHEMA_VERSION })
     for (const e of entities) {
       const cols = e.columns
@@ -74,8 +95,9 @@ export class SqliteMasterDataStore implements MasterDataStore {
         .join(', ')
       db.run(`CREATE TABLE IF NOT EXISTS ${localTable(e)} (${cols})`)
     }
-    persistSqliteDb(db, file)
-    return new SqliteMasterDataStore(db, file)
+    // Un handle de LECTURA (nodo en standby) no vuelca: ver `SqliteGovernanceStore.openDb`.
+    if ((control.mode ?? 'write') === 'write') persistSqliteDb(db, file)
+    return db
   }
 
   /** Estado del plano de escritura de este store (esquema, época, degradado). */

@@ -34,6 +34,51 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
+## Sin publicar
+
+### El cableado que invoca los dos planos: un solo nodo escribe, el otro sirve lecturas (#210 · I4+I5+I6)
+
+**Esto cierra la frase de 0.19.0.** Ahí los dos planos quedaron *puestos y sin cablear* —era cierto de
+esa versión y su entrada no se toca—; este cambio es **el cableado**, y con él el lease deja de ser una
+pieza que nadie invoca.
+
+**Qué cambia para quien opera.**
+
+- **Los cinco lazos de fondo cuelgan del plano de control**: re-ingesta, purga, frescura, vigilancia de
+  cargas y reporte periódico se arman **en el acto de adquirir** el control y se desarman al soltarlo,
+  esperando el tick en vuelo. Un nodo sin control **no observa, no reconcilia contra el motor, no
+  consume archivos del landing, no purga y no reporta** — lo que evita, con dos nodos vivos, dos
+  controladores compitiendo por los mismos recursos externos y dos correos del mismo reporte.
+- **`healthz` gana la fase `standby`**: HTTP **200** y `ok:true`, pero **distinta de `serving`**. El
+  predicado del conmutador y del poller de cortes (`200 ∧ phase=serving`) **no** la satisface, que es
+  justamente el punto: a un nodo en espera no se le rutea tráfico de escritura. La precedencia es
+  `starting → standby → degraded → serving`.
+- **Las mutaciones contra un nodo en espera responden 409**, nombrando al nodo activo y su época, en
+  las superficies de administración, configuración de PI, notas y Miranda. Las lecturas se sirven
+  normalmente: un nodo en espera **sí** sirve.
+- **`/contrato` declara el bloque `control`**: modo, lease (titular, época, renovación, motivo si se
+  perdió), anillo, estado de los lazos y **la lista de stores embebidos** con su versión de esquema
+  soportada y la del archivo — en plural, porque una instalación tiene más de uno y un solo par de
+  números escondería al store que bloquea un rollback.
+- **`SIGUSR2` = «suelta el control y queda en espera»** (desarma lazos → volcado final → release), y
+  **`SIGTERM` ahora suelta el control antes de cerrar**, dejando la marca que le ahorra al sucesor la
+  ventana de staleness.
+
+**Qué NO cambia para un nodo suelto.** Con `VERGIS_CONTROL=single` el comportamiento es el de siempre.
+Con el default (`lease`) un nodo solo adquiere su lease al arrancar y sigue igual; lo observable nuevo
+es el archivo `${VERGIS_OUT}/control.lease.json`, las líneas de log `[control]` y el bloque nuevo del
+contrato. Ninguna variable de entorno es obligatoria.
+
+**Cómo se verificó, y qué NO se midió.** Dos nodos reales sobre el mismo volumen y **sin una sola
+petición**: exactamente uno arma los lazos, el estado del nodo en espera **nunca aterriza** en el
+archivo de gobierno, el nodo en espera responde `phase: standby` y **409** a una mutación, y no aparece
+ni un aborto por escritura concurrente. Con el plano apagado en ambos nodos, **los dos** declaran
+`serving` y aparecen abortos en el que quedó atrás. El relevo se midió por señal (**≈8 s**) y por
+muerte del activo (**≈10–12 s**, una sola corrida: corrobora, no caracteriza). **Sin medir:** el ancho
+de la ventana de gracia del release frente a un candidato lento en arrancar; que un `GET` de las
+superficies de gestión nunca escriba (revisado por patrón, no auditado ruta por ruta); y el
+comportamiento sobre volumen de red, que sigue **fuera de contrato**.
+
 ## 0.19.0 — 2026-08-18
 
 **El plano de columna vuelve a proteger, el gobierno deja de secuestrar columnas, y dos planos del

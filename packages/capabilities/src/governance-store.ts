@@ -999,6 +999,8 @@ export class SqliteGovernanceStore implements GovernanceStore {
   private constructor(
     private db: SqlDb,
     private file: string | null,
+    /** Semilla con la que se abrió: la re-aplica `reopen()` (es idempotente por construcción). */
+    private seed: GovernanceSeed = {},
   ) {}
 
   static async open(
@@ -1006,6 +1008,33 @@ export class SqliteGovernanceStore implements GovernanceStore {
     seed: GovernanceSeed = {},
     control: SqliteControlOptions = {},
   ): Promise<SqliteGovernanceStore> {
+    const db = await SqliteGovernanceStore.openDb(file, seed, control)
+    return new SqliteGovernanceStore(db, file, seed)
+  }
+
+  /**
+   * Reabre el store DESDE DISCO con otras opciones de plano de control, y recién entonces cambia el
+   * handle vivo (validate-before-swap: si la apertura se niega —esquema más nuevo, época posterior— el
+   * handle anterior sigue en pie y el llamador decide qué hacer).
+   *
+   * Es lo que necesita un nodo que **acaba de tomar el control**: su snapshot de standby está rancio
+   * por definición (otro nodo escribió el archivo mientras él solo leía), así que seguir volcando desde
+   * memoria borraría lo que el otro dejó. También es el camino inverso —soltar el control y volver a
+   * modo lectura—, y por eso el modo va en `control`, no en un booleano propio.
+   */
+  async reopen(control: SqliteControlOptions = {}): Promise<void> {
+    const fresh = await SqliteGovernanceStore.openDb(this.file, this.seed, control)
+    const previo = this.db
+    this.db = fresh
+    try {
+      previo.close()
+    } catch {
+      /* cerrar el handle viejo es higiene, no parte del contrato del swap */
+    }
+  }
+
+  /** Apertura + DDL + semilla: el mismo camino para `open()` y para `reopen()`. */
+  private static async openDb(file: string | null, seed: GovernanceSeed, control: SqliteControlOptions): Promise<SqlDb> {
     const db = await openSqliteDb(file, { ...control, schemaVersion: SCHEMA_VERSION })
     ensureAdminTable(db, seed.admins ?? [])
     db.run(GROUP_DDL)
@@ -1055,8 +1084,10 @@ export class SqliteGovernanceStore implements GovernanceStore {
     // Semilla de la secuencia de códigos PI (idempotente: OR IGNORE no re-siembra si ya existe).
     db.run(`INSERT OR IGNORE INTO miranda_seq (id, next_code) VALUES (1, ?)`, [MIRANDA_SEQ_SEED])
     applySeed(db, seed)
-    persistSqliteDb(db, file)
-    return new SqliteGovernanceStore(db, file)
+    // Un handle de LECTURA (el de un nodo en standby) no vuelca: pedírselo sería que el propio store
+    // avise «volcado ignorado» por un camino que sabemos que no escribe. El DDL vive en su memoria.
+    if ((control.mode ?? 'write') === 'write') persistSqliteDb(db, file)
+    return db
   }
 
   private persist(): void {

@@ -52,6 +52,56 @@ export interface ReloadEvent {
   servablePis?: number
 }
 
+/**
+ * El PLANO DE CONTROL tal como el nodo lo vive (issue #210 · I6) — la sección que un conmutador de
+ * anillos consulta para decidir si puede promover a este nodo sin adivinar.
+ *
+ * Derivado, no declarado, igual que el resto del contrato: cada sub-bloque sale de la MISMA pieza que
+ * lo produce —el lease del plano de control, el registro de lazos, el guard de cada store embebido—,
+ * así que no hay arreglo que alguien deba mantener al día.
+ */
+export interface ControlContract {
+  /** `lease` (default de la caja) o `single` (un solo nodo, sin lease). */
+  mode: string
+  lease: {
+    /** Identidad de ESTE nodo como aspirante. */
+    holder: string
+    /** Época con la que controla (0 = nunca controló). */
+    epoch: number
+    /** Última renovación propia; `null` si nunca controló. */
+    renewedAt: string | null
+    /** `true` = este nodo tiene el control ahora mismo. */
+    held: boolean
+    /** Titular leído del archivo de lease (vacío = marca de release). */
+    observedHolder?: string
+    observedEpoch?: number
+    /** Por qué no controla (vocabulario cerrado del lease), si aplica. */
+    reason?: string
+    reasonDetail?: string
+    file: string
+  }
+  /** El ANILLO que este proceso ejecuta. `digest` queda `null` mientras la instalación no lo declare. */
+  ring: { version: string | null; digest: string | null; name: string | null }
+  /** Los lazos de fondo: declarados siempre, armados solo con el control. */
+  loops: { armed: boolean; detail: { name: string; everyMs: number; armed: boolean; ticks: number; lastTickAt?: string; lastError?: string }[] }
+  /**
+   * Los stores embebidos y su plano de escritura. En PLURAL a propósito: un nodo tiene más de uno
+   * (gobierno y notas en producción; data maestra en el camino local), y el pre-flight de una promoción
+   * compara **el más nuevo** — un solo par de números escondería al store que sí bloquea el rollback.
+   */
+  store: {
+    name: string
+    file: string
+    mode: string
+    schemaSupported: number
+    fileVersion: number
+    epoch: number
+    fileEpoch: number
+    degraded: boolean
+    degradedReason?: string
+  }[]
+}
+
 export interface ContractSnapshot {
   /** Versión del producto (`VERGIS_VERSION`, build-time). `null` = ausencia honesta. */
   version: string | null
@@ -72,6 +122,8 @@ export interface ContractSnapshot {
     unknown: string[]
   }
   caveats: string[]
+  /** Plano de control del nodo (#210 · I6). `null`/ausente = el proceso no cableó uno (tests, utilitarios). */
+  control?: ControlContract | null
 }
 
 export interface ContractRegistry {
@@ -129,6 +181,12 @@ export function createContractRegistry(opts: {
   hotReload: boolean
   envSource?: Record<string, string | undefined>
   now?: () => Date
+  /**
+   * Proveedor del bloque `control` (#210 · I6). Es un CLOSURE sobre las piezas vivas (lease, registro de
+   * lazos, guards de los stores), no un arreglo copiado: se llama en cada `snapshot()`, así que no puede
+   * driftear. Ausente ⇒ `control: null` — un proceso sin plano de control cableado lo dice, no lo finge.
+   */
+  control?: () => ControlContract
 }): ContractRegistry {
   const envSource = opts.envSource ?? process.env
   const clock = opts.now ?? ((): Date => new Date())
@@ -139,6 +197,17 @@ export function createContractRegistry(opts: {
   const consumed = new Set<string>()
   const artifacts = new Map<string, ArtifactState>() // clave: `${source}\u0000${path}`
   const recent: ReloadEvent[] = []
+  /** El bloque `control`, siempre por el proveedor vivo. Un fallo suyo NO rompe el contrato: esto es
+   *  observabilidad, y quedarse sin la sección es infinitamente mejor que un 500 en `/contrato`. */
+  const control = (): ControlContract | null => {
+    if (!opts.control) return null
+    try {
+      return opts.control()
+    } catch (e) {
+      console.error(`[contrato] no se pudo derivar el plano de control: ${errMsg(e)}`)
+      return null
+    }
+  }
 
   const key = (source: string, path: string): string => `${source}\u0000${path}`
 
@@ -228,6 +297,7 @@ export function createContractRegistry(opts: {
         }),
         env: { bootOnly, reloadableContent, unknown },
         caveats: [...caveats],
+        control: control(),
       }
     },
   }
