@@ -545,11 +545,63 @@ describe('Fabric · #163 H2 · enmascaramiento por columna (DDM nativo)', () => 
 
   it('emite el ADD MASKED WITH de la columna declarada, al final del setup', () => {
     const enf = compileFabric(polConRegla(), FAB_TARGET)
-    expect(enf.setupSQL[enf.setupSQL.length - 1]).toBe(
+    // El `ADD MASKED` cierra el enforcement DE LA TABLA. Detrás va el centinela de #238, que no es
+    // enforcement sino instrumento compartido por schema — por eso se ancla por posición relativa al
+    // ADD MASKED y no como «último del setup»: el último ya no le pertenece a esta tabla.
+    const iMask = enf.setupSQL.findIndex((x) => x.startsWith('ALTER TABLE'))
+    expect(enf.setupSQL[iMask]).toBe(
       `ALTER TABLE [dbo].[areas] ALTER COLUMN [rut] ADD MASKED WITH (FUNCTION = 'default()');`,
     )
+    expect(enf.setupSQL.slice(iMask + 1)).toEqual(enf.unmaskProbe?.setupSQL)
     // el DDL de fila no se movió: la máscara se SUMA, no reemplaza
     expect(enf.setupSQL.join('\n')).toContain('CREATE SECURITY POLICY [dbo].[secpol_areas]')
+  })
+
+  // ── #238 · el centinela de desenmascarado ────────────────────────────────────────────────────
+  it('#238 · emite el centinela SOLO cuando hay plano de columna', () => {
+    const sinRegla: Policy = { predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }], combine: 'and', default: 'deny' }
+    expect(compileFabric(sinRegla, FAB_TARGET).unmaskProbe).toBeNull()
+    expect(compileFabric(polConRegla(), FAB_TARGET).unmaskProbe).not.toBeNull()
+    // y sin reglas NO mueve un byte del SQL — la promesa que el emisor ya sostenía
+    expect(compileFabric(sinRegla, FAB_TARGET).setupSQL.join('\n')).not.toContain('vergis_unmask_probe')
+  })
+
+  it('#238 · el centinela es CREAR-SI-FALTA, nunca tira-y-recrea', () => {
+    const probe = compileFabric(polConRegla(), FAB_TARGET).unmaskProbe!
+    // Es compartido por schema y lo sondean conexiones vivas de otros PIs: un DROP+CREATE abriría
+    // una ventana en la que un sondeo concurrente lee una tabla ausente. Ninguna sentencia destruye.
+    expect(probe.setupSQL.join('\n')).not.toContain('DROP')
+    expect(probe.setupSQL[0]).toContain(`IF OBJECT_ID(N'[dbo].[vergis_unmask_probe]') IS NULL`)
+    expect(probe.setupSQL[1]).toContain('IF NOT EXISTS (SELECT 1 FROM [dbo].[vergis_unmask_probe])')
+    expect(probe.setupSQL[2]).toContain('ADD MASKED WITH')
+  })
+
+  it('#238 · el centinela NO se retira en el teardown — retirarlo cegaría a las demás tablas', () => {
+    const enf = compileFabric(polConRegla(), FAB_TARGET)
+    expect(enf.teardownSQL.join('\n')).not.toContain('vergis_unmask_probe')
+    // pero existe la vía explícita para retirarlo
+    expect(enf.unmaskProbe!.dropSQL).toBe('DROP TABLE IF EXISTS [dbo].[vergis_unmask_probe];')
+  })
+
+  it('#238 · el centinela lleva su valor esperado y su sondeo de UNA fila', () => {
+    const probe = compileFabric(polConRegla(), FAB_TARGET).unmaskProbe!
+    expect(probe.expectedValue).toBe('VERGIS-UNMASK-OK')
+    expect(probe.probeSQL).toBe('SELECT TOP 1 [probe] AS [probe] FROM [dbo].[vergis_unmask_probe];')
+    // el valor viaja en el INSERT: leerlo tal cual ES la evidencia de que el principal desenmascara
+    expect(probe.setupSQL[1]).toContain(`VALUES ('VERGIS-UNMASK-OK')`)
+  })
+
+  it('#238 · el centinela usa VARCHAR, no NVARCHAR — Fabric Warehouse no soporta NVARCHAR', () => {
+    const probe = compileFabric(polConRegla(), FAB_TARGET).unmaskProbe!
+    expect(probe.setupSQL[0]).toContain('VARCHAR(32)')
+    expect(probe.setupSQL[0]).not.toContain('NVARCHAR')
+  })
+
+  it('#238 · el centinela hereda el schema del target, y su nombre NO es configurable', () => {
+    const enf = compileFabric(polConRegla(), { schema: 'lh', table: 'fct', maskViewName: 'v_otra' })
+    expect(enf.unmaskProbe!.qualifiedName).toBe('[lh].[vergis_unmask_probe]')
+    // no hay opción de target que lo renombre: un instrumento que hay que ir a buscar no se corre
+    expect(enf.unmaskProbe!.table).toBe('vergis_unmask_probe')
   })
 
   it('el teardown revierte la máscara, guardado (DROP MASKED sobre columna sin máscara es error)', () => {
@@ -928,8 +980,11 @@ describe('Fabric · #163 H6 · vista de máscara evaluada por request (el claim 
         `        CAST(SESSION_CONTEXT(N'vergis_claim_ve_rem') AS NVARCHAR(MAX))\n` +
         `    )) AS [vergis_claims] ([ve_pii], [ve_rem]);`,
     )
-    // la vista es la ÚLTIMA sentencia del setup (se apoya en la tabla ya gobernada) y viaja SOLA
-    expect(enf.setupSQL[enf.setupSQL.length - 1]).toBe(enf.maskView?.createSQL)
+    // la vista cierra el enforcement de la tabla (se apoya en la tabla ya gobernada) y viaja SOLA;
+    // detrás solo va el centinela de #238, que es instrumento compartido y no enforcement
+    const iView = enf.setupSQL.indexOf(enf.maskView!.createSQL)
+    expect(iView).toBeGreaterThan(-1)
+    expect(enf.setupSQL.slice(iView + 1)).toEqual(enf.unmaskProbe?.setupSQL)
     // y el plano de fila no se movió: la vista se SUMA
     expect(enf.setupSQL.join('\n')).toContain('CREATE SECURITY POLICY [dbo].[secpol_areas]')
   })

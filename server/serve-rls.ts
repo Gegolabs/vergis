@@ -149,7 +149,7 @@ import { createSinks, fanout, forEvent, type Notification, type ReportSchedule }
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
-import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, type PiVerdict } from './engines/fabric'
+import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, unmaskProbeSchemas, type PiVerdict } from './engines/fabric'
 import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
@@ -560,11 +560,19 @@ if (ENGINE === 'clickhouse') {
     // convención NO es confiar en él — el gate exige además corroboración de `sys`. El porqué
     // completo y el límite vive con la función, en ./engines/fabric.
     const maskViews = maskViewCandidates(store)
+    // CENTINELA DE DESENMASCARADO (#238): los schemas donde buscarlo salen del MISMO store — son
+    // aquellos con reglas de columna, los únicos donde la capacidad de desenmascarar es precondición
+    // de servir. Se calculan acá y no dentro del motor para que el sondeo viaje en la misma ola de
+    // consultas del arranque en frío (#138·3), sin una segunda vuelta de descubrimiento.
+    const unmaskSchemas = unmaskProbeSchemas(store)
     const { state, usedRefs, refErrors, inherited, viewLineage: lineage } = await verifyFabricServability({
       pis: reports.map((r) => ({ slug: r.slug, tables: r.tables, databaseRefs: r.databaseRefs })),
       store,
       maskViews,
-      sourceStateOf: createFabricSourceStateOf((input) => dwh.execute(input, { agent: 'vergis' }) as Promise<{ rows: Record<string, unknown>[] }>),
+      sourceStateOf: createFabricSourceStateOf(
+        (input) => dwh.execute(input, { agent: 'vergis' }) as Promise<{ rows: Record<string, unknown>[] }>,
+        unmaskSchemas,
+      ),
       previous: piState,
     })
     // Swap tras evaluar TODO (validate-before-swap): el estado vivo nunca queda a medias. El linaje

@@ -50,6 +50,35 @@ export const SYS_VIEW_LINEAGE_SQL =
   `JOIN sys.sql_modules m ON m.object_id = v.object_id ` +
   `WHERE d.referenced_id IS NOT NULL`
 
+/**
+ * SQL del **centinela de desenmascarado** (#238) — dos legs, y la primera existe para poder
+ * distinguir «no está instalado» de «está y enmascara».
+ *
+ * `UNMASK_PROBE_SCHEMAS_SQL` localiza los centinelas (el nombre lo fija el emisor, ver
+ * `FabricUnmaskProbe`); `unmaskProbeReadSQL` lee uno. Sin esa separación, un `SELECT` sobre una
+ * tabla ausente devolvería un error indistinguible de una credencial vencida — y el gate trataría
+ * «falta re-aplicar la DDL» como «el warehouse no respondió», que son remediaciones distintas.
+ */
+export const UNMASK_PROBE_TABLE_NAME = 'vergis_unmask_probe'
+export const UNMASK_PROBE_EXPECTED = 'VERGIS-UNMASK-OK'
+export const UNMASK_PROBE_SCHEMAS_SQL =
+  `SELECT s.name AS sch FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id ` +
+  `WHERE t.name = N'${UNMASK_PROBE_TABLE_NAME}'`
+export function unmaskProbeReadSQL(schema: string): string {
+  // El schema viene de `sys`, no del usuario: no hay interpolación de dato ajeno acá.
+  return `SELECT TOP 1 [probe] AS [probe] FROM [${schema}].[${UNMASK_PROBE_TABLE_NAME}];`
+}
+
+/**
+ * Qué se sabe de la capacidad de desenmascarar del principal con el que el serving se conecta.
+ *
+ * Los tres estados son los del instrumento, y **ninguno se colapsa con otro** (Norma 7, corolario
+ * de instrumentos): `capable` y `incapable` son mediciones; `uninstrumented` es la confesión de que
+ * no hay con qué medir. Un instrumento que devolviera «incapable» cuando en realidad no pudo medir
+ * apagaría PIs sanos y entrenaría a desconfiar del gate.
+ */
+export type UnmaskCapability = 'capable' | 'incapable' | 'uninstrumented'
+
 /** Lo que la verificación necesita saber de un PI (proyección de `Report`). */
 export interface VerifiablePi {
   slug: string
@@ -71,6 +100,14 @@ export interface SourceState {
    * no-schemabound hereda).
    */
   unboundViewLineage?: Map<string, string[]>
+  /**
+   * Capacidad de desenmascarar medida en ESTA conexión (#238), o ausente si no se midió.
+   *
+   * Ausente ⇒ el gate se comporta EXACTAMENTE como antes de #238: ninguna leg nueva se evalúa. Es
+   * la misma disciplina de `unboundViewLineage` — una capacidad nueva no puede cambiar el veredicto
+   * de un llamador que todavía no la produce.
+   */
+  unmask?: UnmaskCapability
 }
 
 /**
@@ -109,6 +146,23 @@ export function maskViewCandidates(store: Map<string, PolicyDecl>): MaskViewDecl
       const name = dot > 0 ? table.slice(dot + 1) : table
       return { view: `${schema}.vw_mask_${name}`, base: table }
     })
+}
+
+/**
+ * Schemas donde buscar el centinela de #238: los del policy store que declaran reglas de columna.
+ *
+ * Es la misma derivación que `maskViewCandidates` —el store como única fuente— y por la misma razón:
+ * el emisor instala el centinela exactamente cuando emite plano de columna, así que preguntar por él
+ * en un schema sin reglas de columna sería medir donde no hay nada que medir.
+ */
+export function unmaskProbeSchemas(store: Map<string, PolicyDecl>): string[] {
+  const out = new Set<string>()
+  for (const [table, policy] of store) {
+    if (columnRules(policy).length === 0) continue
+    const dot = table.lastIndexOf('.')
+    out.add(dot > 0 ? table.slice(0, dot) : 'dbo')
+  }
+  return [...out]
 }
 
 /** Normaliza una referencia `[schema].[objeto]` a `schema.objeto` (el emisor entrega la calificada). */
@@ -152,14 +206,41 @@ export interface FabricVerifyResult {
  */
 export function createFabricSourceStateOf(
   execute: (input: { database_ref: string; sql: string }) => Promise<{ rows: Record<string, unknown>[] }>,
+  /**
+   * Schemas donde buscar el centinela de #238 — los que el llamador sabe, por el policy store, que
+   * tienen reglas de columna. **Ausente o vacío ⇒ no se mide nada y `SourceState.unmask` no viaja**:
+   * el gate se comporta EXACTAMENTE como antes de #238, byte por byte.
+   *
+   * Por qué los pone el LLAMADOR y no se descubren acá: descubrirlos exigiría una consulta previa,
+   * y eso convertiría el arranque en frío en DOS olas de round-trips en vez de una — justo el costo
+   * que #138·3 acotó. El llamador ya tiene el store en la mano; pedirle el dato es gratis y el
+   * sondeo viaja en la MISMA ola que las dos consultas de sistema.
+   */
+  unmaskSchemas: string[] = [],
 ): (databaseRef: string) => Promise<SourceState> {
+  const schemas = [...new Set(unmaskSchemas)]
   return async (databaseRef: string): Promise<SourceState> => {
-    const [prot, lin] = (await Promise.all([
+    const [prot, lin, probeSchemas, ...lecturas] = (await Promise.all([
       execute({ database_ref: databaseRef, sql: SYS_SECURITY_POLICIES_SQL }),
       execute({ database_ref: databaseRef, sql: SYS_VIEW_LINEAGE_SQL }),
+      // Las dos legs del centinela viajan en esta MISMA ola. La de descubrimiento existe para poder
+      // distinguir «no está instalado» de «está y enmascara»: sin ella, un `SELECT` sobre una tabla
+      // ausente daría un error indistinguible de una credencial vencida, y el gate confundiría
+      // «falta re-aplicar la DDL» con «el warehouse no respondió» — remediaciones distintas.
+      schemas.length > 0 ? execute({ database_ref: databaseRef, sql: UNMASK_PROBE_SCHEMAS_SQL }) : Promise.resolve({ rows: [] }),
+      // Las lecturas se toleran individualmente: si el centinela no existe en ese schema, el error es
+      // esperado y lo resuelve el descubrimiento. Un error CON centinela presente sí es indeterminación.
+      ...schemas.map((sch) =>
+        execute({ database_ref: databaseRef, sql: unmaskProbeReadSQL(sch) }).then(
+          (r) => r,
+          () => null,
+        ),
+      ),
     ])) as [
       { rows: { sch: string; tbl: string }[] },
       { rows: { vsch: string; vname: string; bsch: string; bname: string; bound?: unknown }[] },
+      { rows: { sch: string }[] },
+      ...({ rows: { probe?: unknown }[] } | null)[],
     ]
     const viewLineage = new Map<string, string[]>()
     const unboundViewLineage = new Map<string, string[]>()
@@ -174,7 +255,30 @@ export function createFabricSourceStateOf(
       const bases = target.get(v) ?? []
       if (!bases.includes(b)) target.set(v, [...bases, b])
     }
-    return { protectedTables: new Set(prot.rows.map((row) => `${row.sch}.${row.tbl}`)), viewLineage, unboundViewLineage }
+    // ── #238 · la capacidad de desenmascarar, MEDIDA en esta conexión ────────────────────────────
+    // El reconocimiento es «leí el valor conocido» vs «leí otra cosa» — NO se compara contra el
+    // literal del motor (`xxxx` hoy): si `default()` cambiara de forma, esto seguiría valiendo.
+    let unmask: UnmaskCapability | undefined
+    if (schemas.length > 0) {
+      const instalados = new Set(probeSchemas.rows.map((r) => r.sch))
+      const conCentinela = schemas.filter((sch) => instalados.has(sch))
+      if (conCentinela.length === 0) {
+        unmask = 'uninstrumented'
+      } else {
+        const valores = conCentinela.map((sch) => {
+          const r = lecturas[schemas.indexOf(sch)]
+          // Centinela presente cuya lectura falló: NO se degrada a `incapable` —eso sería inventar un
+          // veredicto—. Se propaga, y el llamador lo trata como indeterminación.
+          if (r === null) throw new Error(`el centinela de '${sch}' existe pero no se pudo leer`)
+          return r.rows.length > 0 ? String(r.rows[0]!.probe ?? '') : ''
+        })
+        // Basta que UN centinela lea enmascarado para declarar la capacidad ausente: la capacidad es
+        // del principal, no del schema, así que dos lecturas discordantes solo pueden significar algo
+        // más raro — y ahí el lado seguro es el que apaga.
+        unmask = valores.every((v) => v === UNMASK_PROBE_EXPECTED) ? 'capable' : 'incapable'
+      }
+    }
+    return { protectedTables: new Set(prot.rows.map((row) => `${row.sch}.${row.tbl}`)), viewLineage, unboundViewLineage, ...(unmask ? { unmask } : {}) }
   }
 }
 
@@ -355,12 +459,44 @@ export async function verifyFabricServability(opts: {
       continue
     }
     const missing = [...needed].filter((t) => !protectedTables.has(t))
-    if (unresolved.length === 0 && missing.length === 0) {
+
+    // ── #238 · la precondición de desenmascarado, ANTES de poder declarar servible ────────────────
+    // Solo aplica a PIs cuyas tablas declaran reglas de columna: sin plano de columna la capacidad
+    // no cambia nada y exigirla apagaría PIs sanos. Se lee del MISMO helper que usa el emisor
+    // (`columnRules`), para que las dos lecturas no puedan divergir.
+    const needsUnmask = [...needed].some((t) => {
+      const p = store.get(t)
+      return p ? columnRules(p).length > 0 : false
+    })
+    const caps = okRefs.map((r) => stateByRef.get(r)!.unmask).filter((c): c is UnmaskCapability => c !== undefined)
+    // MEDIDO Y AUSENTE ⇒ veredicto definitivo, y gana sobre todo lo demás: la vista de máscara
+    // devuelve la máscara en AMBAS ramas del `CASE`, así que el PI serviría una capacidad muerta sin
+    // que nada lo gritara. Servir enmascarado «con advertencia» se descartó en el diseño: la persona
+    // con derecho no puede distinguir eso de «no traigo el claim».
+    if (needsUnmask && caps.includes('incapable')) {
+      state.set(pi.slug, {
+        ok: false,
+        reason:
+          `el principal de serving NO puede desenmascarar (medido con el centinela ` +
+          `${UNMASK_PROBE_TABLE_NAME}): el DDM enmascara en la lectura de la tabla, río arriba de la ` +
+          `vista, y el claim de columna dejaría de conceder nada (#238). Concede al principal la ` +
+          `capacidad de leer el valor real de las columnas gobernadas (en Fabric, rol Member del ` +
+          `workspace; o GRANT UNMASK donde el motor lo soporte) — es cláusula del contrato de instancia.`,
+      })
+      continue
+    }
+    // SIN INSTRUMENTO ⇒ indeterminación, NO veredicto. Es el estado de una instancia que todavía no
+    // regeneró su DDL: el centinela nace con el setup del emisor. Se trata como una conexión que no
+    // respondió —el PI que YA servía conserva su veredicto sano— porque apagarlo sería castigar una
+    // migración pendiente con un corte de servicio, y lo que falta acá es medición, no gobierno.
+    const unmaskIndeterminado = needsUnmask && caps.length > 0 && caps.includes('uninstrumented')
+
+    if (unresolved.length === 0 && missing.length === 0 && !unmaskIndeterminado) {
       state.set(pi.slug, { ok: true }) // veredicto definitivo: todo gobierno presente
       inherited.push(...piInherited)
       continue
     }
-    if (errRefs.length > 0) {
+    if (errRefs.length > 0 || unmaskIndeterminado) {
       // INDETERMINADO: lo que falta (secpol o linaje) podría vivir en la conexión que no respondió.
       // Conservar el veredicto sano previo; en frío o ya degradado → fail-closed con el motivo.
       const prev = previous?.get(pi.slug)
@@ -368,9 +504,20 @@ export async function verifyFabricServability(opts: {
         state.set(pi.slug, prev)
         continue
       }
+      if (errRefs.length > 0) {
+        state.set(pi.slug, {
+          ok: false,
+          reason: `no se pudo verificar la RLS nativa: conexión ${errRefs.map((r) => `'${r}'`).join(', ')} no respondió (${errRefs.map((r) => refErrors.get(r)).join(' · ')}).`,
+        })
+        continue
+      }
       state.set(pi.slug, {
         ok: false,
-        reason: `no se pudo verificar la RLS nativa: conexión ${errRefs.map((r) => `'${r}'`).join(', ')} no respondió (${errRefs.map((r) => refErrors.get(r)).join(' · ')}).`,
+        reason:
+          `no se pudo verificar que el principal de serving desenmascara: el centinela ` +
+          `${UNMASK_PROBE_TABLE_NAME} no está instalado en la fuente (#238). Regenera y re-aplica la ` +
+          `DDL de la política — el centinela nace con ella. Sin medirlo no se sirve un PI con reglas ` +
+          `de columna: la vista podría estar concediendo nada.`,
       })
       continue
     }
