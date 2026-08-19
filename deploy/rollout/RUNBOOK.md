@@ -271,6 +271,19 @@ pierde.
 gate de esquema negándose, la vuelta atrás cuando el smoke falla, y el modo de falla del inodo de
 §0.5 — que salió como control negativo falso antes de entenderse.
 
+**Medido sobre las herramientas de este runbook**, para que nadie descubra un flag en medio de una
+promoción: la imagen `caddy:2` trae `/bin/sh`, `/usr/bin/wget` y `/bin/sed`, y su `wget` es el de
+**BusyBox**, no el de GNU — las invocaciones de acá (`-q -O-`, `-q -T 2 -O-`) las acepta, pero un
+`--long-flag` de GNU no existe ahí. Si cambias la imagen del borde, **verifica las herramientas antes
+de la ventana, no durante**.
+
+**No medido, y por qué no se disfraza:** el poller de §0.4 está escrito contra el shape real de
+`/healthz` y con flags verificados, pero **no se ejecutó contra un borde vivo desde este runbook**. Y
+las tres vías sanas del inodo (`docker cp`, editar dentro, montar el **directorio**) son la lectura
+mecánica correcta del problema: **lo medido fue el fallo, no la cura**. La primera vez que las uses,
+comprueba con §0.5 que la config llegó — que es justamente lo que §0.5 existe para no dar por
+supuesto.
+
 **Lo que NO se promete: corte cero.** La promoción medida **no fue corte cero**. En el e2e del frente
 anterior se observó un tramo de **≈1,9 s** en que el predicado `phase=serving` no se satisfacía, con
 **0 PIs servidos** y **cero respuestas de error crudas** en el poller. Lo que el mecanismo elimina es
