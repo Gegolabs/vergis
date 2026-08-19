@@ -1,0 +1,867 @@
+#!/bin/sh
+# vergis-rollout — ciclo de vida de ANILLOS de Vergis (issue #210 · I8).
+#
+# Un ANILLO es una instalación ejecutable de una versión publicada: un contenedor `vergis-<versión>`
+# creado desde `ghcr.io/gegolabs/vergis:<versión>` con los mismos montajes de instancia que el nodo de
+# siempre. Hay N anillos en disco y hasta 2 calientes (activo + previo). Promover NO recrea nada:
+# traslada el plano de control de un proceso a otro y conmuta el borde en caliente.
+#
+#   install <versión>    pull + create + start; el anillo queda EN ESPERA (standby), verificado
+#   promote <versión>    pre-flight → handover del control → flip del borde → smoke → registro
+#   rollback [<versión>] promote al previo (o a la versión dada)
+#   retire  <versión>    detiene y borra un anillo (jamás el activo ni el previo)
+#   prune   [--retain N] retira lo que sobra de la ventana de retención (jamás activo ni previo)
+#   status  [--json]     el registro + la fase VIVA de cada anillo + a quién apunta el borde
+#
+# POSIX sh ESTRICTO, cero bashismos: la VM objetivo corre `sh`, no `bash`, y está medido que un
+# bashismo muere con «Syntax error» a mitad de script — dejando el acto A MEDIAS, que es el peor
+# desenlace posible de un despliegue. Se ejecuta con `sh vergis-rollout`, no con `bash`.
+#
+# DEPENDENCIAS: `docker` y `sed`. Nada más — ni jq, ni curl, ni una imagen auxiliar.
+#   · Las sondas HTTP van por `docker exec <anillo> node -e 'fetch(...)'`: `node` es el runtime de la
+#     imagen (existe por construcción) y `:8080`/`:8079` NO están publicados al host por el supuesto de
+#     red D2, así que un `curl` desde el host no los alcanzaría. Es el mismo patrón del healthcheck de
+#     `docker-compose.yml` («node:22-slim no trae curl»).
+#   · La sonda distingue «medí y salió negativo» de «no pude medir»: imprime el código HTTP en la
+#     primera línea y devuelve rc≠0 SOLO cuando no hubo respuesta. Un instrumento que confunde las dos
+#     cosas produce datos con cara de verdad.
+#
+# LO QUE ESTA HERRAMIENTA NO HACE, POR DISEÑO: retirar el anillo activo o el previo (ninguna
+# combinación de flags lo permite), usar `latest` ni tags móviles, promover sin verificar el esquema del
+# store, ni tocar `docker compose` (recrear es exactamente lo que se está eliminando).
+
+set -eu
+
+# ─── Configuración (todo por env; los defaults son los del despliegue de referencia) ────────────────
+RINGS_DIR=${RINGS_DIR:-./rings}                      # dónde viven rings.json y active.caddy
+RINGS_IMAGE=${RINGS_IMAGE:-ghcr.io/gegolabs/vergis}  # repositorio de la imagen (SIN tag)
+RINGS_RETAIN=${RINGS_RETAIN:-3}                      # anillos en disco; 2 ≡ blue-green exacto
+RINGS_ARGS_FILE=${RINGS_ARGS_FILE:-$RINGS_DIR/ring.args}   # argumentos de `docker create` del anillo
+RINGS_ACTIVE_FILE=${RINGS_ACTIVE_FILE:-$RINGS_DIR/active.caddy}
+RINGS_EDGE=${RINGS_EDGE:-caddy}                      # contenedor del borde (Caddy)
+RINGS_EDGE_CONFIG=${RINGS_EDGE_CONFIG:-/etc/caddy/Caddyfile}
+RINGS_EDGE_URL=${RINGS_EDGE_URL:-http://caddy:8079}  # el conmutador, visto desde la red interna
+RINGS_PROMOTE_TIMEOUT=${RINGS_PROMOTE_TIMEOUT:-30}   # s de espera a que el candidato declare serving
+RINGS_STANDBY_TIMEOUT=${RINGS_STANDBY_TIMEOUT:-90}   # s de espera a que un anillo recién iniciado responda
+RINGS_ADMIN_EMAIL=${RINGS_ADMIN_EMAIL:-}             # identidad admin para leer /contrato (pre-flight)
+RINGS_GATE_TOKEN=${RINGS_GATE_TOKEN:-}               # VERGIS_GATE_SECRET, si la instancia lo exige
+RINGS_GATE_TOKEN_FILE=${RINGS_GATE_TOKEN_FILE:-}     # …o el archivo que lo contiene (preferido)
+RINGS_DOCKER=${RINGS_DOCKER:-docker}                 # el cliente docker (inyectable en pruebas)
+RINGS_SMOKE=${RINGS_SMOKE:-1}                        # 0 = sin smoke post-flip (no recomendado)
+
+PROG=vergis-rollout
+REG="$RINGS_DIR/rings.json"
+
+# ─── Utilidades ─────────────────────────────────────────────────────────────────────────────────────
+say() { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$PROG: $*" >&2; }
+die() {
+  printf '%s\n' "$PROG: $*" >&2
+  exit 1
+}
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+docker_cli() { $RINGS_DOCKER "$@"; }
+
+# Un token que puede entrar a JSON o a un nombre de contenedor sin escaparse: si no calza, se rechaza.
+# Es el guard que hace innecesario un escapador de JSON en sh (y por lo tanto imposible su bug).
+check_token() {
+  case "$1" in
+  '' | *[!A-Za-z0-9._:+-]*) die "valor inválido '$1' ($2): solo se aceptan [A-Za-z0-9._:+-]" ;;
+  esac
+}
+
+# Nombre del contenedor de un anillo: los `.` de la versión pasan a `-` (`0.19.0` → `vergis-0-19-0`).
+ring_name() { printf 'vergis-%s\n' "$(printf '%s' "$1" | tr '.' '-')"; }
+
+# Un campo string de una línea JSON de anillo. Determinista porque el único escritor de rings.json es
+# esta herramienta y su formato es una línea por anillo, sin anidamiento.
+jget() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
+
+# Un número (o string numérico) de un cuerpo JSON cualquiera, tolerando espacios.
+jnum() { printf '%s' "$1" | sed -n 's/.*"'"$2"'"[ ]*:[ ]*\([0-9][0-9]*\).*/\1/p' | head -1; }
+
+# ─── El registro de anillos (rings.json) ────────────────────────────────────────────────────────────
+# Se carga a un archivo temporal con UNA LÍNEA JSON POR ANILLO y se re-renderiza completo al guardar
+# (escritura atómica: tmp + mv). Sin parser de JSON: el formato lo produce este mismo script.
+TMPD=
+cleanup() {
+  if [ -n "$TMPD" ]; then rm -rf "$TMPD"; fi
+}
+trap cleanup EXIT HUP INT TERM
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/vergis-rollout.XXXXXX")
+LINES="$TMPD/rings.lines"
+ACTIVE=
+PREVIOUS=
+
+load_reg() {
+  : >"$LINES"
+  ACTIVE=
+  PREVIOUS=
+  [ -f "$REG" ] || return 0
+  ACTIVE=$(sed -n 's/^  "active": *"\([^"]*\)".*/\1/p' "$REG" | head -1)
+  PREVIOUS=$(sed -n 's/^  "previous": *"\([^"]*\)".*/\1/p' "$REG" | head -1)
+  sed -n 's/^    \({"version".*}\),*$/\1/p' "$REG" >"$LINES"
+}
+
+save_reg() {
+  mkdir -p "$RINGS_DIR"
+  tmp="$TMPD/rings.json.new"
+  {
+    say '{'
+    say '  "schema": 1,'
+    printf '  "updatedAt": "%s",\n' "$(now_iso)"
+    printf '  "active": "%s",\n' "$ACTIVE"
+    printf '  "previous": "%s",\n' "$PREVIOUS"
+    say '  "rings": ['
+    n=$(wc -l <"$LINES" | tr -d ' ')
+    i=0
+    while IFS= read -r l; do
+      i=$((i + 1))
+      if [ "$i" -lt "$n" ]; then printf '    %s,\n' "$l"; else printf '    %s\n' "$l"; fi
+    done <"$LINES"
+    say '  ]'
+    say '}'
+  } >"$tmp"
+  mv "$tmp" "$REG"
+}
+
+# Anillos ordenados por fecha de instalación, el más nuevo primero. La clave se EXTRAE a una columna
+# aparte en vez de contar campos de la línea JSON con `sort -t'"'`: contar campos se rompe en silencio
+# el día que el formato gane un campo, y ordenar mal acá retira el anillo equivocado.
+sort_rings_desc() {
+  while IFS= read -r l; do
+    printf '%s\t%s\n' "$(jget "$l" installedAt)" "$l"
+  done <"$LINES" | sort -r | cut -f2-
+}
+
+ring_line() { grep -F "\"version\":\"$1\"," "$LINES" 2>/dev/null | head -1; }
+ring_known() { [ -n "$(ring_line "$1")" ]; }
+ring_drop() {
+  grep -v -F "\"version\":\"$1\"," "$LINES" >"$TMPD/keep" 2>/dev/null || : >"$TMPD/keep"
+  mv "$TMPD/keep" "$LINES"
+}
+
+# Reemplaza (o agrega) la línea de un anillo. Los campos son fijos y en orden fijo: el formato es
+# contrato con `jget`, no un JSON libre.
+ring_put() {
+  _v=$1 _name=$2 _image=$3 _digest=$4 _imageid=$5 _installed=$6 _state=$7 _promoted=$8
+  ring_drop "$_v"
+  printf '{"version":"%s","name":"%s","image":"%s","digest":"%s","imageId":"%s","installedAt":"%s","state":"%s","promotedAt":"%s"}\n' \
+    "$_v" "$_name" "$_image" "$_digest" "$_imageid" "$_installed" "$_state" "$_promoted" >>"$LINES"
+}
+
+ring_set_state() {
+  l=$(ring_line "$1")
+  [ -n "$l" ] || return 0
+  ring_put "$1" "$(jget "$l" name)" "$(jget "$l" image)" "$(jget "$l" digest)" "$(jget "$l" imageId)" \
+    "$(jget "$l" installedAt)" "$2" "${3:-$(jget "$l" promotedAt)}"
+}
+
+# ─── Docker: identidad de imagen y de contenedor ────────────────────────────────────────────────────
+image_digest() {
+  d=$(docker_cli image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null |
+    grep "@sha256:" | head -1 | sed 's/^[^@]*@//')
+  if [ -n "$d" ]; then
+    printf '%s\n' "$d"
+  else
+    # Imagen sin RepoDigest (construida local, nunca empujada): la identidad honesta es el ID de su
+    # configuración. Se marca `local:` para que nadie la confunda con un digest de registry.
+    _id=$(docker_cli image inspect --format '{{.Id}}' "$1" 2>/dev/null || printf '')
+    if [ -z "$_id" ]; then die "la imagen '$1' no existe localmente: no hay digest que registrar."; fi
+    printf 'local:%s\n' "$_id"
+  fi
+}
+image_id() { docker_cli image inspect --format '{{.Id}}' "$1"; }
+container_exists() { docker_cli inspect --format '{{.Id}}' "$1" >/dev/null 2>&1; }
+container_running() { [ "$(docker_cli inspect --format '{{.State.Running}}' "$1" 2>/dev/null || echo false)" = true ]; }
+container_image_id() { docker_cli inspect --format '{{.Image}}' "$1" 2>/dev/null || printf '\n'; }
+
+# ─── Sondas HTTP (por dentro de la red, con `node` de la propia imagen) ─────────────────────────────
+# Imprime «<status>» en la primera línea y el cuerpo en el resto. rc=0 ⇒ HUBO respuesta (aunque sea un
+# 500); rc=1 ⇒ NO se pudo medir. La diferencia es el punto: un instrumento que no sabe reportar su
+# propio fallo produce mediciones falsas.
+FETCH_JS='const [u,h]=process.argv.slice(1);fetch(u,{headers:JSON.parse(h)}).then(async r=>{process.stdout.write(r.status+"\n");process.stdout.write(await r.text())}).catch(e=>{process.stderr.write("sonda: "+(e&&e.message||e)+"\n");process.exit(1)})'
+
+probe_headers() {
+  tok=$RINGS_GATE_TOKEN
+  if [ -z "$tok" ] && [ -n "$RINGS_GATE_TOKEN_FILE" ] && [ -f "$RINGS_GATE_TOKEN_FILE" ]; then
+    tok=$(sed -n '1p' "$RINGS_GATE_TOKEN_FILE" | tr -d '\r\n')
+  fi
+  # El JSON se arma con campos controlados; el token NO se imprime nunca en pantalla ni en logs.
+  printf '{'
+  sep=
+  if [ -n "$RINGS_ADMIN_EMAIL" ]; then
+    printf '"X-Forwarded-Email":"%s"' "$RINGS_ADMIN_EMAIL"
+    sep=,
+  fi
+  if [ -n "$tok" ]; then printf '%s"x-gate-token":"%s"' "$sep" "$tok"; fi
+  printf '}'
+}
+
+# probe <contenedor-sonda> <url> → status + cuerpo por stdout
+probe() { docker_cli exec "$1" node -e "$FETCH_JS" "$2" "$(probe_headers)"; }
+probe_status() { printf '%s' "$1" | sed -n '1p'; }
+probe_body() { printf '%s' "$1" | sed '1d'; }
+
+phase_of() { printf '%s' "$1" | sed -n 's/.*"phase":"\([a-z-]*\)".*/\1/p' | head -1; }
+
+# healthz de un anillo, por dentro de sí mismo (localhost: no depende de DNS ni del borde).
+health_of() { probe "$1" "http://127.0.0.1:8080/healthz" 2>/dev/null || printf '\n'; }
+
+# ¿Este cuerpo satisface el predicado de ruteo? `200 ∧ phase=serving ∧ pis.serving=pis.total`.
+# NUNCA `r.ok` ni «responde»: un standby contesta 200 con ok:true por diseño.
+serving_ok() {
+  _st=$1 _body=$2
+  [ "$_st" = 200 ] || return 1
+  [ "$(phase_of "$_body")" = serving ] || return 1
+  _t=$(jnum "$_body" total)
+  _s=$(jnum "$_body" serving)
+  # Sin bloque `pis` (motor sin servibilidad por PI) el predicado se queda en fase; con él, exige que
+  # TODOS sirvan — un anillo que promueve con PIs caídos no es un anillo promovible.
+  [ -z "$_t" ] || [ "$_t" = "$_s" ] || return 1
+  return 0
+}
+
+# Espera hasta que la fase de un anillo esté en la lista dada. Devuelve la fase observada por stdout.
+wait_phase() {
+  _c=$1 _want=$2 _secs=$3
+  _i=0
+  while [ "$_i" -lt "$_secs" ]; do
+    _out=$(health_of "$_c")
+    _ph=$(phase_of "$(probe_body "$_out")")
+    case " $_want " in
+    *" $_ph "*)
+      printf '%s\n' "$_ph"
+      return 0
+      ;;
+    esac
+    _i=$((_i + 1))
+    sleep 1
+  done
+  printf '%s\n' "${_ph:-sin-respuesta}"
+  return 1
+}
+
+# ¿Qué anillo tiene HOY el plano de control? Se OBSERVA sondeando a los anillos vivos; no se lee del
+# registro. El registro es caché: un restart manual, una instalación en un host sin activo o un relevo
+# por staleness lo dejan atrás, y operar el handover contra un titular equivocado deja el acto a medias.
+live_active() {
+  cp "$LINES" "$TMPD/vivos" 2>/dev/null || : >"$TMPD/vivos"
+  while IFS= read -r l; do
+    _n=$(jget "$l" name)
+    if container_running "$_n"; then
+      if [ "$(phase_of "$(probe_body "$(health_of "$_n")")")" = serving ]; then
+        jget "$l" version
+        return 0
+      fi
+    fi
+  done <"$TMPD/vivos"
+  printf '\n'
+}
+
+# Lleva el plano de control AL CANDIDATO, insistiendo.
+#
+# ¿Por qué hace falta insistir? Porque el activo suelta el lease y **cualquier** anillo caliente puede
+# tomarlo: el previo también está en espera y también poltea. El release no nombra sucesor, así que hay
+# una CARRERA, y el ganador no es necesariamente el que se quiso promover. Quien acaba de soltar tiene un
+# enfriamiento antes de volver a aspirar, así que pedirle soltar al que ganó por error hace converger la
+# cosa en a lo más tantas vueltas como anillos calientes haya (hoy dos).
+#
+# El arreglo durable NO es de esta herramienta: sería un handover DIRIGIDO en el Producto (el release
+# nombrando al sucesor). Mientras no exista, esto es explícito y acotado en vez de silencioso.
+insistir_handover() {
+  _cand=$1 _secs=$2
+  _i=0
+  _ph=
+  while [ "$_i" -lt "$_secs" ]; do
+    _ph=$(phase_of "$(probe_body "$(health_of "$_cand")")")
+    if [ "$_ph" = serving ]; then return 0; fi
+    _h=$(live_active | sed -n '1p')
+    if [ -n "$_h" ]; then
+      _hn=$(jget "$(ring_line "$_h")" name)
+      if [ -n "$_hn" ] && [ "$_hn" != "$_cand" ]; then
+        warn "el control lo tomó '$_h', no el candidato (carrera del lease entre anillos calientes): se
+        le pide soltarlo. Nadie recibió tráfico nuevo — el borde no se ha tocado."
+        docker_cli kill -s USR2 "$_hn" >/dev/null 2>&1 || true
+      fi
+    fi
+    _i=$((_i + 1))
+    sleep 1
+  done
+  printf '%s\n' "${_ph:-sin-respuesta}"
+  return 1
+}
+
+# ─── Pre-flight del esquema del store (§6.3): compara candidato vs archivo, leyendo /contrato ──────
+# Se NIEGA cuando no puede medir. Un pre-flight que se salta lo que no logra leer no es un pre-flight.
+schema_gate() {
+  _c=$1
+  out=$(probe "$_c" "http://127.0.0.1:8080/contrato" 2>/dev/null) || {
+    die "pre-flight ABORTADO: no se pudo consultar /contrato del candidato '$_c'. Sin eso no se sabe si
+    el esquema del store soporta este anillo, y adivinarlo es exactamente lo que no se hace. Define
+    RINGS_ADMIN_EMAIL (un admin de la instancia) y RINGS_GATE_TOKEN/-_FILE si la instancia exige gate,
+    o repite con --no-schema-gate asumiendo tú el riesgo."
+  }
+  st=$(probe_status "$out")
+  body=$(probe_body "$out")
+  [ "$st" = 200 ] || die "pre-flight ABORTADO: /contrato del candidato respondió $st (se esperaba 200).
+    403 ⇒ RINGS_ADMIN_EMAIL no es admin de la instancia; 404 ⇒ la instancia no tiene bloque de gobierno
+    (sin store no hay esquema que verificar: repite con --no-schema-gate)."
+
+  # El bloque `control.store[]` viene en PLURAL: gobierno, notas, data maestra. Se compara el PEOR par
+  # —el mayor `fileVersion` contra el menor `schemaSupported`—: un promedio esconde al store que sí
+  # bloquea el rollback.
+  peor_file=0
+  min_sup=
+  # `tr` y no `sed s/}/}\n/`: BSD sed (macOS) NO expande \n en el reemplazo y dejaría una 'n' literal —
+  # el instrumento mediría cualquier cosa. `tr` parte los objetos en líneas en todo sh POSIX.
+  for pair in $(printf '%s' "$body" | tr '{}' '\n\n' |
+    sed -n 's/.*"schemaSupported":[ ]*\([0-9]*\).*"fileVersion":[ ]*\([0-9]*\).*/\1:\2/p'); do
+    sup=${pair%%:*}
+    fil=${pair##*:}
+    if [ "$fil" -gt "$peor_file" ]; then peor_file=$fil; fi
+    if [ -z "$min_sup" ] || [ "$sup" -lt "$min_sup" ]; then min_sup=$sup; fi
+  done
+  if [ -z "$min_sup" ]; then
+    die "pre-flight ABORTADO: /contrato respondió 200 pero no declara ningún store en control.store[].
+    No hay con qué comparar el esquema, y suponerlo compatible sería inventar la medición."
+  fi
+  if [ "$min_sup" -lt "$peor_file" ]; then
+    die "pre-flight RECHAZADO: el candidato soporta esquema $min_sup y el archivo del store está en
+    $peor_file. Promoverlo dejaría al nodo escribiendo sobre un esquema que no conoce. Este es el
+    rollback imposible que el gate existe para negar: no se tocó nada."
+  fi
+  say "  esquema del store: candidato soporta $min_sup · archivo en $peor_file → compatible"
+}
+
+# ─── El flip del borde ──────────────────────────────────────────────────────────────────────────────
+edge_write_active() {
+  _name=$1
+  mkdir -p "$RINGS_DIR"
+  if [ -f "$RINGS_ACTIVE_FILE" ]; then cp "$RINGS_ACTIVE_FILE" "$RINGS_ACTIVE_FILE.bak"; fi
+  tmp="$TMPD/active.caddy"
+  {
+    say "# Escrito por $PROG el $(now_iso) — NO editar a mano."
+    say "# El respaldo de la línea anterior queda en $(basename "$RINGS_ACTIVE_FILE").bak"
+    printf 'reverse_proxy %s:8080 {\n\timport anillo_activo\n}\n' "$_name"
+  } >"$tmp"
+  cp "$tmp" "$RINGS_ACTIVE_FILE"
+}
+
+edge_restore_active() {
+  if [ -f "$RINGS_ACTIVE_FILE.bak" ]; then
+    cp "$RINGS_ACTIVE_FILE.bak" "$RINGS_ACTIVE_FILE"
+    say "  borde: restaurada la línea anterior desde $(basename "$RINGS_ACTIVE_FILE").bak"
+  fi
+}
+
+edge_validate() { docker_cli exec "$RINGS_EDGE" caddy validate --config "$RINGS_EDGE_CONFIG" --adapter caddyfile >/dev/null 2>&1; }
+edge_reload() { docker_cli exec "$RINGS_EDGE" caddy reload --config "$RINGS_EDGE_CONFIG" --adapter caddyfile; }
+
+# Escribe + valida + recarga. Si la validación falla, restaura y NO recarga: un reload con config
+# malformada no debe ni intentarse (Caddy dejaría la vigente, pero el operador quedaría sin saber qué
+# quedó vivo).
+edge_flip() {
+  _name=$1
+  edge_write_active "$_name"
+  if ! edge_validate; then
+    edge_restore_active
+    die "el borde RECHAZÓ la config con el anillo '$_name' (caddy validate falló). Nada se recargó y la
+    línea anterior quedó restaurada."
+  fi
+  edge_reload || {
+    edge_restore_active
+    edge_validate >/dev/null 2>&1 && edge_reload >/dev/null 2>&1 || true
+    die "el borde no recargó (caddy reload falló). Se restauró la línea anterior."
+  }
+  say "  borde: conmutado a '$_name' (caddy reload en caliente, sin cortar conexiones)"
+}
+
+# ─── Smoke a través del borde (post-flip) ──────────────────────────────────────────────────────────
+# Se sondea DESDE el anillo (misma red interna que el borde) el conmutador, no el anillo: lo que hay que
+# demostrar es que el tráfico que entra por el borde llega a un nodo sirviendo.
+smoke_edge() {
+  _c=$1
+  out=$(probe "$_c" "$RINGS_EDGE_URL/healthz" 2>/dev/null) || {
+    warn "smoke: el conmutador ($RINGS_EDGE_URL) NO respondió — no se pudo medir"
+    return 1
+  }
+  st=$(probe_status "$out")
+  body=$(probe_body "$out")
+  if ! serving_ok "$st" "$body"; then
+    warn "smoke: por el borde se observó status=$st fase='$(phase_of "$body")' pis=$(jnum "$body" serving)/$(jnum "$body" total) — el predicado 200 ∧ phase=serving ∧ pis.serving=pis.total NO se cumple"
+    return 1
+  fi
+  say "  smoke: por el borde → 200 · phase=serving · PIs $(jnum "$body" serving)/$(jnum "$body" total)"
+  # El índice es la única superficie que se puede pedir sin conocer los slugs (healthz da conteos, no
+  # nombres). Un 200/302 significa que el borde entrega tráfico real, no solo healthz.
+  out=$(probe "$_c" "$RINGS_EDGE_URL/" 2>/dev/null) || {
+    warn "smoke: el índice por el borde no respondió"
+    return 1
+  }
+  st=$(probe_status "$out")
+  case "$st" in
+  200 | 30[0-9]) say "  smoke: índice por el borde → $st" ;;
+  *)
+    warn "smoke: el índice por el borde respondió $st"
+    return 1
+    ;;
+  esac
+  return 0
+}
+
+# ─── install ────────────────────────────────────────────────────────────────────────────────────────
+cmd_install() {
+  version= redigest=0 pull=1 start=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --redigest) redigest=1 ;;
+    --no-pull) pull=0 ;;
+    --no-start) start=0 ;;
+    -*) die "install: flag desconocido '$1'" ;;
+    *) version=$1 ;;
+    esac
+    shift
+  done
+  [ -n "$version" ] || die "uso: $PROG install <versión> [--redigest] [--no-pull] [--no-start]"
+  # Tags MÓVILES: un anillo se identifica por versión exacta + digest. `latest` o `main` no dicen qué
+  # quedaría corriendo, y el registro de anillos existe justamente para que eso no sea ambiguo.
+  case "$version" in
+  sha-*) : ;; # un commit exacto: identifica tanto como una versión
+  *.*.*) : ;; # X.Y.Z (o más específico): versión exacta
+  *)
+    die "'$version' no es una versión EXACTA: 'latest', 'main' y las series ('0.19') son tags móviles y
+    no identifican lo que quedaría desplegado. Usa 0.19.0 o un tag sha-<commit>."
+    ;;
+  esac
+  check_token "$version" "versión"
+  if [ ! -f "$RINGS_ARGS_FILE" ]; then die "falta $RINGS_ARGS_FILE (los envs y montajes del anillo). Copia
+    deploy/rollout/ring.args.example y ajústalo a tu instancia."; fi
+
+  ref="$RINGS_IMAGE:$version"
+  name=$(ring_name "$version")
+  load_reg
+
+  if [ "$pull" = 1 ]; then
+    say "· pull $ref"
+    docker_cli pull "$ref" >/dev/null || die "no se pudo traer $ref"
+  fi
+  digest=$(image_digest "$ref")
+  imgid=$(image_id "$ref")
+  check_token "$digest" "digest"
+  say "· imagen: $ref"
+  say "  digest: $digest"
+
+  prev=$(ring_line "$version")
+  if [ -n "$prev" ]; then
+    prev_digest=$(jget "$prev" digest)
+    if [ "$prev_digest" != "$digest" ]; then
+      if [ "$redigest" = 0 ]; then
+        die "GUARD DE DIGEST: la versión $version ya está registrada con digest
+    $prev_digest
+    y la imagen que traes tiene
+    $digest.
+    Dos imágenes distintas con el mismo número de versión es un hecho medido en este proyecto, y el
+    digest es lo único que las distingue. No se instala encima: si de verdad quieres la nueva como
+    anillo aparte, repite con --redigest."
+      fi
+      # --redigest: anillo APARTE, nombre propio. El anterior no se pisa.
+      n=2
+      while ring_known "$version-r$n"; do n=$((n + 1)); done
+      version="$version-r$n"
+      name=$(ring_name "$version")
+      say "  --redigest: se instala como anillo aparte '$version' ($name)"
+    fi
+  fi
+
+  if container_exists "$name"; then
+    if [ "$(container_image_id "$name")" = "$imgid" ]; then
+      say "· contenedor $name ya existe con esta misma imagen (idempotente: no se recrea)"
+    else
+      if [ "$version" = "$ACTIVE" ]; then
+        die "$name corre el ACTIVO con otra imagen: no se recrea el activo. Instala la versión nueva
+    como su propio anillo y promuévela."
+      fi
+      if [ "$version" = "$PREVIOUS" ]; then
+        die "$name es el anillo PREVIO (la red del rollback en caliente): no se recrea."
+      fi
+      say "· contenedor $name existe con OTRA imagen → se recrea"
+      docker_cli rm -f "$name" >/dev/null
+    fi
+  fi
+  if ! container_exists "$name"; then
+    say "· create $name"
+    # shellcheck disable=SC2046 # los argumentos de ring.args deben partirse en palabras: es su formato.
+    docker_cli create --name "$name" \
+      --label vergis.ring="$version" --label vergis.ring.digest="$digest" \
+      -e VERGIS_RING="$name" -e VERGIS_RING_DIGEST="$digest" \
+      $(grep -v '^[ ]*#' "$RINGS_ARGS_FILE" | tr '\n' ' ') \
+      "$ref" >/dev/null
+  fi
+
+  state=instalado
+  if [ "$start" = 1 ]; then
+    container_running "$name" || docker_cli start "$name" >/dev/null
+    say "· start $name — esperando que responda…"
+    if ph=$(wait_phase "$name" "standby serving degraded" "$RINGS_STANDBY_TIMEOUT"); then
+      say "  fase observada: $ph"
+      state=standby
+      if [ "$ph" = serving ]; then state=activo; fi
+      if [ "$ph" = degraded ]; then
+        warn "el anillo responde pero declara PIs degradados: revísalo antes de promover"
+      fi
+    else
+      warn "el anillo no llegó a responder en ${RINGS_STANDBY_TIMEOUT}s (fase observada: $ph). Queda
+      instalado y corriendo; míralo con 'docker logs $name'. NO se promueve así."
+      state=instalado
+    fi
+  fi
+
+  ring_put "$version" "$name" "$ref" "$digest" "$imgid" "$(now_iso)" "$state" "$(jget "$prev" promotedAt)"
+  save_reg
+  say "✓ anillo $version instalado ($state). Retención vigente: $RINGS_RETAIN — 'prune' retira lo que sobre."
+}
+
+# ─── promote ────────────────────────────────────────────────────────────────────────────────────────
+cmd_promote() {
+  version= gate_esquema=1 smoke=$RINGS_SMOKE timeout=$RINGS_PROMOTE_TIMEOUT
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --no-schema-gate) gate_esquema=0 ;;
+    --no-smoke) smoke=0 ;;
+    --timeout)
+      shift
+      timeout=${1:?--timeout necesita segundos}
+      ;;
+    -*) die "promote: flag desconocido '$1'" ;;
+    *) version=$1 ;;
+    esac
+    shift
+  done
+  [ -n "$version" ] || die "uso: $PROG promote <versión> [--timeout N] [--no-smoke] [--no-schema-gate]"
+  check_token "$version" "versión"
+  load_reg
+  line=$(ring_line "$version")
+  [ -n "$line" ] || die "la versión $version no está instalada como anillo. Corre 'install' primero."
+  name=$(jget "$line" name)
+
+  say "· candidato: $version ($name)"
+
+  # 1 · Pre-flight. Cualquier fallo acá y NO SE TOCA NADA.
+  container_exists "$name" || die "el contenedor $name no existe (¿fue retirado?). Re-instala el anillo."
+  if ! container_running "$name"; then
+    say "  el anillo estaba detenido (retenido) → start; el arranque lo cubre la sala de espera del borde"
+    docker_cli start "$name" >/dev/null
+  fi
+  if [ "$(container_image_id "$name")" != "$(jget "$line" imageId)" ]; then
+    die "GUARD DE DIGEST: el contenedor $name corre una imagen distinta de la registrada para $version.
+    Lo desplegado y lo registrado no coinciden — reinstala el anillo antes de promoverlo."
+  fi
+  ph=$(wait_phase "$name" "standby serving" "$RINGS_STANDBY_TIMEOUT") ||
+    die "el candidato no está en condiciones de promoverse (fase observada: $ph). Nada se tocó."
+  say "  fase del candidato: $ph"
+
+  # Quién manda AHORA, observado. Si el registro dice otra cosa, se dice en voz alta y se opera sobre lo
+  # observado (el registro es caché; el nodo que responde es el hecho).
+  activo_ver=$(live_active | sed -n '1p')
+  if [ -n "$activo_ver" ] && [ "$activo_ver" != "${ACTIVE:-}" ]; then
+    warn "el registro dice que el activo es '${ACTIVE:-ninguno}' y el anillo que HOY tiene el plano de
+    control es '$activo_ver'. Se opera sobre lo OBSERVADO. (Estado observado que contradice al registro:
+    no se inventa la causa — revísala después.)"
+  fi
+
+  if [ "$version" = "$activo_ver" ] && [ "$ph" = serving ]; then
+    # Idempotencia (regla dura 17): re-promover el activo re-afirma el borde y no mueve el control.
+    say "· $version ya tiene el plano de control: se re-afirma el borde y se sale (idempotente)"
+    edge_flip "$name"
+    if [ -n "$ACTIVE" ] && [ "$ACTIVE" != "$version" ]; then PREVIOUS=$ACTIVE; fi
+    ACTIVE=$version
+    ring_set_state "$version" activo "$(now_iso)"
+    save_reg
+    return 0
+  fi
+
+  if [ "$gate_esquema" = 1 ]; then
+    schema_gate "$name"
+  else
+    warn "GATE DE ESQUEMA OMITIDO por --no-schema-gate: nadie verificó que el candidato soporte el
+    esquema del archivo del store. Si no lo soporta, esto se descubrirá DESPUÉS del flip."
+  fi
+
+  # 2 · Handover del plano de control. El serving del activo no se interrumpe: solo suelta la escritura.
+  activo_name=
+  if [ -n "$activo_ver" ]; then
+    activo_name=$(jget "$(ring_line "$activo_ver")" name)
+  fi
+  if [ -n "$activo_name" ] && container_running "$activo_name"; then
+    say "· handover: SIGUSR2 a '$activo_name' (suelta el control; sigue sirviendo lecturas)"
+    docker_cli kill -s USR2 "$activo_name" >/dev/null ||
+      die "no se pudo enviar SIGUSR2 a '$activo_name': el handover no empezó y nada se tocó."
+    if ! ph_old=$(wait_phase "$activo_name" "standby" 20); then
+      warn "el activo no declaró 'standby' en 20s (fase: $ph_old); se continúa observando al candidato —
+      el relevo lo decide el lease, no esta herramienta."
+    fi
+  else
+    say "· no hay anillo activo vivo: el candidato tomará el control por relevo del lease"
+  fi
+
+  say "· esperando que el candidato declare 'serving' (hasta ${timeout}s)…"
+  if ! ph=$(insistir_handover "$name" "$timeout"); then
+    warn "el candidato NO llegó a 'serving' (fase: $ph). El tráfico jamás se movió: no hubo daño."
+    say "· devolviendo el control: SIGUSR2 al candidato para que suelte lo que haya tomado"
+    docker_cli kill -s USR2 "$name" >/dev/null 2>&1 || true
+    if [ -n "$activo_name" ]; then
+      if ph_old=$(wait_phase "$activo_name" "serving" 30); then
+        say "  el anillo anterior re-adquirió el control (fase: $ph_old)"
+      else
+        warn "el anillo anterior NO volvió a 'serving' (fase: $ph_old). Hay CERO controladores — que es
+        el modo de falla elegido (nunca dos), pero exige atención: mira 'docker logs $activo_name'."
+      fi
+    fi
+    die "promoción ABORTADA en el handover. El borde sigue apuntando a donde apuntaba."
+  fi
+  say "  candidato en 'serving'"
+
+  # 3 · Flip del borde (lo único que mueve tráfico).
+  edge_flip "$name"
+
+  # 4 · Verificación. Falla ⇒ vuelta atrás por el mismo camino.
+  if [ "$smoke" = 1 ]; then
+    if ! smoke_edge "$name"; then
+      warn "SMOKE FALLIDO tras el flip → volviendo al anillo anterior"
+      if [ -n "$activo_name" ]; then
+        docker_cli kill -s USR2 "$name" >/dev/null 2>&1 || true
+        wait_phase "$activo_name" "serving" 30 >/dev/null || warn "el anterior no volvió a 'serving'"
+        edge_flip "$activo_name"
+      else
+        edge_restore_active
+        edge_validate >/dev/null 2>&1 && edge_reload >/dev/null 2>&1 || true
+      fi
+      die "promoción REVERTIDA por el smoke. Registro sin cambios."
+    fi
+  else
+    warn "smoke OMITIDO (--no-smoke o RINGS_SMOKE=0): nadie verificó que el borde entregue tráfico."
+  fi
+
+  # 5 · Registro.
+  if [ -n "$activo_ver" ] && [ "$activo_ver" != "$version" ]; then
+    PREVIOUS=$activo_ver
+    ring_set_state "$activo_ver" standby-previo
+  fi
+  ACTIVE=$version
+  ring_set_state "$version" activo "$(now_iso)"
+  # CALIENTES = 2, y no es un knob: activo + previo. Un tercer anillo vivo no compra latencia de
+  # rollback (solo uno puede tener el plano de control) y sí cuesta RAM — y además sería un aspirante
+  # más al lease, o sea una carrera cuyo ganador nadie eligió. Se detiene: pasa a RETENIDO, y volver a
+  # él cuesta un boot que la sala de espera del borde convierte en latencia, no en error.
+  # Se itera una COPIA: `ring_set_state` reescribe `$LINES` (drop + mv), y leer un archivo que se está
+  # reemplazando bajo el propio `read` deja el registro a medias — medido acá con el test de `prune`,
+  # que vio desaparecer al anillo previo.
+  cp "$LINES" "$TMPD/calientes"
+  while IFS= read -r l; do
+    v=$(jget "$l" version)
+    if [ "$v" = "$ACTIVE" ] || [ "$v" = "$PREVIOUS" ]; then continue; fi
+    n=$(jget "$l" name)
+    if container_running "$n"; then
+      docker_cli stop "$n" >/dev/null 2>&1 || warn "no se pudo detener el anillo excedente '$n'"
+      say "  anillo $v detenido (retenido en disco: los calientes son dos, activo y previo)"
+    fi
+    ring_set_state "$v" retenido
+  done <"$TMPD/calientes"
+  save_reg
+  say "✓ $version es el anillo ACTIVO. Previo (rollback en caliente): ${PREVIOUS:-ninguno}."
+  say "  El serving no se interrumpió; la escritura estuvo congelada durante el handover (409 explícitos)."
+}
+
+# ─── rollback ───────────────────────────────────────────────────────────────────────────────────────
+cmd_rollback() {
+  load_reg
+  target=${1:-$PREVIOUS}
+  [ -n "$target" ] || die "no hay anillo previo registrado: nombra la versión ('rollback 0.18.0')."
+  say "· rollback a $target (mismo camino y mismo pre-flight que una promoción)"
+  cmd_promote "$target"
+}
+
+# ─── retire ─────────────────────────────────────────────────────────────────────────────────────────
+retire_one() {
+  _v=$1 _rmi=$2
+  _l=$(ring_line "$_v")
+  [ -n "$_l" ] || die "la versión $_v no está en el registro."
+  # LA LÍNEA QUE ESTE COMANDO NO CRUZA. Ninguna combinación de flags la mueve.
+  if [ "$_v" = "$ACTIVE" ]; then
+    die "'$_v' es el anillo ACTIVO: no se retira. Promueve otro primero."
+  fi
+  if [ "$_v" = "$PREVIOUS" ]; then
+    die "'$_v' es el anillo PREVIO (la red del rollback en caliente): no se retira."
+  fi
+  _n=$(jget "$_l" name)
+  if container_exists "$_n"; then
+    docker_cli rm -f "$_n" >/dev/null
+    say "  contenedor $_n eliminado"
+  fi
+  if [ "$_rmi" = 1 ]; then
+    docker_cli image rm "$(jget "$_l" image)" >/dev/null 2>&1 &&
+      say "  imagen $(jget "$_l" image) eliminada" ||
+      warn "la imagen $(jget "$_l" image) no se pudo eliminar (¿en uso por otro anillo?)"
+  fi
+  ring_drop "$_v"
+  say "✓ anillo $_v retirado"
+}
+
+cmd_retire() {
+  version= rmi=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --rmi) rmi=1 ;;
+    -*) die "retire: flag desconocido '$1'" ;;
+    *) version=$1 ;;
+    esac
+    shift
+  done
+  [ -n "$version" ] || die "uso: $PROG retire <versión> [--rmi]"
+  check_token "$version" "versión"
+  load_reg
+  retire_one "$version" "$rmi"
+  save_reg
+}
+
+# ─── prune ──────────────────────────────────────────────────────────────────────────────────────────
+# `RINGS_RETAIN` es el total de anillos EN DISCO, contando al activo y al previo: `2` deja exactamente
+# activo + previo, o sea **blue-green exacto**; el default `3` deja además el retenido más reciente.
+#
+# El ACTIVO y el PREVIO son un PISO INVIOLABLE: se conservan con cualquier combinación de flags —
+# `--force` no los toca, `--retain 0` no los toca. Es la línea que este comando no cruza, y por eso un
+# `--retain` menor que 2 no borra la red del rollback: la deja como piso y lo dice.
+cmd_prune() {
+  retain=$RINGS_RETAIN dry=0 rmi=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --retain)
+      shift
+      retain=${1:?--retain necesita un número}
+      ;;
+    --dry-run) dry=1 ;;
+    --rmi) rmi=1 ;;
+    --force) : ;; # aceptado y deliberadamente inocuo sobre el activo y el previo
+    -*) die "prune: flag desconocido '$1'" ;;
+    *) die "prune: argumento inesperado '$1'" ;;
+    esac
+    shift
+  done
+  case "$retain" in
+  '' | *[!0-9]*) die "--retain espera un número entero (obtuve '$retain')" ;;
+  esac
+  load_reg
+  if [ ! -s "$LINES" ]; then
+    say "no hay anillos registrados: nada que hacer."
+    return 0
+  fi
+
+  # Primera pasada: el piso. Consume presupuesto, porque `RINGS_RETAIN=2` tiene que significar
+  # «activo + previo y nada más», no «activo + previo + 2».
+  keep=0
+  sort_rings_desc >"$TMPD/sorted"
+  while IFS= read -r l; do
+    v=$(jget "$l" version)
+    if [ "$v" = "$ACTIVE" ]; then
+      keep=$((keep + 1))
+      say "  conservo $v — es el ACTIVO (piso inviolable: no se retira nunca)"
+    elif [ "$v" = "$PREVIOUS" ]; then
+      keep=$((keep + 1))
+      say "  conservo $v — es el PREVIO (piso inviolable: la red del rollback en caliente)"
+    fi
+  done <"$TMPD/sorted"
+  if [ "$keep" -gt "$retain" ]; then
+    warn "la retención pedida ($retain) es menor que el piso ($keep: activo y previo). Se respeta el
+    piso: la red del rollback no se retira por un parámetro."
+  fi
+
+  # Segunda pasada: lo demás, del más nuevo al más viejo, hasta llenar la ventana.
+  : >"$TMPD/retirar"
+  while IFS= read -r l; do
+    v=$(jget "$l" version)
+    if [ "$v" = "$ACTIVE" ] || [ "$v" = "$PREVIOUS" ]; then continue; fi
+    if [ "$keep" -lt "$retain" ]; then
+      keep=$((keep + 1))
+      say "  conservo $v — dentro de la ventana de retención ($keep/$retain)"
+    else
+      say "  retiro  $v — fuera de la ventana de retención ($retain)"
+      printf '%s\n' "$v" >>"$TMPD/retirar"
+    fi
+  done <"$TMPD/sorted"
+
+  if [ ! -s "$TMPD/retirar" ]; then
+    say "✓ nada que retirar (retención $retain; activo '${ACTIVE:-ninguno}', previo '${PREVIOUS:-ninguno}')."
+    return 0
+  fi
+  if [ "$dry" = 1 ]; then
+    say "— --dry-run: no se tocó nada."
+    return 0
+  fi
+  while IFS= read -r v; do retire_one "$v" "$rmi"; done <"$TMPD/retirar"
+  save_reg
+}
+
+# ─── status ─────────────────────────────────────────────────────────────────────────────────────────
+cmd_status() {
+  json=0
+  if [ "${1:-}" = "--json" ]; then json=1; fi
+  load_reg
+  if [ "$json" = 1 ]; then
+    [ -f "$REG" ] && cat "$REG" || say '{"schema":1,"active":"","previous":"","rings":[]}'
+    return 0
+  fi
+  say "Anillos de Vergis — registro: $REG"
+  say "  activo: ${ACTIVE:-ninguno}   previo: ${PREVIOUS:-ninguno}   retención: $RINGS_RETAIN"
+  if [ -f "$RINGS_ACTIVE_FILE" ]; then
+    say "  el borde apunta a: $(sed -n 's/^reverse_proxy \([^ ]*\).*/\1/p' "$RINGS_ACTIVE_FILE" | head -1)"
+  else
+    warn "no existe $RINGS_ACTIVE_FILE: el borde no tiene anillo declarado."
+  fi
+  say ""
+  printf '%-12s %-18s %-14s %-9s %s\n' VERSIÓN CONTENEDOR REGISTRO VIVO DIGEST
+  [ -s "$LINES" ] || {
+    say "(ninguno)"
+    return 0
+  }
+  sort_rings_desc >"$TMPD/s"
+  while IFS= read -r l; do
+    v=$(jget "$l" version)
+    n=$(jget "$l" name)
+    st=$(jget "$l" state)
+    d=$(jget "$l" digest)
+    vivo=detenido
+    if container_running "$n"; then
+      out=$(health_of "$n")
+      s=$(probe_status "$out")
+      b=$(probe_body "$out")
+      if [ -z "$s" ]; then
+        vivo=sin-sonda
+      else
+        vivo=$(phase_of "$b")
+        [ -n "$vivo" ] || vivo="http-$s"
+      fi
+    elif ! container_exists "$n"; then
+      vivo=sin-contenedor
+    fi
+    printf '%-12s %-18s %-14s %-9s %s\n' "$v" "$n" "$st" "$vivo" "$(printf '%s' "$d" | cut -c1-24)…"
+  done <"$TMPD/s"
+}
+
+usage() {
+  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# ─── Dispatch ───────────────────────────────────────────────────────────────────────────────────────
+cmd=${1:-}
+[ $# -gt 0 ] && shift || true
+case "$cmd" in
+install) cmd_install "$@" ;;
+promote) cmd_promote "$@" ;;
+rollback) cmd_rollback "$@" ;;
+retire) cmd_retire "$@" ;;
+prune) cmd_prune "$@" ;;
+status) cmd_status "$@" ;;
+-h | --help | help | '') usage ;;
+*) die "comando desconocido '$cmd' (install|promote|rollback|retire|prune|status)" ;;
+esac

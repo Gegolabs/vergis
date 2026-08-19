@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-08-18T21:40:11Z",
+  "active": "0.19.0",
+  "previous": "0.18.0",
+  "rings": [
+    {"version":"0.19.0","name":"vergis-0-19-0","image":"ghcr.io/gegolabs/vergis:0.19.0","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","imageId":"sha256:aaaa","installedAt":"2026-08-18T21:31:02Z","state":"activo","promotedAt":"2026-08-18T21:40:11Z"},
+    {"version":"0.18.0","name":"vergis-0-18-0","image":"ghcr.io/gegolabs/vergis:0.18.0","digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","imageId":"sha256:bbbb","installedAt":"2026-08-11T14:02:55Z","state":"standby-previo","promotedAt":"2026-08-11T14:10:00Z"},
+    {"version":"0.17.0","name":"vergis-0-17-0","image":"ghcr.io/gegolabs/vergis:0.17.0","digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","imageId":"sha256:cccc","installedAt":"2026-08-04T09:12:40Z","state":"retenido","promotedAt":"2026-08-04T09:20:00Z"}
+  ]
+}

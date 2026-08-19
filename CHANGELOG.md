@@ -34,6 +34,54 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
+## Sin publicar
+
+### El despliegue de referencia conmuta entre anillos: desplegar deja de exigir una ventana (#210 · I7+I8)
+
+**Esto es un cambio del CONTRATO DE DESPLIEGUE**, no una capacidad del DSL: lo que cambia es cómo una
+instancia estrena una versión. Hasta acá, adoptar una versión nueva era recrear el contenedor —con su
+corte, su ventana de mantenimiento y su rollback caro—. El despliegue de referencia ahora trae un
+**conmutador en el borde** y una **herramienta de ciclo de vida de anillos**: un anillo es una
+instalación ejecutable de una versión publicada, y estrenar una versión es **trasladar el plano de
+control y conmutar el borde en caliente**, sin recrear nada.
+
+**Qué gana quien opera.**
+
+- **`deploy/Caddyfile.reference`** (nuevo): el mismo Caddy expone un listener interno `:8079` que rutea
+  al anillo activo leyendo `rings/active.caddy` —un archivo de **una línea**— y que trae la **sala de
+  espera**: agotado el plazo de reintento, una página 503 con auto-refresh en vez del error crudo del
+  navegador. Cubre lo **no planificado** (OOM, crash con `restart: unless-stopped`, arranque de un
+  anillo frío), donde antes no había nada. La sala de espera vive en el **borde** porque nada dentro de
+  un proceso puede cubrir su propia ausencia.
+- **El health check del borde juzga por la FASE, no por el código HTTP**: sano ⇔ `200` **y** el cuerpo
+  declara `"phase":"serving"`. Un nodo en espera responde 200 con `ok:true` por diseño, así que
+  cualquier chequeo que juzgue por el código lo declararía sano y le rutearía tráfico de escritura que
+  ese nodo contesta con 409.
+- **`deploy/rollout/vergis-rollout`** (nuevo): `install / promote / rollback / retire / prune / status`.
+  POSIX `sh` estricto —sin bashismos— y con solo `docker` y `sed` como dependencias. Un anillo se
+  identifica por **versión + digest**: los tags móviles (`latest`, `main`, una serie) se rechazan, y
+  volver a instalar una versión cuyo digest cambió **se niega** en vez de pisar lo instalado.
+- **La promoción trae su propio pre-flight y su propio smoke.** El pre-flight compara el esquema de store
+  que el candidato soporta contra el del archivo, leyendo el bloque `control` de `/contrato`: un
+  candidato más viejo que el archivo **no se promueve**, y si el pre-flight no logra medir, **se niega**
+  en vez de suponer. Después del flip, un smoke por el borde con el mismo predicado; si falla, la
+  promoción **se revierte** por el mismo camino.
+- **`RINGS_RETAIN`** (default **3**) es el total de anillos en disco: **`2` es blue-green exacto**. El
+  **activo y el previo son un piso inviolable** — ninguna combinación de flags los retira. Calientes
+  siempre dos (activo + previo); el resto queda en disco, y volver a uno cuesta un arranque que la sala
+  de espera convierte en latencia, no en error.
+- **`oauth2-proxy` apunta al conmutador** (`http://caddy:8079`) y **no se toca en una promoción**: mover
+  el SSO exigiría reiniciarlo, que es exactamente el corte que esto elimina. El gate de identidad no
+  cambia: el conmutador solo proxya las cabeceras que el SSO ya inyectó, y `:8079` **jamás** se publica
+  al host.
+
+**Costo honesto, declarado.** Durante el traslado del plano de control (segundos) las **escrituras**
+responden 409 explícitos; las **lecturas se sirven todo el tiempo** y el serving no se interrumpe.
+
+**Límites declarados.** El plano de control asume **un host con FS local**. La sala de espera no cubre la
+muerte del propio borde. El smoke verifica el predicado de salud y el índice, no la ruta de cada PI:
+`/healthz` publica conteos, no slugs, y el invariante que sí se exige es `pis.serving == pis.total`.
+
 ## 0.20.1 — 2026-08-18
 
 **Una corrección sola, sin capacidad nueva: las instrucciones de una versión ahora viajan con la
