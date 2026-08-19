@@ -13,7 +13,7 @@
 
 ## POL-01 · Recursos externos con costo — US$50/mes, US$10 por acto
 
-**Mes en curso: 2026-08.** Pote US$50 · **gastado US$0,08** · disponible **US$49,92**.
+**Mes en curso: 2026-08.** Pote US$50 · **gastado US$0,14** · disponible **US$49,86**.
 El pote repone el día 1 y no acumula.
 
 | Fecha | Acto | Recurso | Medida | Monto | Asentado por |
@@ -21,6 +21,7 @@ El pote repone el día 1 y no acumula.
 | 2026-08-18 | Ventana de medición de #197 — verificar contra el SKU la vista de máscara que **emite el compilador** tras el rediseño a la forma C2 | Capacidad Fabric **F2** `vergisfablab` (tenant ultraBASE) | ~4 min encendida (dos tramos: 18:46–18:47 y 18:47:16–18:48:20), US$0,36/h | **US$0,02** | Simón Alero |
 | 2026-08-18 | Ventana de medición de #164 — el allow-all **emitido** y el `ALTER` que antes se rechazaba. Dos tramos porque el primero midió mal por un defecto del arnés (`admin.close()` antes de P8) y el instrumento lo reportó como fallo en vez de darlo por verde | Capacidad Fabric **F2** `vergisfablab` | 1m47s + 1m51s = ~4 min encendida, US$0,36/h | **US$0,02** | Simón Alero |
 | 2026-08-19 | Ventana para responder **P5 (#163)** — qué ve el service principal de serving con el DDM aplicado, ya con `FAB_SP_TOKEN` disponible. **Cuatro tramos, y tres de ellos no midieron**: el útil (`fab:proof` completo, P5 respondida), dos abortados por defectos del script de sonda (top-level `await` con salida CJS; `mssql` no resuelve fuera del árbol del repo) y uno de diagnóstico cuyo **control positivo falló** — sin el prelude de `SESSION_CONTEXT` la row policy deniega todo. Se asienta el total, no solo el tramo que sirvió | Capacidad Fabric **F2** `vergisfablab` | ~7 min encendida sumando los cuatro tramos, US$0,36/h | **US$0,04** | Simón Alero |
+| 2026-08-19 | **Experimento del rol** — qué destraba la propagación de un cambio de rol de workspace al plano de datos, sondeando por tres vías (misma conexión · conexión nueva con token viejo · conexión nueva con token nuevo) sin tocar DDL. Refutó la hipótesis del token cacheado, acotó la asimetría conceder/revocar y **detectó que el veredicto de P5 de la mañana era falso** | Capacidad Fabric **F2** `vergisfablab` | ~10 min encendida (13:47–13:57), US$0,36/h | **US$0,06** | Simón Alero |
 
 ### Cómo se mide este recurso
 
@@ -28,6 +29,13 @@ La capacidad F2 factura **por hora encendida** (US$0,36/h) y está **pausada por
 de cada fila es el tiempo real entre `fab:resume` y `fab:pause`, no la duración de la sesión de
 trabajo. La pausa va en un `trap EXIT/INT/TERM`: se apaga aunque el script reviente o lo maten —
 acordarse no es un mecanismo.
+
+**Un tramo se pasó de la ventana prevista y el `trap` no lo apagó** (2026-08-19): el experimento del
+rol excedió el timeout de 10 min de la herramienta que lo corría, y al morir el proceso por SIGTERM
+externo la pausa del `trap` no alcanzó a ejecutarse. Se detectó y se pausó a mano en el minuto
+siguiente. **El `trap` protege contra que el script reviente, no contra que lo maten desde afuera** —
+un experimento con sondeo largo se parte en tramos que quepan en la ventana del ejecutor, o se corre
+en background con su propio vigilante.
 
 ---
 
