@@ -12,6 +12,16 @@ detecta el agente vive en `PENDINGS.md` (TTL 15 días → `PENDINGS-done.md` §v
 
 Detalle y justificación en `docs/mejoras-diagnostico.md`:
 
+- [ ] **Cuenta de bot en GitHub para los agentes** — *decidido por César el 2026-08-18, a crear el
+      2026-08-19*. Hoy `gh` en esta máquina solo tiene la cuenta **`cobach`**, así que **todo lo que
+      un agente escribe en GitHub —issues, PRs, comentarios, merges— queda registrado con el nombre
+      de César**. Afecta a los dos frentes: los PRs #220/#222/#225 de arbol y los #221/#223/#224/#226
+      /#227/#230 y los issues #228/#229 de este frente salieron así.
+      **Mitigación vigente hasta que exista la cuenta, y no la deroga**: todo escrito lleva su firma
+      de autoría al pie y los commits llevan `Co-Authored-By`. Eso cumple el corolario positivo del
+      principio —*la autoría siempre se declara*— pero **no cambia el autor que GitHub registra**,
+      que es lo que la cuenta viene a arreglar.
+      Levantado por el frente arbol; la decisión es de César porque es su nombre.
 - [x] Refactor de los tres monolitos — **HECHO**: `serve-rls.ts` (7 módulos, sesión 07-07; falta solo el wrap literal `createApp()`, ver NEXT.md · Ola 3·A, aceptado como culminación); `render-html-piece.ts` 965→370 LOC en 6 módulos y `mira.ts` 669→378 LOC en 5 módulos (sesión 07-08, ver NEXT.md · Ola 3·B). Todo behavior-preserving (512 tests)
 - [x] HMAC criptográfico en el gateo de anotaciones — **HECHO** (`server/annotations.ts`, HMAC + época de 4h, con tests adversariales · A15). *Nota 2026-08-07: ese archivo y su esquema fueron RETIRADOS con la capa de notas (vergis#84) — el mecanismo ya no existe en el árbol; el único HMAC vigente es el CSRF de `server/ui.ts`, sin época. La época se rediseña en `work/004-…/10-113-hardening` H4.*
 - [x] **E/S del render Vega — CERRADA 2026-08-13** (D-21), aunque **no** por el subproceso que esta
