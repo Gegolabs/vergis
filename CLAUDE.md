@@ -85,6 +85,36 @@ palabras y se nombra la condición que reabriría el issue.
 Sigue intacto lo que protege a terceros: **jamás se cierra el issue ni el PR de otra persona** — ahí el
 acto es suyo, y el entregable nuestro es el veredicto comentado.
 
+## La custodia: arbol propone, vergis dispone
+
+**Este repo tiene más de un frente escribiéndolo, y desde el 2026-08-18 tiene custodio declarado**
+(decisión de César):
+
+| Frente | Qué puede | Qué no |
+|---|---|---|
+| **arbol** (lab de A.R.B.O.L.) | Abrir PRs desde sus ramas, con sus gates y su medición | **Jamás self-merge**, ni commit directo a `main` |
+| **vergis** (este repo) | Revisar, **verificar que compone** con lo demás, y mergear | — |
+| **César** | Todo | — |
+
+**El aviso previo es parte de la norma, y va en los dos sentidos:** un PR al Producto **se anuncia al
+otro frente antes de abrirse**, no después de mergearse.
+
+**La génesis, porque explica qué defecto cierra y no es anécdota:** el 2026-08-18 los dos frentes
+escribieron `Gegolabs/vergis` la misma tarde sin saberlo — #220 y #222 desde el clon de arbol,
+self-mergeados a los dos minutos; #221 y #223 desde acá. Nadie hizo nada prohibido: los dos tenían
+mandato. **El defecto no fue ningún mandato — fue la ausencia de custodio**, y el costo fue real: el
+corte de versión quedó bloqueado porque nadie podía declarar *qué trae* una versión con trabajo que
+no había medido. Está catalogado como ocurrencia 24 del fenómeno W-01.
+
+**Lo que la custodia NO es.** No es jerarquía entre frentes ni juicio sobre la calidad del trabajo
+ajeno — los PRs de arbol llegaron con medición del estándar de la casa. Es **un solo punto donde se
+verifica que las piezas componen**, que es justamente lo que nadie podía hacer cuando cada frente
+mergeaba lo suyo. El custodio no aprueba el trabajo del otro: verifica la **composición** y responde
+por lo que la versión declara.
+
+**Y lo que no cubre:** `POLICIES.md`, que lo escribe **solo César** (su propia cabecera lo declara).
+Ninguna custodia delega esa pluma.
+
 **El `git log` de este repo contradice esta norma y no la deroga.** Hay commits de feature directos en
 `main` (`feat(163)`, `feat(164)`, `feat(159)`, entre otros): documentan lo que se decidió entonces, no lo
 que rige ahora. Ante el choque, gana la norma — la duda no se resuelve mirando más commits.
