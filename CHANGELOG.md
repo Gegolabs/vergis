@@ -21,7 +21,7 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.20.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.20.1` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
 | `0.20` | Flota al último patch de la serie 0.20 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
@@ -34,31 +34,31 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
-## Sin publicar (en `main`)
+## 0.20.1 — 2026-08-18
 
-### Las instrucciones de una versión viajan con la imagen (#229)
+**Una corrección sola, sin capacidad nueva: las instrucciones de una versión ahora viajan con la
+imagen.** Es la primera versión que las trae — las anteriores se construyeron antes del arreglo.
 
-**El `CHANGELOG.md` va dentro de la imagen** (`/app/CHANGELOG.md`) y los labels OCI dejan de estar
-mudos: `org.opencontainers.image.description` (venía **vacío**) y
-`org.opencontainers.image.documentation`, que apunta a las notas del **ref exacto** que se construyó.
+### El operador puede preguntarle a la imagen qué exige (#229)
+
+El `CHANGELOG.md` va **dentro** de la imagen (`/app/CHANGELOG.md`) y los labels OCI dejan de estar
+mudos: `org.opencontainers.image.description` —que venía **vacío**— y
+`org.opencontainers.image.documentation`, que apunta a las notas de la versión.
 
 ```bash
-docker run --rm --entrypoint cat ghcr.io/gegolabs/vergis:<tag> /app/CHANGELOG.md
-docker buildx imagetools inspect ghcr.io/gegolabs/vergis:<tag> --format '{{json .Image}}'
+docker run --rm --entrypoint cat ghcr.io/gegolabs/vergis:0.20.1 /app/CHANGELOG.md
+docker buildx imagetools inspect ghcr.io/gegolabs/vergis:0.20.1 --format '{{json .Image}}'
 ```
 
-**Lo que esto NO alcanza todavía, y hay que decirlo con esas palabras:** el arreglo entró **después**
-del corte de 0.20.0, así que **ninguna versión publicada hasta 0.20.0 inclusive trae el changelog ni
-los labels** — medido contra el registry, no deducido: `:0.18.0`, `:0.19.0` y `:0.20.0` devuelven
-`documentation` **ausente**. Para el salto que un operador tiene hoy delante —0.18.0 → 0.20.0— la vía
-desde la VM **no existe**, y la fuente sigue siendo el repo. Se vuelve utilizable en la próxima
-versión que se corte.
+**Por qué es una Z y no una Y:** no agrega capacidad ni cambia comportamiento — el servidor es
+byte-por-byte el mismo que 0.20.0 salvo un archivo de texto y dos etiquetas. Existe para que un
+operador pueda tomar **esto** sin evaluar nada más.
 
-**Y lo que sigue sin medirse:** que el label ancle al **tag** y no a una rama móvil. La única imagen
-que hoy lo trae es `:main`, y ahí apunta a `blob/main` — correcto para esa imagen, pero no prueba el
-caso que importa. Si al cortar la próxima versión el valor sale `blob/main` en vez de `blob/v<X.Y.Z>`,
-el label llevaría a una imagen vieja al changelog de hoy, que es exactamente el error que este cambio
-existe para evitar. **Se verifica en el próximo corte, antes de darlo por bueno.**
+**Qué NO alcanza, y conviene saberlo antes de contar con ello:** las versiones **anteriores siguen
+mudas**. Medido contra el registry: `:0.18.0`, `:0.19.0` y `:0.20.0` devuelven `documentation`
+ausente y no traen el archivo. Un runbook que recorra **versiones intermedias** —que es lo correcto
+cuando se salta de la que corre la instancia a la nueva— tiene que tratar el **repo como fuente** y
+la imagen como comodidad; desde 0.20.1 en adelante, la comodidad existe.
 
 ## 0.20.0 — 2026-08-18
 
