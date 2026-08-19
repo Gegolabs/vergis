@@ -37,6 +37,23 @@ reporte. Ejercido tres veces hoy (#225, #233 y el rechazo de #233 en su primera 
 | **`I9+I10`** del frente arbol | **arbol**, luego nuestro el merge | Desbloqueado al mergear #233. Avisará antes de abrir |
 | **`shellcheck` en el CI** | **Nuestro** | Lo tomamos nosotros (es el CI de este repo); arbol lo cierra de su lado. Ficha en `PENDINGS.md` |
 
+## Lo que apareció hoy y cambia el aviso al operador
+
+**#238 — la vista de máscara no discrimina para el sujeto que sirve.** Medido en el arnés local con
+la vista **emitida**: si el principal de serving no tiene `UNMASK`, el DDM enmascara en la lectura de
+la tabla **antes** de que el `CASE` de la vista decida, y `ve_pii` no concede nada. Por la asimetría
+declarada del terreno, **un negativo local refuta también para Fabric**.
+
+**No hay fuga: falla cerrado.** Se pierde una capacidad en silencio, no se filtra PII.
+
+**El hallazgo grande:** el cinturón DDM y la vista **se anulan entre sí** según el rol del sujeto —
+con `Member` el DDM es inerte y la vista funciona; con `Viewer` el DDM muerde y la vista está muerta.
+No hay configuración donde las dos aporten. **Es una bifurcación de diseño, y es de César.**
+
+**Toca el aviso de 0.20.1**: la línea (a) iba a anunciar #197 como corregido. La vista **sí** se
+consulta y **sí** discrimina —eso sigue siendo cierto— **para un principal con `UNMASK`**. Esa
+salvedad tiene que ir, o el aviso afirma más de lo medido.
+
 ## Próximo paso de este frente
 
 **Agregar `shellcheck -s sh` al job `test` del workflow**, midiendo primero contra lo que ya está en

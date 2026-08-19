@@ -102,6 +102,21 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
   aparece, nace issue propio. `reg 2026-08-17`
 
+- **El arnés de Fabric mide la discriminación con el principal EQUIVOCADO, y así se coló #238** —
+  todas las comprobaciones de discriminación corren como `admin` (`fabric-lab-proof.ts:232-233` y
+  `:346-347`); el único sondeo que usa el service principal es P5. El admin **siempre** tiene
+  `UNMASK`, así que los verdes que cerraron #197 midieron una propiedad real sobre un sujeto que no
+  es el que sirve. **Lo que falta no es un test más, es un control de premisa**: verificar el estado
+  del sujeto **en el plano de datos** —no en el de control, que miente durante la staleness de
+  revocación— antes de creerle a cualquier veredicto sobre `UNMASK`. `reg 2026-08-19`
+
+- **La staleness de revocación de rol supera los 20 min** — cota medida el 2026-08-19: rol bajado a
+  `Viewer` a las 13:50:47 UTC, y a las 14:11:40 el SP seguía leyendo **en claro**. El experimento que
+  la esperaba **se negó a concluir**, que es lo correcto. Sigue sin medirse el techo y qué la termina.
+  **Consecuencia práctica inmediata**: cualquier medición sobre el SP de laboratorio queda inválida
+  durante una ventana de al menos 20 min después de tocarle el rol, así que **el experimento se
+  planifica antes de tocar el plano de control, no después**. `reg 2026-08-19`
+
 - **La conexión viva es una frontera de autorización, y el nodo sostiene un pool** — medido el
   2026-08-19 contra Fabric: una conexión ya abierta **nunca** vio el cambio de rol dentro de la
   ventana de sondeo (60 s tras conceder), mientras conexiones nuevas lo vieron en ≤11 s. **La
