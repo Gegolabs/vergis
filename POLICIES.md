@@ -19,6 +19,7 @@
 
 | ID | Política | Techo | Ventana | Vigencia |
 |--|--|--|--|--|
+| **POL-02** | **Custodia del repo del Producto** (`Gegolabs/vergis`) — el frente **roble PROPONE** (PRs desde sus ramas, jamás self-merge) · el frente **vergis DISPONE** (revisa, verifica compatibilidad y mergea) · merges directos a `main`: **solo el frente vergis o César** | — (estructural, no de gasto) | Permanente | Hasta revocación · declarada **2026-08-18** |
 | **POL-01** | **Uso de recursos externos con costo** — el agente contrata, enciende, consume y paga recursos externos necesarios para el trabajo del Producto, sin consultar, mientras el gasto quede bajo el techo | **US$50 / mes** (pote, cualquier recurso) · **US$10 por acto** individual | Mensual, calendario: el pote repone el día 1 y **no acumula** — lo no gastado se pierde | Hasta revocación · declarada **2026-08-18** |
 
 ### POL-01 — la letra chica que la vuelve operable
@@ -53,6 +54,20 @@ sobre cualquier monto:
 preguntar. Encender o tocar capacidad en el tenant **del cliente** no entra jamás, cueste lo que
 cueste.
 
+### POL-02 — la letra chica que la vuelve operable
+
+**Génesis, citada:** la ocurrencia 24 del W-01 (2026-08-18) — los PRs #220/#222 del frente roble,
+self-mergeados a los 2 minutos, convergiendo sin custodia declarada con los #221/#223 del frente
+vergis en la misma tarde. El defecto no fue ningún mandato: fue la ausencia de custodio.
+
+**Alcance:** el código y los contratos del Producto. **No cubre este archivo** — `POLICIES.md` lo
+escribe solo César (cabecera), y esta inscripción la ejecutó Simón (frente soveria) **por mandato
+directo de César en su canal, 2026-08-18**, citado como génesis de autoridad; el push de esta
+inscripción lo ejecuta el frente vergis — la primera ejecución de la regla, cumpliendo la regla.
+
+**El aviso previo es parte de la política:** todo PR al Producto se anuncia al otro frente ANTES de
+abrirse (el pacto roble↔vergis del 2026-08-18 queda elevado de pacto a política).
+
 ## El contador
 
 El consumo se asienta en **`POLICIES-ledger.md`** — una fila por gasto, con fecha, monto medido,
@@ -67,7 +82,7 @@ cero.** Si el ledger no se pudo escribir, el acto se reporta igual y se dice que
 Una política se revoca o se cambia **por acto de César**, editando este archivo. La fila revocada
 **no se borra**: se marca revocada con su fecha — saber que algo estuvo autorizado explica actos del
 pasado que de otro modo se leen como excesos. Los IDs `POL-NN` son de pool propio y **jamás se
-reusan**. Próximo disponible: **POL-02**.
+reusan**. Próximo disponible: **POL-03**.
 
 **Los presupuestos no se heredan ni se suman.** Si `~/.claude/POLICIES.md` declara un pote
 transversal y este archivo declara uno para Vergis, rige el de Vergis **para Vergis** — no se suman.
