@@ -44,6 +44,33 @@ COPY examples ./examples
 #   docker run --rm --entrypoint cat <imagen> /app/CHANGELOG.md
 COPY CHANGELOG.md ./CHANGELOG.md
 
+# ═══ CONTRATO PÚBLICO DEL ANILLO (issue #210 · I9) ═════════════════════════════════════════════════
+#
+# Los labels de descripción/licencia/versión (`org.opencontainers.image.*`) los inyecta el workflow de
+# build desde la metadata de git — NO se declaran acá, para que no haya dos fuentes del mismo dato.
+# Lo que sí es del Dockerfile es el dato que ninguna metadata de git conoce: **qué versión de esquema
+# del store embebido soporta el código que va DENTRO de esta imagen**.
+#
+# ¿Para qué sirve? Para que un conmutador de anillos pueda negarse a un rollback incompatible SIN
+# arrancar el candidato: leer un label de una imagen es barato (`docker inspect` / `imagetools`),
+# arrancar un nodo no lo es, y un candidato cuyo esquema es más viejo que el del archivo del store no
+# debe llegar ni a abrirlo. Es una negativa TEMPRANA, no la única: el gate autoritativo sigue siendo el
+# pre-flight de la promoción contra el bloque `control` de `/contrato` (que además reporta época,
+# degradación y el store exacto que bloquea). El label descarta antes; el pre-flight decide.
+#
+#   vergis.schema         — el esquema del store de GOBIERNO (el número del diseño, para el consumidor
+#                           que quiere un solo entero).
+#   vergis.schema.stores  — el mapa COMPLETO, un store por par `nombre=versión`. En plural a propósito:
+#                           una instalación tiene más de un store embebido y un solo número esconde al
+#                           que sí bloquea el rollback. Los nombres son los mismos que declara
+#                           `/contrato` (`store[].name`).
+#
+# Estos valores NO se mantienen a mano con la esperanza de acordarse: `tests/imagen-anillo-labels.test.ts`
+# los compara contra las constantes `*_SCHEMA_VERSION` del código y contra la lista de stores que el
+# server cablea. Si alguien sube una constante y no el label —o agrega un store—, la suite se pone roja.
+LABEL vergis.schema="1" \
+      vergis.schema.stores="gobierno=1,notas=1,data-maestra=1"
+
 USER node
 EXPOSE 8080
 
