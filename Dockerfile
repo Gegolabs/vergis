@@ -37,6 +37,12 @@ RUN npm ci --omit=dev --ignore-scripts
 COPY --from=build /app/dist ./dist
 COPY schema ./schema
 COPY examples ./examples
+# El CHANGELOG viaja DENTRO de la imagen (issue #229). No es documentación de cortesía: es lo único
+# que responde «¿qué exige esta versión?» desde la VM, sin salir de ella y sin acceso al repo — que es
+# exactamente el momento en que la pregunta aparece, con el `pull` ya hecho. Va al final para no
+# invalidar las capas caras de arriba, y pesa lo que pesa un texto.
+#   docker run --rm --entrypoint cat <imagen> /app/CHANGELOG.md
+COPY CHANGELOG.md ./CHANGELOG.md
 
 USER node
 EXPOSE 8080
