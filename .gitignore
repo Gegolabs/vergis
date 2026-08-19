@@ -8,3 +8,4 @@ proyeccion.html
 out/
 .env
 .DS_Store
+local/

@@ -34,7 +34,33 @@ Desconectado del cliente, datos sintéticos, **capacidad pausada por defecto**. 
 | Warehouse | `vergislab` · `4e1a4b39-bf4e-4c2e-8d8c-e92dbe7b0714` |
 | Endpoint SQL | `b5towqozkz5ebe7ayhs6w67cdq-vei4k2srzm5efe57d5tj2a75by.datawarehouse.fabric.microsoft.com` |
 | Collation | `Latin1_General_100_BIN2_UTF8` — Fabric Warehouse no soporta `NVARCHAR` |
-| SP de serving (laboratorio) | `vergis-lab-serving-sp` · appId `9faa3c3c-27ca-44e5-ad18-8ce65e9e1b11` · rol **Viewer** en el workspace. **El rol decide si tiene `UNMASK`** — medido: `Member` ve el valor real, `Viewer` ve la máscara |
+| SP de serving (laboratorio) | `vergis-lab-serving-sp` · appId `9faa3c3c-27ca-44e5-ad18-8ce65e9e1b11` · objectId `38a06a01-8f44-4418-8174-9eae0ad7190b` · rol **`Viewer`** en el workspace — **medido en vivo el 2026-08-19** (`GET /v1/workspaces/{id}/roleAssignments`), no leído de este archivo. ⚠️ **La regla «el rol decide `UNMASK`» está CONTRADICHA — ver la nota de abajo** |
+
+> ⚠️ **`UNMASK` y el rol del workspace — lo medido y lo que NO se sabe.**
+>
+> Este archivo declaraba, desde el 2026-08-16, que *«`Member` ve el valor real, `Viewer` ve la
+> máscara»*. **La corrida de `fab:proof` del 2026-08-19 midió lo contrario**: con el SP en rol
+> `Viewer` —verificado contra el plano de control en la misma sesión, no leído de acá—, control
+> positivo en verde (el SP vio sus 2 filas) y la columna corroborada como enmascarada en
+> `sys.masked_columns`, **el SP leyó el RUT en claro** (`33.333.333-3`). O sea: **el DDM es inerte
+> para él, y la única protección de columna es la vista**.
+>
+> **Cuál de las dos mediciones describe el mecanismo NO está medido**, y se dice con esas palabras.
+> Candidato principal, ya catalogado en `PENDINGS.md`: revocar un rol de workspace en Fabric **no
+> toma efecto de inmediato** —bajar de `Member` a `Viewer` no tomó efecto en 6,5 min de sondeo—, así
+> que el plano de control puede decir `Viewer` mientras el plano de datos sigue tratándolo como
+> `Member`. Eso explicaría el resultado de hoy sin refutar el de agosto 16, pero **es conjetura hasta
+> que alguien la mida**.
+>
+> **Mientras tanto, lo prudente es asumir que el SP de serving SÍ lee en claro** — es el supuesto que
+> falla del lado seguro para el diseño de la protección de columna.
+>
+> **Instrumentos que NO sirven para esto** (medido el 2026-08-19, para que nadie los reintente):
+> `fn_my_permissions(NULL,'DATABASE')` devuelve `[]` incluso para permisos que el principal
+> evidentemente tiene, y `DATABASE_PRINCIPAL_ID()` **no está soportado** en Fabric. Un `[]` ahí
+> significa *«no pude medir»*, no *«no tiene `UNMASK`»*. Y una consulta cruda sin el prelude de
+> `SESSION_CONTEXT` **no mide nada**: la row policy deniega todas las filas y el control positivo
+> sale vacío.
 
 **Cómo se pausa y se prende** — y no es opcional:
 
@@ -45,9 +71,17 @@ npm run fab:pause    # deja de facturar cómputo
 npm run fab:state    # Paused | Active
 ```
 
-**El secreto del SP no está en el repo.** Es un secreto de laboratorio, en tenant propio y sobre
-datos sintéticos, pero igual vive fuera: se regenera con
-`POST /applications/{objectId}/addPassword` de Graph cuando haga falta, y no se commitea nunca.
+**El secreto del SP no está en el repo, pero ya no falta.** Es un secreto de laboratorio, en tenant
+propio y sobre datos sintéticos; vive en **`local/fabric-lab-sp.env`** (modo `600`, y `local/` está
+en `.gitignore`), junto al `FAB_SP_ROLE` que el arnés exige declarar. Se carga con
+`source local/fabric-lab-sp.env` antes de la ventana.
+
+La app tiene **dos** credenciales vivas: `lab-186` (hasta 2028-08-16, cuyo **valor se perdió** — solo
+se muestra al crearlo) y **`lab-186-b`** (hasta 2028-08-19), emitida el 2026-08-19 por mandato
+explícito de César en sesión. Se emite con `az ad app credential reset --append`; **el `--append` no
+es opcional**: sin él el comando **borra** las credenciales existentes en vez de agregar una. Y
+`az ad` **no acepta `--subscription`** —hereda el tenant de la cuenta activa—, así que antes va
+`az account set --subscription b9ce0759-…` y después se devuelve el default. No se commitea nunca.
 
 ### Recursos preexistentes en el tenant ultraBASE — no son del Producto
 

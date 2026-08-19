@@ -76,12 +76,16 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 - ~~**La medición de #164 NO está en el arnés de Fabric**~~ — **SALDADO 2026-08-18**: es P7 de
   `fab:proof` (PR #219) y ya corrió contra el SKU. Resultado en el comentario de #164
-- **El secreto del SP de laboratorio no está en la máquina, y por eso P5 (#163) sigue sin respuesta**
-  — la ventana del 2026-08-18 corrió sin `FAB_SP_TOKEN`, así que la pregunta «¿el service principal de
-  serving tiene `UNMASK`?» quedó igual de abierta que antes. El arnés lo declara y no lo cuenta como
-  verde, que es lo correcto, pero significa que **la próxima ventana también lo desperdicia** si nadie
-  regenera el secreto antes (`POST /applications/{objectId}/addPassword` de Graph, ver `RESOURCES.md`).
-  Regenerarlo toca credenciales, así que no se hizo por cuenta propia. `reg 2026-08-18`
+- **✅ SALDADO (2026-08-19) — el secreto del SP ya está en la máquina y P5 (#163) quedó respondida.**
+  La ficha pedía «regenerar el secreto», y esa premisa era **falsa a medias**: la app tenía —y tiene—
+  una credencial vigente (`lab-186`, hasta 2028-08-16); lo perdido era **su valor**, que Entra solo
+  muestra al crearla. Se emitió una segunda (`lab-186-b`) **por mandato explícito de César en sesión**,
+  con `--append` para no borrar la primera, y vive en `local/fabric-lab-sp.env` (ver `RESOURCES.md`).
+  **Resultado de P5**: con el SP en rol `Viewer` —medido en vivo contra el plano de control— y control
+  positivo en verde, **el SP lee el RUT en claro**: el DDM es **inerte** para él y la única protección
+  de columna es la vista. **Contradice el registro del 2026-08-16**, y cuál de las dos mediciones
+  describe el mecanismo **no está medido** — ver la nota de `RESOURCES.md`.
+
 - **El eslabón «renombrar en la consola → catálogo servido» de #207 no tiene test de integración** —
   está medido que el override no se congela en el memo del escáner y que sobrevive al reinicio del
   nodo (SQLite en disco), pero la cadena *POST → `refreshDisplayNames()` → `discover()`* solo está
@@ -93,19 +97,19 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   opciones con cascada). Las facetas son otra superficie y **no fueron lo reportado**, así que esto no
   es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
   aparece, nace issue propio. `reg 2026-08-17`
-  **Tres ventanas desperdiciadas ya** (2026-08-18: la de la mañana y las dos de la tarde). Cada
-  corrida de `fab:proof` que pasa sin `FAB_SP_TOKEN` deja P5 sin responder y el arnés lo **declara**
-  en vez de darlo por verde, que es lo correcto — pero el costo se repite. Con #197 corregido la
-  pregunta **pesa más que antes**: ahora la vista sí discrimina, así que si el SP no tiene `UNMASK`,
-  la rama en claro la aplasta el DDM y la capacidad queda degradada **sin que nada lo grite**.
-  `act 2026-08-18`
 
 - **Revocar un rol de workspace en Fabric NO toma efecto de inmediato, y no se sabe qué lo destraba**
   — medido el 2026-08-16: subir el SP de `Viewer` a `Member` cambió el resultado en la **primera**
   lectura (t+0s); bajarlo de `Member` a `Viewer` **no tomó efecto en 6,5 minutos de sondeo continuo**
   (14 lecturas, el principal siguió viendo el valor real). La máscara se observó recién **después de
   recrear tabla y política**, así que hay dos candidatos —el tiempo o la re-aplicación del DDL— y
-  **cuál de los dos NO está medido**. Importa por dos vías: (a) es un asimetría de seguridad
+  **cuál de los dos NO está medido**. **Subió de precio el 2026-08-19**: la corrida de `fab:proof` con
+  el SP en `Viewer` —rol verificado contra el plano de control— lo vio leer **en claro**, o sea el
+  resultado OPUESTO al del 16-ago bajo el mismo rol declarado. Este fenómeno es el candidato principal
+  a explicarlo (plano de control diciendo `Viewer` mientras el plano de datos sigue en `Member`), pero
+  **es conjetura**: el experimento que decide sigue siendo el mismo y sigue sin correrse. Mientras
+  tanto **hay dos mediciones contradictorias en el registro** y ninguna se puede preferir por
+  argumento. Importa por dos vías: (a) es un asimetría de seguridad
   —conceder privilegio es instantáneo, quitarlo no—; (b) **envenenó una medición de esta misma
   sesión**: el primer veredicto sobre `UNMASK` fue el opuesto al correcto y se publicó como hallazgo
   antes de que tres corridas seguidas lo desmintieran. El experimento que falta es barato: bajar el
@@ -118,9 +122,9 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   ellas es de César** (gasto). Se anota acá porque el hallazgo es del agente, no encargo suyo.
   `reg 2026-08-16`
 - **Una consulta de instancia sigue abierta, y ya no es sobre la severidad de #197 sino sobre
-  `UNMASK`** (*act 2026-08-18: la ficha preguntaba si #197 era latente o activo; el defecto está
-  **corregido** desde 0.19.0, así que esa mitad caducó*) — lo que queda: **¿con qué rol de workspace
-  corre el service principal de serving?** Decide si el cinturón DDM le muerde (`Viewer`) o si lee la
+  `UNMASK`** (*act 2026-08-19: la pregunta ya NO es si el mecanismo existe —se midió en terreno propio,
+  y con `Viewer` el SP de laboratorio lee en claro—, sino qué ocurre en la instancia del cliente*) —
+  lo que queda: **¿con qué rol de workspace corre el service principal de serving de la instancia?** Decide si el cinturón DDM le muerde (`Viewer`) o si lee la
   tabla en claro (`Member`), y por lo tanto si la rama «en claro» de la vista sirve de algo. Es la
   misma pregunta que P5 por otra vía, y **es una consulta contra la instancia, no un frente**.
   Conserva valor la otra mitad, con otro sentido: **¿algún PI nombra una `vw_mask_*`?** — ya no mide
