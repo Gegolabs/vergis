@@ -34,6 +34,32 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
+## Sin publicar (en `main`)
+
+### Las instrucciones de una versión viajan con la imagen (#229)
+
+**El `CHANGELOG.md` va dentro de la imagen** (`/app/CHANGELOG.md`) y los labels OCI dejan de estar
+mudos: `org.opencontainers.image.description` (venía **vacío**) y
+`org.opencontainers.image.documentation`, que apunta a las notas del **ref exacto** que se construyó.
+
+```bash
+docker run --rm --entrypoint cat ghcr.io/gegolabs/vergis:<tag> /app/CHANGELOG.md
+docker buildx imagetools inspect ghcr.io/gegolabs/vergis:<tag> --format '{{json .Image}}'
+```
+
+**Lo que esto NO alcanza todavía, y hay que decirlo con esas palabras:** el arreglo entró **después**
+del corte de 0.20.0, así que **ninguna versión publicada hasta 0.20.0 inclusive trae el changelog ni
+los labels** — medido contra el registry, no deducido: `:0.18.0`, `:0.19.0` y `:0.20.0` devuelven
+`documentation` **ausente**. Para el salto que un operador tiene hoy delante —0.18.0 → 0.20.0— la vía
+desde la VM **no existe**, y la fuente sigue siendo el repo. Se vuelve utilizable en la próxima
+versión que se corte.
+
+**Y lo que sigue sin medirse:** que el label ancle al **tag** y no a una rama móvil. La única imagen
+que hoy lo trae es `:main`, y ahí apunta a `blob/main` — correcto para esa imagen, pero no prueba el
+caso que importa. Si al cortar la próxima versión el valor sale `blob/main` en vez de `blob/v<X.Y.Z>`,
+el label llevaría a una imagen vieja al changelog de hoy, que es exactamente el error que este cambio
+existe para evitar. **Se verifica en el próximo corte, antes de darlo por bueno.**
+
 ## 0.20.0 — 2026-08-18
 
 **Los dos planos que 0.19.0 dejó puestos ya están cableados: con dos nodos vivos, exactamente uno
