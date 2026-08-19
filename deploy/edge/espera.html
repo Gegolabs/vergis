@@ -1,0 +1,111 @@
+<!doctype html>
+<!--
+  SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado
+  `lb_try_duration`, ningún anillo declara `"phase":"serving"`.
+
+  VIVE EN EL BORDE, NUNCA DENTRO DE VERGIS: está medido que nada dentro de un proceso puede cubrir su
+  propia ausencia. Es un archivo estático, sin dependencias externas ni red: si el motor no está, esta
+  página igual se sirve.
+
+  Cubre lo NO planificado (OOM, crash, arranque de un anillo frío). Una promoción normal no la muestra:
+  el anillo nuevo ya sirve antes de que el borde conmute.
+-->
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Auto-refresh: el usuario percibe latencia, no un error. 5 s es un compromiso entre volver
+         pronto y no martillar un motor que está arrancando. -->
+    <meta http-equiv="refresh" content="5" />
+    <title>La plataforma se está reiniciando</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fondo: #f6f7f9;
+        --texto: #1f2328;
+        --suave: #5b6570;
+        --borde: #e2e5ea;
+        --acento: #E07A2E;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fondo: #14181d;
+          --texto: #e8eaed;
+          --suave: #9aa4b0;
+          --borde: #2a3037;
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: var(--fondo);
+        color: var(--texto);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 32rem;
+        background: transparent;
+        border: 1px solid var(--borde);
+        border-radius: 12px;
+        padding: 2rem 2.25rem;
+        text-align: left;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin: 0 0 0.75rem;
+        font-weight: 600;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.55;
+        color: var(--suave);
+      }
+      .barra {
+        margin-top: 1.5rem;
+        height: 3px;
+        border-radius: 3px;
+        background: var(--borde);
+        overflow: hidden;
+      }
+      .barra span {
+        display: block;
+        height: 100%;
+        width: 35%;
+        background: var(--acento);
+        animation: corre 1.6s ease-in-out infinite;
+      }
+      @keyframes corre {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(300%);
+        }
+      }
+      code {
+        font-size: 0.85em;
+        color: var(--suave);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>La plataforma se está reiniciando</h1>
+      <p>Esta página se recargará sola en unos segundos. No hace falta hacer nada.</p>
+      <p>Tu sesión sigue vigente: cuando el servicio vuelva, seguirás donde estabas.</p>
+      <div class="barra"><span></span></div>
+      <p style="margin-top: 1.5rem">
+        Si esto persiste varios minutos, avisa a quien opera la plataforma.
+        <br />
+        <code>503 · el borde no encontró ningún nodo sirviendo</code>
+      </p>
+    </main>
+  </body>
+</html>
