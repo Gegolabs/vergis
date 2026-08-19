@@ -17,3 +17,6 @@ tests
 .github
 local
 *.md
+# …salvo el CHANGELOG, que SÍ va a la imagen: es lo único que contesta «¿qué exige esta versión?»
+# desde la VM, sin salir de ella (issue #229). La excepción va después del patrón que la excluiría.
+!CHANGELOG.md

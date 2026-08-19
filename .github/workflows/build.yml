@@ -63,6 +63,15 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=main,enable={{is_default_branch}}
             type=sha
+          # Labels que contestan «¿qué es esto y qué exige?» desde un `docker inspect`, sin salir de
+          # la VM (issue #229). `description` venía VACÍO —metadata-action lo toma de la descripción
+          # del repo en GitHub, que no está puesta— y ningún label apuntaba a las notas de la versión.
+          # `documentation` ancla al REF EXACTO que se está construyendo (`v0.20.0`, `main`, …), no a
+          # una rama móvil: el operador que inspecciona una imagen vieja tiene que llegar al changelog
+          # DE ESA versión, no al de la última.
+          labels: |
+            org.opencontainers.image.description=Vergis — servidor de dashboards con RLS por consumidor (data-anchored). Qué trae y qué exige cada versión: CHANGELOG.md, incluido dentro de la imagen en /app/CHANGELOG.md.
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
