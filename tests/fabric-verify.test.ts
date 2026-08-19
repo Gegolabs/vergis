@@ -436,3 +436,73 @@ describe('fabric · maskViewCandidates', () => {
     expect(cands.map((c) => c.base)).toEqual(['dbo.a', 'dbo.c'])
   })
 })
+
+describe('fabric · #238 · la precondición de desenmascarado', () => {
+  const CON_COLUMNA: PolicyDecl = {
+    predicates: [{ kind: 'membership', column: 'area', claim: 'groups', op: 'in' }],
+    combine: 'and',
+    default: 'deny',
+    columnRules: [{ column: 'rut', claim: 've_pii', action: 'mask' }],
+  }
+  const STORE_COL = new Map<string, PolicyDecl>([['dbo.saldos', CON_COLUMNA], ['dbo.ventas', GOVERNED]])
+  const conUnmask = (tables: string[], unmask?: 'capable' | 'incapable' | 'uninstrumented'): SourceState => ({
+    protectedTables: new Set(tables),
+    viewLineage: new Map(),
+    unboundViewLineage: new Map(),
+    ...(unmask ? { unmask } : {}),
+  })
+  const correr = (unmask: 'capable' | 'incapable' | 'uninstrumented' | undefined, previous?: Map<string, PiVerdict>) =>
+    verifyFabricServability({
+      pis: [PI_A, PI_B],
+      store: STORE_COL,
+      sourceStateOf: executor({
+        wh_finanzas: conUnmask(['dbo.saldos'], unmask),
+        wh_comercial: conUnmask(['dbo.ventas'], unmask),
+      }),
+      previous,
+    })
+
+  it('capacidad PRESENTE → el PI con reglas de columna sirve', async () => {
+    const { state } = await correr('capable')
+    expect(verdictOf(state, 'pi-a').ok).toBe(true)
+  })
+
+  it('capacidad MEDIDA AUSENTE → veredicto DEFINITIVO de no-servible, con la causa y la remediación', async () => {
+    const { state } = await correr('incapable')
+    const v = verdictOf(state, 'pi-a')
+    expect(v.ok).toBe(false)
+    if (v.ok) return
+    expect(v.reason).toContain('NO puede desenmascarar')
+    expect(v.reason).toContain('#238')
+    expect(v.reason).toContain('contrato de instancia')
+  })
+
+  it('capacidad medida ausente GANA sobre un veredicto sano previo — ningún camino afloja el fail-closed', async () => {
+    const previo = new Map<string, PiVerdict>([['pi-a', { ok: true }]])
+    const { state } = await correr('incapable', previo)
+    expect(verdictOf(state, 'pi-a').ok).toBe(false)
+  })
+
+  it('SIN INSTRUMENTO ≠ ausente: es indeterminación, y el PI que YA servía conserva su veredicto', async () => {
+    const previo = new Map<string, PiVerdict>([['pi-a', { ok: true }]])
+    const { state } = await correr('uninstrumented', previo)
+    expect(verdictOf(state, 'pi-a').ok).toBe(true) // validate-before-swap: no se castiga una migración pendiente
+    const frio = await correr('uninstrumented') // en frío, fail-closed con la remediación
+    const v = verdictOf(frio.state, 'pi-a')
+    expect(v.ok).toBe(false)
+    if (v.ok) return
+    expect(v.reason).toContain('no está instalado')
+    expect(v.reason).toContain('Regenera y re-aplica')
+  })
+
+  it('un PI SIN reglas de columna no se ve afectado por la capacidad, ni siquiera medida ausente', async () => {
+    const { state } = await correr('incapable')
+    expect(verdictOf(state, 'pi-b').ok).toBe(true) // dbo.ventas no declara plano de columna
+  })
+
+  it('si el llamador NO produce la capacidad, el gate se comporta EXACTAMENTE como antes de #238', async () => {
+    const { state } = await correr(undefined)
+    expect(verdictOf(state, 'pi-a').ok).toBe(true)
+    expect(verdictOf(state, 'pi-b').ok).toBe(true)
+  })
+})

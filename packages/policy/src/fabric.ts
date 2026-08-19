@@ -118,6 +118,55 @@ export interface FabricEnforcement {
    * tabla es decisión de arquitectura/instancia (qué objeto nombra el spec), no de este emisor.
    */
   maskView: FabricMaskView | null
+  /**
+   * El **CENTINELA DE DESENMASCARADO** emitido (#238), o `null` si no hay reglas de columna.
+   *
+   * Mide una **precondición del contrato de instancia**: que el principal con el que el serving se
+   * conecta pueda **leer el valor real** de una columna enmascarada. Sin esa capacidad, el DDM
+   * enmascara en la lectura de la tabla —río arriba del `CASE` de la vista— y la vista devuelve la
+   * máscara en AMBAS ramas: `ve_pii` deja de conceder nada, **y nada lo grita**. Ese es el defecto
+   * que #238 nombra, y la razón de que esto se mida en vez de suponerse.
+   *
+   * **Por qué un centinela propio y no una columna de negocio**: la lectura tiene que poder ocurrir
+   * ANTES de servir cualquier PI, sin depender de que haya filas visibles bajo la RLS del sujeto ni
+   * de conocer un valor real. El centinela trae **un valor conocido por construcción**, así que la
+   * lectura es concluyente por sí sola.
+   *
+   * **Sabe reportar su propio fallo** (Norma 7, corolario de instrumentos): su lectura da
+   * exactamente uno de tres estados distinguibles — valor esperado (capacidad PRESENTE), cualquier
+   * otro valor (capacidad **medida** AUSENTE: el motor enmascaró), o error (**no se pudo medir**,
+   * que jamás es un veredicto). Nótese que la ausencia se reconoce por «≠ esperado» y no por el
+   * literal del motor: `default()` rinde `xxxx` hoy, pero el veredicto no cuelga de esa constante.
+   */
+  unmaskProbe: FabricUnmaskProbe | null
+}
+
+/**
+ * El centinela de desenmascarado: una tabla mínima con UNA columna enmascarada y UN valor conocido.
+ *
+ * **Es compartido por schema, no por tabla**, y de ahí sale su regla de ciclo de vida: se crea si no
+ * existe y **NO se retira en `teardownSQL`**. Retirarlo al desinstalar la política de UNA tabla
+ * dejaría ciegas a todas las demás del mismo schema — el instrumento moriría por un acto que no lo
+ * nombra. Para retirarlo hay `dropSQL`, explícito.
+ */
+export interface FabricUnmaskProbe {
+  /** Nombre simple de la tabla centinela (fijado por el emisor: no es configurable). */
+  table: string
+  /** Referencia calificada `[schema].[tabla]`. */
+  qualifiedName: string
+  /** Nombre de la columna enmascarada. */
+  column: string
+  /**
+   * El valor que la columna trae por construcción. Leerlo tal cual ⇒ el principal desenmascara.
+   * Leer CUALQUIER otra cosa ⇒ el motor enmascaró ⇒ capacidad ausente.
+   */
+  expectedValue: string
+  /** DDL idempotente (crear-si-falta) para instalar el centinela. En orden. */
+  setupSQL: string[]
+  /** Retiro explícito. NO va en `teardownSQL`: el centinela es compartido (ver arriba). */
+  dropSQL: string
+  /** La consulta de sondeo. Devuelve exactamente una fila con una columna. */
+  probeSQL: string
 }
 
 /** La vista de máscara emitida: su nombre, su forma y su DDL. */
@@ -509,6 +558,54 @@ function buildMaskView(
 }
 
 /**
+ * Nombre y valor del centinela: **fijados por el emisor, no configurables**.
+ *
+ * No se ofrecen como opción del target a propósito. El centinela es un instrumento, no un artefacto
+ * de negocio: si cada instancia pudiera renombrarlo, el serving tendría que descubrir cómo se llama
+ * antes de poder medir — y un instrumento que hay que ir a buscar es un instrumento que a veces no
+ * se corre. `VARCHAR` y no `NVARCHAR` porque Fabric Warehouse no soporta `NVARCHAR`, y el mismo SQL
+ * tiene que servir a los dos motores.
+ */
+const UNMASK_PROBE_TABLE = 'vergis_unmask_probe'
+const UNMASK_PROBE_COLUMN = 'probe'
+const UNMASK_PROBE_VALUE = 'VERGIS-UNMASK-OK'
+const UNMASK_PROBE_TYPE = 'VARCHAR(32)'
+
+/**
+ * Emite el centinela de desenmascarado (#238).
+ *
+ * **Crear-si-falta, jamás tira-y-recrea.** El resto del emisor es idempotente por tira-y-recrea, y
+ * acá esa forma sería un defecto: el centinela es compartido por schema y lo sondean conexiones
+ * vivas de otros PIs. Tirarlo y recrearlo abriría una ventana en la que un sondeo concurrente lee
+ * una tabla ausente — que el serving traduce, correctamente, a «no pude medir». Correcto pero
+ * ruidoso, y provocado por nosotros: crear-si-falta lo evita sin perder idempotencia.
+ */
+function buildUnmaskProbe(schema: string): FabricUnmaskProbe {
+  const qProbe = `[${schema}].[${UNMASK_PROBE_TABLE}]`
+  const col = `[${UNMASK_PROBE_COLUMN}]`
+  return {
+    table: UNMASK_PROBE_TABLE,
+    qualifiedName: qProbe,
+    column: UNMASK_PROBE_COLUMN,
+    expectedValue: UNMASK_PROBE_VALUE,
+    setupSQL: [
+      `IF OBJECT_ID(N'${qProbe}') IS NULL\n` + `    CREATE TABLE ${qProbe} (${col} ${UNMASK_PROBE_TYPE} NOT NULL);`,
+      `IF NOT EXISTS (SELECT 1 FROM ${qProbe})\n` + `    INSERT INTO ${qProbe} (${col}) VALUES ('${UNMASK_PROBE_VALUE}');`,
+      // La máscara del centinela se pone con el MISMO mecanismo que la de una columna de negocio:
+      // si el motor cambiara la semántica de `default()`, el instrumento cambiaría con el sujeto que
+      // mide, que es justo lo que se quiere de un control.
+      `IF NOT EXISTS (\n` +
+        `    SELECT 1 FROM sys.masked_columns\n` +
+        `    WHERE object_id = OBJECT_ID(N'${qProbe}') AND name = N'${UNMASK_PROBE_COLUMN}' AND is_masked = 1\n` +
+        `)\n` +
+        `    ALTER TABLE ${qProbe} ALTER COLUMN ${col} ADD MASKED WITH (FUNCTION = 'default()');`,
+    ],
+    dropSQL: `DROP TABLE IF EXISTS ${qProbe};`,
+    probeSQL: `SELECT TOP 1 ${col} AS ${col} FROM ${qProbe};`,
+  }
+}
+
+/**
  * Compila el IR a enforcement de Fabric / Azure SQL (push-down). `public` no genera policy
  * (solo gatea el reporte; sin RLS de fila).
  */
@@ -543,10 +640,19 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
   // objetos nombrados, en vez de dejar que el motor devuelva «one or more objects access this column».
   // Sin reglas de columna no se emite ni una línea — la promesa de «la ausencia de reglas no mueve un
   // byte del SQL» sigue intacta, y hay un test que la sostiene.
+  // El centinela de #238 se emite exactamente cuando hay plano de columna: solo ahí la capacidad de
+  // desenmascarar es precondición de servir. Va AL FINAL del bloque y no depende de ningún objeto de
+  // esta tabla — es infraestructura de medición compartida por schema, no parte de su enforcement.
+  const unmaskProbe = maskedCols.length === 0 ? null : buildUnmaskProbe(schema)
   const maskSetup =
     maskedCols.length === 0
       ? []
-      : [maskPreflightSQL(qTable, maskedCols), ...maskedCols.map((c) => addMaskedSQL(qTable, c)), ...(maskView ? [maskView.createSQL] : [])]
+      : [
+          maskPreflightSQL(qTable, maskedCols),
+          ...maskedCols.map((c) => addMaskedSQL(qTable, c)),
+          ...(maskView ? [maskView.createSQL] : []),
+          ...(unmaskProbe ? unmaskProbe.setupSQL : []),
+        ]
   // Claims que solo aparecen en reglas de COLUMNA: hay que inyectarlos igual. No es cosmético — es la
   // misma nuance de no-fuga del pool (doc 10 §5): un claim que el nodo NO inyecta no se reescribe en
   // cada request, así que el `SESSION_CONTEXT` de OTRO consumidor sobreviviría en la conexión reusada
@@ -603,6 +709,7 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
       injections: columnClaims.map((claim) => ({ setting: settingForClaim(claim), claim })),
       policy,
       maskView,
+      unmaskProbe,
       // El allow-all ya NO aporta dependencias (#164): su función no referencia ninguna columna.
       // Quedan solo las ENMASCARADAS, y por un lazo distinto: este enforcement es dueño de un
       // atributo de esa columna (su máscara), así que retirarla o alterarla exige pasar por acá.
@@ -651,6 +758,7 @@ export function compileFabric(policy: PolicyDecl, target: FabricTarget): FabricE
     })),
     policy,
     maskView,
+    unmaskProbe,
     // Acá la dependencia SÍ es semántica: son las columnas que la política usa como criterio. Las
     // enmascaradas se suman (ver la nota del caso público): su máscara es propiedad de este artefacto.
     schemaDependencies: [...new Set([...columns, ...maskedCols])],

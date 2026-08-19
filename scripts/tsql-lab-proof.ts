@@ -105,6 +105,20 @@ async function intentar(pool: sql.ConnectionPool, batch: string): Promise<{ ok: 
 }
 
 /** Consulta con los claims del consumidor inyectados por `SESSION_CONTEXT`, en la MISMA conexión. */
+/** Como `consultar`, pero con el SQL COMPLETO en vez de un objeto — para las sondas de esquive. */
+async function consultarRaw(
+  pool: sql.ConnectionPool,
+  injections: { setting: string; claim: string }[],
+  claims: ClaimSet,
+  sqlText: string,
+): Promise<Record<string, unknown>[]> {
+  const p = sessionContextPrelude(injections, claims)
+  const req = pool.request()
+  for (const x of p.params) req.input(x.name, sql.NVarChar, x.value)
+  const r = await req.query(`${p.sql}\n${sqlText}`)
+  return r.recordset as unknown as Record<string, unknown>[]
+}
+
 async function consultar(
   pool: sql.ConnectionPool,
   injections: { setting: string; claim: string }[],
@@ -256,6 +270,58 @@ async function main(): Promise<void> {
     unmaskConClaim.join() !== unmaskSinClaim.join(),
     'CONTROL · la vista DISCRIMINA por claim (con y sin claim dan distinto), no es un no-op',
   )
+
+  // ── P1b (#238·E2) · ¿hay ALGUNA construcción que esquive el DDM sin `UNMASK`? ────────────────
+  seccion('P1b (#238·E2) · ¿alguna construcción T-SQL obtiene el valor real SIN `UNMASK`?')
+  // El diseño de #238 se apoya en que NO existe: por eso la capacidad de desenmascarar es
+  // precondición y no una alternativa a rediseñar. Eso era RAZONAMIENTO —todo camino pasa por la
+  // columna—, no medición. Acá se pone en riesgo: si alguna devuelve el valor, el diseño tiene una
+  // alternativa que no se consideró **y** el DDM tiene un agujero reportable.
+  const T = 'dbo.areas'
+  const RUT_REAL = '11.111.111-1'
+  const esquives: { nombre: string; sql: string }[] = [
+    { nombre: 'proyección directa (línea base)', sql: `SELECT rut AS r FROM ${T}` },
+    { nombre: 'cómputo intermedio (CONCAT)', sql: `SELECT CONCAT(rut, N'') AS r FROM ${T}` },
+    { nombre: 'SUBSTRING sobre la columna', sql: `SELECT SUBSTRING(rut, 1, 20) AS r FROM ${T}` },
+    { nombre: 'CROSS APPLY (VALUES (rut))', sql: `SELECT v.r FROM ${T} CROSS APPLY (VALUES (rut)) AS v(r)` },
+    { nombre: 'CTE intermedia', sql: `WITH c AS (SELECT rut FROM ${T}) SELECT rut AS r FROM c` },
+    { nombre: 'subconsulta derivada', sql: `SELECT r FROM (SELECT rut AS r FROM ${T}) AS d` },
+    { nombre: 'agregación (MAX)', sql: `SELECT MAX(rut) AS r FROM ${T}` },
+    { nombre: 'CASE que la re-proyecta', sql: `SELECT CASE WHEN 1 = 1 THEN rut ELSE N'' END AS r FROM ${T}` },
+    { nombre: 'materialización en #temp y lectura', sql: `SELECT rut INTO #esq FROM ${T}; SELECT rut AS r FROM #esq; DROP TABLE #esq;` },
+  ]
+  // CONTROL POSITIVO del experimento: el MISMO sujeto, con UNMASK, sí ve el valor por la vía directa.
+  // Sin él, N negativos podrían significar «el sujeto no ve NADA» en vez de «el DDM aguanta».
+  const ctrlDirecto = (await consultarRaw(unmask, enf.injections, TODOS, `SELECT rut AS r FROM ${T}`)).map((r) => String(r['r']))
+  ok(ctrlDirecto.includes(RUT_REAL), `CONTROL POSITIVO · el mismo sujeto CON UNMASK ve el valor real: [${ctrlDirecto.slice(0, 3).join(' ')}]`)
+
+  let esquivoAlguno = false
+  let medidas = 0
+  for (const e of esquives) {
+    let filas: Record<string, unknown>[] | null = null
+    try {
+      filas = await consultarRaw(plain, enf.injections, TODOS, e.sql)
+    } catch (err) {
+      // NO cuenta como «aguantó»: cuenta como NO MEDIDA. Una sonda que el motor rechaza no exonera
+      // a nadie — es justo la confusión que la Norma 7 persigue en los instrumentos.
+      hallazgo(`${e.nombre}: LA SONDA NO CORRIÓ (${(err as Error).message.split('\n')[0].slice(0, 70)}) — no mide`)
+      continue
+    }
+    medidas++
+    const vio = filas.some((r) => String(r['r'] ?? '').includes('-'))
+    if (vio) esquivoAlguno = true
+    ok(!vio, `${e.nombre}: ${vio ? `⚠ DEVUELVE EL VALOR REAL [${filas.map((r) => String(r['r'])).slice(0, 2).join(' ')}]` : 'enmascarada'}`)
+  }
+  // El resumen se calcula sobre las que DE VERDAD corrieron. La primera versión de este bloque
+  // declaró «E2 corroborada en 8 construcciones» con las 8 rechazadas por un error de sintaxis mío:
+  // cero mediciones y un veredicto positivo. Queda el contador a la vista para que no se repita.
+  if (medidas === 0) {
+    ok(false, 'E2 NO SE MIDIÓ: ninguna sonda corrió. Nada se concluye sobre el DDM.')
+  } else if (esquivoAlguno) {
+    hallazgo(`E2 REFUTADA (${medidas}/${esquives.length} sondas corridas): existe una construcción que esquiva el DDM sin UNMASK — el diseño de #238 tiene alternativa Y el DDM tiene un agujero`)
+  } else {
+    hallazgo(`E2 CORROBORADA en ${medidas}/${esquives.length} sondas corridas: ninguna obtiene el valor sin UNMASK. Corrobora, NO demuestra: es una lista, no una prueba de imposibilidad`)
+  }
 
   // ── P3 (#164) · las tres formas del FILTER PREDICATE, con su control positivo ───────────────
   seccion('P3 (#164) · ¿acepta el motor un FILTER PREDICATE cuya función no recibe columna?')

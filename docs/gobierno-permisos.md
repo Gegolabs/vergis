@@ -305,16 +305,62 @@ objeto nombra el spec), no del emisor: el compilador la emite y la declara.
 - Si **lo tiene**, la vista discrimina por claim como se diseñó — y el DDM queda **inerte para ese
   principal**, que es lo esperable: su papel es cubrir a los demás.
 
-**En Fabric la disyuntiva ya aplica** desde que la vista sirve (#197, 2026-08-18): cuál de las dos
-ramas ocurre depende de si el principal de serving tiene `UNMASK`, y **eso sigue sin medirse** para
-el SP de serving (P5 del arnés). Mientras no se mida, lo prudente es asumir la rama degradada.
+**La disyuntiva quedó CERRADA por contrato el 2026-08-19 (#238), y no por medición de instancia.**
+Mientras esto fue una disyuntiva abierta, el sistema podía correr en la rama degradada **sin que
+nada lo gritara**: la vista devolvía la máscara en las dos ramas del `CASE` y un usuario con
+`ve_pii` legítimo veía `xxxx` sin distinguirlo de «no traigo el claim». Eso dejó de ser aceptable:
 
-**Qué decide `UNMASK` en Fabric, medido el 2026-08-16:** el **rol del workspace** del principal.
-Con rol `Member` el service principal lee el valor **real** de la tabla; con rol `Viewer` lee la
-máscara. Dos advertencias que van con el dato: vale para **ese SKU y ese rol** —un positivo de
-Fabric no se generaliza a otra instancia—, y **revocar un rol no toma efecto de inmediato** (se
-sondeó 6,5 min tras bajar de `Member` a `Viewer` y el principal seguía viendo el valor real; qué
-destraba la revocación **no está medido**).
+| Antes | Desde 0.21.0 |
+|---|---|
+| El principal de serving *podía* tener `UNMASK`; si no lo tenía, la capacidad moría callada | **Debe** poder leer el valor real: es **cláusula del contrato de instancia** |
+| Nada lo verificaba | El emisor instala un **centinela** y el gate de servibilidad lo **mide por conexión** |
+| La degradación era invisible | El PI con reglas de columna queda **no-servible con la causa nombrada** |
+
+**El principio que ordena las dos capas**, y que explica por qué la respuesta es ésta y no «quitar
+el DDM»: son **dos planos de identidad** distintos, y cada uno tiene una sola capa capaz de
+gobernarlo.
+
+| Plano | Sujeto | Única capa que lo discrimina | Se evalúa |
+|---|---|---|---|
+| **Persona** | quien consume el PI (`groups`, `ve_pii`) | el SQL que lee claims: predicado RLS y vista de máscara | **por consulta** |
+| **Principal de máquina** | quien se conecta al warehouse | autorización nativa: roles, grants, DDM | **por conexión**, fijada al conectar |
+
+El motor **jamás ve a la persona** —Vergis se conecta con un solo principal y los claims viajan por
+`SESSION_CONTEXT`—, así que la decisión por persona no puede vivir ahí. Y aunque pudiera: la
+autorización nativa **se fija al conectar** y su revocación es patológica (ver abajo), lo que la
+vuelve inservible para una decisión que se concede y se quita seguido. El defecto de #238 no fue
+elegir mal entre las dos capas: fue **cablearlas en serie** sobre el mismo camino de lectura.
+
+**El centinela, y por qué es un instrumento y no una tabla más.** El emisor instala
+`[<schema>].[vergis_unmask_probe]` —una fila, una columna enmascarada, un valor conocido por
+construcción— exactamente cuando emite plano de columna. Su lectura da **tres estados
+distinguibles**, y ninguno se colapsa con otro: el valor esperado (capacidad **presente**),
+cualquier otro valor (capacidad **medida ausente** — el motor enmascaró), o un error (**no se pudo
+medir**, que jamás es veredicto). El reconocimiento es «leí el valor conocido», **no** «leí `xxxx`»:
+si `default()` cambiara de forma, el instrumento seguiría valiendo.
+
+Se sondea **por conexión** porque ésa es la granularidad real de la capacidad —la autorización se
+fija al conectar—, y viaja en la **misma ola** de consultas del arranque en frío, sin costo de
+latencia adicional.
+
+**Los dos literales son distintos a propósito, y eso es diagnóstico gratis:** la vista enmascara con
+`•••` y el DDM con `xxxx`. Un `xxxx` visto a través de Vergis significa **capacidad ausente**; un
+`•••` significa **persona sin derecho**. El defecto de #238 habría sido visible a simple vista.
+
+**Lo que se descartó, para que nadie lo reabra sin el dato:** servir enmascarado con una advertencia
+—convertiría una violación de contrato en una degradación que la persona con derecho no puede
+distinguir de «no traigo el claim»—, y enmascarar en la capa de aplicación —rompe la propiedad de
+que **el valor real nunca sale del motor** hacia la consulta de quien no tiene derecho—.
+
+**Qué decide `UNMASK` en Fabric, medido el 2026-08-16 y RE-MEDIDO el 2026-08-19:** el **rol del
+workspace**. Con `Member` el service principal lee el valor **real**; con `Viewer` lee la máscara.
+
+⚠ **La asimetría de propagación, y por qué invalida mediciones**: conceder propaga a una conexión
+nueva en **≤11 s**; **revocar no propagó en >20 min** (techo sin medir), y **ni una conexión nueva
+ni un token de acceso nuevo la destraban**. Una conexión ya abierta **nunca** vio el cambio dentro
+de la ventana medida. De ahí la regla operativa: **una medición de `UNMASK` solo vale si el rol no
+cambió recientemente, o si el principal nunca tuvo el rol superior.** Un rol recién bajado miente a
+favor del privilegio — pasó el 2026-08-19 y produjo un veredicto falso que duró medio día.
 
 **Control obligatorio al verificarlo en una instancia**, en la misma sesión: una consulta a la tabla
 **sin** la vista. Sin él, un negativo no distingue «al principal le falta el permiso» de «la vista no
