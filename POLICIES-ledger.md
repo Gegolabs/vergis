@@ -13,13 +13,14 @@
 
 ## POL-01 · Recursos externos con costo — US$50/mes, US$10 por acto
 
-**Mes en curso: 2026-08.** Pote US$50 · **gastado US$0,04** · disponible **US$49,96**.
+**Mes en curso: 2026-08.** Pote US$50 · **gastado US$0,08** · disponible **US$49,92**.
 El pote repone el día 1 y no acumula.
 
 | Fecha | Acto | Recurso | Medida | Monto | Asentado por |
 |--|--|--|--|--|--|
 | 2026-08-18 | Ventana de medición de #197 — verificar contra el SKU la vista de máscara que **emite el compilador** tras el rediseño a la forma C2 | Capacidad Fabric **F2** `vergisfablab` (tenant ultraBASE) | ~4 min encendida (dos tramos: 18:46–18:47 y 18:47:16–18:48:20), US$0,36/h | **US$0,02** | Simón Alero |
 | 2026-08-18 | Ventana de medición de #164 — el allow-all **emitido** y el `ALTER` que antes se rechazaba. Dos tramos porque el primero midió mal por un defecto del arnés (`admin.close()` antes de P8) y el instrumento lo reportó como fallo en vez de darlo por verde | Capacidad Fabric **F2** `vergisfablab` | 1m47s + 1m51s = ~4 min encendida, US$0,36/h | **US$0,02** | Simón Alero |
+| 2026-08-19 | Ventana para responder **P5 (#163)** — qué ve el service principal de serving con el DDM aplicado, ya con `FAB_SP_TOKEN` disponible. **Cuatro tramos, y tres de ellos no midieron**: el útil (`fab:proof` completo, P5 respondida), dos abortados por defectos del script de sonda (top-level `await` con salida CJS; `mssql` no resuelve fuera del árbol del repo) y uno de diagnóstico cuyo **control positivo falló** — sin el prelude de `SESSION_CONTEXT` la row policy deniega todo. Se asienta el total, no solo el tramo que sirvió | Capacidad Fabric **F2** `vergisfablab` | ~7 min encendida sumando los cuatro tramos, US$0,36/h | **US$0,04** | Simón Alero |
 
 ### Cómo se mide este recurso
 
