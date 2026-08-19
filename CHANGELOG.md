@@ -36,6 +36,64 @@ cambio lo decide quien opera esa instancia.
 
 ## Sin publicar
 
+### El contrato público del cambio: la imagen declara su esquema, las migraciones tienen regla y la promoción tiene ceremonia (#210 · I9+I10)
+
+**Esto completa el cambio del CONTRATO DE DESPLIEGUE** que traen las dos entradas de abajo. Ahí quedó
+el mecanismo; acá queda **lo que hay que poder leer para operarlo**, que es la mitad que decide si un
+rollback de emergencia se puede ejecutar a las tres de la mañana o hay que averiguarlo en el momento.
+
+**Qué gana quien opera.**
+
+- **La imagen declara qué esquema de store soporta.** Dos labels nuevos: **`vergis.schema`** (el store
+  de gobierno, un entero) y **`vergis.schema.stores`** (el mapa completo, `gobierno=1,notas=1,
+  data-maestra=1` — en plural porque un solo número esconde al store que sí bloquea un rollback). Con
+  eso, una incompatibilidad de esquema se descarta **leyendo metadata de la imagen**, sin arrancar el
+  candidato:
+  `docker inspect --format '{{index .Config.Labels "vergis.schema.stores"}}' ghcr.io/gegolabs/vergis:<versión>`.
+  Es una negativa **temprana**, no la única: el gate autoritativo sigue siendo el pre-flight de la
+  promoción contra el bloque `control` de `/contrato`. Los labels `org.opencontainers.image.*` siguen
+  saliendo de la metadata de git en el build — no se duplican.
+- **Los labels no pueden mentir por descuido.** La suite compara el literal del `Dockerfile` contra las
+  constantes `*_SCHEMA_VERSION` del código **y** contra la lista de stores que el server cablea de
+  verdad: subir una constante sin el label, o agregar un store embebido sin declararlo, deja el CI
+  rojo. El guard se falsificó (con un label que miente, la suite se pone roja nombrando ambos números).
+- **La regla de migraciones queda escrita y es ejercible.** Dentro de la ventana de retención —las
+  últimas `RINGS_RETAIN` versiones publicadas, default 3— las migraciones del store son **aditivas y
+  compatibles hacia atrás**. Una migración incompatible exige **subir `SCHEMA_VERSION` en el mismo
+  commit** y anunciarlo en este archivo con la frase que un operador puede buscar: **«rompe rollback a
+  < X.Y»**. Con tabla de qué cuenta como aditivo y qué no, qué hace el autor del PR y **qué hace valer
+  la regla por él** (el rechazo al abrir el archivo, el pre-flight y el label). Está en la doc de
+  contribución.
+- **La promoción tiene runbook** (`deploy/rollout/RUNBOOK.md`): la secuencia exacta con verificación
+  por paso y su vuelta atrás, el recon read-only previo, qué se registra después, y las tres maneras de
+  volver atrás (al previo caliente, a un retenido, y qué hacer si quedan **cero** controladores). El
+  README de `rollout/` sigue siendo la referencia de la herramienta; el runbook es la ceremonia.
+- **Y trae la ley del instrumento, que es lo que lo distingue de un README.** El corte **se mide**: el
+  comando miente (rc=0 en 375 ms mientras las rutas no sirven — un factor de 9 a 20). El predicado es
+  `200 ∧ phase=serving ∧ pis.serving == pis.total`, jamás «responde». El poller vive en un contenedor
+  que el acto **no** recrea —uno efímero muere durante el acto y solo acota el corte por abajo—, va
+  escrito y listo para copiar, y **cuenta como fallo el no haber podido medir**. El **control negativo
+  es obligatorio**: una medición cuyo instrumento no demostró saber ver el fallo no vale.
+- **El modo de falla que hace falso a un control negativo verde, citado con su medición.** Bajar
+  `lb_try_duration` a `1ms` en el `Caddyfile` **del host** dejó el control en verde y la conclusión
+  habría sido falsa: el compose monta ese archivo como **archivo**, un `sed -i` cambia su inodo y el
+  contenedor siguió viendo lo viejo. La regla que se deriva y queda escrita: **la configuración se
+  verifica leyéndola del sujeto vivo** (su API de administración), no del archivo que editaste; y para
+  degradarla, `docker cp`, editar dentro, o montar el **directorio**.
+- **El límite de un solo host queda donde el operador lo lee** (I10): en el compose de referencia,
+  junto al montaje de `VERGIS_OUT`, y en el runbook. El plano de control se ordena por rename atómico y
+  relojes del mismo kernel, así que un **volumen de red** (NFS, SMB/CIFS, EFS, Azure Files) o anillos
+  repartidos en dos hosts quedan **fuera de contrato**: no soportado, no medido. Si `VERGIS_OUT` vive en
+  un share de red, el mecanismo **no aplica a esa instalación** y el compose lo dice ahí mismo.
+
+**Lo que este trabajo NO promete: corte cero.** El runbook lo declara de frente: la promoción medida
+**no fue corte cero** — en el e2e del frente anterior hubo un tramo de **≈1,9 s** sin satisfacer
+`phase=serving`, con **0 PIs** y **cero respuestas de error crudas**. Lo que el mecanismo elimina es el
+**error** y el **recreate con su ventana**; lo que deja es un tramo corto de escritura congelada con 409
+explícitos. La cifra viene de un host de desarrollo y **no caracteriza** una instalación con carga: el
+runbook manda medir el corte propio y registrar la fila **incluso cuando no se pudo medir**, diciendo
+por qué — una fila ausente hace creer que el corte no ocurrió.
+
 ### El despliegue de referencia conmuta entre anillos: desplegar deja de exigir una ventana (#210 · I7+I8)
 
 **Esto es un cambio del CONTRATO DE DESPLIEGUE**, no una capacidad del DSL: lo que cambia es cómo una
