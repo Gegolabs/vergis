@@ -229,4 +229,4 @@ el encargo: **los registros los escribe el orquestador**, o se reparten nominalm
 > Las notas completas de cada versión están en el CHANGELOG del repo. Desde 0.20.1 la imagen también
 > las trae adentro; las anteriores no, así que para este tramo el repo es la fuente.
 
-<!-- /ww:next · 2026-08-19 · HEAD 8368232 -->
+<!-- /ww:finish · 2026-08-19 · HEAD d0a8f01 -->
