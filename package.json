@@ -24,7 +24,8 @@
     "fab:resume": "az fabric capacity resume --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB",
     "fab:pause": "az fabric capacity suspend --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB",
     "fab:state": "az fabric capacity show --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB --query state -o tsv",
-    "fab:proof": "tsx scripts/fabric-lab-proof.ts"
+    "fab:proof": "tsx scripts/fabric-lab-proof.ts",
+    "fab:sql": "FAB_PROOF_PRINT_SQL=1 tsx scripts/fabric-lab-proof.ts"
   },
   "license": "AGPL-3.0-or-later",
   "devDependencies": {
