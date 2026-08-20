@@ -315,7 +315,11 @@ schema_gate() {
   min_sup=
   # `tr` y no `sed s/}/}\n/`: BSD sed (macOS) NO expande \n en el reemplazo y dejaría una 'n' literal —
   # el instrumento mediría cualquier cosa. `tr` parte los objetos en líneas en todo sh POSIX.
-  for pair in $(printf '%s' "$body" | tr '{}' '\n\n' |
+  # Dos `tr` de un carácter y no `tr '{}' '\n\n'`: POSIX declara UNSPECIFIED el caso en que el segundo
+  # conjunto es más corto que el primero, y `'\n\n'` —el único modo de igualar los largos— repite el
+  # mismo carácter, que es exactamente lo que shellcheck señala como intención dudosa (SC2020).
+  # Encadenar dos sustituciones de un solo carácter es equivalente y no depende de ninguna extensión.
+  for pair in $(printf '%s' "$body" | tr '{' '\n' | tr '}' '\n' |
     sed -n 's/.*"schemaSupported":[ ]*\([0-9]*\).*"fileVersion":[ ]*\([0-9]*\).*/\1:\2/p'); do
     sup=${pair%%:*}
     fil=${pair##*:}
@@ -412,7 +416,7 @@ smoke_edge() {
 
 # ─── install ────────────────────────────────────────────────────────────────────────────────────────
 cmd_install() {
-  version= redigest=0 pull=1 start=1
+  version='' redigest=0 pull=1 start=1
   while [ $# -gt 0 ]; do
     case "$1" in
     --redigest) redigest=1 ;;
@@ -524,7 +528,7 @@ cmd_install() {
 
 # ─── promote ────────────────────────────────────────────────────────────────────────────────────────
 cmd_promote() {
-  version= gate_esquema=1 smoke=$RINGS_SMOKE timeout=$RINGS_PROMOTE_TIMEOUT
+  version='' gate_esquema=1 smoke=$RINGS_SMOKE timeout=$RINGS_PROMOTE_TIMEOUT
   while [ $# -gt 0 ]; do
     case "$1" in
     --no-schema-gate) gate_esquema=0 ;;
@@ -700,16 +704,24 @@ retire_one() {
     say "  contenedor $_n eliminado"
   fi
   if [ "$_rmi" = 1 ]; then
-    docker_cli image rm "$(jget "$_l" image)" >/dev/null 2>&1 &&
-      say "  imagen $(jget "$_l" image) eliminada" ||
+    # `if` y no `A && B || C`: en la forma corta, el `warn` no cuelga del `docker image rm` sino del
+    # `say` — si el `say` de éxito fallara, se avisaría «no se pudo eliminar» una imagen que sí se
+    # eliminó. NO está medido que ese camino sea alcanzable acá (el intento con stdout cerrado muere
+    # antes, en el `say` del contenedor), así que esto se corrige como peligro estructural, no como
+    # cierre de un bug demostrado. Los dos caminos vivos —rm exitoso y rm fallido— sí están medidos,
+    # y se comportan igual que antes.
+    if docker_cli image rm "$(jget "$_l" image)" >/dev/null 2>&1; then
+      say "  imagen $(jget "$_l" image) eliminada"
+    else
       warn "la imagen $(jget "$_l" image) no se pudo eliminar (¿en uso por otro anillo?)"
+    fi
   fi
   ring_drop "$_v"
   say "✓ anillo $_v retirado"
 }
 
 cmd_retire() {
-  version= rmi=0
+  version='' rmi=0
   while [ $# -gt 0 ]; do
     case "$1" in
     --rmi) rmi=1 ;;
@@ -808,7 +820,18 @@ cmd_status() {
   if [ "${1:-}" = "--json" ]; then json=1; fi
   load_reg
   if [ "$json" = 1 ]; then
-    [ -f "$REG" ] && cat "$REG" || say '{"schema":1,"active":"","previous":"","rings":[]}'
+    # `if` y no `[ -f ] && cat || say`: en la forma corta, un `cat` que falla con el archivo PRESENTE
+    # caería en el `say` del registro vacío, y el consumidor del `--json` leería «no hay anillos»
+    # cuando la verdad sería «no pude leer el registro» — justo la confusión que esta herramienta se
+    # prohíbe. NO está medido que ese camino sea alcanzable: `load_reg` ya leyó `$REG` con `sed` tres
+    # veces y aborta antes (medido con el archivo en modo 000). Se corrige como peligro estructural,
+    # no como cierre de un bug demostrado; el camino vivo —archivo legible, y archivo ausente— se
+    # comporta igual que antes.
+    if [ -f "$REG" ]; then
+      cat "$REG"
+    else
+      say '{"schema":1,"active":"","previous":"","rings":[]}'
+    fi
     return 0
   fi
   say "Anillos de Vergis — registro: $REG"

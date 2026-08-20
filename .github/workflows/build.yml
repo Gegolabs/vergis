@@ -32,8 +32,19 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # Job hermano y no un paso de `test`: shellcheck no necesita `npm ci` ni las deps de node, así que
+  # colgarlo de esa escalera lo haría esperar el toolchain entero para medir 1130 líneas de shell —
+  # y, peor, un `npm audit` rojo lo dejaría sin correr. Acá corre en paralelo y falla por su cuenta,
+  # diciendo exactamente qué está mal. `shellcheck` viene preinstalado en `ubuntu-latest`; el script
+  # sale ROJO si no lo encuentra, en vez de reportar «limpio» sin haber medido.
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: npm run lint:shell
+
   image:
-    needs: test
+    needs: [test, shell]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

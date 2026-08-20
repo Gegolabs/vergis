@@ -14,6 +14,7 @@
   "scripts": {
     "vergis": "tsx packages/cli/src/main.ts",
     "typecheck": "tsc --noEmit",
+    "lint:shell": "sh scripts/lint-shell.sh",
     "test": "vitest run",
     "build": "esbuild server/serve-rls.ts --bundle --platform=node --target=node22 --format=esm --external:canvas --external:mssql --external:tedious --external:sql.js --external:ajv --external:ajv-formats --external:yaml --outfile=dist/serve-rls.mjs && cp packages/capabilities/src/themes/arbol-logo.png dist/",
     "start": "node dist/serve-rls.mjs",

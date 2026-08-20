@@ -79,7 +79,7 @@ image)
   shift
   case "$sub" in
   inspect)
-    fmt= ref=
+    fmt='' ref=''
     while [ $# -gt 0 ]; do
       case "$1" in
       --format)
@@ -105,7 +105,7 @@ image)
   esac
   ;;
 inspect)
-  fmt= name=
+  fmt='' name=''
   while [ $# -gt 0 ]; do
     case "$1" in
     --format)
@@ -127,7 +127,7 @@ inspect)
   esac
   ;;
 create)
-  name= image= prev=
+  name='' image='' prev=''
   while [ $# -gt 0 ]; do
     case "$1" in
     --name)
@@ -179,7 +179,7 @@ rm)
   done
   ;;
 kill)
-  sig= name=
+  sig='' name=''
   while [ $# -gt 0 ]; do
     case "$1" in
     -s)
