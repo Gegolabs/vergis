@@ -23,8 +23,24 @@
 # ESTE SCRIPT SABE REPORTAR SU PROPIO FALLO. Si shellcheck no está, o si el descubrimiento no
 # encuentra nada, sale ROJO en vez de verde: un instrumento que confunde «medí y salió limpio» con «no
 # pude medir» produce datos con cara de verdad.
+#
+# POR QUÉ DECLARA LA VERSIÓN. Un gate cuya severidad depende de qué versión trae el runner no es un
+# gate reproducible, y «verde en local» deja de significar algo. Medido: sobre `deploy/rollout/
+# vergis-rollout`, shellcheck 0.9.0 (la que traía la imagen `ubuntu-latest`) reportaba tres SC2015 que
+# 0.11.0 no reporta. La versión autoritativa se declara acá y el CI la instala pinneada por checksum
+# (ver el job `shell` de `.github/workflows/build.yml`); este script solo la CONTRASTA.
+#
+# Y por qué el aviso no es rojo en local: un desarrollador con otra versión tiene que poder trabajar —
+# se le dice que sus hallazgos pueden diferir del gate, no se le bloquea la máquina. En el CI sí es
+# rojo, vía LINT_SHELL_STRICT=1: si el pin se rompe (release retirada, cache, un `apt` que se cuela en
+# el PATH), el gate volvería a ser irreproducible EN SILENCIO, que es exactamente el defecto que este
+# bloque existe para cerrar.
 
 set -eu
+
+# La versión que corre el gate autoritativo (el CI). Cambiarla acá exige cambiar SHELLCHECK_VERSION y
+# SHELLCHECK_SHA256 en `.github/workflows/build.yml`: son el mismo hecho escrito en dos lados.
+SHELLCHECK_ESPERADO=0.11.0
 
 cd "$(dirname "$0")/.."
 
@@ -32,6 +48,18 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   printf 'lint-shell: shellcheck no está instalado — NO se midió nada.\n' >&2
   printf '  macOS: brew install shellcheck · Debian/Ubuntu: apt-get install -y shellcheck\n' >&2
   exit 1
+fi
+
+SHELLCHECK_INSTALADO=$(shellcheck --version | sed -n 's/^version: //p')
+if [ "$SHELLCHECK_INSTALADO" != "$SHELLCHECK_ESPERADO" ]; then
+  printf 'lint-shell: AVISO — versión de shellcheck DIVERGENTE.\n' >&2
+  printf '  El gate autoritativo corre %s; esta corrida usa %s. Los hallazgos pueden diferir.\n' \
+    "$SHELLCHECK_ESPERADO" "${SHELLCHECK_INSTALADO:-<no se pudo leer>}" >&2
+  if [ "${LINT_SHELL_STRICT:-0}" = 1 ]; then
+    printf '  LINT_SHELL_STRICT=1 (el gate autoritativo): esto es ROJO. El pin de versión se rompió.\n' >&2
+    exit 1
+  fi
+  printf '  En local es solo aviso: se sigue midiendo con la versión instalada.\n' >&2
 fi
 
 LISTA=$(mktemp)
@@ -64,8 +92,8 @@ fi
 set --
 while IFS= read -r f; do set -- "$@" "$f"; done <"$LISTA"
 
-printf 'lint-shell: %s archivo(s) bajo shellcheck %s\n' "$#" \
-  "$(shellcheck --version | sed -n 's/^version: /v/p')"
+printf 'lint-shell: %s archivo(s) bajo shellcheck v%s (esperada v%s)\n' "$#" \
+  "$SHELLCHECK_INSTALADO" "$SHELLCHECK_ESPERADO"
 printf '%s\n' "$@" | sed 's/^/  · /'
 
 # `--severity=style` es el default de shellcheck hoy; se escribe explícito para que un cambio de
