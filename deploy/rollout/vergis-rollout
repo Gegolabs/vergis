@@ -375,7 +375,13 @@ edge_flip() {
   fi
   edge_reload || {
     edge_restore_active
-    edge_validate >/dev/null 2>&1 && edge_reload >/dev/null 2>&1 || true
+    # Recarga de la línea RESTAURADA, y es best-effort a propósito: ya se está muriendo por el reload
+    # que falló, así que ni la validación ni esta segunda recarga deben cambiar el desenlace. La forma
+    # `if` en vez de `A && B || true` para que el gate de shellcheck no dependa de qué versión corre
+    # el runner (SC2015 se reporta en 0.9.0 y no en 0.11.0).
+    if edge_validate >/dev/null 2>&1; then
+      edge_reload >/dev/null 2>&1 || true
+    fi
     die "el borde no recargó (caddy reload falló). Se restauró la línea anterior."
   }
   say "  borde: conmutado a '$_name' (caddy reload en caliente, sin cortar conexiones)"
@@ -639,7 +645,10 @@ cmd_promote() {
         edge_flip "$activo_name"
       else
         edge_restore_active
-        edge_validate >/dev/null 2>&1 && edge_reload >/dev/null 2>&1 || true
+        # Best-effort igual que en `edge_flip`: se va a morir con `die` en cualquier caso.
+        if edge_validate >/dev/null 2>&1; then
+          edge_reload >/dev/null 2>&1 || true
+        fi
       fi
       die "promoción REVERTIDA por el smoke. Registro sin cambios."
     fi
@@ -877,7 +886,9 @@ usage() {
 
 # ─── Dispatch ───────────────────────────────────────────────────────────────────────────────────────
 cmd=${1:-}
-[ $# -gt 0 ] && shift || true
+# Sin argumentos no hay nada que consumir; `shift` con $# = 0 fallaría y `set -e` abortaría antes de
+# llegar al `usage`. La forma `if` dice eso mismo sin depender de la versión de shellcheck.
+if [ $# -gt 0 ]; then shift; fi
 case "$cmd" in
 install) cmd_install "$@" ;;
 promote) cmd_promote "$@" ;;
