@@ -51,7 +51,8 @@
           "source": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$" },
           "param": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Parámetro de ctx que fija (default = id); dos controles con el mismo param = llaves alternativas del mismo alcance." },
           "display": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Campo del mismo dataset que se muestra como etiqueta (default = el campo de source)." },
-          "default": { "enum": ["max", "min", "first"] },
+          "default": { "type": "string", "minLength": 1, "description": "Valor inicial: max | min | first, o un VALOR LITERAL del dominio (#92). El literal se valida contra las opciones resueltas al render; fuera del dominio cae al comportamiento sin default (max)." },
+          "defaultField": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Campo booleano del MISMO dataset de source que designa la opción por defecto (#235). Gana sobre `default` cuando EXACTAMENTE UNA opción resuelta lo trae verdadero; si ninguna o más de una, cae a `default` y de ahí a max." },
           "single": { "type": "boolean" }
         }
       }
