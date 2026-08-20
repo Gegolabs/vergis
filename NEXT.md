@@ -31,6 +31,44 @@ colapsan, y negativa **ruidosa** por PI cuando falta.
 La corrección está en #237 y la regla que sale de ahí vive en `RESOURCES.md`: *una medición de
 `UNMASK` solo vale si el rol no cambió recientemente*.
 
+## Próximo paso
+
+**Verificar y mergear el PR #234** (`feat/210-i9i10-docs-contrato`, del frente arbol: docs del contrato
+de despliegue por anillos). Está verde y `MERGEABLE/CLEAN`. **Destraba a arbol**, que no puede
+mergear lo suyo por la custodia.
+
+**Contexto para arrancar en frío:** el merge es nuestro por la custodia (`CLAUDE.md` §«La custodia»),
+y lo que el custodio hace **no es revisar el código ajeno**: es correr los gates **por mano propia**
+antes y después, y **verificar los invariantes que el PR afirma** en vez de leerlos de su reporte.
+
+```bash
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+gh pr view 234 --json mergeable,mergeStateStatus,statusCheckRollup
+gh pr diff 234
+npm run typecheck && npm test && npm run build     # por mano propia, NO del reporte del PR
+gh pr merge 234 --squash --delete-branch
+```
+
+**Trampa medida hoy:** no correr `npm test` si hay otra suite viva — la contención produce ~40 rojos
+en paquetes que el cambio no toca. Y para matar una corrida colgada, por PID acotado al árbol, nunca
+`pkill -f vitest`.
+
+## Los scripts de medición viven en `local/` (ignorado, no versionado)
+
+Se escribieron hoy y **una sesión fría no sabría que existen**. Sirven para E3/E4/E5 de #238:
+
+| Script | Qué mide |
+|---|---|
+| `local/rol-experimento.ts` | propagación de un cambio de rol de workspace por tres vías (misma conexión · conexión nueva con token viejo · conexión nueva con token nuevo), sin tocar DDL |
+| `local/centinela-fabric.ts` | que Fabric acepte el DDL del centinela, sea idempotente, el descubrimiento lo encuentre y `sys` corrobore la máscara |
+| `local/discrimina-como-sp.ts` | la discriminación de la vista **como el SP**, con control de premisa bloqueante |
+| `local/discrimina-sin-unmask-local.ts` | lo mismo en el arnés local, fabricando un usuario sin `UNMASK` |
+| `local/fabric-lab-sp.env` | el secreto del SP (modo 600). Se carga con `source`; el valor **no** se cita en ningún registro |
+| `local/rollback-roleassignments-2026-08-19.json` | snapshot de las asignaciones de rol del workspace, para revertir |
+
+**Si hay que promoverlos a `scripts/`**, eso ya es código y va por rama + PR — hoy quedaron fuera del
+árbol a propósito, para no publicar arnés sin decidirlo.
+
 ## Terreno ya recorrido — no reintentar
 
 - **«El mecanismo de #238 se descubrió el 19-ago»** — **falso**: el arnés local lo medía desde el
@@ -88,7 +126,6 @@ uno y el `proof` en otro, el `trap` del primero pausa la capacidad antes de medi
 `trap EXIT/INT/TERM`**, no en acordarse. El gasto se asienta en `POLICIES-ledger.md` (hoy: US$0,04 de
 US$50).
 
-<!-- /ww:finish · 2026-08-18 · HEAD f6b1295 -->
 
 ---
 
@@ -161,3 +198,4 @@ US$50).
 > Las notas completas de cada versión están en el CHANGELOG del repo. Desde 0.20.1 la imagen también
 > las trae adentro; las anteriores no, así que para este tramo el repo es la fuente.
 
+<!-- /ww:next · 2026-08-19 · HEAD 5c080de -->
