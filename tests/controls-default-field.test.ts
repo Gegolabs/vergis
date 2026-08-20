@@ -456,3 +456,37 @@ describe('#246 · el default literal de #92 pasa el validateSpec COMPLETO (schem
     expect(calls.find((c) => /dbo\.lineas/.test(c.sql))!.params?.['ctx_semana']).toBe('W32')
   })
 })
+
+/**
+ * #248 · LAS CLAVES DE UN CONTROL SON UN CONJUNTO CERRADO.
+ *
+ * `controls.items` tenía `additionalProperties: true`, así que una clave inventada —o el typo de una
+ * real— pasaba en SILENCIO: el control caía a su default de siempre y nadie se enteraba de por qué el
+ * PI abría en la opción equivocada. Es la contracara exacta del check `control-default-field-dangling`
+ * de #235: allá se atrapa el typo en el VALOR de `defaultField`, acá el typo en su NOMBRE.
+ *
+ * El riesgo de cerrarlo lo midió el frente `arbol` desde la instancia (#248) y es cero para las specs
+ * que hoy existen: 9 specs, 7 claves distintas, todas dentro de las 8 declaradas. **Y lo midió contra
+ * lo DESPLEGADO, no solo contra el repo** — con drift en dos specs que no toca controles.
+ *
+ * Lo que este cierre implica y va dicho en el CHANGELOG: al agregar una capacidad de control nueva,
+ * **el orden de despliegue importa** — el Producto primero, la spec después. Antes una spec podía
+ * adelantarse con una clave que el Producto no conocía y el control simplemente la ignoraba.
+ */
+describe('#248 · las claves de un control son un conjunto cerrado', () => {
+  it('una clave inventada en un control → RECHAZO (antes se ignoraba en silencio)', () => {
+    const spec = parseSpec(LITERAL_YAML('max')) as Record<string, unknown>
+    const ctrl = (spec['controls'] as Record<string, unknown>[])[0]!
+    ctrl['defaultFild'] = 'es_default' // el typo de `defaultField`, que es el caso real
+    expect(() => validate(spec)).toThrow(/defaultFild|additionalProperties|schema/i)
+  })
+
+  it('las OCHO claves declaradas siguen validando juntas (control positivo del cierre)', () => {
+    const spec = parseSpec(LITERAL_YAML('max')) as Record<string, unknown>
+    const ctrl = (spec['controls'] as Record<string, unknown>[])[0]!
+    Object.assign(ctrl, { label: 'Semana', param: 'semana', display: 'etiqueta', single: true })
+    delete ctrl['default']
+    ctrl['defaultField'] = 'es_default'
+    expect(() => validate(spec)).not.toThrow()
+  })
+})
