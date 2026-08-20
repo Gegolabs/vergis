@@ -55,6 +55,33 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **`tsconfig.json` no incluye `scripts/`, así que `npm run typecheck` NUNCA los chequeó** — descubierto
+  al promover el control de premisa y el centinela al arnés (P9/P10): `scripts/fabric-lab-proof.ts` y
+  `scripts/tsql-lab-proof.ts` están **fuera** del `include`, o sea que el gate del repo daba verde sobre
+  ellos **por ausencia**, no por corrección. Se typechequearon aparte con un tsconfig temporal (verde),
+  y el hueco quedó abierto a propósito: tocar el `include` afecta a los demás scripts a la vez y puede
+  destapar errores preexistentes en archivos que nadie estaba mirando. Es de la familia del instrumento
+  que no sabe reportar su propio fallo — **un gate que no mira un directorio no dice «no medí», dice
+  «verde»**. Lo barato: agregar `scripts/` al `include` en su propia rama y ver qué sale. `reg 2026-08-19`
+
+- **El pin de shellcheck está escrito en DOS lugares y nada mecánico impide que se desincronicen** —
+  `SHELLCHECK_ESPERADO` en `scripts/lint-shell.sh` y `SHELLCHECK_VERSION`/`SHELLCHECK_SHA256` en
+  `.github/workflows/build.yml`, con comentario cruzado en ambos. Si divergen, el modo estricto del CI
+  (`LINT_SHELL_STRICT=1`) lo delata en **rojo** —no en silencio, que es lo importante— pero el aviso
+  llega después del push. Es exactamente la pareja que driftea que el guard de labels de la imagen ya
+  resolvió para su caso (`tests/imagen-anillo-labels.test.ts`): un test que compare los dos literales
+  cerraría esto igual. No se hizo para no ampliar el alcance del frente. `reg 2026-08-19`
+
+- **El corte de versión no tiene ningún chequeo de que el CHANGELOG declare lo que el tag contiene** —
+  es la causa raíz de #242 y sigue viva: el corte compara **lo que el humano recuerda**, no lo que el
+  tag trae. La entrada de anillos I7+I8 quedó bajo «Sin publicar» con su código dentro de `v0.21.0`, y
+  lo detectó una revisión de custodia por casualidad, no un gate. **Difícil de automatizar bien**
+  —mapear entrada→commit exige una convención que hoy no existe—, pero hay una versión barata y
+  honesta: al cortar, listar los issues/PRs cuyos commits están en el tag y contrastarlos a mano contra
+  los encabezados de la sección. Anotado para que el próximo corte no dependa otra vez de la suerte.
+  `reg 2026-08-19`
+
+
 - **✅ RESUELTO (2026-08-19) — los dos compose juzgan por la FASE, y el instrumento demostró que sabe
   reprobar.** La ficha decía que el `healthcheck` de `docker-compose.yml` juzgaba por `r.ok` y que desde
   0.20.0 eso daba «sano» a un nodo en `standby` (que responde HTTP 200 con `ok:true` por diseño). Ahora

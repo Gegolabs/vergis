@@ -87,7 +87,18 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   corrió** —es P7 de `fab:proof`, ventana del 2026-08-18, PR #219— con su control positivo y el
   control de que la tabla siga sirviendo filas. Los otros cuatro criterios ya estaban cumplidos.
   **Y ya rindió**: la primera corrida encontró que la vista de máscara publicada en 0.16.0 **no sirve
-  en Fabric** — issue **#197**, con la causa aislada. `act 2026-08-16`
+  en Fabric** — issue **#197**, con la causa aislada.
+  **Barrido del 2026-08-19 (noche)**: se cerraron **E3 y E5** de #238 —los dos que 0.21.0 publicó como
+  «sin medir»— y **E3 salió al revés de lo supuesto**: existe `UNMASK` **granular por columna**
+  (`GRANT UNMASK ON tabla(columna) TO [public]`, aceptado, con efecto, la vista discriminando y el
+  revoke verificado en el plano de datos), así que el requisito nuevo de 0.21.0 **no obliga** a subir el
+  rol del workspace — issue **#245**, esperando decisión. Lo más durable no es el dato sino que **el
+  terreno dejó de depender de que alguien se acuerde**: el control de premisa y el centinela viven ahora
+  en `fab:proof` como sondeos **P9** y **P10**, con `npm run fab:sql` para revisar el SQL emitido sin
+  motor y sin gasto. **Queda E4** (¿la aptitud vale toda la vida de la conexión?), y ahora se sabe qué
+  cuesta: por la vía del rol arrastra la staleness de revocación —>20 min, techo desconocido— y deja el
+  terreno inutilizable; por la vía del `GRANT` es viable y cabe en una ventana propia.
+  `act 2026-08-19`
 
 ### Decisiones y acciones de César (2026-08-08, ronda de decisiones del cluster 004)
 
