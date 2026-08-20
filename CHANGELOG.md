@@ -90,6 +90,27 @@ Si copiaste la plantilla, este bloque es lo que hay que traer. **Hoy no cambia n
 corriendo**: sin un `depends_on` con `condition: service_healthy`, nada enruta por esta señal. Muerde el
 día que algo lo haga.
 
+### Las claves de un control son un conjunto cerrado (#248)
+
+`controls[]` aceptaba **cualquier** clave: una inventada —o el **typo** de una real— pasaba en silencio,
+el control caía a su default de siempre y nadie se enteraba de por qué el PI abría en la opción
+equivocada. Ahora una clave no declarada **es error de spec**, ruidoso, al validar.
+
+Es la contracara del check que trae `defaultField`: allá se atrapa el typo en el **valor** de la clave,
+acá el typo en su **nombre**. Las ocho declaradas son `id`, `label`, `source`, `param`, `display`,
+`default`, `defaultField` y `single`.
+
+**El riesgo se midió antes de cerrar**, y desde la instancia: 9 specs, 7 claves distintas en uso, todas
+dentro de las 8 — cero specs afectadas y ningún typo vivo. Medido con **parseo YAML y no grep** (un grep
+confunde niveles: una clave dentro de un `options:` no es clave *del* control) y **contra lo desplegado,
+no solo contra el repo**.
+
+**Lo que esto implica para quien opera, y es lo único que cambia en su rutina:** al estrenar una
+capacidad de control nueva, **el orden importa — el Producto primero, la spec después**. Antes una spec
+podía adelantarse usando una clave que su versión del Producto no conocía y el control simplemente la
+ignoraba; ahora ese spec **no arranca** hasta que corra la versión que la declara. Es el efecto buscado
+—una clave que nadie lee es un defecto silencioso— con su costo dicho.
+
 ### El default de un control puede venir DEL DATO, y el default literal vuelve a ser alcanzable (#235 + #246)
 
 **Dos cosas, y la segunda es la que explica por qué la primera no podía existir sola.**

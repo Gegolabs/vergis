@@ -44,7 +44,7 @@
       "items": {
         "type": "object",
         "required": ["id", "source"],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "id": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
           "label": { "type": "string" },
