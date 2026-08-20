@@ -19,6 +19,10 @@ caliente. El serving no se interrumpe; lo que se congela por unos segundos es la
 El borde está en [`../Caddyfile.reference`](../Caddyfile.reference) y el stack en
 [`../compose.reference.yml`](../compose.reference.yml).
 
+**¿Vas a promover de verdad?** Este archivo dice qué hace cada comando; la **ceremonia** —el orden, la
+verificación de cada paso, su vuelta atrás y **cómo se mide el corte sin engañarse**— está en
+[`RUNBOOK.md`](RUNBOOK.md). Léelo completo antes de la primera promoción.
+
 ## ¿Qué predicado decide que un anillo está sano?
 
 ```

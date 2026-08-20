@@ -37,6 +37,20 @@
 # ⚠ `rollout/ring.args` es la MISMA lista de envs y montajes del servicio `vergis`: si acá cambia un
 # env o un volumen, ahí también. Nada lo verifica por ti — es el precio de que los anillos vivan fuera
 # del ciclo de vida de compose (que es justamente lo que permite no recrearlos).
+#
+# ⚠⚠ LÍMITE DE CONTRATO — UN SOLO HOST, CON FS LOCAL (issue #210 · I10). Los anillos coordinan quién
+# escribe mediante un lease sobre `${VERGIS_OUT}/control.lease.json`, y ese lease se ordena por **rename
+# atómico** y por relojes del **mismo kernel**. Por eso el montaje de `VERGIS_OUT` (acá `./governance`)
+# tiene que ser un **volumen LOCAL del host donde corren los anillos**.
+#
+#   FUERA DE CONTRATO: un volumen de RED (NFS, SMB/CIFS, EFS, Azure Files…) o anillos repartidos en dos
+#   hosts. No está soportado ni medido, y el modo de falla que habilita —dos nodos creyéndose el activo
+#   sobre el mismo archivo— es exactamente el que este mecanismo existe para hacer imposible.
+#
+# Si tu `./governance` vive en un share de red, **este mecanismo no aplica a tu instalación**: sigue con
+# un solo nodo (`rings/active.caddy` apuntando al servicio `vergis` de abajo, su valor de fábrica) y con
+# la ventana de mantenimiento de siempre. La ceremonia de promoción y este límite están en
+# `rollout/RUNBOOK.md`.
 services:
   vergis:
     # SIN digest a propósito: esta referencia es NUESTRA imagen y este archivo es la plantilla que
