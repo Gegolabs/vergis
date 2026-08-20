@@ -24,7 +24,10 @@ import { dirname } from 'node:path'
  *   el titular ya no es uno mismo, el control se perdió y se avisa (`onLost`) en vez de seguir
  *   creyéndose dueño.
  * - **Release ordenado**: se deja una **marca de release** (titular vacío, la época se conserva) para
- *   que el sucesor adquiera de inmediato, sin pagar el stale window.
+ *   que el sucesor adquiera de inmediato, sin pagar el stale window. El release tiene además una
+ *   variante **síncrona** (`releaseSync`) para el único llamador que no puede esperar una promesa: el
+ *   handler de salida del proceso, que es lo que impide que un arranque muerto por excepción retenga
+ *   el control (#228). Un nodo que nunca llegó a servir no se queda con el plano de control.
  * - **La época es monótona y creciente**: cada cambio de titular la incrementa. Es la misma época que
  *   los stores estampan en `control_meta` (ver `sqlite.ts`), así que un handle de un titular anterior
  *   se topa con el gate de época al abrir en escritura: el lease previene, el gate delata.
@@ -158,6 +161,12 @@ export interface ControlPlane {
   renew(): Promise<boolean>
   /** Suelta el control de forma ordenada, dejando la marca de release. Idempotente. */
   release(): Promise<void>
+  /**
+   * Lo mismo que `release()`, SÍNCRONO. Existe para el único sitio donde no hay await posible: un
+   * handler de `process.on('exit')` — el camino por el que un arranque que muere por excepción deja
+   * de retener el plano de control (#228). Idempotente, y no pisa a un sucesor.
+   */
+  releaseSync(): void
   status(): ControlLeaseStatus
   /** El predicado que gatea lazos y mutaciones. */
   hasControl(): boolean
@@ -402,6 +411,17 @@ export class ControlLease implements ControlPlane {
   }
 
   async release(): Promise<void> {
+    this.releaseSync()
+  }
+
+  /**
+   * El release, síncrono. TODO el trabajo del release ordenado ya era síncrono (`readFileSync` +
+   * `renameSync`); esta variante existe porque hay un llamador que **no puede** esperar una promesa:
+   * el handler de `process.on('exit')` que suelta el control cuando el arranque muere por excepción
+   * (#228). Node corre los handlers de `exit` de forma síncrona y no le da al proceso otro turno de
+   * event loop, así que un `await` ahí no se completa nunca.
+   */
+  releaseSync(): void {
     this.stopRenewals()
     if (!this.#held) return
     this.#held = false
@@ -596,6 +616,10 @@ export class SingleControlPlane implements ControlPlane {
   }
 
   async release(): Promise<void> {
+    this.releaseSync()
+  }
+
+  releaseSync(): void {
     this.#held = false
   }
 
