@@ -262,6 +262,30 @@ const storeControl = (): SqliteControlOptions => ({
   writer: CONTROL_HOLDER,
   mode: plane.hasControl() ? 'write' : 'read',
 })
+// SUELTA EN EL CAMINO DE EXCEPCIÓN (#228). Se registra ANTES de adquirir, porque lo que protege es
+// justamente la ventana que se abre al adquirir: la adquisición tiene que ocurrir acá arriba —el modo de
+// apertura de cada store y el gate de época dependen de ella— y la validación de configuración sigue
+// lanzando MÁS ABAJO (VERGIS_DATASETS, VERGIS_CONNECTIONS, la verificación de conexiones, el bloque de
+// gobierno del reporte…), incluso después de que el primer store ya abrió. Un `throw` de arranque no
+// pasa por el release ordenado —que cuelga de SIGTERM/SIGUSR2— y dejaba el lease con un titular que ya
+// no existe y sin marca de release: el sucesor tenía que esperar el stale window contado desde la última
+// renovación del muerto (MEDIDO por el frente arbol: ≈11,5 s en el caso peor, declarándose `standby`
+// siendo el único nodo vivo).
+//
+// El handler de `exit` es el ÚNICO lugar que cubre el camino de excepción entero sin depender de dónde
+// esté el throw: Node lo corre también tras una excepción no capturada (y tras el rechazo no manejado de
+// la evaluación de este módulo, que es la forma que toma un throw de arranque en un ESM con top-level
+// await). Corre síncrono y sin otro turno de event loop, de ahí `releaseSync`. Es idempotente y no pisa
+// a un sucesor: relee y solo escribe si el titular sigue siendo este nodo. Un SIGKILL o un corte de luz
+// siguen fuera de alcance — para eso está el stale window.
+process.on('exit', () => {
+  try {
+    plane.releaseSync()
+  } catch (e) {
+    // Un fallo al soltar no puede cambiar el código de salida ni tapar la causa real de la muerte.
+    console.error(`[control] no se pudo soltar el control al salir: ${e instanceof Error ? e.message : String(e)}`)
+  }
+})
 // ADQUISICIÓN, antes de abrir un solo store: el modo de apertura depende de ella, y el gate de época del
 // store se negaría a abrir en escritura con la época de un titular anterior.
 const CONTROL_AL_ARRANCAR = await plane.acquire()
