@@ -136,13 +136,27 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
   aparece, nace issue propio. `reg 2026-08-17`
 
-- **El arnés de Fabric mide la discriminación con el principal EQUIVOCADO, y así se coló #238** —
-  todas las comprobaciones de discriminación corren como `admin` (`fabric-lab-proof.ts:232-233` y
-  `:346-347`); el único sondeo que usa el service principal es P5. El admin **siempre** tiene
+- ~~**El arnés de Fabric mide la discriminación con el principal EQUIVOCADO, y así se coló #238**~~ —
+  todas las comprobaciones de discriminación corrían como `admin` (`fabric-lab-proof.ts:232-233` y
+  `:346-347`); el único sondeo que usaba el service principal era P5. El admin **siempre** tiene
   `UNMASK`, así que los verdes que cerraron #197 midieron una propiedad real sobre un sujeto que no
-  es el que sirve. **Lo que falta no es un test más, es un control de premisa**: verificar el estado
-  del sujeto **en el plano de datos** —no en el de control, que miente durante la staleness de
+  es el que sirve. **Lo que faltaba no era un test más, era un control de premisa**: verificar el
+  estado del sujeto **en el plano de datos** —no en el de control, que miente durante la staleness de
   revocación— antes de creerle a cualquier veredicto sobre `UNMASK`. `reg 2026-08-19`
+  **CERRADA 2026-08-19 (PR #244):** el arnés tiene sondeo P9, que mide la discriminación con el
+  principal que **sirve** y no concluye sin premisa: el estado del sujeto se mide **leyendo** la tabla
+  y, si contradice el `FAB_SP_ROLE` declarado, el sondeo **se niega a concluir**. Las comprobaciones
+  del admin se conservan a propósito, rotuladas REFERENCIA — el contraste admin-vs-SP es lo que hizo
+  visible #238. El arnés estrena además un tercer estado, `⚠ NO MEDIDO` (antes «no pude medir» salía
+  como hallazgo, indistinguible de un dato), con código de salida propio (3).
+  **Y un defecto nuevo que el cierre destapó:** el test por desigualdad de JSON que la ficha daba por
+  bueno **no habría atrapado #238** — la rama `ELSE` de la vista devuelve el literal del IR (`•••`) y
+  el DDM devuelve el default del tipo (`XXXX`), así que las dos lecturas difieren sin que ninguna
+  traiga el dato. P9 juzga si el claim concede el **valor real** (los ruts sintéticos, conocidos por
+  construcción), no si las lecturas difieren.
+  **Verificado de FORMA, no contra el motor:** `typecheck` verde, el SQL emitido revisado a mano
+  (sale del compilador, `FAB_PROOF_PRINT_SQL=1 npm run fab:sql`) y la lógica de la premisa ejercitada
+  con dobles. **Queda sin medir** hasta la primera corrida con la ventana de capacidad abierta.
 
 - **La staleness de revocación de rol supera los 20 min** — cota medida el 2026-08-19: rol bajado a
   `Viewer` a las 13:50:47 UTC, y a las 14:11:40 el SP seguía leyendo **en claro**. El experimento que
@@ -160,6 +174,15 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   nueva**: un mecanismo no se publica sin el experimento que lo pone en riesgo, y «publicar» empieza
   en el tag, no en el aviso. El arnés del terreno (`fab:proof`) debería incluir el centinela para que
   esto no dependa de que alguien se acuerde. `reg 2026-08-19`
+  **CERRADA 2026-08-19 (PR #244):** el centinela es el sondeo **P10** de `fab:proof`, con lo que midió
+  el experimento suelto —las 3 sentencias emitidas, idempotencia real (crear-si-falta, una sola fila
+  tras dos pasadas), el descubrimiento del serving, la corroboración en `sys`, el control positivo del
+  instrumento con el admin y el estado `uninstrumented` honesto— más dos cosas que el experimento no
+  medía: el **retiro verificado midiendo** (no se supone que `dropSQL` funcionó porque no dio error) y
+  que el SQL del **emisor** y el del **serving** sean el mismo byte a byte. Su cabecera declara que
+  este sondeo es la condición de cortar versión cuando el corte toca el centinela.
+  **Verificado de FORMA:** ver la ficha de arriba. **Queda sin medir** hasta la primera corrida con la
+  ventana abierta.
 
 - **La conexión viva es una frontera de autorización, y el nodo sostiene un pool** — medido el
   2026-08-19 contra Fabric: una conexión ya abierta **nunca** vio el cambio de rol dentro de la
