@@ -126,6 +126,71 @@ export function buildControlOptions(
   return pairs
 }
 
+/**
+ * Lista CERRADA de valores que cuentan como VERDADERO en la columna de `defaultField` (#235).
+ * El pipeline no tipa nada: las filas son `Record<string, unknown>` con los valores CRUDOS del driver,
+ * así que en esa columna puede llegar `true`/`false` (BIT de mssql/tedious), `1`/`0` (CAST AS INT),
+ * `'S'`/`'N'` (un CASE WHEN) o `null` (las filas no marcadas). Por eso NO se usa truthiness de JS: la
+ * trampa concreta es que `String(false)` es `'false'`, que es truthy — un `if (String(v))` daría
+ * verdadero para TODAS las filas.
+ */
+const TRUTHY_FLAGS = new Set(['1', 'true', 't', 's', 'si', 'sí', 'y', 'yes'])
+
+/**
+ * ¿Esta celda marca la opción por defecto? Verdadero SOLO para `true`, `1`, `'1'`, `'true'`, `'t'`,
+ * `'s'`, `'si'`, `'sí'`, `'y'`, `'yes'` (comparación en minúsculas y con `trim`). **Todo lo demás
+ * —incluidos `false`, `0`, `'0'`, `'false'`, `'N'`, `null`, `undefined` y la cadena vacía— es falso.**
+ * Un valor fuera de ambas listas (p. ej. `'quizás'`) es FALSO, no error: el dominio lo produce el SQL
+ * y puede moverse bajo un spec quieto — mismo argumento del fail-safe del literal de #92.
+ */
+export function isDefaultFlag(v: unknown): boolean {
+  if (v === true) return true
+  if (typeof v === 'number') return v === 1
+  if (typeof v === 'string') return TRUTHY_FLAGS.has(v.trim().toLowerCase())
+  return false
+}
+
+/**
+ * La opción que el DATO designa por defecto (#235), o `undefined` si el dato no designa EXACTAMENTE
+ * una. El conteo es sobre **opciones resueltas**, no sobre filas: se deduplica por `value` con la MISMA
+ * regla que `buildControlOptions` (1ª aparición gana, `value` vacío descartado), porque contar filas
+ * diría 2 donde el usuario ve una sola opción, y una fila marcada con `value` vacío no es una opción.
+ * Con dedup, si dos filas del mismo `value` traen flags distintos gana la **primera aparición** — la
+ * misma regla de desempate que ya rige para la etiqueta.
+ * Ninguna marcada o más de una → `undefined`: `defaultField` NO resuelve y el llamador cae a `default`
+ * y de ahí al fallback universal (`max`). Fail-safe, no fail-closed (S2).
+ */
+export function defaultFromField(
+  rows: Record<string, unknown>[],
+  valueField: string,
+  defaultField: string,
+): string | undefined {
+  const marked = markedDefaults(rows, valueField, defaultField)
+  return marked.length === 1 ? marked[0] : undefined
+}
+
+/**
+ * Los `value`s de las OPCIONES RESUELTAS que traen el flag de `defaultField` verdadero — el conteo
+ * crudo detrás de `defaultFromField`. Se expone porque la observabilidad de S2 tiene que distinguir
+ * «ninguna marcada» de «más de una» y decir cuántas: sin el conteo, el fail-safe sería un silencio
+ * (§5·O2). Dedup y descarte del vacío idénticos a `buildControlOptions`.
+ */
+export function markedDefaults(
+  rows: Record<string, unknown>[],
+  valueField: string,
+  defaultField: string,
+): string[] {
+  const seen = new Set<string>()
+  const marked: string[] = []
+  for (const r of rows) {
+    const value = String(r[valueField] ?? '')
+    if (value === '' || seen.has(value)) continue
+    seen.add(value)
+    if (isDefaultFlag(r[defaultField])) marked.push(value)
+  }
+  return marked
+}
+
 /** La etiqueta del `value` vigente dentro de un juego de pares (para el print/summary del sello). */
 export function labelForValue(pairs: ControlOption[], value: string): string {
   return pairs.find((p) => p.value === value)?.label ?? value

@@ -14,6 +14,7 @@
   "scripts": {
     "vergis": "tsx packages/cli/src/main.ts",
     "typecheck": "tsc --noEmit",
+    "lint:shell": "sh scripts/lint-shell.sh",
     "test": "vitest run",
     "build": "esbuild server/serve-rls.ts --bundle --platform=node --target=node22 --format=esm --external:canvas --external:mssql --external:tedious --external:sql.js --external:ajv --external:ajv-formats --external:yaml --outfile=dist/serve-rls.mjs && cp packages/capabilities/src/themes/arbol-logo.png dist/",
     "start": "node dist/serve-rls.mjs",
@@ -23,7 +24,8 @@
     "fab:resume": "az fabric capacity resume --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB",
     "fab:pause": "az fabric capacity suspend --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB",
     "fab:state": "az fabric capacity show --resource-group rg-vergis-fabric-lab --capacity-name vergisfablab --subscription $VERGIS_FAB_SUB --query state -o tsv",
-    "fab:proof": "tsx scripts/fabric-lab-proof.ts"
+    "fab:proof": "tsx scripts/fabric-lab-proof.ts",
+    "fab:sql": "FAB_PROOF_PRINT_SQL=1 tsx scripts/fabric-lab-proof.ts"
   },
   "license": "AGPL-3.0-or-later",
   "devDependencies": {

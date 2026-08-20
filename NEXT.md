@@ -13,7 +13,7 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
 | **El aviso al operador** — ahora de 0.18.0 → **0.21.0** | **César** | Comunicación saliente. **Redactado y listo**, al pie de este archivo; no se envió |
-| **PR #234** (docs del contrato de anillos, del frente arbol) | **Nuestro** — la custodia | Verde y limpio; espera nuestra verificación de composición y merge |
+| **Issue #245** — hay `UNMASK` **granular por columna** en Fabric: el requisito de 0.21.0 no obliga a subir el rol del workspace | **César decide** si el emisor lo emite (a) o si se documenta como vía recomendada del operador (b) | Medido el 2026-08-19 con control positivo, negativo y revoke verificado. **Recomiendo (b)** por frontera: los privilegios del principal los decide quien opera. El borrador del aviso, al pie, ya está corregido con las dos vías |
 | **`shellcheck` en el CI** | **Nuestro** | Sin empezar. Ficha en `PENDINGS.md` |
 | **#235** — default móvil en controles del DSL | **Nuestro** | Abierto hoy por César, sin empezar |
 | **E3/E4/E5 de #238** | **Nuestro** | Exigen el SP de laboratorio **fuera** de la ventana de staleness de revocación, que sigue viva |
@@ -34,25 +34,23 @@ La corrección está en #237 y la regla que sale de ahí vive en `RESOURCES.md`:
 
 ## Próximo paso
 
-**Verificar y mergear el PR #234** (`feat/210-i9i10-docs-contrato`, del frente arbol: docs del contrato
-de despliegue por anillos). Está verde y `MERGEABLE/CLEAN`. **Destraba a arbol**, que no puede
-mergear lo suyo por la custodia.
+**El PR #234 ya está mergeado** (2026-08-19 21:01, squash → `6694bea`), con los tres gates corridos
+por mano propia antes Y después del merge (typecheck ✓ · 2312 tests ✓ · build ✓) y el guard de labels
+verificado aislado contra las constantes de `main`. Arbol quedó destrabado. Del ejercicio de custodia
+salió el **issue #242** (ver tabla).
 
-**Contexto para arrancar en frío:** el merge es nuestro por la custodia (`CLAUDE.md` §«La custodia»),
-y lo que el custodio hace **no es revisar el código ajeno**: es correr los gates **por mano propia**
-antes y después, y **verificar los invariantes que el PR afirma** en vez de leerlos de su reporte.
-
-```bash
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-gh pr view 234 --json mergeable,mergeStateStatus,statusCheckRollup
-gh pr diff 234
-npm run typecheck && npm test && npm run build     # por mano propia, NO del reporte del PR
-gh pr merge 234 --squash --delete-branch
-```
+**Candidato natural siguiente: E3/E4/E5 de #238.** Estaban frenados por la ventana de staleness de
+revocación del SP de laboratorio; esa ventana se abrió en la tarde del 19-ago y **probablemente ya
+venció** (>2 h al momento de escribir esto) — **supuesto, sin confirmar**: se verifica midiendo, no
+esperando más. Los scripts están en `local/` (tabla abajo) y la ventana de Fabric entra bajo POL-01.
 
 **Trampa medida hoy:** no correr `npm test` si hay otra suite viva — la contención produce ~40 rojos
 en paquetes que el cambio no toca. Y para matar una corrida colgada, por PID acotado al árbol, nunca
 `pkill -f vitest`.
+
+**Residuo del merge de #234:** la rama local `feat/210-i9i10-docs-contrato` no se pudo borrar porque
+la retiene el worktree `../vergis-wt-210-i9i10b` (limpio, en el tip del PR). No se tocó: el worktree
+no es de esta sesión.
 
 ## Los scripts de medición viven en `local/` (ignorado, no versionado)
 
@@ -162,9 +160,24 @@ US$50).
 >
 > **Qué hay que hacer, en orden:**
 >
-> **1 · Conceder la capacidad de desenmascarar al principal con el que corre Vergis.** En Fabric lo
-> decide el **rol del workspace**: con `Member` lee el valor real de las columnas; con `Viewer` lee
-> la máscara. Vergis no exige un rol concreto — mide si la lectura desenmascara.
+> **1 · Conceder la capacidad de desenmascarar al principal con el que corre Vergis.** Hay **dos
+> vías**, y la segunda es la que recomiendo:
+>
+> - **Subir el rol del workspace a `Member`.** Funciona, y es privilegio **amplio**: lectura y
+>   escritura de todo el workspace. Y con un costo que medimos: **quitarlo después no surte efecto
+>   inmediato** — sondeamos más de 20 minutos y el permiso seguía vigente.
+> - **Conceder `UNMASK` sobre la columna, y nada más:**
+>   `GRANT UNMASK ON [esquema].[tabla]([columna]) TO [public]`. Lo medimos contra un warehouse Fabric:
+>   el motor lo acepta, surte efecto, la vista discrimina correctamente, y **revocarlo sí es
+>   inmediato**. Es del tamaño del dato que protege.
+>
+>   Con una advertencia que hay que decir: `public` es un rol al que pertenece **todo** principal de la
+>   base, así que la capacidad queda para todos los que puedan consultar ese warehouse — no solo para
+>   Vergis. No se puede hacer más fino: Fabric no permite crearle un usuario propio a un service
+>   principal (`CREATE USER … FROM EXTERNAL PROVIDER` no está soportado). Si en ese warehouse consultan
+>   otros principals, esto los alcanza.
+>
+> Vergis no exige ninguna de las dos: mide si la lectura desenmascara, y le da igual cómo lo lograste.
 >
 > **2 · Regenerar y re-aplicar la security policy de cada tabla gobernada.** Es lo que instala la
 > pieza con la que Vergis mide esa capacidad. Hasta que se re-aplique, un producto que ya venía
@@ -180,10 +193,11 @@ US$50).
 > cerrado), pero la capacidad de «este usuario sí puede ver el RUT» **no concedía nada y nada lo
 > avisaba**. Ahora se mide y, si falta, se dice.
 >
-> **Una advertencia sobre el paso 1, medida:** conceder el rol surte efecto casi de inmediato, pero
-> **quitarlo no** — sondeamos más de 20 minutos y el permiso seguía vigente, y una conexión ya
-> abierta no se entera nunca. Si en algún momento revocan ese rol, hay que reiniciar Vergis en vez
-> de confiar en que el motor propague.
+> **Una advertencia sobre el paso 1, medida, y aplica a la vía del ROL:** conceder el rol surte
+> efecto casi de inmediato, pero **quitarlo no** — sondeamos más de 20 minutos y el permiso seguía
+> vigente, y una conexión ya abierta no se entera nunca. Si en algún momento revocan ese rol, hay que
+> reiniciar Vergis en vez de confiar en que el motor propague. **Con la vía del `GRANT` esto no pasa**:
+> el revoke lo verificamos efectivo en la misma corrida. Es la segunda razón para preferirla.
 >
 > **Y como vienes desde 0.18.0, en el camino hay tres cosas más:**
 >
@@ -199,4 +213,4 @@ US$50).
 > Las notas completas de cada versión están en el CHANGELOG del repo. Desde 0.20.1 la imagen también
 > las trae adentro; las anteriores no, así que para este tramo el repo es la fuente.
 
-<!-- /ww:next · 2026-08-19 · HEAD 5c080de -->
+<!-- /ww:next · 2026-08-19 · HEAD 6694bea (actualizado en sesión tras mergear #234) -->

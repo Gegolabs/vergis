@@ -151,6 +151,34 @@ services:
     # settings auto-asignables → alcance de red al HTTP de CH = bypass total de la row-policy. Igual que
     # acá: nada de data-plane se publica; el único ingress público es Caddy (TLS) → oauth2-proxy (SSO).
     expose: ["8080"]
+    # DIAGNÓSTICO, NO RUTEO — y la distinción es lo importante de este bloque. Esto solo hace que
+    # `docker ps` diga la verdad sobre ESTE servicio. **Quien rutea es el conmutador del borde**, con su
+    # propio health check activo en `Caddyfile.reference` — cambiar esto no cambia a dónde va el tráfico.
+    #
+    # Aplica al modo UN SOLO NODO. En modo ANILLOS los nodos los crea `vergis-rollout` con
+    # `rollout/ring.args`, que —a diferencia de los envs y los montajes— **no lleva healthcheck**: la
+    # salud de un anillo la mide el borde, que es el único que puede actuar sobre ella. Así que este
+    # bloque no viaja, y no hace falta que viaje.
+    #
+    # Juzga por la FASE, jamás por `r.ok` ni por el código HTTP: un nodo EN ESPERA (standby) responde 200
+    # con `ok:true` por diseño —sirve lecturas, no tiene el plano de control, sus mutaciones dan 409—, y
+    # marcarlo `healthy` sería la mentira más cara que este archivo podría contar en un incidente. El
+    # predicado es el canónico, idéntico al del borde y al de `rollout/vergis-rollout` (`serving_ok`):
+    #
+    #   sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  (sin bloque `pis`  ∨  pis.serving == pis.total)
+    #
+    # `pis` se exige SOLO SI VIENE (`/healthz` lo omite cuando el motor no tiene servibilidad por PI; acá
+    # el motor es `fabric`, así que viene). El cuerpo se PARSEA, no se grepea: un grep de `"serving"`
+    # colisiona con `"phase":"serving"`. Lo no medible —vacío, no-JSON, conexión rechazada— es FALLO.
+    # node:22-slim no trae curl → el fetch de Node, el patrón de todo el repo.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r=>{const b=JSON.parse(await r.text());process.exit(r.status===200&&b.phase==='serving'&&(!b.pis||b.pis.total===b.pis.serving)?0:1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # El arranque medido de un nodo va de 3,8 a 11,6 s; 40 s cubre una máquina cargada y el tramo en
+      # que un nodo reiniciado espera que el lease del proceso anterior venza (10 s por default).
+      start_period: 40s
 
   # Sidecar HTML→PDF (issue #65). Convierte el render en modo print de un PI —que ya nació filtrado por
   # la RLS de quien lo pidió— en un PDF. Es MUDO respecto a identidad: convierte lo que le llega; su

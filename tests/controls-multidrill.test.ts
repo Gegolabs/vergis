@@ -145,10 +145,42 @@ describe('validación · controles + drill multi-clave', () => {
     const s = parseSpec(YAML.replace('source: data.semanas.semana', 'source: data.fantasma.x')) as Record<string, unknown>
     expect(() => validate(s)).toThrow(/no existe en data/)
   })
-  it('control con default inválido → rechazo', () => {
+  // #246 · Este test decía «default inválido → rechazo» con `default: promedio` y aceptaba cualquier
+  // rechazo, comentando que «lo atrapa el schema (enum)» como si eso fuera correcto. NO lo era: el
+  // `enum: [max,min,first]` del schema rechazaba TAMBIÉN el valor literal que #92 había hecho válido,
+  // y el test lo bendijo — por eso la capacidad estuvo cinco meses inalcanzable desde un spec. Ahora el
+  // vocabulario del schema es «string no vacío» (lo mismo que ya exigía la validación semántica) y el
+  // test DISTINGUE qué capa rechaza: un no-keyword es un LITERAL válido en el spec, y lo único que
+  // rechaza es el string vacío.
+  it('un default que no es keyword es un LITERAL válido (#92/#246), no un rechazo del schema', () => {
     const s = parseSpec(YAML.replace('default: max', 'default: promedio')) as Record<string, unknown>
-    // Lo atrapa el schema (enum) antes que la validación semántica — ambas son rechazo válido.
-    expect(() => validate(s)).toThrow(/default/)
+    expect(() => validate(s)).not.toThrow()
+    // Y en el render es fail-safe: fuera del dominio cae al comportamiento sin default (max).
+    expect(resolveControlValue(undefined, ['W16', 'W20', 'W21'], 'promedio')).toBe('W21')
+  })
+  it('default vacío → rechazo por AMBAS capas, y se distingue cuál habla', () => {
+    const s = parseSpec(YAML.replace('default: max', 'default: ""')) as Record<string, unknown>
+    // Capa 1 · el SCHEMA (corre primero y lanza antes de la semántica): minLength.
+    const conSchema = (() => {
+      try {
+        validate(s)
+        return null
+      } catch (e) {
+        return (e as { structured?: { code?: string; message?: string } }).structured ?? null
+      }
+    })()
+    expect(conSchema?.code).toBe('schema-violation')
+    // Capa 2 · la validación SEMÁNTICA, aislada bajo un schema PERMISIVO (`{}` acepta todo, así que
+    // el único que puede hablar es el validador semántico): su propio veredicto nombrado.
+    const sinSchema = (() => {
+      try {
+        validateSpec(s, { capabilities: CAPS, schema: {} })
+        return null
+      } catch (e) {
+        return (e as { structured?: { code?: string } }).structured ?? null
+      }
+    })()
+    expect(sinSchema?.code).toBe('control-default-invalid')
   })
   it('control multi-select (single: false) → válido (soportado desde work/052 R3)', () => {
     const s = parseSpec(YAML.replace('single: true', 'single: false')) as Record<string, unknown>

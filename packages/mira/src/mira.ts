@@ -9,7 +9,7 @@ import { composePiece, type DatasetResult, type ResolvedNode } from './compose'
 import { applyNotas, type ResolverComentarios } from './notas'
 import { expectString, expectRows } from './contract'
 import type { CtxValues, PagesNav, ControlResolved } from './mira-types'
-import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues, buildControlOptions, labelForValue } from './controls'
+import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues, buildControlOptions, labelForValue, markedDefaults } from './controls'
 import { resolveActiveView, normalizeCtx, watermarkDatasetOf, isMultiControl, asSingle } from './views'
 import { applyFlt, filterCarry, filterColumn, normalizeFlt, resolveFilters, stripFilterSource, type FilterResolved } from './filters'
 import { parseSpec } from './dsl/parse'
@@ -328,7 +328,26 @@ export class MiraBotlet implements Botlet {
       paramOwned.add(param)
       // El valor vigente es el de `ctx.<param>` (compartido por todas las llaves alternativas); el
       // default lo aplica SOLO el dueño (los demás heredan el valor que el dueño ya fijó).
-      const def = isOwner ? c.default : undefined
+      // `defaultField` (#235): el DATO designa la opción por defecto. Entra por el MISMO `??` que el
+      // literal de #92 —o sea, como el argumento `def` de resolveControlValue— y así hereda gratis toda
+      // la precedencia ya escrita: la URL gana (S3), fuera del dominio cae a `max` (S2), y si el dato no
+      // designa exactamente una se evalúa `c.default` (S4). Replicar esa precedencia acá sería el error.
+      const delDato = isOwner && c.defaultField ? markedDefaults(results[dsName]?.rows ?? [], field, c.defaultField) : undefined
+      if (delDato && delDato.length !== 1) {
+        // S2 es fail-safe, no fail-closed — pero no puede ser un SILENCIO: un PI que abre en la semana
+        // equivocada porque el SQL dejó de marcar la fila tiene que poder diagnosticarse sin adivinar.
+        host.log({
+          type: 'mira-control-default-field',
+          botletId: this.id,
+          control: c.id,
+          dataset: dsName,
+          field: c.defaultField,
+          marked: delDato.length,
+          reason: delDato.length === 0 ? 'none-marked' : 'multiple-marked',
+          fallback: c.default ?? 'max',
+        })
+      }
+      const def = isOwner ? ((delDato?.length === 1 ? delDato[0] : undefined) ?? c.default) : undefined
       if (isMultiControl(c)) {
         // Multi-select: los valores de la URL se filtran contra las opciones; sin ninguno válido,
         // aplica el default (un solo valor, como en single). Se colapsa a string cuando queda uno
