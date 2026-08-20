@@ -9,6 +9,29 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-53 · 2026-08-19 — Se emprende #235 (`defaultField`) en modo autónomo, con #246 como prerrequisito
+
+- **Bifurcación**: #235 pide una capacidad **nueva del DSL** —que el dato designe la opción por defecto de un control—, o sea contrato público que consumen los especificadores de la instancia. ¿Se implementa sin consultar, o sube a decisión por ser cambio de contrato?
+- **Decidido**: **se implementa.** Tres razones, en orden de peso: la **semántica ya la fijó quien la pidió** (el issue propone `defaultField`, declara el fail-safe y **descarta con argumento** la alternativa del mini-lenguaje de fechas `default: today+1w`, así que no hay bifurcación viva que elegir); el cambio es **aditivo** (un campo opcional; ningún spec existente cambia de comportamiento); y hay un **requisito de usuario real bloqueado** — PI-12 no puede cumplir su §2.4 y el *workaround* vigente le rompe la promesa al usuario que la pidió.
+- **Lo que sí decidí yo, y va en el documento de diseño** (`work/011-235-default-del-dato/01-diseno-defaultfield-v1.0.md`), porque el issue no lo contempla: el **criterio de verdad** del booleano es una **lista cerrada** y no truthiness de JS (`String(false)` es `'false'`, que es truthy — la trampa concreta); «exactamente una» se cuenta sobre **opciones deduplicadas**, no sobre filas; el valor del dato entra por el **mismo camino que el literal de #92** para heredar gratis la precedencia de la URL; y la ausencia de resolución **emite evento**, porque un fail-safe sin observabilidad es un silencio.
+- **#246 es prerrequisito, no vecino**: el `enum` del JSON Schema que dejó muerto al literal de #92 bloquearía igual cualquier `default` nuevo, y el hueco de validación que permite claves desconocidas en silencio haría que un typo en `defaultField` no dijera nada. Los dos tocan la misma línea.
+- **Costo de revertir**: medio. Es código con tests y un campo de contrato público; revertirlo después de que un spec de instancia lo use rompería ese spec. Antes de eso, es un revert limpio.
+
+## D-52 · 2026-08-19 — El healthcheck por fase también va al compose de REFERENCIA
+
+- **Bifurcación**: el defecto (`r.ok` dando sano a un `standby`) estaba en `docker-compose.yml`. ¿Se arregla solo ahí, o también se agrega el healthcheck —que no existía— al servicio `vergis` de `deploy/compose.reference.yml`?
+- **Decidido**: **también en el de referencia.** El argumento en contra es serio y se evaluó: ese archivo describe una instancia **con anillos**, donde el borde ya juzga la salud por el predicado correcto y los anillos viven fuera del ciclo de vida de compose, así que un healthcheck ahí podría leerse como «compose es el mecanismo de ruteo». Ganó el otro: **el archivo documenta explícitamente el modo de un solo nodo**, y en ese modo el servicio `vergis` *es* el que sirve — un `docker ps` diciendo `healthy` sobre un standby es la mentira más cara que esa plantilla puede contar, justo cuando el operador la mira porque algo anda mal.
+- **La mala lectura se desarma por escrito en el propio archivo**, no en el commit: que es diagnóstico y **no** ruteo, y que los anillos no lo heredan porque `ring.args` no lleva healthcheck y su salud la mide el borde, el único que puede *actuar* sobre ella.
+- **Costo de revertir**: nulo — borrar el bloque.
+
+## D-51 · 2026-08-19 — Los dos PRs de Renovate NO se mergean: el cooldown de supply chain está corriendo
+
+- **Bifurcación**: #201 (`python:3.12-slim-bookworm`) y #175 (`caddy:2`) tienen `test` y `review` en verde y la custodia autoriza aterrizar PRs de bot. ¿Se mergean?
+- **Decidido**: **no**, y no por prudencia genérica: **`renovate/stability-days` está en `pending`** en los dos, con el mensaje «Updates have not met minimum release age requirement». Ese check es el **cooldown de `minimumReleaseAge: "14 days"`** del ADR-001, y es un control declarado a propósito contra compromisos de supply chain. #175 tiene 6 días y #201 tiene 2: ninguno cumple. Mergearlos sería **anular un control que costó tres días hacer visible** — el mismo que estuvo inerte hasta que se descubrió el 403 que abortaba a Renovate con el job en verde.
+- **Y no son «casi trámite»**: el job `image` está **SKIPPED en pull requests** (verificado), así que el digest nuevo del sidecar de PDF **no se construye en el PR**. Un digest roto se descubriría en `main`. Con el cooldown corriendo, no hay ninguna razón para adelantarlo.
+- **Qué los destraba**: que el check pase por sí solo al cumplirse los 14 días. Ahí sí son trámite y se aterrizan con gates.
+- **Costo de revertir**: nulo — es una no-acción.
+
 ## D-50 · 2026-08-19 — La entrada I7+I8 de anillos se MUEVE a la sección 0.21.0 del CHANGELOG (#242)
 
 - **Bifurcación**: el tag `v0.21.0` **contiene** el código de #233 (el conmutador de anillos, I7+I8) —medido con `git merge-base --is-ancestor f6b1295 v0.21.0`— pero el corte dejó su entrada bajo «Sin publicar». Dos salidas: **(a)** mover la entrada a 0.21.0, o **(b)** declarar que la exclusión fue criterio deliberado («no se declara hasta que sea operable con su runbook») y dejarla donde está.

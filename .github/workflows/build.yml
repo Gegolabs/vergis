@@ -32,8 +32,60 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # Job hermano y no un paso de `test`: shellcheck no necesita `npm ci` ni las deps de node, así que
+  # colgarlo de esa escalera lo haría esperar el toolchain entero para medir 1130 líneas de shell —
+  # y, peor, un `npm audit` rojo lo dejaría sin correr. Acá corre en paralelo y falla por su cuenta,
+  # diciendo exactamente qué está mal. El script sale ROJO si no encuentra shellcheck, en vez de
+  # reportar «limpio» sin haber medido.
+  #
+  # LA VERSIÓN VA PINNEADA, y no es prolijidad: `ubuntu-latest` traía shellcheck 0.9.0 preinstalado y
+  # esta casa mide con 0.11.0 — medido, la 0.9.0 reporta tres SC2015 que la 0.11.0 no reporta. Un gate
+  # cuya severidad la decide la imagen del runner NO es reproducible: «verde en local» no dice nada, y
+  # el próximo bump de imagen puede traer otros hallazgos que nadie pidió. Se pinnea la MISMA versión
+  # que corre la máquina de desarrollo, que es el punto: local y CI miden lo mismo.
+  #
+  # POR QUÉ EL BINARIO OFICIAL Y NO UNA ACTION DE TERCEROS (p. ej. `ludeeus/action-shellcheck`): la
+  # action mete un tercero DENTRO del camino del gate —hay que pinnearla por SHA y auditar su código,
+  # y encima ella misma baja el binario— cuando lo único que hace falta son tres comandos. Acá la
+  # cadena de confianza termina en `koalaman/shellcheck` y en un sha256 escrito en este archivo.
+  # El checksum va ESCRITO acá y verificado contra el descargado: calcularlo del mismo archivo que se
+  # baja no verificaría nada. Está corroborado en dos fuentes independientes — `shasum -a 256` sobre
+  # la descarga local y el campo `digest` que la API de GitHub publica para el asset del release.
+  # Coherente con el ADR-001 de supply chain (cooldown de 14 días): la 0.11.0 se publicó 2025-08-03.
+  #
+  # Y acá el gate SÍ es estricto (`LINT_SHELL_STRICT=1`): si el pin se rompe —release retirada, otro
+  # binario ganando el PATH— el script falla en vez de medir con lo que haya. Un pin que se rompe en
+  # silencio devuelve el gate a irreproducible sin avisar, que es el defecto que esto cierra.
+  shell:
+    runs-on: ubuntu-latest
+    env:
+      SHELLCHECK_VERSION: 0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      LINT_SHELL_STRICT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: shellcheck pinneado (binario oficial + checksum)
+        run: |
+          set -eu
+          # El asset es por arquitectura; si el runner deja de ser x86_64 esto tiene que fallar acá y
+          # no bajar un binario que no corre.
+          arch=$(uname -m)
+          [ "$arch" = x86_64 ] || { echo "arquitectura inesperada: $arch" >&2; exit 1; }
+          tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 --retry-connrefused -o "$tarball" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
+          echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xJf "$tarball"
+          mkdir -p "$RUNNER_TEMP/shellcheck-bin"
+          install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "$RUNNER_TEMP/shellcheck-bin/shellcheck"
+          # $GITHUB_PATH PREPONE: gana sobre el shellcheck preinstalado de la imagen.
+          echo "$RUNNER_TEMP/shellcheck-bin" >>"$GITHUB_PATH"
+      - run: shellcheck --version
+      - run: npm run lint:shell
+
   image:
-    needs: test
+    needs: [test, shell]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

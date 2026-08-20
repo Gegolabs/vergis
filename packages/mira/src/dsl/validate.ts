@@ -662,6 +662,25 @@ export interface MiraControl {
    */
   default?: 'max' | 'min' | 'first' | (string & {})
   /**
+   * Campo del MISMO dataset de `source` cuya celda designa la opción por DEFECTO (#235): el DATO elige
+   * el default, no el spec. Resuelve el caso del default MÓVIL —«la semana siguiente a hoy», «la campaña
+   * vigente»— que ni los keywords ni el literal de #92 pueden expresar: el literal caduca y `first` no
+   * da acceso al orden del SQL.
+   *
+   * Cuenta como VERDADERO exactamente: `true`, `1`, `'1'`, `'true'`, `'t'`, `'s'`, `'si'`, `'sí'`, `'y'`,
+   * `'yes'` (en minúsculas, con `trim`). Todo lo demás —incluidos `false`, `0`, `'0'`, `'false'`, `'N'`,
+   * `null` y la cadena vacía— es FALSO. No es truthiness de JS.
+   *
+   * Semántica: si EXACTAMENTE UNA de las opciones resueltas lo trae verdadero, esa opción es el default
+   * y gana sobre `default`. Si ninguna o más de una lo traen, `defaultField` no resuelve y se evalúa
+   * `default`; si tampoco resuelve, cae al comportamiento sin default (`max`) — fail-safe, no
+   * fail-closed, porque el conteo depende del dato y un SQL que un día marca dos filas no debe dejar el
+   * PI caído. El caso que no resuelve se LOGUEA (`mira-control-default-field`).
+   * El conteo es sobre OPCIONES (después del dedup por value y del descarte del value vacío), no sobre
+   * filas. Y como todo default, lo aplica SOLO el dueño del `param`, y la URL le gana siempre.
+   */
+  defaultField?: string
+  /**
    * Selección única (default true). Con `single: false` el control es MULTI-SELECT: los valores viajan
    * como parámetro repetido (`?ctx.<id>=a&ctx.<id>=b`) y en la query el placeholder `:ctx.<id>` DEBE
    * vivir dentro de paréntesis de IN (`WHERE semana IN (:ctx.<id>)`) — Mira lo expande a N binds.
@@ -778,6 +797,20 @@ function validateControls(spec: MiraSpec): void {
         value: c.display,
         message: `El control '${c.id}' muestra el campo '${c.display}' de '${dataset}', que no está declarado en data.${dataset}.shape.fields.`,
         remediation: `Declarar '${c.display}' en shape.fields o corregir display.`,
+      })
+    }
+    // El campo de `defaultField` (#235) debe existir en el MISMO dataset. Sin este check un TYPO en el
+    // nombre sería MUDO: `controls.items` tiene `additionalProperties: true` y el control caería a `max`
+    // sin decir nada — el PI abriría en la semana equivocada y nadie sabría por qué. El campo colgante
+    // es error de SPEC (estático, ruidoso); que el DATO no marque ninguna fila es fail-safe (dinámico).
+    if (c.defaultField && cds?.shape?.fields && !(c.defaultField in cds.shape.fields)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'control-default-field-dangling',
+        path: `controls[${c.id}].defaultField`,
+        value: c.defaultField,
+        message: `El control '${c.id}' toma su default del campo '${c.defaultField}' de '${dataset}', que no está declarado en data.${dataset}.shape.fields.`,
+        remediation: `Declarar '${c.defaultField}' en shape.fields o corregir defaultField.`,
       })
     }
     // `default` (#92): keywords `max|min|first` con su semántica de siempre, o un LITERAL — cualquier

@@ -36,6 +36,119 @@ cambio lo decide quien opera esa instancia.
 
 ## Sin publicar
 
+### Los tres experimentos que 0.21.0 declaró «sin medir» quedaron medidos — y uno cambia la recomendación (#238 · E3/E4/E5)
+
+**0.21.0 exige que el principal de serving pueda leer el valor real de las columnas gobernadas, y dijo
+—con esas palabras— que tres experimentos quedaban sin medir.** Dos ya no lo están, y el resultado del
+primero **cambia lo que hay que recomendarle a quien opera**.
+
+**E3 · hay `UNMASK` granular por COLUMNA, así que no hace falta subir el rol del workspace.** Medido
+contra el SKU: `GRANT UNMASK ON [esquema].[tabla]([columna]) TO [public]` se acepta, **surte efecto**
+(que no es lo mismo: es la lección de #197), **la vista discrimina** correctamente con el claim, y el
+`REVOKE` se verificó **en el plano de datos**. Frente a la vía del rol `Member`, esta es del tamaño del
+dato que protege y **su revocación sí es inmediata** — la del rol no propaga en más de 20 minutos, con
+techo desconocido.
+
+Con dos límites que van dichos: `public` es un rol al que pertenece **todo** principal de la base, así
+que la capacidad alcanza a cualquiera que pueda consultar ese warehouse, y **no se puede hacer más
+fino** porque Fabric no permite crearle un usuario propio a un service principal (`CREATE USER … FROM
+EXTERNAL PROVIDER` no está soportado — medido, no supuesto). Si en ese warehouse consultan otros
+principals, esto los alcanza.
+
+**Qué hacer con esto es decisión de quien opera**, y por eso Vergis no la toma: el Producto **mide** si
+la lectura desenmascara y le da igual cómo se logró. Lo que cambia es la recomendación — de «súbele el
+rol» a «concédele esta columna». Ver issue #245, que también recoge la pregunta abierta de si el
+emisor debería emitir ese `GRANT` él mismo.
+
+**E5 · el centinela distingue sus tres estados también en Fabric.** Verde, y ahora **dentro del arnés**
+(sondeo P10) en vez de en un experimento suelto: las 3 sentencias aceptadas, idempotencia real, el
+descubrimiento encontrándolo, `sys` corroborando la máscara, el control positivo del instrumento (un
+sujeto con la capacidad lee el valor esperado) y el retiro **verificado leyendo**, no supuesto porque
+la sentencia no diera error.
+
+**E4 sigue sin medir**, y ahora se sabe qué costaría: exige cambiar la capacidad y sondear una conexión
+viva por mucho más tiempo. Por la vía del rol arrastra la staleness de revocación (>20 min, techo
+desconocido) y deja el terreno inutilizable; por la vía del `GRANT` es viable y queda para una ventana
+propia. Lo que sí está medido, y es lo que importa para operar: **una conexión ya abierta no se enteró
+nunca** de un cambio de rol dentro de la ventana de sondeo, o sea que **la autorización se fija al
+conectar**.
+
+### El healthcheck del despliegue de referencia juzga por la FASE, no por «responde»
+
+El `healthcheck` de `docker-compose.yml` juzgaba por el código HTTP, y desde 0.20.0 eso **da «sano» a un
+nodo que no sirve**: un nodo en `standby` responde `200` con `ok:true` **por diseño**. Ahora exige el
+predicado canónico —`200 ∧ phase=serving ∧ (sin bloque pis ∨ pis.serving == pis.total)`—, el mismo que
+usan el conmutador del borde y la herramienta de anillos.
+
+**Y `deploy/compose.reference.yml` lo trae por primera vez** en su servicio `vergis`: ese archivo
+documenta el modo de **un solo nodo**, y ahí el servicio *es* el que sirve. Va con su advertencia
+escrita al lado, porque la mala lectura es fácil: **es diagnóstico, no ruteo** —quien rutea es el
+conmutador del borde— y los anillos **no lo heredan**, porque su salud la mide el borde, que es el
+único que puede actuar sobre ella.
+
+Si copiaste la plantilla, este bloque es lo que hay que traer. **Hoy no cambia nada en una instalación
+corriendo**: sin un `depends_on` con `condition: service_healthy`, nada enruta por esta señal. Muerde el
+día que algo lo haga.
+
+### El default de un control puede venir DEL DATO, y el default literal vuelve a ser alcanzable (#235 + #246)
+
+**Dos cosas, y la segunda es la que explica por qué la primera no podía existir sola.**
+
+**El default puede ser MÓVIL (`controls[].defaultField`, #235).** Hay defaults que se definen por su
+relación con *hoy* y no por su posición en el dominio: «la semana siguiente», «la campaña vigente», «el
+período contable abierto». Ninguno se podía expresar. El literal de #92 **caduca** —`2026-08-24` es «la
+semana siguiente» durante siete días y al octavo apunta al pasado— y `first` no da acceso al orden del
+SQL, porque las opciones se ordenan por su `value`. El sustituto que quedaba era acotar el dominio para
+que la opción buscada fuera el `max`: arregla el default y **rompe el requisito**, porque el usuario
+deja de poder mirar más allá.
+
+Ahora el **dato** designa la opción, marcando una columna del mismo dataset que produce las opciones —
+el mismo SQL que conoce el calendario:
+
+```yaml
+controls:
+  - { id: semana, source: data.semanas.semana, display: etiqueta, defaultField: es_default }
+```
+
+- **Qué cuenta como verdadero es una lista CERRADA**, no truthiness de JavaScript: `true`, `1`, `'1'`,
+  `'true'`, `'t'`, `'s'`, `'si'`, `'sí'`, `'y'`, `'yes'` (minúsculas, con `trim`). Todo lo demás
+  —incluidos `false`, `0`, `'0'`, `'false'`, `'N'`, `null` y la cadena vacía— es **falso**. La columna
+  llega con el valor **crudo del driver** (un `BIT` de mssql da `true`/`false`, un `CAST AS INT` da
+  `1`/`0`, un `CASE WHEN` da `'S'`/`'N'`, las filas no marcadas suelen dar `null`), y `String(false)` es
+  `'false'`, que en JS es *truthy*: con truthiness cruda, **todas** las filas quedarían marcadas.
+- **Exactamente UNA opción marcada** designa el default, y gana sobre `default`. Ninguna o más de una y
+  `defaultField` no resuelve: se evalúa `default`, y de ahí al comportamiento sin default, que es
+  **`max`**. Es **fail-safe**, no fail-closed — el conteo depende del dato, así que un SQL que un día
+  marca dos filas no puede dejar el PI caído. Y el conteo es sobre **opciones** (después del dedup por
+  `value` y del descarte del `value` vacío), no sobre filas: dos filas del mismo `value` son una sola
+  opción, y una fila marcada con `value` vacío no es opción ninguna.
+- **Cuando no resuelve, se ve**: evento `mira-control-default-field` con el control, el dataset, el
+  campo, cuántas quedaron marcadas y el fallback aplicado, distinguiendo «ninguna» de «más de una». Es
+  lo que separa un fail-safe de un silencio: un PI que abre en la semana equivocada porque el SQL dejó
+  de marcar la fila se diagnostica leyendo el log, no adivinando.
+- **La URL sigue ganando** y **solo el dueño del `param`** aplica el default — las dos reglas se heredan
+  sin escribirlas, porque el valor que designa el dato entra por la misma puerta que el literal de #92.
+- **El campo colgante es error de SPEC**, ruidoso y estático (`control-default-field-dangling`). Sin ese
+  check un typo en el nombre habría sido **mudo**: `controls.items` tolera claves desconocidas, el
+  control caería a `max` y nadie sabría por qué el PI abre donde abre.
+
+**Y el default LITERAL de #92 vuelve a ser alcanzable (#246).** La entrada que #92 nunca tuvo, y la
+razón por la que este cambio necesitaba dos issues: el schema cerraba `controls[].default` en
+`enum: ["max","min","first"]`, y el schema corre **antes** de la validación semántica —que sí aceptaba
+el literal—. O sea que **la capacidad se publicó inalcanzable desde un spec**: cualquier `default` que
+no fuera uno de los tres keywords se rechazaba al validar. El vocabulario del schema pasa a ser «string
+no vacío», que es exactamente lo que la validación semántica ya exigía: dos fuentes del mismo contrato
+que ahora dicen lo mismo. El mismo `enum` habría bloqueado cualquier default nuevo, así que arreglarlo
+no era un vecino de #235 sino su primer paso.
+
+El defecto sobrevivió cinco meses porque el test que lo tocaba lo **bendijo**: afirmaba «default
+inválido → rechazo» con un valor literal y comentaba que «lo atrapa el schema (enum)» como si eso fuera
+correcto. Ese test ahora **distingue qué capa rechaza**, y la suite trae el `validateSpec` completo —con
+schema— sobre un spec con `default` literal, que es la medición que faltaba.
+
+**Compatibilidad.** Ambos cambios son aditivos: un spec sin `defaultField` se comporta idéntico, y el
+schema solo se abre —jamás rechaza algo que antes aceptaba—.
+
 ### El contrato público del cambio: la imagen declara su esquema, las migraciones tienen regla y la promoción tiene ceremonia (#210 · I9+I10)
 
 **Esto completa el cambio del CONTRATO DE DESPLIEGUE** que traen **0.21.0** (el conmutador y la

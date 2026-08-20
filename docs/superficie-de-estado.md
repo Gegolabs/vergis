@@ -135,12 +135,14 @@ igual después. La convención es de superficie; el gate es la versión (**0.8.0
 
 Un mismo **alcance** puede tener más de una **llave** para elegirlo. En PI-07, una recepción se
 identifica por su **OC** *o* por su **Fecha Fin Recepción**: dos campos, un solo alcance. La superficie
-lo modela separando dos roles que hasta 0.8.0 estaban fundidos en cada entrada de `controls:`:
+lo modela separando roles que en 0.8.0 estaban fundidos en cada entrada de `controls:` — a qué escribe,
+qué muestra, y de dónde sale su valor inicial:
 
 | Rol | DSL | Default | Qué controla |
 |---|---|---|---|
 | **`param`** | `param: <clave>` | el `id` del control | a qué `ctx.<param>` ESCRIBE el sello (la llave de alcance) |
 | **`display`** | `display: <campo>` | el campo de `source` | qué campo del MISMO dataset se ve como ETIQUETA de las opciones |
+| **`defaultField`** | `defaultField: <campo>` | sin default del dato | qué campo del MISMO dataset DESIGNA la opción por defecto — el default lo elige el DATO, no el spec |
 
 El **valor** de cada opción sale del campo de `source` (la llave que viaja a `ctx`); la **etiqueta**
 sale del campo de `display`. Las opciones se construyen como pares `{value, label}` **fila a fila del
@@ -153,9 +155,10 @@ Dos controles que declaran el **mismo `param`** son **llaves alternativas**: eli
 distintos pero fijan el **mismo `ctx.<param>`**. Al cambiar cualquiera de los dos sellos, el re-render
 pinta **ambos coherentes** (elegir la fecha equivale a elegir su OC). Reglas de resolución:
 
-- **Dueño del `param`.** El **primer** control que declara un `param` es su dueño: aplica su `default`
-  (`max`/`min`/`first`). Los demás controles del mismo `param` heredan el valor vigente de
-  `ctx.<param>` (no aplican default propio).
+- **Dueño del `param`.** El **primer** control que declara un `param` es su dueño: aplica su default
+  —`max`/`min`/`first`, un **valor literal** del dominio (#92) o el que designe el **dato** vía
+  `defaultField` (#235, ver §7·3)—. Los demás controles del mismo `param` heredan el valor vigente de
+  `ctx.<param>` (no aplican default propio, ni por `default` ni por `defaultField`).
 - **Mismo dataset, `single` obligatorio.** Todos los controles de un `param` compartido deben leer del
   **mismo dataset** de `source` y ser `single` (validación con error claro si no; multi-valor + llaves
   alternativas queda fuera de alcance en esta fase).
@@ -191,3 +194,41 @@ controls:
   primitiva de opciones-como-pares sostiene las dos; (ii) solo agrega la **arista de dependencia**
   (`narrows:`) y la re-derivación del hijo. Por eso (i) se construye ahora y (ii) queda diseñada sobre la
   misma base, sin deuda: cuando llegue, no reescribe la resolución de controles, la extiende.
+
+### 7·3 · El default lo puede designar el DATO (`defaultField`)
+
+Un default puede ser **móvil**: se define por su relación con *hoy* y no por su posición en el dominio.
+«La semana siguiente a hoy» es el caso real, y el vocabulario anterior no lo alcanza: el **literal
+caduca** (`2026-08-24` es «la siguiente» durante siete días y al octavo apunta al pasado) y `first` no
+da acceso al orden del SQL, porque las opciones se ordenan por `value`. El sustituto —acotar el dominio
+para que la siguiente sea el `max`— arregla el default rompiendo el requisito: el usuario ya no puede
+mirar más allá.
+
+`defaultField` deja que **el mismo SQL que conoce el calendario** designe la opción, marcando una
+columna del dataset de `source`:
+
+```yaml
+controls:
+  - { id: semana, source: data.semanas.semana, display: etiqueta, defaultField: es_default }
+```
+
+- **Qué cuenta como verdadero.** Lista **cerrada**: `true`, `1`, `'1'`, `'true'`, `'t'`, `'s'`, `'si'`,
+  `'sí'`, `'y'`, `'yes'` (en minúsculas, con `trim`). Todo lo demás —incluidos `false`, `0`, `'0'`,
+  `'false'`, `'N'`, `null` y la cadena vacía— es **falso**. No es truthiness de JavaScript: la columna
+  llega con el valor **crudo del driver** y `String(false)` es `'false'`, que en JS es *truthy*.
+- **Exactamente una.** Si **una sola** opción resuelta trae el flag verdadero, esa es el default y
+  **gana sobre `default`**. Si **ninguna** o **más de una** lo traen, `defaultField` no resuelve: se
+  evalúa `default` si está declarado, y si tampoco resuelve se cae al comportamiento sin default, que
+  es **`max`**. Es **fail-safe**, no fail-closed: el conteo depende del dato, y un SQL que un día marca
+  dos filas no debe dejar el PI caído.
+- **El conteo es sobre OPCIONES, no sobre filas** — después del dedup por `value` y del descarte del
+  `value` vacío. Dos filas del mismo `value` son **una** opción (gana el flag de la primera aparición,
+  la misma regla de desempate que la etiqueta), y una fila marcada con `value` vacío no es una opción.
+- **La URL gana siempre.** Un `?ctx.<param>=…` dentro del dominio se sirve sin mirar ningún default.
+- **Solo el dueño del `param`** lo aplica (§7·1); las llaves alternativas heredan el valor vigente.
+- **El campo colgante es error de spec**, ruidoso y estático: un `defaultField` que no está en
+  `shape.fields` del dataset se rechaza en la validación (`control-default-field-dangling`). Un typo
+  mudo dejaría el PI abriendo en la opción equivocada sin que nadie supiera por qué.
+- **Y cuando no resuelve, se ve.** Se emite `mira-control-default-field` con el control, el dataset, el
+  campo, cuántas opciones quedaron marcadas y el fallback que se aplicó, distinguiendo «ninguna» de
+  «más de una». Es lo que separa un fail-safe de un silencio.

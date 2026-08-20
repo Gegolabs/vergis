@@ -23,8 +23,31 @@
 // EL TERRENO SE RECREA, NO SE RESPALDA: este script parte de cero y es idempotente. Si no puede
 // levantarlo desde nada, el script está incompleto.
 //
+// EL SUJETO QUE MIDE NO ES CUALQUIERA (lección de #238). Toda comprobación de discriminación de
+// máscara que corra como `admin` es REFERENCIA, no veredicto: el admin siempre tiene `UNMASK`, así
+// que mide una propiedad real sobre un sujeto que no es el que sirve — y así se coló #238 tras los
+// verdes que cerraron #197. Las comprobaciones del admin se conservan a propósito (el contraste
+// admin-vs-SP es lo que hizo visible el defecto), y el veredicto sobre el sujeto que sirve lo da P9.
+//
+// Y ANTES DE CUALQUIER VEREDICTO SOBRE `UNMASK`, EL CONTROL DE PREMISA: el estado del sujeto se mide
+// LEYENDO —plano de datos—, nunca consultando el plano de control. `FAB_SP_ROLE=Viewer` fue cierto en
+// el plano de control y falso en el plano de datos durante más de una hora de staleness de
+// revocación; un veredicto apoyado en esa declaración habría sido falso con cara de medido.
+// `fn_my_permissions` y `DATABASE_PRINCIPAL_ID()` no sirven en Fabric (medido): su `[]` significa «no
+// pude medir», no «no tiene» — no se usan acá.
+//
+// TRES ESTADOS, NO DOS. Este arnés distingue `✓` (medí y salió bien), `✗` (medí y salió mal) y
+// `⚠` (NO PUDE MEDIR: premisa no satisfecha, credencial ausente, lectura que falló). La
+// indeterminación no es un verde ni un rojo — es el instrumento diciendo que no sabe (Norma 7,
+// corolario de instrumentos). Sale en el resumen y en el código de salida: 0 sin fallos ni
+// indeterminaciones · 1 con fallos · 3 solo con indeterminaciones · 2 la sonda no pudo correr.
+//
 // Uso — ver `scripts/README-fabric-lab.md`:
 //   npm run fab:resume && npm run fab:proof && npm run fab:pause
+//
+// SIN MOTOR Y SIN GASTO — `FAB_PROOF_PRINT_SQL=1 npm run fab:proof` imprime todo el SQL que el
+// arnés emite (el del COMPILADOR, no escrito a mano) y ejercita la lógica del control de premisa con
+// dobles, sin conectarse a nada. Es la revisión previa a gastar una ventana de capacidad.
 //
 // No entra en `npm test`: la suite es hermética y sin red. Es prueba de aceptación bajo demanda,
 // igual que `tsql-lab-proof.ts` y `live-rls-proof.ts`.
@@ -32,6 +55,7 @@
 import sql from 'mssql'
 import { compileFabric, sessionContextPrelude } from '../packages/policy/src/fabric'
 import type { ClaimSet, ColumnRule, PolicyDecl } from '../packages/policy/src/ir'
+import { UNMASK_PROBE_EXPECTED, UNMASK_PROBE_SCHEMAS_SQL, unmaskProbeReadSQL } from '../server/engines/fabric'
 
 // ── El terreno: la MISMA forma que `tsql-lab-proof.ts` y que `tests/policy.test.ts` ──────────
 const REGLA_PII: ColumnRule = { column: 'rut', claim: 've_pii', action: 'mask' }
@@ -59,11 +83,47 @@ const FILAS = [
 const SERVER = process.env['FAB_SERVER']
 const DB = process.env['FAB_DB'] ?? 'vergislab'
 const TOKEN = process.env['FAB_TOKEN']
-const SP_TOKEN = process.env['FAB_SP_TOKEN']
+const PRINT_SQL = process.env['FAB_PROOF_PRINT_SQL'] === '1'
 
-// ── Andamiaje de reporte, mismo vocabulario que el arnés local ───────────────────────────────
+/**
+ * El token del SERVICE PRINCIPAL, por UNA sola vía para todos los sondeos que lo usan.
+ *
+ * Dos rutas, en este orden: `FAB_SP_TOKEN` ya obtenido (lo que este arnés usaba) y, si no está,
+ * `client_credentials` con `FAB_SP_APP_ID` / `FAB_SP_SECRET` / `FAB_TENANT`. La segunda existe porque
+ * un sondeo que muere por una variable que el runner no exportó es un modo de falla ya pagado: dos
+ * experimentos del mismo día pedían el token de dos maneras distintas y uno se quedó sin medir.
+ * Devuelve también la RUTA, porque un veredicto sobre un principal sin decir cómo se autenticó deja
+ * al lector sin saber a quién se midió.
+ */
+async function tokenSP(): Promise<{ token: string; via: string } | { token: null; via: string }> {
+  const ya = process.env['FAB_SP_TOKEN']
+  if (ya) return { token: ya, via: 'FAB_SP_TOKEN (pre-obtenido)' }
+  const appId = process.env['FAB_SP_APP_ID']
+  const secret = process.env['FAB_SP_SECRET']
+  const tenant = process.env['FAB_TENANT']
+  if (!appId || !secret || !tenant) {
+    return { token: null, via: 'sin credencial: falta FAB_SP_TOKEN o el trío FAB_SP_APP_ID/FAB_SP_SECRET/FAB_TENANT' }
+  }
+  const body = new URLSearchParams({
+    client_id: appId,
+    client_secret: secret,
+    scope: 'https://database.windows.net/.default',
+    grant_type: 'client_credentials',
+  })
+  try {
+    const r = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, { method: 'POST', body })
+    const j = (await r.json()) as { access_token?: string; error_description?: string }
+    if (!j.access_token) return { token: null, via: `client_credentials FALLÓ: ${j.error_description ?? r.status}` }
+    return { token: j.access_token, via: `client_credentials (${appId.slice(0, 8)}…)` }
+  } catch (e) {
+    return { token: null, via: `client_credentials FALLÓ: ${(e as Error).message.split('\n')[0]}` }
+  }
+}
+
+// ── Andamiaje de reporte, mismo vocabulario que el arnés local, más el tercer estado ─────────
 let fallos = 0
 let hallazgos = 0
+let indeterminaciones = 0
 function ok(cond: boolean, msg: string): boolean {
   console.log(`  ${cond ? '✓' : '✗'} ${msg}`)
   if (!cond) fallos++
@@ -73,6 +133,58 @@ function ok(cond: boolean, msg: string): boolean {
 function hallazgo(msg: string): void {
   hallazgos++
   console.log(`  ◆ ${msg}`)
+}
+/**
+ * NO PUDE MEDIR — el tercer estado, y el que faltaba.
+ *
+ * No es un verde ni un rojo: es el instrumento declarando que no sabe. Se usa cuando la premisa del
+ * experimento no está satisfecha, cuando falta la credencial del sujeto o cuando la lectura falló.
+ * Antes esto salía como `hallazgo`, indistinguible de un dato — y un instrumento que confunde «medí y
+ * salió negativo» con «no pude medir» produce datos con cara de verdad (Norma 7).
+ */
+function noMedido(msg: string): void {
+  indeterminaciones++
+  console.log(`  ⚠ NO MEDIDO · ${msg}`)
+}
+
+// ── El control de premisa, como lógica PURA: se ejercita sin motor ───────────────────────────
+type EstadoUnmask = 'unmask' | 'enmascarado' | 'no-medible'
+interface Premisa {
+  estado: EstadoUnmask
+  valor: string | null
+  motivo: string
+}
+/**
+ * ¿Qué ve el sujeto al LEER la columna gobernada de la tabla? El plano de DATOS, que es el único que
+ * no miente durante la staleness de revocación.
+ *
+ * La lectura se juzga contra los valores SINTÉTICOS que este terreno cargó —conocidos por
+ * construcción—, y la ausencia de capacidad se reconoce por «≠ esperado», nunca por el literal que
+ * el motor use para enmascarar (`default()` rinde `xxxx` hoy; el veredicto no cuelga de eso). Es la
+ * misma doctrina del centinela de #238.
+ */
+function premisaUnmask(filas: Record<string, unknown>[] | null, columna = 'rut'): Premisa {
+  if (filas === null) return { estado: 'no-medible', valor: null, motivo: 'la lectura de la tabla FALLÓ: no se sabe qué ve el sujeto' }
+  if (filas.length === 0) {
+    return { estado: 'no-medible', valor: null, motivo: 'el sujeto no ve NINGUNA fila (RLS o terreno vacío): sin fila no hay valor que juzgar' }
+  }
+  const valor = String(filas[0]?.[columna] ?? '')
+  if (valor === '') return { estado: 'no-medible', valor, motivo: 'la columna vino vacía: no se distingue máscara de dato ausente' }
+  if (FILAS.some((f) => f.rut === valor)) {
+    return { estado: 'unmask', valor, motivo: 'lee un valor sintético EN CLARO ⇒ el sujeto DESENMASCARA' }
+  }
+  return { estado: 'enmascarado', valor, motivo: 'lee algo distinto de todo valor sintético ⇒ el motor ENMASCARÓ para él' }
+}
+/**
+ * Lo que el PLANO DE CONTROL declara, para poder CONTRASTARLO — jamás para sustituir la medición.
+ * Un rol que no sabemos mapear no declara nada: inventar la expectativa sería peor que no tenerla.
+ */
+function esperadoPorRol(rol: string | undefined): EstadoUnmask | null {
+  if (!rol) return null
+  const r = rol.trim().toLowerCase()
+  if (['member', 'admin', 'contributor'].includes(r)) return 'unmask'
+  if (r === 'viewer') return 'enmascarado'
+  return null
 }
 function seccion(t: string): void {
   console.log(`\n${t}\n${'─'.repeat(t.length)}`)
@@ -116,13 +228,85 @@ async function leer(pool: sql.ConnectionPool, claims: ClaimSet, query: string): 
   }
 }
 
+/**
+ * MODO SIN MOTOR Y SIN GASTO (`FAB_PROOF_PRINT_SQL=1`).
+ *
+ * Imprime el SQL que los sondeos nuevos emiten —tomado del COMPILADOR y del descubrimiento del
+ * serving, jamás escrito a mano para la ocasión— y ejercita la lógica del control de premisa con
+ * dobles. Existe porque entre el SQL de un experimento suelto y el que emite `compileFabric` hubo
+ * diferencias que nadie eligió, y eso ya cobró su precio dos veces: acá se revisa antes de encender
+ * la capacidad, que cuesta plata.
+ *
+ * Lo que este modo NO hace, y hay que decirlo: no mide nada contra Fabric. Que el SQL se vea bien no
+ * dice que el SKU lo acepte — eso solo lo contesta la corrida con la ventana abierta.
+ */
+function imprimirSQL(): void {
+  const vista = enf.maskView!
+  const cent = enf.unmaskProbe!
+  seccion('SQL EMITIDO · el centinela de desenmascarado (P10) — sale de compileFabric')
+  cent.setupSQL.forEach((s, i) => console.log(`\n-- setupSQL[${i + 1}/${cent.setupSQL.length}]\n${s}`))
+  console.log(`\n-- dropSQL\n${cent.dropSQL}`)
+  console.log(`\n-- probeSQL (del compilador)\n${cent.probeSQL}`)
+  console.log(`\n-- unmaskProbeReadSQL('dbo') (lo que el SERVING ejecuta)\n${unmaskProbeReadSQL('dbo')}`)
+  console.log(`\n-- UNMASK_PROBE_SCHEMAS_SQL (el descubrimiento del serving)\n${UNMASK_PROBE_SCHEMAS_SQL}`)
+  console.log(`\n-- corroboración en sys\nSELECT name, is_masked FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'${cent.qualifiedName}')`)
+  console.log(`\n-- idempotencia\nSELECT COUNT(*) AS n FROM ${cent.qualifiedName}`)
+
+  seccion('SQL EMITIDO · el control de premisa y la discriminación como SP (P9)')
+  const prel = sessionContextPrelude(enf.injections, { groups: ['Finanzas', 'Comercial'] } as ClaimSet)
+  console.log(`\n-- prelude de SESSION_CONTEXT (params: ${prel.params.map((p) => p.name).join(', ')})\n${prel.sql}`)
+  console.log(`\n-- control de premisa: se mide LEYENDO la tabla, en el plano de DATOS\nSELECT rut FROM [dbo].[areas]`)
+  console.log(`\n-- la discriminación, misma vista y dos claims\nSELECT area, rut FROM ${vista.name} ORDER BY area`)
+  console.log(`\n-- la vista, tal como la emite el compilador\n${vista.createSQL}`)
+
+  seccion('DRY-RUN de la lógica del control de premisa — con dobles, sin motor')
+  const casos: [string, Record<string, unknown>[] | null][] = [
+    ['lectura que falló (null)', null],
+    ['sin filas visibles', []],
+    ['valor sintético en claro', [{ rut: FILAS[0]!.rut }]],
+    ['default() del motor (XXXX)', [{ rut: 'XXXX' }]],
+    ['literal de la vista (•••)', [{ rut: '•••' }]],
+    ['string vacío', [{ rut: '' }]],
+    ['valor inesperado', [{ rut: 'lo-que-sea' }]],
+  ]
+  for (const [nombre, doble] of casos) {
+    const p = premisaUnmask(doble)
+    console.log(`  ${p.estado === 'no-medible' ? '⚠' : '·'} ${nombre.padEnd(26)} ⇒ ${p.estado.padEnd(13)} · ${p.motivo}`)
+  }
+  // El trampantojo que un sondeo por desigualdad de JSON NO habría atrapado, ejercitado con dobles:
+  // la rama ELSE de la vista devuelve el literal del IR (`•••`) y el DDM devuelve el default del tipo
+  // (`XXXX`), así que las dos lecturas DIFIEREN sin que ninguna traiga el dato.
+  seccion('DRY-RUN · por qué el veredicto NO es la desigualdad de JSON')
+  const conDDM = [{ area: 'Finanzas', rut: 'XXXX' }]
+  const sinDDM = [{ area: 'Finanzas', rut: '•••' }]
+  const realesEn = (f: Record<string, unknown>[]) => f.filter((r) => FILAS.some((x) => x.rut === String(r['rut']))).length
+  console.log(`  · estado DEFECTUOSO (sujeto sin UNMASK): con=${JSON.stringify(conDDM)} · sin=${JSON.stringify(sinDDM)}`)
+  console.log(`  ✗ el test por desigualdad diría: ${JSON.stringify(conDDM) !== JSON.stringify(sinDDM) ? 'DISCRIMINA (verde falso)' : 'no discrimina'}`)
+  console.log(`  ✓ el test por VALOR REAL dice: ${realesEn(conDDM)} celdas reales con el claim ⇒ no concede nada`)
+  const conSano = [{ area: 'Finanzas', rut: FILAS[1]!.rut }]
+  console.log(`  · estado SANO (sujeto con UNMASK): con=${JSON.stringify(conSano)} ⇒ ${realesEn(conSano)} celdas reales ⇒ concede`)
+
+  seccion('DRY-RUN del contraste plano de control vs plano de datos')
+  for (const rol of ['Member', 'Viewer', 'Admin', 'Contributor', 'Cualquiera', undefined]) {
+    console.log(`  · FAB_SP_ROLE=${String(rol).padEnd(12)} ⇒ esperado ${esperadoPorRol(rol) ?? '(no se mapea: no se inventa expectativa)'}`)
+  }
+  console.log('\nEste modo NO mide contra Fabric. Que el SQL se vea bien no dice que el SKU lo acepte.\n')
+}
+
 async function main(): Promise<void> {
+  if (PRINT_SQL) {
+    imprimirSQL()
+    return
+  }
   if (!SERVER || !TOKEN) {
     console.error('Faltan FAB_SERVER y/o FAB_TOKEN — ver scripts/README-fabric-lab.md')
     process.exit(2)
   }
   console.log(`\nPrueba VIVA contra FABRIC REAL — ${SERVER.split('-')[0]}… / ${DB}`)
   if (!enf.maskView) throw new Error('El compilador no emitió vista de máscara: la prueba no aplica.')
+  if (!enf.unmaskProbe) throw new Error('El compilador no emitió centinela de desenmascarado: la prueba no aplica.')
+  const VISTA = enf.maskView
+  const CENTINELA = enf.unmaskProbe
 
   const admin = await conectar(TOKEN)
   const quien = await admin.request().query('SELECT SUSER_SNAME() AS w')
@@ -229,6 +413,10 @@ async function main(): Promise<void> {
     // EL CONTROL QUE DECIDE (lección del 2026-08-18): que la vista se consulte no significa que
     // DISCRIMINE. Una vista que devuelve lo mismo con y sin el claim pasa el `ok` de arriba y no
     // protege nada — el defecto de #197 con otra cara. Se compara la MISMA vista bajo dos claims.
+    //
+    // PERO ESTO ES REFERENCIA, NO VEREDICTO: corre como `admin`, que SIEMPRE tiene `UNMASK`. Es la
+    // mitad del contraste que hizo visible #238 y por eso se conserva; el veredicto sobre el sujeto
+    // que sirve lo da P9, y solo tras verificar su premisa en el plano de datos.
     const conClaim = await leer(admin, { groups: ['Finanzas', 'Comercial'], ve_pii: 'true' } as unknown as ClaimSet, `SELECT area, rut FROM ${enf.maskView.name}`)
     const sinClaim = await leer(admin, CLAIMS, `SELECT area, rut FROM ${enf.maskView.name}`)
     if (conClaim === null || sinClaim === null) {
@@ -244,31 +432,41 @@ async function main(): Promise<void> {
 
   // ── P5 · la pregunta de instancia, con el principal correcto ───────────────────────────────
   seccion('P5 (#163) · ¿El SERVICE PRINCIPAL de serving tiene UNMASK?')
-  if (!SP_TOKEN) {
-    hallazgo('FAB_SP_TOKEN no está: la pregunta NO se responde en esta corrida. No es un verde.')
+  const cred = await tokenSP()
+  console.log(`  credencial del SP: ${cred.via}`)
+  if (!cred.token) {
+    noMedido('sin credencial del SP la pregunta NO se responde en esta corrida. No es un verde.')
     hallazgo('Un admin humano SIEMPRE tiene UNMASK — medirlo con la cuenta propia no contesta nada.')
   } else {
-    const sp = await conectar(SP_TOKEN)
+    const sp = await conectar(cred.token)
     const w = await sp.request().query('SELECT SUSER_SNAME() AS w')
     console.log(`  principal: ${(w.recordset[0] as { w: string }).w}`)
     // El ROL del workspace decide `UNMASK` (medido 2026-08-16: Member ve el valor real, Viewer ve la
-    // máscara). Un veredicto sin el rol al lado no dice nada — declararlo es parte del resultado.
-    console.log(`  rol declarado por quien corre: ${process.env['FAB_SP_ROLE'] ?? '(no declarado — el veredicto queda sin contexto)'}`)
+    // máscara). Se DECLARA para poder contrastarlo con la medición — no para sustituirla.
+    const rolDeclarado = process.env['FAB_SP_ROLE']
+    console.log(`  rol declarado por quien corre: ${rolDeclarado ?? '(no declarado — no hay nada que contrastar)'}`)
     const control = await leer(sp, CLAIMS, 'SELECT area FROM [dbo].[areas]')
     if (!control || control.length === 0) {
-      ok(false, 'CONTROL POSITIVO FALLIDO: el SP no ve filas — nada se concluye sobre UNMASK')
+      noMedido('CONTROL POSITIVO FALLIDO: el SP no ve filas — nada se concluye sobre UNMASK')
     } else {
       ok(true, `control positivo: el SP ve ${control.length} filas`)
-      const r = await leer(sp, CLAIMS, 'SELECT rut FROM [dbo].[areas]')
-      const valor = String(r?.[0]?.['rut'] ?? '')
-      const real = valor.includes('-')
-      hallazgo(`rut leído de la TABLA (sin vista), sujeto SIN ve_pii = ${JSON.stringify(valor)}`)
-      const rol = process.env['FAB_SP_ROLE'] ?? 'rol NO declarado'
-      hallazgo(
-        real
-          ? `EL SP TIENE UNMASK con ${rol} → el DDM es INERTE para él; la única protección de columna sería la vista.`
-          : `EL SP NO TIENE UNMASK con ${rol} → el DDM muerde para él.`,
-      )
+      const p = premisaUnmask(await leer(sp, CLAIMS, 'SELECT rut FROM [dbo].[areas]'))
+      hallazgo(`rut leído de la TABLA (sin vista), sujeto SIN ve_pii = ${JSON.stringify(p.valor)} — ${p.motivo}`)
+      const rol = rolDeclarado ?? 'rol NO declarado'
+      if (p.estado === 'no-medible') {
+        noMedido(`el estado de UNMASK del SP no se pudo determinar: ${p.motivo}`)
+      } else if (p.estado === 'unmask') {
+        hallazgo(`EL SP TIENE UNMASK con ${rol} → el DDM es INERTE para él; la única protección de columna sería la vista.`)
+      } else {
+        hallazgo(`EL SP NO TIENE UNMASK con ${rol} → el DDM muerde para él, y el gate de #238 lo declara NO SERVIBLE.`)
+      }
+      const esperado = esperadoPorRol(rolDeclarado)
+      if (esperado && p.estado !== 'no-medible' && esperado !== p.estado) {
+        hallazgo(
+          `EL PLANO DE CONTROL MIENTE AHORA MISMO: el rol declarado '${rolDeclarado}' implica '${esperado}' y ` +
+            `el plano de datos dice '${p.estado}'. Es la staleness de revocación (medida >1 h, techo desconocido).`,
+        )
+      }
       hallazgo('El veredicto vale para ESTE rol. Cambiar el rol cambia la respuesta — no se generaliza.')
     }
     await sp.close()
@@ -343,6 +541,9 @@ async function main(): Promise<void> {
       // Una vista que se consulta pero devuelve lo mismo con y sin el claim pasaría el paso de
       // arriba y no protegería nada — que es exactamente el defecto que #197 vino a corregir, con
       // otra cara. Se compara la MISMA vista bajo dos claims en la misma sesión.
+      // También acá el sujeto es el `admin`: sirve para elegir la FORMA (qué sintaxis el planner
+      // acepta y discrimina), que es lo que P6 decide. Que la forma elegida discrimine para el
+      // principal que SIRVE es otra pregunta, y es la de P9.
       const conClaim = await leer(admin, { groups: ['Finanzas', 'Comercial'], ve_pii: 'true' } as unknown as ClaimSet, `SELECT * FROM ${vw}`)
       const sinClaim = await leer(admin, { groups: ['Finanzas', 'Comercial'] } as ClaimSet, `SELECT * FROM ${vw}`)
       const a = JSON.stringify(conClaim)
@@ -497,10 +698,197 @@ async function main(): Promise<void> {
     await intentar(admin, `DROP TABLE IF EXISTS dbo.publica_emit`)
   }
 
+  // ── P9 · el veredicto sobre EL SUJETO QUE SIRVE, con su premisa medida antes ────────────────
+  //
+  // POR QUÉ EXISTE: todas las comprobaciones de discriminación de arriba corren como `admin`, y el
+  // admin siempre tiene `UNMASK`. Miden una propiedad real sobre un sujeto que no es el que sirve —
+  // y así se coló #238 tras los verdes que cerraron #197. Esto lo mide con el principal correcto.
+  //
+  // EL CONTROL DE PREMISA VA PRIMERO Y ES BLOQUEANTE, y se mide LEYENDO (plano de datos): el estado
+  // de `UNMASK` del SP decide QUÉ resultado es el esperado, así que un veredicto sobre la vista sin
+  // la premisa medida no dice nada. Se re-mide acá aunque P5 ya lo midió: entre P5 y este punto pasan
+  // minutos, y la staleness de revocación de Fabric dura más que eso.
+  //
+  // Y LAS DOS EXPECTATIVAS SON OPUESTAS, que es lo que vuelve la premisa indispensable:
+  //  · SP CON unmask   → el gate de #238 lo declara SERVIBLE, y la vista TIENE que discriminar.
+  //  · SP SIN unmask   → el DDM enmascara río arriba de la vista: las dos ramas del CASE devuelven la
+  //    máscara y la vista NO discrimina. Eso es la CORROBORACIÓN de #238, no un fallo del Producto —
+  //    su respuesta correcta es el fail-closed del gate. Si acá discriminara, el diagnóstico de #238
+  //    estaría mal y habría que rehacerlo, no celebrarlo.
+  seccion('P9 (#238) · La vista de máscara ante EL SUJETO QUE SIRVE — premisa medida en el plano de datos')
+  if (!cred.token) {
+    noMedido(`sin credencial del SP (${cred.via}): la discriminación para el sujeto que sirve NO se mide. No es un verde.`)
+  } else {
+    const sp = await conectar(cred.token)
+    const quienSp = await sp.request().query('SELECT SUSER_SNAME() AS w')
+    console.log(`  principal que sirve: ${(quienSp.recordset[0] as { w: string }).w}`)
+    const p = premisaUnmask(await leer(sp, CLAIMS, 'SELECT rut FROM [dbo].[areas]'))
+    console.log(`  premisa medida LEYENDO la tabla: ${JSON.stringify(p.valor)} ⇒ '${p.estado}' (${p.motivo})`)
+    const esperado = esperadoPorRol(process.env['FAB_SP_ROLE'])
+    if (p.estado === 'no-medible') {
+      noMedido(`PREMISA NO VERIFICABLE: ${p.motivo}. No se emite veredicto sobre la vista.`)
+    } else if (esperado && esperado !== p.estado) {
+      // El defecto que esto cierra, textual: `FAB_SP_ROLE=Viewer` fue cierto en el plano de control y
+      // FALSO en el plano de datos durante la staleness. Concluir ahí es publicar un veredicto sobre
+      // un sujeto cuyo estado no es el declarado — y se hizo, y se coló.
+      noMedido(
+        `PREMISA NO SATISFECHA: se declaró rol '${process.env['FAB_SP_ROLE']}' (⇒ '${esperado}') y el plano de datos ` +
+          `mide '${p.estado}'. El experimento SE NIEGA A CONCLUIR: staleness de revocación en curso.`,
+      )
+      hallazgo('Reintentar más tarde con el mismo rol declarado. La cota inferior medida de la staleness es >1 h.')
+    } else {
+      ok(true, `premisa verificada en el plano de datos: el sujeto que sirve está '${p.estado}'${esperado ? ' (coincide con el rol declarado)' : ' (sin rol declarado: la medición ES la premisa)'}`)
+      const con = await leer(sp, { groups: ['Finanzas', 'Comercial'], ve_pii: 'true' } as unknown as ClaimSet, `SELECT area, rut FROM ${VISTA.name} ORDER BY area`)
+      const sinC = await leer(sp, CLAIMS, `SELECT area, rut FROM ${VISTA.name} ORDER BY area`)
+      if (con === null || sinC === null || con.length === 0 || sinC.length === 0) {
+        noMedido('el SP no pudo consultar la vista con filas visibles: sin control positivo nada se concluye')
+      } else {
+        const a = JSON.stringify(con)
+        const b = JSON.stringify(sinC)
+        console.log(`  · con ve_pii : ${a}`)
+        console.log(`  · sin ve_pii : ${b}`)
+        // EL TEST NO ES «¿DEVUELVE ALGO DISTINTO?», Y ESTA ES LA MITAD DEL DEFECTO DE #238 QUE UN
+        // SONDEO POR DESIGUALDAD NO HABRÍA VISTO. La rama ELSE de la vista devuelve un LITERAL del IR
+        // (`•••`), y el DDM devuelve el default DEL TIPO (`XXXX`): para un sujeto SIN `UNMASK` las dos
+        // lecturas difieren en el texto —`XXXX` vs `•••`— aunque NINGUNA traiga el dato. Comparar
+        // JSON habría dado verde sobre una capacidad muerta. Lo que se mide es si el claim CONCEDE EL
+        // VALOR REAL, y el valor real se conoce por construcción: los ruts sintéticos del terreno.
+        const real = (filas: Record<string, unknown>[]) => filas.filter((r) => FILAS.some((f) => f.rut === String(r['rut']))).length
+        const conReal = real(con)
+        const sinReal = real(sinC)
+        console.log(`  · celdas con el VALOR REAL — con ve_pii: ${conReal}/${con.length} · sin ve_pii: ${sinReal}/${sinC.length}`)
+        hallazgo(`el sondeo por DESIGUALDAD de JSON habría dicho '${a !== b ? 'discrimina' : 'no discrimina'}' — por eso no es el test`)
+        if (p.estado === 'unmask') {
+          if (ok(conReal === con.length && sinReal === 0, 'EL CLAIM CONCEDE EL VALOR REAL AL SUJETO QUE SIRVE, y sin el claim no concede nada')) {
+            hallazgo('`ve_pii` concede de verdad al principal que sirve: es el estado en que el gate de #238 permite servir.')
+          } else if (conReal === 0) {
+            hallazgo('DEFECTO VIVO: el sujeto desenmascara y AUN ASÍ el claim no le concede el valor real — `ve_pii` no concede nada.')
+          } else {
+            hallazgo(`Resultado MIXTO (${conReal} de ${con.length} con el claim, ${sinReal} sin él): no se declara sano hasta explicarlo.`)
+          }
+        } else {
+          if (ok(conReal === 0, 'CONTROL NEGATIVO · sin capacidad de desenmascarar, ni CON el claim llega el valor real — como midió #238')) {
+            hallazgo('Corrobora por qué el gate de #238 declara NO SERVIBLE a este principal: la vista le concedería nada.')
+          } else {
+            hallazgo('CONTROL NEGATIVO INESPERADO: un sujeto SIN unmask recibe el valor real. El diagnóstico de #238 hay que rehacerlo antes de usar esto.')
+          }
+        }
+      }
+      // La referencia, en la MISMA corrida: el contraste admin-vs-SP es lo que hizo visible #238.
+      const ac = await leer(admin, { groups: ['Finanzas', 'Comercial'], ve_pii: 'true' } as unknown as ClaimSet, `SELECT area, rut FROM ${VISTA.name} ORDER BY area`)
+      const as_ = await leer(admin, CLAIMS, `SELECT area, rut FROM ${VISTA.name} ORDER BY area`)
+      hallazgo(
+        JSON.stringify(ac) !== JSON.stringify(as_)
+          ? 'REFERENCIA · el admin SÍ discrimina sobre la misma vista — por eso su verde no decía nada del SP'
+          : 'REFERENCIA · el admin tampoco discrimina — el fenómeno no depende del principal',
+      )
+    }
+    await sp.close()
+  }
+
+  // ── P10 · el centinela de desenmascarado, medido ANTES de cortar una versión ────────────────
+  //
+  // ESTE SONDEO ES LA CONDICIÓN DE CORTAR VERSIÓN cuando el corte toca el centinela: el DDL de #238
+  // se midió contra Fabric VEINTE MINUTOS DESPUÉS de empujar el tag 0.21.0. La medición salió limpia,
+  // y eso es exactamente lo que la vuelve peligrosa: el orden estuvo mal y el resultado no lo delató.
+  // Que el centinela viva acá quita la dependencia de que alguien se acuerde.
+  //
+  // Mide lo que «aceptar el DDL» no basta para decir (#197): que el SKU acepte las 3 sentencias, que
+  // sean idempotentes de verdad, que el descubrimiento del serving lo ENCUENTRE, que `sys` corrobore
+  // la máscara, que el sujeto CON capacidad lea el valor esperado —control positivo del instrumento—
+  // y que sin centinela el descubrimiento diga `uninstrumented` en vez de mentir.
+  seccion('P10 (#238) · El centinela de desenmascarado: ¿lo acepta el SKU, y SIRVE lo que promete?')
+  hallazgo(`centinela emitido: ${CENTINELA.qualifiedName} · columna ${CENTINELA.column} · valor esperado '${CENTINELA.expectedValue}'`)
+  // Las dos mitades del instrumento viven en módulos distintos —el EMISOR en el compilador, el LECTOR
+  // en el serving— y si divergen el gate mide otra cosa que la que se instaló, sin decirlo. Cuesta dos
+  // comparaciones de strings y no necesita motor.
+  ok(CENTINELA.probeSQL === unmaskProbeReadSQL('dbo'), 'el SQL de sondeo del EMISOR y el del SERVING son el mismo byte a byte')
+  ok(CENTINELA.expectedValue === UNMASK_PROBE_EXPECTED, `el valor esperado por el emisor y por el serving coincide ('${UNMASK_PROBE_EXPECTED}')`)
+  // C0 · el estado `uninstrumented`, ANTES de instalar: sin centinela el descubrimiento no miente.
+  // Nótese que P1 ya lo instaló (el emisor lo mete en `setupSQL` cuando hay plano de columna), así que
+  // esto además prueba que `dropSQL` retira de verdad — y el retiro se VERIFICA midiendo, no se supone
+  // porque la sentencia no dio error.
+  await intentar(admin, CENTINELA.dropSQL)
+  const vacio = await admin.request().query(UNMASK_PROBE_SCHEMAS_SQL)
+  ok(
+    vacio.recordset.length === 0,
+    `retirado con dropSQL, el descubrimiento del serving devuelve ${vacio.recordset.length} filas ⇒ 'uninstrumented' honesto`,
+  )
+  // C1 · ¿acepta el SKU las 3 sentencias EMITIDAS?
+  for (const [i, stmt] of CENTINELA.setupSQL.entries()) {
+    const r = await intentar(admin, stmt)
+    ok(r.ok, `[${i + 1}/${CENTINELA.setupSQL.length}] ${stmt.split('\n')[0].slice(0, 78)}${r.ok ? '' : ` — ${r.error}`}`)
+    if (!r.ok) hallazgo(`RECHAZO EXACTO DE FABRIC: ${r.error}`)
+  }
+  // C2 · idempotencia REAL: el centinela es crear-si-falta a propósito (no tira-y-recrea), porque
+  // conexiones vivas de otros PIs lo sondean. Correrlo dos veces no puede duplicar la fila.
+  for (const stmt of CENTINELA.setupSQL) {
+    const r = await intentar(admin, stmt)
+    if (!r.ok) ok(false, `la SEGUNDA pasada del centinela rompió: ${r.error}`)
+  }
+  const nProbe = await admin.request().query(`SELECT COUNT(*) AS n FROM ${CENTINELA.qualifiedName}`)
+  ok(Number((nProbe.recordset[0] as { n: number }).n) === 1, `tras DOS pasadas la tabla sigue con UNA fila: ${(nProbe.recordset[0] as { n: number }).n}`)
+  // C3 · ¿lo encuentra el descubrimiento que corre el serving, y corrobora `sys` la máscara?
+  const hallado = (await admin.request().query(UNMASK_PROBE_SCHEMAS_SQL)).recordset as { sch: string }[]
+  ok(hallado.some((r) => r.sch === 'dbo'), `el descubrimiento lo encuentra en: [${hallado.map((r) => r.sch).join(', ')}]`)
+  const maskedProbe = await admin
+    .request()
+    .query(`SELECT name, is_masked FROM sys.masked_columns WHERE object_id = OBJECT_ID(N'${CENTINELA.qualifiedName}')`)
+  ok(maskedProbe.recordset.length === 1, `sys corrobora la máscara del centinela: ${JSON.stringify(maskedProbe.recordset)}`)
+  // C4 · el instrumento ante los dos sujetos. El admin es el CONTROL POSITIVO: si el que tiene
+  // capacidad no lee el valor esperado, el centinela no mide nada y ningún veredicto sobre el SP vale.
+  const leerCentinela = async (pool: sql.ConnectionPool, quien: string): Promise<string | null> => {
+    try {
+      const r = (await pool.request().query(unmaskProbeReadSQL('dbo'))).recordset as { probe: string }[]
+      const v = String(r[0]?.['probe'] ?? '')
+      console.log(`  · ${quien} lee ${JSON.stringify(v)} ⇒ ${v === UNMASK_PROBE_EXPECTED ? 'capable' : 'incapable'}`)
+      return v
+    } catch (e) {
+      console.log(`  · ${quien}: la lectura FALLÓ ⇒ 'no pude medir' (${(e as Error).message.split('\n')[0].slice(0, 60)})`)
+      return null
+    }
+  }
+  const vAdmin = await leerCentinela(admin, 'ADMIN (tiene UNMASK)')
+  ok(vAdmin === UNMASK_PROBE_EXPECTED, 'CONTROL POSITIVO DEL INSTRUMENTO · el sujeto CON capacidad lee el valor esperado')
+  if (!cred.token) {
+    noMedido('sin credencial del SP el centinela no se lee con el sujeto que sirve — el estado del serving queda sin medir')
+  } else {
+    const sp2 = await conectar(cred.token)
+    const vSp = await leerCentinela(sp2, 'SP de serving       ')
+    if (vSp === null) {
+      noMedido('la lectura del centinela por el SP falló: es indeterminación, jamás un veredicto de capacidad')
+    } else {
+      hallazgo(
+        vSp === UNMASK_PROBE_EXPECTED
+          ? "el SP lee el valor ⇒ 'capable': el gate de #238 lo dejaría servir un PI con reglas de columna."
+          : `el SP lee ${JSON.stringify(vSp)} ⇒ 'incapable': el gate de #238 lo declara NO SERVIBLE, y eso es lo correcto.`,
+      )
+      hallazgo('Este dato vale para el rol vigente AHORA en el plano de datos, no para el rol declarado en el plano de control.')
+    }
+    await sp2.close()
+  }
+  // C5 · LIMPIEZA VERIFICADA MIDIENDO. El centinela se deja instalado a propósito —es infraestructura
+  // compartida por schema y el `teardownSQL` del emisor NO lo retira, por diseño (retirarlo al
+  // desinstalar UNA tabla dejaría ciegas a las demás)—, así que lo que se verifica es que quede en el
+  // MISMO estado en que el `setupSQL` emitido lo deja, y que el retiro explícito funcione de verdad.
+  const trasDrop = await intentar(admin, CENTINELA.dropSQL)
+  const verifDrop = await admin.request().query(UNMASK_PROBE_SCHEMAS_SQL)
+  ok(
+    trasDrop.ok && verifDrop.recordset.length === 0,
+    `el retiro explícito se VERIFICA leyendo el descubrimiento: ${verifDrop.recordset.length} filas${trasDrop.ok ? '' : ` (el cliente reportó: ${trasDrop.error})`}`,
+  )
+  for (const stmt of CENTINELA.setupSQL) await intentar(admin, stmt)
+  const reinstalado = await admin.request().query(UNMASK_PROBE_SCHEMAS_SQL)
+  ok(reinstalado.recordset.length >= 1, 'el terreno queda como el `setupSQL` emitido lo deja: centinela instalado (compartido por schema, a propósito)')
+
   await admin.close()
 
-  console.log(`\n${fallos === 0 ? '✅ Sin fallos' : `❌ ${fallos} fallo(s)`} · ${hallazgos} hallazgo(s) registrados\n`)
-  process.exit(fallos === 0 ? 0 : 1)
+  const veredicto = fallos > 0 ? `❌ ${fallos} fallo(s)` : indeterminaciones > 0 ? '⚠ sin fallos, pero con indeterminación' : '✅ Sin fallos'
+  console.log(`\n${veredicto} · ${hallazgos} hallazgo(s) · ${indeterminaciones} sin medir\n`)
+  if (indeterminaciones > 0) {
+    console.log('Lo que NO se midió no es un verde: revisar las líneas ⚠ antes de citar cualquier resultado de esta corrida.\n')
+  }
+  process.exit(fallos > 0 ? 1 : indeterminaciones > 0 ? 3 : 0)
 }
 
 main().catch((e) => {
