@@ -14,7 +14,7 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
-| **Cortar 0.22.0** | **Nuestro** | `main` acumula #235, #246, el healthcheck por fase y E3/E5 medidos. Sin corte, nada de eso es consumible |
+| **Cortar 0.22.0** | **Nuestro** | `main` acumula **#235, #246, #248, #228** y el healthcheck por fase, más la corrección de E3/E5. Sin corte, nada de eso es consumible |
 | **El aviso al operador** — de 0.18.0 → la versión que se corte | **César** | Comunicación saliente. **Redactado al pie de este archivo**, y **corregido**: la capacidad de desenmascarar tiene **dos** vías y la del `GRANT` es mejor |
 | **Issue #245** — hay `UNMASK` **granular por columna** en Fabric | **César decide**: ¿el emisor lo emite (a), o se documenta como vía del operador (b)? | Medido con control positivo, negativo y revoke verificado. **Recomiendo (b)** por frontera: los privilegios del principal los decide quien opera |
 | **E4 de #238** — ¿la aptitud vale toda la vida de la conexión? | **Nuestro** | Sigue **sin medir**, y ahora se sabe qué cuesta: por la vía del rol arrastra la staleness (>20 min, techo desconocido) y deja el terreno inutilizable; **por la vía del `GRANT` es viable** y cabe en una ventana propia |
@@ -22,8 +22,8 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 | **PRs #201 y #175** (Renovate) | **Nadie, todavía** | **No se mergean**: su `renovate/stability-days` está en `pending` — es el cooldown de 14 días del ADR-001 (6 y 2 días cumplidos). Se aterrizan solos cuando pase. Ver `DECISIONS.md` D-51 |
 | **Cuenta de bot en GitHub** · **`CONTRIBUTING.md`** · **capacidades Fabric del tenant** · **header del theme `default`** | **César** | Sin cambios |
 | **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding` | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; propuesto, sin mergear |
-| **#228 / #232** (lease) | **arbol** | **#228 en vuelo ahora mismo** (avisado por el frente arbol, en worktree). Cuando abra el PR, lo revisa esta casa por la custodia |
-| **Lista blanca de claves en `validateControls`** | **arbol** | Lo está **midiendo antes de proponerlo**: cruce de las claves que usan de verdad los `controls:` de los specs de instancia contra lo que el Producto conoce. No llega como propuesta hasta tener el dato |
+| **#232** (lease: el release no nombra sucesor) | **arbol** | Sin empezar. **#228 CERRADO** — PR #247 mergeado con su invariante de runtime verificado por esta casa |
+| **Drift de specs en la instancia** — `pi04` y `pi12` desplegadas difieren del repo | **arbol** | Detectado al medir #248 (`md5sum` de `/opt/mira/specs/` contra el árbol: 7 de 9 idénticos). **No toca controles** —verificado leyendo sus bloques vivos—, así que no invalidó esa medición |
 
 ## Lo que cambió en la sesión del 2026-08-19 (noche)
 
@@ -228,4 +228,4 @@ el encargo: **los registros los escribe el orquestador**, o se reparten nominalm
 > Las notas completas de cada versión están en el CHANGELOG del repo. Desde 0.20.1 la imagen también
 > las trae adentro; las anteriores no, así que para este tramo el repo es la fuente.
 
-<!-- /ww:next · 2026-08-19 · HEAD 6d0d645 -->
+<!-- /ww:next · 2026-08-19 · HEAD c223394 -->
