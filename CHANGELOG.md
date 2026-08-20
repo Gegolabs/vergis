@@ -208,6 +208,29 @@ explícitos. La cifra viene de un host de desarrollo y **no caracteriza** una in
 runbook manda medir el corte propio y registrar la fila **incluso cuando no se pudo medir**, diciendo
 por qué — una fila ausente hace creer que el corte no ocurrió.
 
+### Un nodo que nunca llegó a servir no retiene el plano de control (#228)
+
+Un arranque que moría **después** de tomar el lease —configuración incompleta, credenciales inválidas,
+cualquier `throw` del arranque— dejaba el archivo de lease con un titular que ya no existe y **sin marca
+de release**: el release ordenado cuelga de `SIGTERM`/`SIGUSR2`, y una excepción no pasa por ahí. El
+costo lo midió el frente arbol con su arnés de dos nodos: **≈11,5 s en el caso peor** hasta
+`phase=serving`, contados desde la última renovación del huérfano — y durante esa ventana el nodo, el
+**único vivo**, se declara `standby` citando un `pid` muerto, así que un conmutador con el predicado
+`phase=serving` no le manda tráfico. No era un retraso de arranque: era indisponibilidad con un nodo
+sano.
+
+**El arreglo suelta el control en el camino de excepción**, no reordena la adquisición: la adquisición
+tiene que ocurrir antes de abrir un solo store (el modo de apertura y el gate de época dependen de ella)
+y hay validaciones que lanzan **después** de que el primer store abrió, así que ningún reordenamiento
+cubre el arranque entero — y cualquier validación futura agregada más abajo lo reabriría en silencio. El
+handler de salida del proceso cubre el camino de excepción completo con independencia de dónde esté el
+`throw`; es idempotente y **no pisa a un sucesor** (relee y solo escribe si el titular sigue siendo este
+nodo). Un `SIGKILL` sigue fuera de alcance: para eso está el stale window.
+
+Verificado arrancando el server de verdad con la configuración incompleta del issue: antes deja
+`holder: "vergis@<host>/<pid>"`, ahora deja la marca de release con la época conservada, y el sucesor
+adquiere de inmediato.
+
 ## 0.21.0 — 2026-08-19
 
 **⚠ Esta versión EXIGE algo nuevo de la instancia.** Un requisito de configuración que antes era
