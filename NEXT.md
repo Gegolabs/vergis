@@ -3,128 +3,139 @@
 **0.21.0 es la versión publicada** (tag `v0.21.0`, 2026-08-19). **Es la primera versión que EXIGE algo
 nuevo de la instancia**: el principal de serving debe poder leer el valor real de las columnas
 gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el centinela exista.
-**La instancia del cliente sigue en 0.18.0.**
+**La instancia del cliente sigue en 0.18.0** — medido por el frente arbol contra la VM viva
+(`docker ps` → `ghcr.io/gegolabs/vergis:0.18.0`), o sea **tres minors de gap**.
 
-> **No hay trabajo de este frente en vuelo.** Este archivo es el **estado** y el índice de lo que
-> espera a César o a otro frente.
+> **`main` tiene trabajo sin publicar.** La sesión del 2026-08-19 (noche) dejó en «Sin publicar» dos
+> capacidades del DSL (#235, #246), el healthcheck por fase y la corrección de E3/E5. **Nadie puede
+> consumirlo hasta que se corte una versión** — ver «Lo que espera».
 
 ## Lo que espera, y de quién es
 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
-| **El aviso al operador** — ahora de 0.18.0 → **0.21.0** | **César** | Comunicación saliente. **Redactado y listo**, al pie de este archivo; no se envió |
-| **Issue #245** — hay `UNMASK` **granular por columna** en Fabric: el requisito de 0.21.0 no obliga a subir el rol del workspace | **César decide** si el emisor lo emite (a) o si se documenta como vía recomendada del operador (b) | Medido el 2026-08-19 con control positivo, negativo y revoke verificado. **Recomiendo (b)** por frontera: los privilegios del principal los decide quien opera. El borrador del aviso, al pie, ya está corregido con las dos vías |
-| **`shellcheck` en el CI** | **Nuestro** | Sin empezar. Ficha en `PENDINGS.md` |
-| **#235** — default móvil en controles del DSL | **Nuestro** | Abierto hoy por César, sin empezar |
-| **E3/E4/E5 de #238** | **Nuestro** | Exigen el SP de laboratorio **fuera** de la ventana de staleness de revocación, que sigue viva |
+| **Cortar 0.22.0** | **Nuestro** | `main` acumula #235, #246, el healthcheck por fase y E3/E5 medidos. Sin corte, nada de eso es consumible |
+| **El aviso al operador** — de 0.18.0 → la versión que se corte | **César** | Comunicación saliente. **Redactado al pie de este archivo**, y **corregido**: la capacidad de desenmascarar tiene **dos** vías y la del `GRANT` es mejor |
+| **Issue #245** — hay `UNMASK` **granular por columna** en Fabric | **César decide**: ¿el emisor lo emite (a), o se documenta como vía del operador (b)? | Medido con control positivo, negativo y revoke verificado. **Recomiendo (b)** por frontera: los privilegios del principal los decide quien opera |
+| **E4 de #238** — ¿la aptitud vale toda la vida de la conexión? | **Nuestro** | Sigue **sin medir**, y ahora se sabe qué cuesta: por la vía del rol arrastra la staleness (>20 min, techo desconocido) y deja el terreno inutilizable; **por la vía del `GRANT` es viable** y cabe en una ventana propia |
+| **`tsconfig.json` no incluye `scripts/`** | **Nuestro** | `npm run typecheck` **nunca** chequeó `fabric-lab-proof.ts` ni `tsql-lab-proof.ts`. Descubierto al promover el arnés; no se tapó porque tocar el `include` afecta a otros scripts |
+| **PRs #201 y #175** (Renovate) | **Nadie, todavía** | **No se mergean**: su `renovate/stability-days` está en `pending` — es el cooldown de 14 días del ADR-001 (6 y 2 días cumplidos). Se aterrizan solos cuando pase. Ver `DECISIONS.md` D-51 |
 | **Cuenta de bot en GitHub** · **`CONTRIBUTING.md`** · **capacidades Fabric del tenant** · **header del theme `default`** | **César** | Sin cambios |
-| **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding`: *el análisis de excelencia lo hace Fable* | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; **propuesto, sin mergear**. No choca con el PR #1, que inserta más abajo en la misma regla |
-| **#228 / #232** (lease) | **arbol** | Sin cambios |
+| **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding` | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; propuesto, sin mergear |
+| **#228 / #232** (lease) | **arbol** | **#228 en vuelo ahora mismo** (avisado por el frente arbol, en worktree). Cuando abra el PR, lo revisa esta casa por la custodia |
+| **Lista blanca de claves en `validateControls`** | **arbol** | Lo está **midiendo antes de proponerlo**: cruce de las claves que usan de verdad los `controls:` de los specs de instancia contra lo que el Producto conoce. No llega como propuesta hasta tener el dato |
 
-## Lo que cambió hoy
+## Lo que cambió en la sesión del 2026-08-19 (noche)
 
-**#238 — la protección de columna no discriminaba para el sujeto que sirve.** Corregido y publicado
-en 0.21.0: dos planos de identidad que estaban cableados **en serie** sobre el mismo camino de
-lectura, un **centinela** que mide la precondición por conexión con tres estados que nunca se
-colapsan, y negativa **ruidosa** por PI cuando falta.
+Dos PRs mergeados —**#243** y **#244**— con cinco frentes y todos los gates por mano propia antes y
+después. Detalle en `BITACORA.md`; lo que hay que saber para retomar:
 
-**P5 quedó respondida** — y su primer veredicto fue **falso**, por la staleness de revocación de rol.
-La corrección está en #237 y la regla que sale de ahí vive en `RESOURCES.md`: *una medición de
-`UNMASK` solo vale si el rol no cambió recientemente*.
+- **#242 cerrado**: la entrada de anillos I7+I8 volvió a la sección 0.21.0, que es la versión cuyo tag
+  contiene su código. La imagen `0.21.0` ya horneó el CHANGELOG sin ella y **eso no se corrige** — para
+  ese tramo la fuente es el repo.
+- **#246 cerrado**: el `enum` del schema tenía **muerto** al default literal de #92 desde agosto. El test
+  que debía protegerlo **bendecía el defecto** — aceptaba cualquier rechazo sin distinguir la capa.
+- **#235 cerrado**: `controls[].defaultField`. El criterio de verdad es una **lista cerrada** (no
+  truthiness: `String(false)` es truthy), el conteo va sobre **opciones deduplicadas**, y la ausencia de
+  resolución **emite evento**.
+- **El gate de shell es reproducible**: shellcheck pinneado a 0.11.0 con checksum, y el CI **más
+  estricto que el local** (`LINT_SHELL_STRICT=1`). Si tocas shell, corre `npm run lint:shell`.
+- **El arnés de Fabric tiene P9 y P10**: el control de premisa (mide **leyendo**, en el plano de datos) y
+  el centinela. Y `npm run fab:sql` imprime el SQL emitido **sin motor y sin gasto** — es la revisión
+  previa a abrir una ventana.
 
 ## Próximo paso
 
-**El PR #234 ya está mergeado** (2026-08-19 21:01, squash → `6694bea`), con los tres gates corridos
-por mano propia antes Y después del merge (typecheck ✓ · 2312 tests ✓ · build ✓) y el guard de labels
-verificado aislado contra las constantes de `main`. Arbol quedó destrabado. Del ejercicio de custodia
-salió el **issue #242** (ver tabla).
+**Cortar 0.22.0**, que es lo único que vuelve consumible el trabajo de `main`. Lo que el corte tiene que
+declarar ya está escrito en «Sin publicar» del CHANGELOG, y trae dos cosas que el operador necesita: el
+healthcheck para su plantilla y la corrección de E3 (que **cambia la recomendación** de cómo concederle
+la capacidad al principal de serving).
 
-**Candidato natural siguiente: E3/E4/E5 de #238.** Estaban frenados por la ventana de staleness de
-revocación del SP de laboratorio; esa ventana se abrió en la tarde del 19-ago y **probablemente ya
-venció** (>2 h al momento de escribir esto) — **supuesto, sin confirmar**: se verifica midiendo, no
-esperando más. Los scripts están en `local/` (tabla abajo) y la ventana de Fabric entra bajo POL-01.
+**Antes de taggear, y esta vez en el orden correcto:** correr `npm run fab:proof` con su ventana. La
+lección de 0.21.0 fue que el DDL del centinela se midió **20 minutos después** de empujar el tag; ahora
+P10 existe justamente para que el corte no dependa de que alguien se acuerde. Su cabecera lo declara.
 
-**Trampa medida hoy:** no correr `npm test` si hay otra suite viva — la contención produce ~40 rojos
-en paquetes que el cambio no toca. Y para matar una corrida colgada, por PID acotado al árbol, nunca
-`pkill -f vitest`.
-
-**Residuo del merge de #234:** la rama local `feat/210-i9i10-docs-contrato` no se pudo borrar porque
-la retiene el worktree `../vergis-wt-210-i9i10b` (limpio, en el tip del PR). No se tocó: el worktree
-no es de esta sesión.
-
-## Los scripts de medición viven en `local/` (ignorado, no versionado)
-
-Se escribieron hoy y **una sesión fría no sabría que existen**. Sirven para E3/E4/E5 de #238:
-
-| Script | Qué mide |
-|---|---|
-| `local/rol-experimento.ts` | propagación de un cambio de rol de workspace por tres vías (misma conexión · conexión nueva con token viejo · conexión nueva con token nuevo), sin tocar DDL |
-| `local/centinela-fabric.ts` | que Fabric acepte el DDL del centinela, sea idempotente, el descubrimiento lo encuentre y `sys` corrobore la máscara |
-| `local/discrimina-como-sp.ts` | la discriminación de la vista **como el SP**, con control de premisa bloqueante |
-| `local/discrimina-sin-unmask-local.ts` | lo mismo en el arnés local, fabricando un usuario sin `UNMASK` |
-| `local/fabric-lab-sp.env` | el secreto del SP (modo 600). Se carga con `source`; el valor **no** se cita en ningún registro |
-| `local/rollback-roleassignments-2026-08-19.json` | snapshot de las asignaciones de rol del workspace, para revertir |
-
-**Si hay que promoverlos a `scripts/`**, eso ya es código y va por rama + PR — hoy quedaron fuera del
-árbol a propósito, para no publicar arnés sin decidirlo.
-
-## Terreno ya recorrido — no reintentar
-
-- **«El mecanismo de #238 se descubrió el 19-ago»** — **falso**: el arnés local lo medía desde el
-  frente #163 y lo reportaba como *hallazgo*. Lo nuevo fue que **nada lo detectaba**.
-- **Medir `UNMASK` con la cuenta de un admin** — no contesta nada: un admin siempre lo tiene.
-- **Medir `UNMASK` justo después de tocar el rol** — miente a favor del privilegio durante >20 min.
-- **`fn_my_permissions` / `DATABASE_PRINCIPAL_ID()` en Fabric** — no sirven; un `[]` significa «no
-  pude medir», no «no tiene».
-- **Consultar sin el prelude de `SESSION_CONTEXT`** — la row policy deniega todo y el control
-  positivo sale vacío: no mide nada.
-- **Correr dos suites de tests a la vez** — produce ~40 rojos en paquetes que el cambio no toca.
-  Es contención; se re-corre solo antes de investigar.
-- **Inscribir normas de aterrizaje en `POLICIES.md`** — descartado: esa pluma es **solo de César**, y
-  el contenido pertenece a `CLAUDE.md` §«El aterrizaje». La custodia se inscribió allá.
-- **Medir un mecanismo con SQL escrito a mano** — insuficiente y ya cobró su precio dos veces: entre
-  el SQL del experimento y el que **emite el compilador** hay diferencias que nadie eligió. Se mide
-  con lo emitido.
-- **Cerrar un issue cuyo arreglo no alcanza a ninguna versión publicada** — pasó hoy con #229 y lo
-  detectó otro frente. Un arreglo mergeado que nadie puede consumir no está entregado.
-- **Leer «sin checks» como «todavía no corrió»** — un PR conflictuado **no da CI rojo: da CI ausente**,
-  porque el workflow de `pull_request` corre sobre la merge ref y con conflictos no existe. Ante
-  checks vacíos, preguntar si es *mergeable*.
-- **Suponer que una sesión peer desconocida es un actor** — el mapeo `/tmp/cc-socks/*.sock` → PID →
-  `cwd` lo resuelve en un comando. Las «dos sesiones fantasma» del 18-ago eran ceremonias headless
-  del órgano de asimilación, no actores.
-
-## Lo que cambió cómo se trabaja este repo: la custodia
-
-**`arbol` propone · `vergis` dispone · jamás self-merge**, y el **aviso previo antes de abrir PR va en
-los dos sentidos**. Vive en `CLAUDE.md` §«La custodia» (decisión de César, 2026-08-18).
-
-Nació porque los dos frentes escribieron `Gegolabs/vergis` la misma tarde sin saberlo. **Ninguno hizo
-nada prohibido: faltaba el custodio.** El dato que hay que internalizar, porque ningún reconocedor
-clásico lo atrapa: **el lab de A.R.B.O.L. tiene un clon de este repo y pushea al mismo remoto**, así
-que el trabajo ajeno **no aparece como cambios sin commitear — llega por `git pull` ya mergeado**,
-con el árbol local impecable.
-
-**Lo que el custodio hace, y no es revisar el código ajeno:** correr los gates **por mano propia**
-antes y después del merge, y verificar los invariantes que el PR afirma en vez de leerlos de su
-reporte. Ejercido tres veces hoy (#225, #233 y el rechazo de #233 en su primera forma).
+```bash
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+npm run typecheck && npm test && npm run build && npm run lint:shell
+npm run fab:sql          # gratis: revisa el SQL emitido antes de gastar
+# y la ventana, UN solo comando de shell con la pausa en trap (ver más abajo)
+```
 
 ## La ventana de Fabric, que ya no se pide
 
 ```bash
 export VERGIS_FAB_SUB=b9ce0759-1cf3-4be9-af83-149c926fd584
 export FAB_SERVER="b5towqozkz5ebe7ayhs6w67cdq-vei4k2srzm5efe57d5tj2a75by.datawarehouse.fabric.microsoft.com"
+. local/fabric-lab-sp.env                      # el secreto del SP; su valor no se cita en ningún registro
 export FAB_TOKEN=$(az account get-access-token --subscription $VERGIS_FAB_SUB \
                      --resource https://database.windows.net/ --query accessToken -o tsv)
 npm run fab:resume && npm run fab:proof && npm run fab:pause
 ```
 
-Entra bajo **POL-01** y **se corre sin preguntar** (≈US$0,01 la ventana de 2 min). Dos reglas que
-costaron aprenderse hoy: **la ventana tiene que ser UN solo comando de shell** —si el `resume` va en
-uno y el `proof` en otro, el `trap` del primero pausa la capacidad antes de medir— y **la pausa va en
-`trap EXIT/INT/TERM`**, no en acordarse. El gasto se asienta en `POLICIES-ledger.md` (hoy: US$0,04 de
-US$50).
+Entra bajo **POL-01** y **se corre sin preguntar** (≈US$0,02 la ventana de 4 min). Tres reglas que
+costaron aprenderse:
 
+1. **La ventana es UN solo comando de shell** — si el `resume` va en uno y el `proof` en otro, el `trap`
+   del primero pausa la capacidad antes de medir.
+2. **La pausa va en `trap EXIT/INT/TERM`**, no en acordarse. Y el `trap` **no** protege contra que te
+   maten desde afuera: un sondeo largo se corre **en background con su propio techo de tiempo**, porque
+   un SIGTERM por timeout del ejecutor deja la capacidad viva.
+3. **Los sondeos piden el token de dos maneras distintas.** `centinela-fabric.ts` exige `FAB_SP_TOKEN`
+   **pre-obtenido**; los demás lo sacan solos por `client_credentials`. Una ventana entera se perdió por
+   esto. `fab:proof` ya lo unificó, pero los scripts de `local/` no.
+
+El gasto se asienta en `POLICIES-ledger.md` (mes en curso: **US$0,24** de US$50).
+
+## Los scripts de medición viven en `local/` (ignorado, no versionado)
+
+| Script | Qué mide |
+|---|---|
+| `local/unmask-a-public.ts` | **la escalera de `GRANT UNMASK`** (issue #245): columna → objeto → schema → base, cada peldaño medido dos veces («¿lo acepta el motor?» y «¿surte efecto?») |
+| `local/unmask-granular-y-conexion.ts` | E3 por principal (negativo: Fabric no soporta `CREATE USER … FROM EXTERNAL PROVIDER`) y el andamiaje de E4 |
+| `local/rol-experimento.ts` | propagación de un cambio de rol de workspace por tres vías, sin tocar DDL |
+| `local/centinela-fabric.ts` | **superado por P10 de `fab:proof`** — se conserva como referencia |
+| `local/discrimina-como-sp.ts` | **⚠ instrumento DÉBIL**: juzga por desigualdad de JSON, que no sabe reprobar (`•••` y `xxxx` difieren sin traer el dato). Su control de premisa sí es bueno. Superado por P9 |
+| `local/fabric-lab-sp.env` | el secreto del SP (modo 600). Se carga con `source` |
+| `local/rollback-roleassignments-2026-08-19.json` | snapshot de asignaciones de rol del workspace, para revertir |
+
+## Terreno ya recorrido — no reintentar
+
+- **Juzgar la discriminación de máscara por «las dos lecturas difieren»** — no sirve, y no en una sola
+  dirección: la vista devuelve `•••` y el DDM `xxxx`, así que **difieren sin traer el dato** (verde
+  falso) y **coinciden cuando el DDM aplasta las dos ramas** (rojo falso sobre un Producto sano, porque
+  desde #240 el gate declara ese PI no servible a propósito). Se juzga por **valor real**.
+- **Medir `UNMASK` con la cuenta de un admin** — no contesta nada: un admin siempre lo tiene.
+- **Medir `UNMASK` justo después de tocar el rol** — miente a favor del privilegio durante >20 min.
+- **Conceder `UNMASK` a un principal específico en Fabric** — imposible: `CREATE USER … FROM EXTERNAL
+  PROVIDER` no está soportado, así que el SP **no tiene principal propio en la base**. La granularidad
+  que sí existe es **por objeto/columna, vía `public`** (#245).
+- **`fn_my_permissions` / `DATABASE_PRINCIPAL_ID()` en Fabric** — no sirven; un `[]` significa «no pude
+  medir», no «no tiene».
+- **Consultar sin el prelude de `SESSION_CONTEXT`** — la row policy deniega todo y el control positivo
+  sale vacío: no mide nada.
+- **Correr dos suites de tests a la vez** — ~40 rojos por contención en paquetes que el cambio no toca.
+- **Arreglar hallazgos de un linter sin pinnear su versión** — el gate sigue siendo irreproducible y el
+  próximo bump del runner trae otros. Se pinnea.
+- **`git ls-files` sin `--others`** en un gate de descubrimiento — la corrida local previa al commit no
+  ve el archivo nuevo y sale **verde** justo cuando tenía que atrapar el error.
+- **Medir un mecanismo con SQL escrito a mano** — se mide con **lo que emite el compilador**. Ya cobró
+  su precio dos veces.
+- **Cerrar un issue cuyo arreglo no alcanza a ninguna versión publicada** — pasó con #229.
+- **Leer «sin checks» como «todavía no corrió»** — un PR conflictuado **no da CI rojo: da CI ausente**.
+- **Inscribir normas de aterrizaje en `POLICIES.md`** — esa pluma es **solo de César**.
+
+## Coordinación con el frente arbol — funcionó, y así
+
+**El aviso previo antes de abrir un PR se pagó solo el 2026-08-19.** El frente arbol anunció cuatro
+partidas y **tres ya estaban hechas**: mató dos subagentes en vuelo antes de gastar, y de paso se le
+corrigió un diagnóstico falso (tenía el check rojo de #244 como «falta sanear el archivo» cuando la
+causa era el gate no reproducible). El canal es `SendMessage` sobre el socket de la sesión.
+
+**Y la lección propia sobre repartir frentes en paralelo** (ocurrencia 27 de W-01): los archivos de
+*trabajo* se reparten solos, los que colisionan son los **canónicos de registro** —`PENDINGS.md`,
+`CHANGELOG.md`, `DECISIONS.md`— porque *todos* los frentes terminan escribiéndolos. La mitigación va en
+el encargo: **los registros los escribe el orquestador**, o se reparten nominalmente uno por frente.
 
 ---
 
@@ -137,20 +148,24 @@ US$50).
 > 1. **No pude correr el paso cero.** La doctrina de `conversacion` exige reconstruir el hilo desde
 >    la fuente viva —qué se le dijo y qué contestó, en todos los foros— antes de redactar. **No tengo
 >    acceso a su canal**, así que este borrador se escribió sobre el estado del Producto, no sobre el
->    estado de la conversación. Si ya le adelantaste algo de esto en una reunión o por chat, **hay
->    partes que estarían re-vendiéndole lo que ya sabe** — se podan antes de enviar.
+>    estado de la conversación. Si ya le adelantaste algo de esto, **hay partes que estarían
+>    re-vendiéndole lo que ya sabe** — se podan antes de enviar.
 > 2. **El objetivo lo propuse yo, y el gate es que tú lo veas.** Lo escribo abajo para que lo
 >    corrijas, no para que lo asumas.
 >
 > | Cabecera | |
 > |---|---|
-> | **Objetivo propuesto** | Que planifique el salto a 0.21.0 **con su control de cambio**, sabiendo que esta vez trae una migración que no es opcional y un requisito nuevo de configuración — y que **verifique la capacidad antes de subir**, no después |
+> | **Objetivo propuesto** | Que planifique el salto **con su control de cambio**, sabiendo que esta vez trae una migración que no es opcional y un requisito nuevo de configuración — y que **verifique la capacidad antes de subir**, no después |
 > | **Actitud** | **Aliado.** Necesitamos su voluntad de agendar una ventana y tocar permisos; ninguna línea puede insinuar que se le lleva la cuenta |
 > | **Canal** | Sin decidir — el que uses habitualmente. Si va por escrito, el detalle largo puede ir al CHANGELOG y el mensaje quedar corto |
 >
 > **Lo que deliberadamente NO lleva:** ningún número sobre su conducta (cuántas versiones lleva sin
 > subir, cuánto tiempo pasó), ningún plazo que no exista en su calendario, y ninguna enumeración de
 > sus pendientes. Son las marcas que reasignan la relación sin que nadie lo haya decidido.
+>
+> **⚠ Y una nota de vigencia:** el borrador dice «0.21.0». Si se corta **0.22.0** antes de enviarlo,
+> hay que actualizar la versión y agregar lo que esa versión trae (el healthcheck y los defaults del
+> DSL). El paso 1 ya está corregido con el hallazgo de #245 y **ése no caduca**.
 
 ### Borrador
 
@@ -213,4 +228,4 @@ US$50).
 > Las notas completas de cada versión están en el CHANGELOG del repo. Desde 0.20.1 la imagen también
 > las trae adentro; las anteriores no, así que para este tramo el repo es la fuente.
 
-<!-- /ww:next · 2026-08-19 · HEAD 6694bea (actualizado en sesión tras mergear #234) -->
+<!-- /ww:next · 2026-08-19 · HEAD 6d0d645 -->
