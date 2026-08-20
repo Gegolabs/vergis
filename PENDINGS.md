@@ -55,23 +55,57 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **El `healthcheck` de `docker-compose.yml` juzga por `r.ok`, y desde 0.20.0 eso da «sano» a un nodo
-  que no sirve** — un nodo en `standby` responde **HTTP 200 con `ok:true`**, así que Docker lo marca
-  `healthy` sin que esté sirviendo escrituras. **Hoy no muerde**: `deploy/compose.reference.yml` no
-  declara healthcheck y su `depends_on` no usa `condition: service_healthy`. **Muerde el día que algo
-  enrute por salud**, y ese día se acerca con el conmutador de anillos. El predicado correcto ya
-  existe y está escrito en dos lados: en el código del Producto y en `Caddyfile.reference:49`
-  (`health_body "phase":"serving"`) — **`200 ∧ phase=serving ∧ pis.serving=N`**. Copiarlo al
-  compose es barato; el gemelo del lado del operador lo lleva el frente arbol (`P-239`).
-  `reg 2026-08-18`
+- **✅ RESUELTO (2026-08-19) — los dos compose juzgan por la FASE, y el instrumento demostró que sabe
+  reprobar.** La ficha decía que el `healthcheck` de `docker-compose.yml` juzgaba por `r.ok` y que desde
+  0.20.0 eso daba «sano» a un nodo en `standby` (que responde HTTP 200 con `ok:true` por diseño). Ahora
+  el predicado es el canónico —el mismo del borde y de `rollout/vergis-rollout` (`serving_ok`)—:
+  **`HTTP 200 ∧ "phase":"serving" ∧ (sin bloque pis ∨ pis.serving == pis.total)`**, con el cuerpo
+  **parseado** y no grepeado, y con todo lo no medible (vacío, no-JSON, conexión rechazada) contando
+  como fallo. El `pis` se exige **solo si viene**: `/healthz` lo omite cuando el motor no tiene
+  servibilidad por PI (`VERGIS_ENGINE` ≠ `fabric`), y exigirlo incondicionalmente habría dejado el modo
+  Free en `unhealthy` perpetuo — ese detalle era el que decidía el diseño.
+  **También se le agregó healthcheck al servicio `vergis` de `deploy/compose.reference.yml`**, que no
+  tenía ninguno, porque el modo un-solo-nodo está documentado como válido en ese archivo y ahí un
+  `docker ps` que dice `healthy` sobre un standby es la mentira más cara en un incidente. Va con el
+  comentario que desarma las dos malas lecturas: es **diagnóstico, no ruteo** (quien rutea es el
+  conmutador del borde), y **no viaja a los anillos** — `rollout/ring.args` no lleva healthcheck, y no
+  le hace falta porque la salud de un anillo la mide el borde, el único que puede actuar sobre ella.
+  El healthcheck del borde `caddy` **se deja intacto**: es un proxy sin fases y su comentario ya explica
+  por qué juzga por HTTP.
+  **Verificado con arnés propio** (`spawn` asíncrono + servidor de mentira; el comando se **extrae** del
+  YAML, no se copia a mano): 10 casos, 0 discrepancias — `serving` con y sin `pis` → 0; `standby`,
+  `degraded`, `serving` con `pis` incompletos, 503, cuerpo vacío, cuerpo no-JSON, la trampa del grep
+  (`"serving"` fuera de `phase`) y conexión rechazada → 1. Con **control negativo**: el comando viejo
+  (`r.ok`) contra el cuerpo `standby` da **0**, que es exactamente el defecto que esto cierra.
+  **NO se verificó contra un contenedor real corriendo**: el arnés mide el **predicado**, no el montaje
+  —ni que Docker interprete el `test` como se espera, ni el `start_period`, ni la transición
+  `starting → healthy → unhealthy` de un nodo vivo—. Tampoco se midió el caso de un nodo reiniciado que
+  espera el vencimiento del lease anterior; se **razonó** que cabe en el `start_period` (lease stale
+  10 s por default contra 40 s de gracia) y eso es conjetura, no medición. El gemelo del lado del
+  operador lo lleva el frente arbol (`P-239`) y sigue siendo suyo. `reg 2026-08-18`
 
-- **867 líneas de shell entrarán al repo sin linter en CI** — el PR #233 (borde de anillos) trae
-  `deploy/rollout/vergis-rollout` y `tests/fixtures/anillos/fake-docker.sh`, y el CI **no corre
-  `shellcheck`** (ni está instalado en la máquina de trabajo). Se sustituyó por `sh -n`, que **solo
-  atrapa errores de parseo** — no variables sin comillas, no `test` mal formado, no globbing
-  accidental. Sus 381 líneas de test con `fake-docker.sh` cubren bastante más que un linter, así que
-  no se pidió como condición de merge; queda anotado **para que nadie asuma que esa superficie está
-  linteada**. `reg 2026-08-18`
+- ~~**867 líneas de shell entrarán al repo sin linter en CI**~~ — **✅ RESUELTO (2026-08-19)**: el gate
+  existe y es `npm run lint:shell` (`scripts/lint-shell.sh`), con job hermano `shell` en
+  `.github/workflows/build.yml` y `image` colgado de `needs: [test, shell]` — o sea que **ninguna
+  imagen se publica con el shell en rojo**. El gate **descubre, no enumera**: `git ls-files --cached
+  --others --exclude-standard` filtrado por `*.sh` **o por shebang**, así que cubre los dos scripts
+  extensionless (un glob `**/*.sh` habría medido 259 de 1130 líneas) y **también el script de shell
+  que alguien agregue mañana sin tocar ninguna lista**. El dialecto lo deriva shellcheck del shebang:
+  no se fuerza `-s bash`, que volvería el gate ciego a los bashismos que la VM objetivo no soporta
+  (medido: el falsificador con `[ $1 == x ]` sale rojo por SC3014). Los 15 hallazgos que había se
+  **arreglaron**, sin ningún `disable` nuevo en los tres archivos: 9×SC1007 (`var=` → `var=''`),
+  1×SC2020 (`tr '{}' '\n\n'` → dos `tr` de un carácter: POSIX declara *unspecified* el segundo
+  conjunto más corto) y 2×SC2015 (`A && B || C` → `if`). El gate se falsificó en tres direcciones
+  (script nuevo no enumerado, bug inyectado en el archivo grande, shellcheck ausente) y las tres
+  salieron rojas.
+  **Lo que NO cubre, dicho con esas palabras:** (a) un script de shell **ignorado por `.gitignore`**
+  —`local/`, por ejemplo— no se lintea, por construcción; (b) el CI usa el `shellcheck` preinstalado
+  del runner, que **no está pinneado**: su versión puede diferir de la local (0.11.0) y un upgrade de
+  imagen del runner puede traer hallazgos nuevos — se verá como un rojo en el job `shell`, no como un
+  falso verde; (c) shellcheck queda con su severidad por defecto (`style`), **sin** los *optional
+  checks*; y (d) los dos SC2015 se arreglaron como **remoción de un peligro estructural**, no como
+  cierre de un bug demostrado: no se logró construir una corrida en que la forma anterior diera una
+  respuesta falsa — el detalle está en el PR y en el comentario de cada línea. `reg 2026-08-18`
 
 
 - ~~**La medición de #164 NO está en el arnés de Fabric**~~ — **SALDADO 2026-08-18**: es P7 de
