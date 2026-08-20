@@ -20,6 +20,7 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 | **E4 de #238** — ¿la aptitud vale toda la vida de la conexión? | **Nuestro** | Sigue **sin medir**, y ahora se sabe qué cuesta: por la vía del rol arrastra la staleness (>20 min, techo desconocido) y deja el terreno inutilizable; **por la vía del `GRANT` es viable** y cabe en una ventana propia |
 | **`tsconfig.json` no incluye `scripts/`** | **Nuestro** | `npm run typecheck` **nunca** chequeó `fabric-lab-proof.ts` ni `tsql-lab-proof.ts`. Descubierto al promover el arnés; no se tapó porque tocar el `include` afecta a otros scripts |
 | **PRs #201 y #175** (Renovate) | **Nadie, todavía** | **No se mergean**: su `renovate/stability-days` está en `pending` — es el cooldown de 14 días del ADR-001 (6 y 2 días cumplidos). Se aterrizan solos cuando pase. Ver `DECISIONS.md` D-51 |
+| **Issue #250** — el fallback de `?page=` desconocido no se declara al USUARIO | **César decide** entre tres caminos (404 · como está · declararlo en la nav) | Abierto por el frente arbol y **reescrito por él** tras refutarle esta casa la mitad falsa (sí hay evento `mira-page-unknown` con sus tests). **Recomiendo declararlo en la nav** conservando el 200. No se implementó por dos vías: es elemento visible nuevo y es diseño abierto |
 | **Cuenta de bot en GitHub** · **`CONTRIBUTING.md`** · **capacidades Fabric del tenant** · **header del theme `default`** | **César** | Sin cambios |
 | **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding` | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; propuesto, sin mergear |
 | **#232** (lease: el release no nombra sucesor) | **arbol** | Sin empezar. **#228 CERRADO** — PR #247 mergeado con su invariante de runtime verificado por esta casa |
@@ -228,4 +229,4 @@ el encargo: **los registros los escribe el orquestador**, o se reparten nominalm
 > Las notas completas de cada versión están en el CHANGELOG del repo. Desde 0.20.1 la imagen también
 > las trae adentro; las anteriores no, así que para este tramo el repo es la fuente.
 
-<!-- /ww:next · 2026-08-19 · HEAD c223394 -->
+<!-- /ww:next · 2026-08-19 · HEAD 8368232 -->
