@@ -18,6 +18,7 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 | **#235** — default móvil en controles del DSL | **Nuestro** | Abierto hoy por César, sin empezar |
 | **E3/E4/E5 de #238** | **Nuestro** | Exigen el SP de laboratorio **fuera** de la ventana de staleness de revocación, que sigue viva |
 | **Cuenta de bot en GitHub** · **`CONTRIBUTING.md`** · **capacidades Fabric del tenant** · **header del theme `default`** | **César** | Sin cambios |
+| **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding`: *el análisis de excelencia lo hace Fable* | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; **propuesto, sin mergear**. No choca con el PR #1, que inserta más abajo en la misma regla |
 | **#228 / #232** (lease) | **arbol** | Sin cambios |
 
 ## Lo que cambió hoy
