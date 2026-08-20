@@ -38,7 +38,8 @@ cambio lo decide quien opera esa instancia.
 
 ### El contrato público del cambio: la imagen declara su esquema, las migraciones tienen regla y la promoción tiene ceremonia (#210 · I9+I10)
 
-**Esto completa el cambio del CONTRATO DE DESPLIEGUE** que traen las dos entradas de abajo. Ahí quedó
+**Esto completa el cambio del CONTRATO DE DESPLIEGUE** que traen **0.21.0** (el conmutador y la
+herramienta de anillos, I7+I8) y **0.20.0** (los dos planos cableados, I4+I5+I6). Ahí quedó
 el mecanismo; acá queda **lo que hay que poder leer para operarlo**, que es la mitad que decide si un
 rollback de emergencia se puede ejecutar a las tres de la mañana o hay que averiguarlo en el momento.
 
@@ -94,7 +95,57 @@ explícitos. La cifra viene de un host de desarrollo y **no caracteriza** una in
 runbook manda medir el corte propio y registrar la fila **incluso cuando no se pudo medir**, diciendo
 por qué — una fila ausente hace creer que el corte no ocurrió.
 
+## 0.21.0 — 2026-08-19
+
+**⚠ Esta versión EXIGE algo nuevo de la instancia.** Un requisito de configuración que antes era
+implícito pasa a ser **cláusula del contrato**, verificada por el Producto: si no se cumple, los PIs
+con reglas de columna **no se sirven** y el motivo lo nombra. Léase la sección «Qué exige» antes de
+adoptarla.
+
+### La protección de columna no discriminaba para el sujeto que sirve (#238)
+
+**El defecto, medido:** la vista de máscara `vw_mask_<tabla>` devolvía **lo mismo con y sin el claim**
+cuando la consulta el principal de serving sin capacidad de desenmascarar. La vista lee la tabla, y
+el DDM enmascara **en esa lectura** — río arriba del `CASE`, que entonces elige correctamente entre
+dos valores ya enmascarados.
+
+**Consecuencia: `ve_pii` no concedía nada, y nada lo gritaba.** Una persona con derecho veía `xxxx`
+sin poder distinguirlo de «no traigo el claim».
+
+**No hay fuga.** Falla cerrado: se pierde una capacidad, no se filtra PII. Y **la instancia de
+referencia corre 0.18.0**, anterior a la vista de máscara, así que nunca consumió la superficie
+afectada. Alcanzó a **0.19.0, 0.20.0 y 0.20.1**, publicadas y no consumidas.
+
+**Lo que se corrigió no es el `CASE`: es la asignación de planos.** Hay dos planos de identidad y
+cada uno tiene una sola capa capaz de gobernarlo — la **persona** (claims, por consulta: RLS + vista)
+y el **principal de máquina** (roles y DDM, por conexión). El defecto fue **cablearlos en serie**
+sobre el mismo camino de lectura. El DDM **se conserva** con su papel real —cubrir a principales que
+no son Vergis—, y la decisión por persona vuelve entera a la capa que evalúa por consulta.
+
+### El centinela: la precondición se mide, y su ausencia es ruidosa
+
+El emisor instala `[<schema>].[vergis_unmask_probe]` cuando emite plano de columna: una fila, una
+columna enmascarada, un valor conocido por construcción. El gate de servibilidad lo sondea **por
+conexión** —la granularidad real de la capacidad, que se fija al conectar— y su lectura da **tres
+estados que nunca se colapsan**: valor esperado (capacidad presente), otro valor (capacidad **medida
+ausente**), o error (**no se pudo medir**, que jamás es veredicto).
+
+- El centinela es **compartido por schema** y **no se retira** con el teardown de una tabla; se
+  instala con **crear-si-falta**, nunca tira-y-recrea (`DECISIONS.md` D-46).
+- **Sin centinela instalado** el gate declara **indeterminación**, no veredicto: un PI que ya servía
+  conserva su veredicto sano y la remediación va escrita en el motivo (D-47).
+- El sondeo viaja en la **misma ola** de consultas del arranque en frío: no agrega latencia (D-48).
+
+**Diagnóstico gratis:** la vista enmascara con `•••` y el DDM con `xxxx`, **distintos a propósito**.
+Un `xxxx` visto a través de Mira significa *capacidad ausente*; un `•••`, *persona sin derecho*.
+
 ### El despliegue de referencia conmuta entre anillos: desplegar deja de exigir una ventana (#210 · I7+I8)
+
+> **Esta entrada se declaró después del corte, y consta.** El código de este frente (#233) viajó en el
+> tag `v0.21.0` —verificado: `git merge-base --is-ancestor f6b1295 v0.21.0`— pero el corte del CHANGELOG
+> lo dejó bajo «Sin publicar». La corrección lo devuelve a la versión que de verdad lo trae. **Lo que no
+> se puede corregir**: la imagen `0.21.0` horneó el CHANGELOG sin esta entrada, así que para este
+> tramo la fuente es el repo y no la imagen. Ver issue #242.
 
 **Esto es un cambio del CONTRATO DE DESPLIEGUE**, no una capacidad del DSL: lo que cambia es cómo una
 instancia estrena una versión. Hasta acá, adoptar una versión nueva era recrear el contenedor —con su
@@ -139,50 +190,6 @@ responden 409 explícitos; las **lecturas se sirven todo el tiempo** y el servin
 **Límites declarados.** El plano de control asume **un host con FS local**. La sala de espera no cubre la
 muerte del propio borde. El smoke verifica el predicado de salud y el índice, no la ruta de cada PI:
 `/healthz` publica conteos, no slugs, y el invariante que sí se exige es `pis.serving == pis.total`.
-
-## 0.21.0 — 2026-08-19
-
-**⚠ Esta versión EXIGE algo nuevo de la instancia.** Un requisito de configuración que antes era
-implícito pasa a ser **cláusula del contrato**, verificada por el Producto: si no se cumple, los PIs
-con reglas de columna **no se sirven** y el motivo lo nombra. Léase la sección «Qué exige» antes de
-adoptarla.
-
-### La protección de columna no discriminaba para el sujeto que sirve (#238)
-
-**El defecto, medido:** la vista de máscara `vw_mask_<tabla>` devolvía **lo mismo con y sin el claim**
-cuando la consulta el principal de serving sin capacidad de desenmascarar. La vista lee la tabla, y
-el DDM enmascara **en esa lectura** — río arriba del `CASE`, que entonces elige correctamente entre
-dos valores ya enmascarados.
-
-**Consecuencia: `ve_pii` no concedía nada, y nada lo gritaba.** Una persona con derecho veía `xxxx`
-sin poder distinguirlo de «no traigo el claim».
-
-**No hay fuga.** Falla cerrado: se pierde una capacidad, no se filtra PII. Y **la instancia de
-referencia corre 0.18.0**, anterior a la vista de máscara, así que nunca consumió la superficie
-afectada. Alcanzó a **0.19.0, 0.20.0 y 0.20.1**, publicadas y no consumidas.
-
-**Lo que se corrigió no es el `CASE`: es la asignación de planos.** Hay dos planos de identidad y
-cada uno tiene una sola capa capaz de gobernarlo — la **persona** (claims, por consulta: RLS + vista)
-y el **principal de máquina** (roles y DDM, por conexión). El defecto fue **cablearlos en serie**
-sobre el mismo camino de lectura. El DDM **se conserva** con su papel real —cubrir a principales que
-no son Vergis—, y la decisión por persona vuelve entera a la capa que evalúa por consulta.
-
-### El centinela: la precondición se mide, y su ausencia es ruidosa
-
-El emisor instala `[<schema>].[vergis_unmask_probe]` cuando emite plano de columna: una fila, una
-columna enmascarada, un valor conocido por construcción. El gate de servibilidad lo sondea **por
-conexión** —la granularidad real de la capacidad, que se fija al conectar— y su lectura da **tres
-estados que nunca se colapsan**: valor esperado (capacidad presente), otro valor (capacidad **medida
-ausente**), o error (**no se pudo medir**, que jamás es veredicto).
-
-- El centinela es **compartido por schema** y **no se retira** con el teardown de una tabla; se
-  instala con **crear-si-falta**, nunca tira-y-recrea (`DECISIONS.md` D-46).
-- **Sin centinela instalado** el gate declara **indeterminación**, no veredicto: un PI que ya servía
-  conserva su veredicto sano y la remediación va escrita en el motivo (D-47).
-- El sondeo viaja en la **misma ola** de consultas del arranque en frío: no agrega latencia (D-48).
-
-**Diagnóstico gratis:** la vista enmascara con `•••` y el DDM con `xxxx`, **distintos a propósito**.
-Un `xxxx` visto a través de Mira significa *capacidad ausente*; un `•••`, *persona sin derecho*.
 
 ### Qué exige esta versión
 

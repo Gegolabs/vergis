@@ -9,6 +9,14 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-50 · 2026-08-19 — La entrada I7+I8 de anillos se MUEVE a la sección 0.21.0 del CHANGELOG (#242)
+
+- **Bifurcación**: el tag `v0.21.0` **contiene** el código de #233 (el conmutador de anillos, I7+I8) —medido con `git merge-base --is-ancestor f6b1295 v0.21.0`— pero el corte dejó su entrada bajo «Sin publicar». Dos salidas: **(a)** mover la entrada a 0.21.0, o **(b)** declarar que la exclusión fue criterio deliberado («no se declara hasta que sea operable con su runbook») y dejarla donde está.
+- **Decidido**: **(a)**. Declarar **qué trae una versión** es competencia de este repo (`CLAUDE.md` §«La frontera»), y una sección de versión que omite un mecanismo que su tag sí contiene no es una omisión inocua: en el corte siguiente esa entrada se habría movido a la versión nueva, **declarando bajo 0.22.0 un mecanismo que viajó en 0.21.0**. La declaración de esa versión habría nacido falsa, y el operador que planifica por CHANGELOG habría decidido con un dato falso.
+- **Por qué NO (b)**: el criterio «no se declara hasta que sea operable» no consta en ninguna parte —ni `DECISIONS.md` ni la bitácora lo registran— y **la convención vigente lo contradice**: I4+I5+I6 se declaró bajo 0.20.0 y #220/#222 bajo 0.19.0, ambas sin runbook. Inventarle el criterio a posteriori para justificar el estado sería fabricar la justificación que la Norma 6 prohíbe.
+- **Lo que NO se corrige, y va escrito en la propia entrada**: la imagen `0.21.0` ya horneó el CHANGELOG sin esta entrada. No se re-taggea una versión publicada, así que para ese tramo la fuente es el repo. Queda dicho en el CHANGELOG, no solo acá.
+- **Costo de revertir**: bajo — es un movimiento de bloque en un archivo de texto, sin código. Revertirlo devuelve el defecto.
+
 ## D-46 · 2026-08-19 — El centinela de #238 NO se retira en el `teardownSQL`
 
 - **Bifurcación**: el emisor es simétrico por doctrina —todo lo que el setup instala, el teardown lo desinstala— y hay un test que lo sostiene. ¿El centinela sigue esa simetría?
