@@ -67,7 +67,9 @@ Detalle y justificación en `docs/mejoras-diagnostico.md`:
   dependencia. **Datos sintéticos**, tenant propio, y el terreno se **recrea** en vez de respaldarse.
   **El costo dejó de ser el argumento**: capacidad F2 pay-as-you-go **pausada por defecto** —mismo
   modelo que la VM desasignada—, del orden de un dólar por sesión de medición. **Trial NO**: muere a
-  los 60 días y se lleva el terreno. Las decisiones de gasto e infraestructura siguen siendo suyas.
+  los 60 días y se lleva el terreno. Las decisiones de **infraestructura** siguen siendo suyas; el **gasto** de encender este
+  terreno entra bajo POL-01 (`POLICIES.md`) y se corre sin consultar, asentándolo en el ledger.
+  Lo que sigue siendo suyo por otra razón: `FAB_SP_TOKEN` es credencial, no gasto.
   **Encogido el 2026-08-14 con el terreno T-SQL local** (`npm run lab:proof`, PR #190): la premisa
   —«no hay dónde medir lo que toca Fabric»— era **falsa para la semántica del lenguaje**, y ahí se
   midieron y corrigieron los tres defectos del plano de columna (#163) y se destrabó #164. **Sigue
