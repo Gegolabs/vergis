@@ -4,6 +4,12 @@ Pendientes que **detectó el agente**, no encargó el humano. TTL 15 días desde
 pasan a `PENDINGS-done.md` §vencidas. Lo que César declare o confirme como pendiente vive en `TODO.md` (sin TTL);
 la promoción PENDINGS→TODO se pide, no se toma.
 
+> **La regla del TTL y las fichas con dependencia externa (adoptada 2026-08-22).** El TTL corre
+> **sobre las abiertas `[ ]`**: mide el silencio del agente, no el del acreedor. Una ficha `[~]` con
+> **dependencia externa nombrada** (pagada, esperando a un tercero) **no vence por plazo** — hereda
+> la exención de la cobranza-con-rehén de `TODO.md`, y su TTL se cuenta desde la última
+> **re-derivación contra el estado vivo**, no desde su `reg`.
+
 ## Operación / despliegue
 
 - **0.20.1 está publicada y NO se ha avisado al operador** (*act 2026-08-18: la ficha decía 0.18.0 y

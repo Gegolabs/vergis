@@ -1,5 +1,11 @@
 # BITACORA
 
+> **Convención de autoría (desde el 2026-08-11).** El agente firma **Simón Alero** —su nombre
+> propio desde el acta de bautizo de ese día (`soveria-ai/registro/01`)—; «Claude» es su
+> **linaje**, no su firma. Las filas anteriores al bautizo conservan «Claude» porque ése era su
+> nombre entonces: los registros no se reescriben hacia atrás.
+
+
 Registro cronológico de acciones relevantes del proyecto. Tareas pendientes en `TODO.md`.
 
 | Fecha | Hora | Acción | Responsable | Artefacto/Resultado | Notas |
