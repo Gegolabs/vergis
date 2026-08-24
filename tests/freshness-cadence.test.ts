@@ -7,6 +7,7 @@ import {
   requiredCadenceSeconds,
   deriveIngestionMap,
   deriveEntityFreshness,
+  processBelongsToDomain,
   validateOferta,
   SqliteGovernanceStore,
 } from '@vergis/capabilities'
@@ -83,6 +84,45 @@ describe('freshness · deriveIngestionMap', () => {
     const finanzas = map.find((r) => r.processId === 'pipe_finanzas')!
     expect(finanzas.requiredCadence).toBe('PT6H')
     expect(finanzas.unsatisfiable).toBe(false)
+  })
+})
+
+// La pertenencia de un proceso a un dominio se hereda de su FUENTE. Es el predicado que gobierna las
+// acciones por-proceso de Frescura, donde el proceso llega en un formulario y el dominio en la URL.
+describe('freshness · processBelongsToDomain (fail-closed)', () => {
+  const PROCS = [
+    { id: 'p_sap', label: 'Ingesta SAP', sourceId: 'sap' },
+    { id: 'p_buk', label: 'Ingesta Buk', sourceId: 'buk' },
+    { id: 'p_huerfano', label: 'Sin fuente registrada', sourceId: 'fantasma' },
+  ]
+  const SRCS = [
+    { id: 'sap', domain: 'cartera' },
+    { id: 'buk', domain: 'personas' },
+    { id: 'sin_dom', domain: '' },
+    { id: 'fantasma_no', domain: 'cartera' },
+  ]
+
+  it('el proceso pertenece al dominio de su fuente, y solo a ese', () => {
+    expect(processBelongsToDomain('cartera', 'p_sap', PROCS, SRCS)).toBe(true)
+    expect(processBelongsToDomain('personas', 'p_buk', PROCS, SRCS)).toBe(true)
+    expect(processBelongsToDomain('cartera', 'p_buk', PROCS, SRCS)).toBe(false)
+    expect(processBelongsToDomain('personas', 'p_sap', PROCS, SRCS)).toBe(false)
+  })
+
+  it('lo indeterminable se niega: proceso desconocido, fuente ausente, dominio vacío', () => {
+    expect(processBelongsToDomain('cartera', 'p_inexistente', PROCS, SRCS)).toBe(false)
+    expect(processBelongsToDomain('cartera', 'p_huerfano', PROCS, SRCS)).toBe(false) // fuente no registrada
+    expect(processBelongsToDomain('cartera', '', PROCS, SRCS)).toBe(false)
+    expect(processBelongsToDomain('', 'p_sap', PROCS, SRCS)).toBe(false)
+    expect(processBelongsToDomain('cartera', 'p_sap', PROCS, [])).toBe(false)
+    // Fuente sin dominio: no calza contra un `domainId` vacío ni contra ninguno.
+    expect(processBelongsToDomain('', 'p_x', [{ id: 'p_x', sourceId: 'sin_dom' }], SRCS)).toBe(false)
+    expect(processBelongsToDomain('cartera', 'p_x', [{ id: 'p_x', sourceId: 'sin_dom' }], SRCS)).toBe(false)
+  })
+
+  it('una fuente con dominio nulo tampoco habilita nada', () => {
+    expect(processBelongsToDomain('cartera', 'p_n', [{ id: 'p_n', sourceId: 'nulo' }], [{ id: 'nulo', domain: null }])).toBe(false)
+    expect(processBelongsToDomain('cartera', 'p_u', [{ id: 'p_u', sourceId: 'undef' }], [{ id: 'undef' }])).toBe(false)
   })
 })
 

@@ -107,6 +107,7 @@ import {
   canOpen,
   deriveIngestionMap,
   deriveEntityFreshness,
+  processBelongsToDomain,
   classifyProcess,
   reconcilePlan,
   createAsOfProvider,
@@ -1877,9 +1878,14 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // schedule, NADA se registra (jamás un «pausado» en el producto con el motor corriendo).
       // REANUDAR: se limpia el flag primero y se empuja la cadencia derivada; si el empuje falla, el lazo
       // converge en el tick siguiente (el proceso ya no está pausado) y la página muestra el estado real.
-      pauseProcess: async (processId: string, paused: boolean, by: string) => {
+      // La PERTENENCIA del proceso al dominio se valida acá (fail-closed), igual que en `runLogs.refOf`:
+      // la ruta autoriza el DOMINIO de la URL, pero el `process` llega en el formulario — sin esta
+      // validación un steward del dominio A pausaría un proceso del dominio B.
+      pauseProcess: async (domainId: string, processId: string, paused: boolean, by: string) => {
         const engine = fabricWiring.engine
         if (!engine) throw new Error('Sin conexión al motor: no se puede pausar ni reanudar.')
+        const fin = await freshnessInputs()
+        if (!processBelongsToDomain(domainId, processId, fin.procs, fin.sources)) throw new Error(`Proceso desconocido en el dominio: ${processId}`)
         if (paused) {
           await engine.setScheduleEnabled(processId, false)
           await govStore.setProcessPaused(processId, true, by)
@@ -1898,10 +1904,12 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       },
       // Driver del reconciliador («aplicar cadencia»): empuja la cadencia derivada del proceso al schedule
       // del motor (one-way, idempotente). Devuelve el plan (set/noop) para feedback.
-      applyCadence: async (processId: string, by: string) => {
+      applyCadence: async (domainId: string, processId: string, by: string) => {
         const engine = fabricWiring.engine
         if (!engine) throw new Error('Sin conexión al motor: no se puede aplicar la cadencia.')
         const f = await freshnessInputs()
+        // Misma validación de pertenencia que en `pauseProcess`, por la misma razón (fail-closed).
+        if (!processBelongsToDomain(domainId, processId, f.procs, f.sources)) throw new Error(`Proceso desconocido en el dominio: ${processId}`)
         const map = deriveIngestionMap(f.mapInput)
         const row = map.find((m) => m.processId === processId)
         if (!row) throw new Error(`Proceso desconocido: ${processId}`)
