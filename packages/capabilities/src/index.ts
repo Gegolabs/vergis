@@ -216,6 +216,7 @@ export {
   requiredCadenceSeconds,
   deriveIngestionMap,
   deriveEntityFreshness,
+  processBelongsToDomain,
   OFERTA_EVENTO,
   isEventDriven,
   validateOferta,

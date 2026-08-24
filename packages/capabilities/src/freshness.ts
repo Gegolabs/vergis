@@ -154,6 +154,28 @@ export function deriveIngestionMap(input: DeriveMapInput): IngestionMapRow[] {
   })
 }
 
+/**
+ * ¿El proceso pertenece al dominio? La pertenencia NO la declara el proceso: se hereda de la FUENTE
+ * que ingesta —el mismo criterio con que la vista de Frescura filtra su lista— y por eso se resuelve
+ * acá, donde viven fuentes y procesos, y no en el formulario que nombra el proceso.
+ *
+ * PURA y FAIL-CLOSED: proceso desconocido, fuente desconocida o fuente sin dominio ⇒ `false`. Si la
+ * pertenencia no se puede determinar, se niega — la alternativa es que una acción por-proceso quede
+ * gobernada solo por el dominio de la URL, que el formulario no elige.
+ */
+export function processBelongsToDomain(
+  domainId: string,
+  processId: string,
+  processes: { id: string; sourceId: string }[],
+  sources: { id: string; domain?: string | null }[],
+): boolean {
+  if (!domainId || !processId) return false
+  const proc = processes.find((p) => p.id === processId)
+  if (!proc) return false
+  const domain = sources.find((s) => s.id === proc.sourceId)?.domain
+  return domain != null && domain !== '' && domain === domainId
+}
+
 // ─── Proyección por ENTIDAD (la unidad de demanda; la vista de Frescura del dominio) ─────────────────
 export interface EntityFreshnessRow {
   /** Entidad = tabla de salida silver que un PI consume. */

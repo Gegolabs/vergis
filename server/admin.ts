@@ -303,10 +303,13 @@ export interface AdminDeps {
   processStates?: () => Promise<ProcessIngestionState[]>
   /** Frescura por entidad de un dominio (vista de dominio): proyección por entidad + run-history + schedule + salud. Opcional. */
   domainFreshness?: (domainId: string) => Promise<DomainEntityFreshness[]>
-  /** Driver del reconciliador: empuja la cadencia derivada de un proceso al schedule del motor. Opcional. */
-  applyCadence?: (processId: string, by: string) => Promise<{ action: 'set' | 'noop'; desiredSeconds: number }>
-  /** Pausa/reanudación de un proceso (#107): motor primero, store después. Lo implementa el wiring. */
-  pauseProcess?: (processId: string, paused: boolean, by: string) => Promise<void>
+  /** Driver del reconciliador: empuja la cadencia derivada de un proceso al schedule del motor. Opcional.
+   * Recibe el dominio de la URL (ya autorizado por `canMng`) para que el wiring valide la PERTENENCIA
+   * del proceso a ese dominio, igual que `runLogs.refOf`: el `process` llega en el formulario. */
+  applyCadence?: (domainId: string, processId: string, by: string) => Promise<{ action: 'set' | 'noop'; desiredSeconds: number }>
+  /** Pausa/reanudación de un proceso (#107): motor primero, store después. Lo implementa el wiring.
+   * El `domainId` viaja por la misma razón que en `applyCadence`. */
+  pauseProcess?: (domainId: string, processId: string, paused: boolean, by: string) => Promise<void>
   /** Nº de PIs servidos (para el tile del dashboard). Opcional. */
   piCount?: number
   /** Resumen de la vigilancia del intake (#161) para el tile «Cargas» del dashboard, acotado a los
@@ -480,6 +483,8 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         }
         // Un solo POST para las acciones por proceso de Frescura: `accion` rutea. Ausente = «aplicar»
         // (la conducta de siempre: los forms ya publicados no llevan el campo).
+        // `canMng` autoriza el dominio de la URL; el `process` viene del FORMULARIO, así que su
+        // pertenencia a ese dominio la valida el wiring (fail-closed) — se le pasa `domain.id`.
         if (section === 'frescura' && (deps.applyCadence ?? deps.pauseProcess) && req.method === 'POST') {
           const f = await readForm(req)
           requireCsrf(f, token)
@@ -488,12 +493,12 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           try {
             if (accion === 'pausar' || accion === 'reanudar') {
               if (!deps.pauseProcess) throw new ValidationError('La pausa de procesos no está disponible en esta instancia.')
-              await deps.pauseProcess(f['process'] ?? '', accion === 'pausar', email)
+              await deps.pauseProcess(domain.id, f['process'] ?? '', accion === 'pausar', email)
               msg = accion === 'pausar' ? 'Proceso pausado.' : 'Proceso reanudado.'
             } else if (!deps.applyCadence) {
               throw new ValidationError('Aplicar cadencia no está disponible en esta instancia.')
             } else {
-              const plan = await deps.applyCadence(f['process'] ?? '', email)
+              const plan = await deps.applyCadence(domain.id, f['process'] ?? '', email)
               msg = plan.action === 'set' ? 'Cadencia aplicada al motor.' : 'El schedule ya estaba en la cadencia requerida.'
             }
           } catch (e) {
