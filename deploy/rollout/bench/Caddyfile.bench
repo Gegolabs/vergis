@@ -1,0 +1,63 @@
+# Banco V-14 — BORDE DEL BANCO, derivado de `deploy/Caddyfile.reference`.
+#
+# Qué se conserva IDÉNTICO al de referencia, porque es el sujeto de la medición:
+#   · el snippet `anillo_activo` entero — predicado de salud (`"phase":"serving"`), `health_interval`,
+#     `health_timeout`, `lb_try_duration`, `lb_try_interval` y los timeouts de transporte;
+#   · el listener `:8079` (conmutador + sala de espera) con su `import /etc/caddy/rings/active.caddy`;
+#   · el `handle_errors` que degrada a la página de espera con 503.
+#
+# Qué se OMITE, y por qué omitirlo no toca lo medido: el tramo `:443` (TLS) y el salto a
+# oauth2-proxy. El SSO está aguas ARRIBA del conmutador y por contrato «no se toca en una promoción»
+# (`compose.reference.yml`): lo que conmuta y lo que retiene es este listener. Montar ACME y un IdP
+# en un banco local agregaría fallos ajenos al sujeto sin agregar una sola observación sobre él.
+#
+# ⚠ ESTE ARCHIVO ES ESPEJO. Si `deploy/Caddyfile.reference` cambia el snippet `anillo_activo` o el
+# listener `:8079`, acá también — o el banco pasa a medir un borde que ya no existe.
+{
+	# El admin API (localhost:2019 DENTRO del contenedor) es lo que hace posible `caddy reload` sin
+	# bajar el proceso, y en el banco además es LA FUENTE VIVA que se lee para los controles: qué
+	# upstream está ruteado y qué salud le ve el borde se preguntan acá, jamás al archivo que se editó
+	# (Regla 3 de `ww:wingcoding`: un bind-mount puede seguir viendo el inodo viejo).
+	admin 0.0.0.0:2019
+}
+
+(anillo_activo) {
+	health_uri /healthz
+	health_interval 1s
+	health_timeout 2s
+	health_status 2xx
+	health_body `"phase":"serving"`
+
+	lb_try_duration 90s
+	lb_try_interval 500ms
+
+	transport http {
+		read_timeout 300s
+		write_timeout 300s
+	}
+}
+
+:8079 {
+	import /etc/caddy/rings/active.caddy
+
+	handle_errors {
+		@sin-anillo expression `{err.status_code} in [502, 503, 504]`
+		handle @sin-anillo {
+			root * /etc/caddy/edge
+			rewrite * /espera.html
+			header Cache-Control "no-store"
+			file_server {
+				status 503
+			}
+		}
+		handle {
+			respond "{err.status_code} {err.status_text}" {err.status_code}
+		}
+	}
+
+	log {
+		output stderr
+	}
+}
+
+# • Generado con Wingworking

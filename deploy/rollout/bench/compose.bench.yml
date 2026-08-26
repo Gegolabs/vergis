@@ -1,0 +1,97 @@
+# Banco V-14 — el mundo local donde se mide una promoción de anillos.
+#
+# LO QUE ESTE ARCHIVO NO DECLARA, Y ES DELIBERADO: los anillos. Los crea `vergis-rollout install` como
+# contenedores `vergis-<versión>` fuera del ciclo de vida de compose — que es exactamente la propiedad
+# que permite tener dos versiones vivas a la vez y promover sin recrear nada.
+#
+# LEY DEL INSTRUMENTO (`lab/scripts/poller-corte.mjs`, cabecera): el poller y el mutador viven en
+# contenedores HERMANOS que el acto de promoción NO recrea. Un poller efímero muere durante el acto y
+# solo acota el corte POR ABAJO, sin decir que no pudo medir.
+#
+# Todo recurso lleva prefijo `benchv14-`: el banco convive con otros trabajos en la misma máquina y
+# ningún comando suyo puede alcanzar lo que no es suyo.
+name: benchv14
+
+networks:
+  default:
+    name: benchv14
+
+services:
+  # El store gobernado del motor B. Vive acá y no como anillo: es la FUENTE, no el sujeto.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: benchv14-clickhouse
+    environment:
+      # El nodo crea rol, row policy y usuario consumidor en el bootstrap: sin access management el
+      # arranque falla y el banco no tendría de dónde servir.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    expose: ["8123"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # El borde que conmuta y espera — el SUJETO de la medición.
+  caddy:
+    image: caddy:2
+    container_name: benchv14-caddy
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    volumes:
+      - ./Caddyfile.bench:/etc/caddy/Caddyfile:ro
+      - ./.run/rings:/etc/caddy/rings:ro
+      # La sala de espera se monta DESDE EL REPO, no se copia: un espejo sin nota de divergencia
+      # se revierte solo, y acá además el banco tiene que medir la página que la instancia sirve.
+      - ../../edge:/etc/caddy/edge:ro
+    # `:8079` NO se publica al host — mismo supuesto de red del despliegue de referencia. Todo lo que
+    # el banco observa se observa DESDE ADENTRO de la red (poller, mutador, sondas de la herramienta).
+    expose: ["8079", "2019"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:2019/config/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # EL INSTRUMENTO. Se levanta cuando el banco ya está estable y sobrevive al acto entero.
+  poller:
+    image: node:22-slim
+    container_name: benchv14-poller
+    profiles: ["medicion"]
+    depends_on: [caddy]
+    volumes:
+      - ./poller:/poller:ro
+      - ./.run/datos:/datos
+    working_dir: /poller
+    # El destino y el archivo de salida los fija `bench.sh` por env: el mismo instrumento mide el
+    # conmutador (CN-2) o un nodo suelto (CN-1) sin cambiar una línea de código.
+    environment:
+      POLLER_URL: ${POLLER_URL:-http://benchv14-caddy:8079/healthz}
+      POLLER_OUT: ${POLLER_OUT:-/datos/poller.jsonl}
+      POLLER_INTERVALO_MS: ${POLLER_INTERVALO_MS:-28}
+      POLLER_TIMEOUT_MS: ${POLLER_TIMEOUT_MS:-20000}
+    command: ["node", "/poller/poller-v14.mjs"]
+    restart: "no"
+
+  # El loop de mutaciones (V13 de work/210 §10, 1/s) — hermano del poller, tampoco lo recrea el acto.
+  mutador:
+    image: node:22-slim
+    container_name: benchv14-mutador
+    profiles: ["medicion"]
+    depends_on: [caddy]
+    volumes:
+      - ./poller:/poller:ro
+      - ./.run/datos:/datos
+    working_dir: /poller
+    environment:
+      MUT_URL: ${MUT_URL:-http://benchv14-caddy:8079}
+      MUT_PI: ${MUT_PI:-bench-01}
+      MUT_OUT: ${MUT_OUT:-/datos/mutaciones.jsonl}
+      MUT_EMAIL: ${MUT_EMAIL:-banco@v14.local}
+      MUT_INTERVALO_MS: ${MUT_INTERVALO_MS:-1000}
+      MUT_TIMEOUT_MS: ${MUT_TIMEOUT_MS:-20000}
+      VERGIS_CSRF_SECRET: ${VERGIS_CSRF_SECRET:-}
+    command: ["node", "/poller/mutador.mjs"]
+    restart: "no"
