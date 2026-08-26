@@ -256,7 +256,10 @@ medir_acto() {
   if [ "$accion" = rollback ]; then
     say "· ACTO: sh vergis-rollout rollback $cand   (t0=$ini)"
     set +e
-    sh "$TOOL" rollback "$cand" >"$D/tool.log" 2>&1
+    # `--no-schema-gate`: la instancia del banco no tiene store de gobierno, asi que /contrato
+    # responde 403 y el gate ABORTA el pre-flight. Un aborto de pre-flight no mueve nada y por eso
+    # sale «0 fuera de predicado» sin haber medido acto alguno — el verde que no midio.
+    sh "$TOOL" rollback "$cand" --no-schema-gate >"$D/tool.log" 2>&1
     rc=$?
     set -e
   else
