@@ -259,16 +259,17 @@ medir_acto() {
   if [ "$accion" = rollback ]; then
     say "· ACTO: sh vergis-rollout rollback $cand   (t0=$ini)"
     set +e
-    # `--no-schema-gate`: la instancia del banco no tiene store de gobierno, asi que /contrato
-    # responde 403 y el gate ABORTA el pre-flight. Un aborto de pre-flight no mueve nada y por eso
-    # sale «0 fuera de predicado» sin haber medido acto alguno — el verde que no midio.
-    sh "$TOOL" rollback "$cand" --no-schema-gate >"$D/tool.log" 2>&1
+    # CON gate de esquema. Antes iba `--no-schema-gate` porque la instancia del banco no tenia store
+    # de gobierno: /contrato respondia 403 y el gate ABORTABA el pre-flight, y un aborto no mueve nada
+    # — de ahi salia «0 fuera de predicado» sin haber medido acto alguno, el verde que no midio.
+    # Con `VERGIS_ADMIN_SEED` en `ring.args.tmpl` el store existe y el gate se ejerce de verdad (V11).
+    sh "$TOOL" rollback "$cand" >"$D/tool.log" 2>&1
     rc=$?
     set -e
   else
     say "· ACTO: sh vergis-rollout promote $cand   (t0=$ini)"
     set +e
-    sh "$TOOL" promote "$cand" --no-schema-gate >"$D/tool.log" 2>&1
+    sh "$TOOL" promote "$cand" >"$D/tool.log" 2>&1
     rc=$?
     set -e
   fi
@@ -574,6 +575,10 @@ cmd_v9() {
   say "  época observada por el standby ANTES: ${ep_antes:-?} · veces que armó lazos ANTES: $armados_antes"
   contrato_de "$ne" >"$D/contrato-standby-antes.txt"
 
+  # Los anillos nacen con `--restart unless-stopped`: un SIGKILL sale con 137 y Docker LO RESUCITA en
+  # menos de un segundo. Eso no es el crash que V9 mide —el titular que muere y NO vuelve— así que la
+  # política se retira ANTES del kill y se restaura después. Acotado por nombre a este anillo.
+  docker update --restart=no "$na" >/dev/null 2>&1 || true
   t0=$(ahora_ms)
   docker kill -s SIGKILL "$na" >/dev/null
   say "  SIGKILL enviado a $na en t0=$t0 (el comando miente: la medición es el sondeo de abajo)"
@@ -595,18 +600,50 @@ cmd_v9() {
   fase=$(fase_de "$ne" | head -c 120)
 
   if [ -n "$t_adq" ]; then ms=$((t_adq - t0)); else ms=-1; fi
-  {
-    printf '{"v":"V9","muerto":"%s","sobreviviente":"%s","t0":%s,"tAdquisicion":%s,"msHastaAdquirir":%s,' "$act" "$esp" "$t0" "${t_adq:-null}" "$ms"
-    printf '"epocaObservadaAntes":%s,"epocaDespues":%s,"armadosAntes":%s,"armadosDespues":%s,' "${ep_antes:-null}" "${ep_desp:-null}" "$armados_antes" "$armados_desp"
-    printf '"presupuestoMs":12000,"faseFinal":"%s","fin":%s}\n' "$(printf '%s' "$fase" | sed 's/"/\\"/g')" "$fin"
-  } >"$D/resultado.json"
+
+  # LA CIFRA QUE VALE NO ES LA DEL SONDEO. `ahora_ms()` fabrica los milisegundos (`date +%s000`) y cada
+  # vuelta del sondeo cuesta un `docker exec`: el «13 s» que sale de ahí tiene una resolución de segundos
+  # y un sesgo hacia arriba. Los dos instantes exactos existen y no son míos: la MUERTE la sella Docker
+  # (`State.FinishedAt`, nanosegundos) y la ADQUISICIÓN la sella el propio nodo en su log con timestamp.
+  # Se re-deriva de ahí, y el sondeo queda como lo que es: el disparador, no la medición.
+  muerte=$(docker inspect --format '{{.State.FinishedAt}}' "$na" 2>/dev/null || printf '')
+  adq_log=$(grep "RELEVO: control adquirido" "$D/log-sobreviviente.txt" | tail -1 | awk '{print $1}')
+  armado_log=$(grep "RELEVO completo" "$D/log-sobreviviente.txt" | tail -1 | awk '{print $1}')
+  # shellcheck disable=SC2016  # es código JS, no expansión de shell
+  node -e '
+    const [muerte,adq,armado,epA,epD,arA,arD,fase,msSondeo,acto,superv]=process.argv.slice(1)
+    const d=(x)=>{const t=Date.parse(x);return Number.isFinite(t)?t:null}
+    const m=d(muerte), a=d(adq), r=d(armado)
+    // Techo REAL del protocolo, leído del código y no supuesto: staleMs (10 s, `DEFAULT_STALE_MS`)
+    // + una vuelta del poller de relevo (`serve-rls.ts`: setInterval de max(500, renewMs) = 2 s)
+    // + el período de renovación que `#reclamar` espera ANTES de confirmar por relectura
+    // (`control-lease.ts` §Relevo, `await this.#sleep(this.#renewMs)`) = 14 s.
+    const techo=14000
+    const ms = m!==null && a!==null ? a-m : null
+    const out={v:"V9",muerto:acto,sobreviviente:superv,
+      muerteExacta:muerte||null, adquisicionExacta:adq||null, lazosArmadosExacto:armado||null,
+      msHastaAdquirir_exacto:ms, msHastaLazosArmados_exacto: m!==null&&r!==null?r-m:null,
+      msHastaAdquirir_porSondeo:Number(msSondeo),
+      techoDelProtocoloMs:techo, techoDesglose:"staleMs 10000 + poll de relevo 2000 + confirmación 2000",
+      epocaAntes:Number(epA), epocaDespues:Number(epD), deltaEpoca:Number(epD)-Number(epA),
+      armadosAntes:Number(arA), armadosDespues:Number(arD), vecesQueArmoEnEsteRelevo:Number(arD)-Number(arA),
+      faseFinal:fase,
+      veredicto: ms!==null && ms<=techo && Number(epD)-Number(epA)===1 && Number(arD)-Number(arA)===1
+        ? "V9 PASA · adquirió con época+1 dentro del techo del protocolo y armó los lazos UNA sola vez"
+        : "V9 NO PASA · mirar los brazos"}
+    console.log(JSON.stringify(out,null,2))
+  ' "$muerte" "$adq_log" "$armado_log" "${ep_antes:-0}" "${ep_desp:-0}" "$armados_antes" "$armados_desp" "$fase" "$ms" "$act" "$esp" >"$D/resultado.json"
   cat "$D/resultado.json"
   say ""
   say "  Tramos internos del sobreviviente:"
   grep -E "RELEVO|ARMADOS|adquir|EN ESPERA|época" "$D/log-sobreviviente.txt" | tail -8
   say ""
-  say "  LECTURA: V9 pasa si msHastaAdquirir ≤ 12000 (STALE_MS 10 s + renovación 2 s), la época subió"
-  say "  EXACTAMENTE en 1 y los lazos se armaron UNA sola vez más que antes."
+  say "  LECTURA: V9 pasa si msHastaAdquirir_exacto ≤ 14000 —el techo del protocolo, desglosado en el"
+  say "  propio resultado y leído del código—, la época subió EXACTAMENTE en 1, y los lazos se armaron"
+  say "  UNA sola vez más que antes."
+  # Se devuelve el anillo muerto al mundo (como standby del nuevo titular) y se restaura su política.
+  docker start "$na" >/dev/null 2>&1 || true
+  docker update --restart=unless-stopped "$na" >/dev/null 2>&1 || true
 }
 
 # ── V9 · CONTROL NEGATIVO · sin kill, el standby JAMÁS adquiere ────────────────────────────────────
@@ -735,6 +772,10 @@ cmd_v12() {
   say "── V12 · sala de espera · único nodo vivo = $act ($na) ──"
   say "· se detiene el otro anillo ($no): V12 mide el hueco SIN standby, que es el que la sala cubre."
   docker stop "$no" >/dev/null 2>&1 || true
+  # Mismo motivo que en V9: con `--restart unless-stopped` Docker resucita al muerto en menos de un
+  # segundo y el hueco que la sala de espera tiene que cubrir no llega a existir. Se retira y se restaura.
+  docker update --restart=no "$na" >/dev/null 2>&1 || true
+  secreto_cargar
 
   # El instrumento vive en un contenedor hermano que el acto NO recrea (el mutador ya está declarado).
   $COMPOSE --profile medicion up -d --no-deps mutador >/dev/null 2>&1 || true
@@ -776,6 +817,7 @@ cmd_v12() {
   say "  restaurando el espejo:"
   lb_fijar 90s
   i=0; while [ "$i" -lt 120 ]; do case "$(fase_de "$na")" in *'"phase":"serving"'*) break ;; esac; sleep 1; i=$((i+1)); done
+  docker update --restart=unless-stopped "$na" >/dev/null 2>&1 || true
   docker start "$no" >/dev/null 2>&1 || true
   $COMPOSE --profile medicion stop mutador >/dev/null 2>&1 || true
   docker logs --timestamps benchv14-caddy >"$D/log-borde.txt" 2>&1 || true
