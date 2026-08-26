@@ -1,0 +1,50 @@
+# PI 01 del banco V-14 — sintético. Nueve PIs iguales salvo su identidad: lo que el banco necesita
+# de la instancia es CARGA DE ARRANQUE Y DE SERVING representativa, no variedad de piezas.
+mira_version: "1.0"
+
+identity:
+  id: pi-01
+  display_name: "PI 01 · Asistencia por Área"
+  code: "BENCH-01"
+  org: "Banco V-14"
+  classification: public
+
+piece:
+  layout: rows
+  elements:
+    - layout: grid
+      columns: 2
+      elements:
+        - kpi: { label: "Presentes", accent: blue, format: int_0, agg: { dataset: areas, op: sum, field: present } }
+        - kpi: { label: "Total", accent: gray, format: int_0, agg: { dataset: areas, op: sum, field: total } }
+    - semaforo:
+        data: data.areas
+        label: area
+        present: present
+        total: total
+        thresholds: { green: 90, yellow: 70 }
+        title: "Asistencia por Área — PI 01"
+
+data:
+  areas:
+    capability: execute-sql-ch
+    params:
+      sql: "SELECT area, total, present FROM bench.areas"
+    shape:
+      type: rows
+      fields:
+        area: string
+        total: integer
+        present: integer
+
+delivery:
+  render:
+    - { format: html, target: web }
+
+# Autorización: NINGUNA acá. El spec es authz-blind — la política vive atada al dato
+# (`instancia/entidades.yaml`). Es la regla del proyecto, y en el banco además es lo que deja que el
+# predicado del borde dependa SOLO de la fase del nodo.
+quality:
+  freshness: { max_age: PT0S, source_watermark: ignore }
+  refresh: { mode: on-demand }
+  degradation: { on_capability_fail: agentic_fallback }

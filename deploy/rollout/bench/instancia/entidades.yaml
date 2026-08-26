@@ -1,0 +1,8 @@
+# Policy store del banco (VERGIS_POLICIES). `grant: all` es apertura EXPLÍCITA y gobernada — no es
+# ausencia de política: sin entrada, el dataset no se sirve (default-deny).
+#
+# El banco mide el conmutador, no la RLS: abrir el dato es lo que deja que el predicado del borde
+# dependa SOLO de la fase del nodo. La RLS tiene su propio arnés (V10 del dossier).
+policies:
+  - dataset: bench.areas
+    grant: all

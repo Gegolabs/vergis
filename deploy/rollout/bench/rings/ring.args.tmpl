@@ -1,0 +1,43 @@
+# Argumentos de `docker create` de cada anillo del banco (espejo de `deploy/rollout/ring.args.example`).
+# `bench.sh` lo materializa en `.run/rings/ring.args` reemplazando @BENCH@ por la ruta absoluta de este
+# directorio y @SECRETO@ por el secreto CSRF de la corrida (generado al vuelo, jamás versionado).
+--network
+benchv14
+--restart
+unless-stopped
+--init
+--memory
+1g
+--log-driver
+json-file
+--log-opt
+max-size=10m
+--log-opt
+max-file=3
+-e
+VERGIS_ENGINE=clickhouse
+-e
+VERGIS_CH_URL=http://benchv14-clickhouse:8123
+-e
+VERGIS_DATASETS=/instancia/datasets.yaml
+-e
+VERGIS_POLICIES=/instancia/entidades.yaml
+-e
+VERGIS_SPECS_DIR=/specs
+-e
+VERGIS_OUT=/governance
+-e
+VERGIS_REFRESH_MS=0
+-e
+VERGIS_CSRF_SECRET=@SECRETO@
+# El plano de control: `lease` es lo que hace posible dos nodos vivos sin pisarse las escrituras.
+-e
+VERGIS_CONTROL=lease
+-v
+@BENCH@/specs:/specs:ro
+-v
+@BENCH@/instancia:/instancia:ro
+# PERSISTENTE y COMPARTIDO: acá viven el lease del plano de control y los stores embebidos. Que sea
+# el mismo directorio para todos los anillos es el punto — el lease solo ordena a quien ve el archivo.
+-v
+@BENCH@/.run/governance:/governance
