@@ -23,7 +23,11 @@
 
 (anillo_activo) {
 	health_uri /healthz
-	health_interval 1s
+	# ESPEJO de `deploy/Caddyfile.reference`: 250 ms. El intervalo NO decide correctitud (eso lo hace
+	# el predicado `health_body`): decide cuánto tarda la sala de espera en soltar a los retenidos una
+	# vez que el anillo nuevo ya satisface el predicado — recorte de la COLA DE LATENCIA del acto.
+	# Su costo es `frecuencia × upstreams declarados`: con UN upstream, 4 req/s contra `/healthz`.
+	health_interval 250ms
 	health_timeout 2s
 	health_status 2xx
 	health_body `"phase":"serving"`
