@@ -56,6 +56,24 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### La sala de espera del borde ya no envenena a un lector de fase por expresión regular
+
+`deploy/edge/espera.html` —el cuerpo del **503** que Caddy sirve cuando ningún anillo declara la fase
+`serving`— llevaba ese literal escrito en un comentario. Cualquier lector que extraiga la fase del
+cuerpo por regexp leía `serving` **de la página que significa justo lo contrario**.
+
+**El veredicto de ruteo NO estaba comprometido** y va dicho para no inflar el hallazgo: `serving_ok`
+de `deploy/rollout/vergis-rollout` exige `200` **antes** de mirar la fase, y esta página se sirve con
+503. Lo que sí mentía era el **diagnóstico**: el `warn` del smoke llama al extractor sin ese gate, así
+que ante un 503 imprimía `fase='serving'` — exactamente cuando alguien está averiguando qué pasó.
+
+Medido con sus dos controles: el extractor real (`sed`) sobre la página anterior devuelve `serving`,
+sobre la corregida devuelve vacío, y sobre un `/healthz` de verdad sigue devolviendo `serving` — o sea
+que se cortó la trampa sin romper el instrumento. **Se corta en la fuente y no en cada lector**: los
+lectores se multiplican, este archivo es uno.
+
+Hallado por el frente `arbol` midiendo el banco del conmutador de anillos.
+
 ### Dependencias
 
 - `tedious` ^19.2.1 → **^19.2.2** (#252) — patch dentro del mismo minor; el salto a v20 sigue

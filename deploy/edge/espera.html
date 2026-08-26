@@ -1,7 +1,18 @@
 <!doctype html>
 <!--
   SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado
-  `lb_try_duration`, ningún anillo declara `"phase":"serving"`.
+  `lb_try_duration`, ningún anillo declara la fase `serving`.
+
+  EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, ni siquiera en un comentario, y
+  la razón es concreta: esta página ES el cuerpo del 503 del borde. Cualquier lector que extraiga la
+  fase del cuerpo por expresión regular —`phase_of()` de `deploy/rollout/vergis-rollout` lo hace con
+  un `sed`— leería `serving` de la página que significa exactamente lo contrario.
+  Hoy el veredicto NO se corrompe, porque `serving_ok` exige `200` antes de mirar la fase y esta
+  página se sirve con 503. Lo que sí se corrompía era el DIAGNÓSTICO: el `warn` del smoke llama a
+  `phase_of` sin ese gate, así que ante un 503 imprimía `fase='serving'` — mentir justo cuando
+  alguien está averiguando qué pasó.
+  Se corta en la fuente y no en cada lector: los lectores se multiplican, este archivo es uno.
+  Hallazgo del frente arbol, midiendo el banco del conmutador (2026-08-26).
 
   VIVE EN EL BORDE, NUNCA DENTRO DE VERGIS: está medido que nada dentro de un proceso puede cubrir su
   propia ausencia. Es un archivo estático, sin dependencias externas ni red: si el motor no está, esta
