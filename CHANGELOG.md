@@ -21,8 +21,8 @@ Publicar es un **acto deliberado**: el tag de versión lo mueve un tag de git, n
 
 | Tag | Qué es | Para quién |
 |--|--|--|
-| `0.21.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
-| `0.21` | Flota al último patch de la serie 0.21 | Producción que quiere correcciones sin capacidades nuevas |
+| `0.22.0` | Una versión publicada. **No se reescribe** | Producción — es el pin recomendado |
+| `0.22` | Flota al último patch de la serie 0.22 | Producción que quiere correcciones sin capacidades nuevas |
 | `latest` | La **última versión publicada** | Lectura y desarrollo local. No para producción |
 | `main` | El último commit de `main`. Cambia sin aviso y puede traer trabajo a medio verificar | QA que quiere probar antes de la release |
 | `sha-<commit>` | Un commit exacto | Diagnóstico y reproducibilidad |
@@ -55,6 +55,47 @@ aparte, para mirarlos a mano.
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
 ## Sin publicar
+
+*(nada todavía)*
+
+## 0.22.0 — 2026-08-26
+
+### Qué exige esta versión
+
+> **Nada nuevo del motor ni de la base**, y conviene decirlo primero: quien ya satisfizo lo que exigía
+> 0.21.0 no tiene que conceder nada más. Lo que 0.22.0 exige es del **procedimiento de despliegue**.
+
+- **La herramienta de anillos es la de este repo, no la que ya esté en la VM.** `promote` cambió su
+  orden de operaciones y el `rollback` delega en él: correr la herramienta vieja contra un Producto
+  nuevo no rompe nada, pero **no obtiene el orden nuevo** — o sea que se paga el tramo (a) igual y la
+  medición de V-14 no aplica. Copiar `deploy/rollout/vergis-rollout` es parte de adoptar esta versión.
+- **El presupuesto por default de la ventana bajó de 30 s a 10 s** (`RINGS_PROMOTE_TIMEOUT` /
+  `--timeout`). Es deliberado —el tráfico se compromete antes de que el candidato tenga el control— y
+  es la cota superior de la ventana del intent de handover. Quien tenga el valor fijado por env sigue
+  con el suyo: revísenlo.
+- **`Caddyfile.reference` baja `health_interval` a 250 ms.** Es **plantilla, no obligación**: recorta la
+  cola de latencia, no la correctitud, y su costo está declarado al lado. Un despliegue que no lo adopte
+  sigue siendo correcto — más lento en soltar a los retenidos, nada más.
+- **Sigue vigente lo de 0.21.0** para quien venga de antes: el principal de serving debe poder leer el
+  valor real de las columnas gobernadas, y hay que regenerar y re-aplicar la DDL de la política. **Y su
+  recomendación cambió** — ver la corrección de E3 más abajo: `GRANT UNMASK` por columna es mejor vía
+  que subir el rol del workspace, y es la que esta versión recomienda.
+
+### Lo que sigue sin medirse, dicho con esas palabras
+
+- **Producción.** Todo lo del conmutador se midió en **banco local** (Docker, 9 PIs, motor
+  `clickhouse`), con su control reproduciendo el defecto viejo tres veces. Un despliegue real
+  **corrobora**; no es la medición que falta.
+- **La dispersión del tramo (a)** —234–762 ms, 9–27 respuestas en el orden viejo— **no está explicada**.
+  Se afirma que el tramo existe y quién lo abre y lo cierra; su tamaño no.
+- **Qué le hace el `caddy reload` del flip-back a los requests retenidos.**
+- **El cierre de #232 es parcial y por diseño**: el intent ordena la fila solo entre quienes pasan por
+  `intentarRelevo`. La marca de release **sigue siendo subasta abierta** por cualquier otro camino. Lo
+  que esta versión garantiza es que **la promoción orquestada es determinista** — no que soltar el
+  control sea una entrega.
+- **La ventana del arnés de Fabric se corrió ANTES de este tag** (2026-08-26, 13:12–13:14 UTC): 26
+  hallazgos, 0 fallos, 0 sin medir, capacidad devuelta a `Paused`. Es la cadencia declarada, y existe
+  porque en 0.21.0 esa misma medición se hizo **veinte minutos después** de empujar el tag.
 
 ### La promoción de anillos conmuta el borde ANTES del handover, y el relevo va DIRIGIDO por un intent (#232, parcial)
 
@@ -111,7 +152,7 @@ espera sigue siendo el predicado `200 ∧ phase=serving ∧ pis.serving=pis.tota
 Caddyfile es una plantilla: adoptar el valor es decisión de quien opera. Un despliegue que no use
 anillos no cambia en nada.
 
-### La sala de espera del borde ya no envenena a un lector de fase por expresión regular
+### La sala de espera del borde ya no envenena a un lector de fase por expresión regular (#256)
 
 `deploy/edge/espera.html` —el cuerpo del **503** que Caddy sirve cuando ningún anillo declara la fase
 `serving`— llevaba ese literal escrito en un comentario. Cualquier lector que extraiga la fase del
@@ -128,6 +169,25 @@ que se cortó la trampa sin romper el instrumento. **Se corta en la fuente y no 
 lectores se multiplican, este archivo es uno.
 
 Hallado por el frente `arbol` midiendo el banco del conmutador de anillos.
+
+### Lo que se endureció puertas adentro, y el operador no ve (#256)
+
+Nada de esto cambia el comportamiento del Producto: se declara porque **cambia cuánto vale su verde**.
+
+- El `typecheck` del repo **no miraba `scripts/`** — daba verde por ausencia. Al abrirlo aparecieron
+  cuatro errores de tipo y **dos arneses rotos**: uno moría al correr, el otro reportaba la falta de su
+  insumo con un stack crudo en vez de decir «no pude medir».
+- **El pin de shellcheck** vivía en dos archivos atado solo con comentarios cruzados. Ahora lo ata un
+  test.
+- **El corte de versión no cotejaba nada** contra lo que el tag contiene — esta misma sección se
+  verificó con `npm run corte:cotejo` antes de cerrarse, y el procedimiento está arriba.
+- El eslabón **renombrar → catálogo servido** (#207) pasó de estar cubierto por lectura a estar medido.
+- Los dos arneses que no corrían en ningún gate ya tienen **uno cada uno**: el de T-SQL, un workflow
+  con filtro de `paths`; el de Fabric, una **cadencia** — el corte de versión, antes del tag.
+
+Los cinco tenían la misma forma: **un control que no controlaba**, y ninguno se caía. Se dicen acá
+porque quien lee un CHANGELOG está decidiendo cuánto confiar en la versión, y eso depende tanto de lo
+que trae como de lo que la midió.
 
 ### Dependencias
 
