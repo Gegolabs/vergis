@@ -25,6 +25,16 @@ la promoción PENDINGS→TODO se pide, no se toma.
   0.20.0, que da «sano» a un nodo que no sirve si el chequeo juzga por `r.ok`; (e) que **su producción
   corre 0.18.0** —verificado por el frente arbol contra la VM viva—, o sea sin ninguna de estas
   correcciones. `reg 2026-08-18`
+  **RE-DERIVADA 2026-08-26 — y el pendiente CRECIÓ, no se saldó.** Se cortó **0.22.0** (tag `v0.22.0`,
+  imagen verificada contra el registry: `0.22.0`, `0.22` y `latest` en 200, con la revisión `d1e3ac1`
+  en los labels). O sea que el salto que el aviso tiene que declarar ya no es 0.18.0 → 0.20.1 sino
+  **0.18.0 → 0.22.0**, y suma dos cosas nuevas: (f) el **conmutador de anillos determinista** con su
+  cambio de PROCEDIMIENTO —la herramienta de anillos de este repo, el presupuesto de ventana en 10 s—
+  y (g) que la recomendación de cómo concederle la capacidad al principal de serving **cambió** (E3:
+  `GRANT UNMASK` por columna en vez de subir el rol).
+  **Sigue siendo suyo y por la misma razón**: comunicación saliente a un tercero. Publicar es nuestro y
+  está hecho; avisar es de él. El borrador vive al pie de `NEXT.md` y **hay que actualizarlo antes de
+  enviarlo**. `act 2026-08-26`
 
 - **Las imágenes hasta 0.20.0 inclusive están MUDAS: no traen changelog ni labels** — el arreglo de
   #229 entró después de ese corte, así que solo desde **0.20.1** la imagen contesta «¿qué exige
