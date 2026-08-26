@@ -24,7 +24,21 @@ import { createPiConfig } from '../server/pi-config'
 
 const PORT = Number(process.env['PORT'] ?? 7799)
 const OUT = mkdtempSync(join(tmpdir(), 'admin-smoke-'))
-const entities = parseMasterDataConfig(parseYaml(readFileSync(process.env['VERGIS_MASTER_DATA']!, 'utf8')))
+// Sin su insumo, este arnés NO PUDO MEDIR — y tiene que decirlo con esas palabras. Con el `!` de
+// antes, la ausencia del env salía como un stack crudo de `node:fs` («path must be of type string»),
+// que se lee como «el arnés está roto» y no como «te falta el archivo». Es la misma familia del
+// instrumento que no sabe reportar su propio fallo, del lado ruidoso.
+const masterData = process.env['VERGIS_MASTER_DATA']
+if (!masterData) {
+  console.error(
+    'NO SE PUDO MEDIR: falta VERGIS_MASTER_DATA (ruta al YAML de data maestra).\n' +
+      '  Uso: VERGIS_MASTER_DATA=<entidades.yaml> VERGIS_ADMIN_SEED=cesar@x.com npx tsx scripts/admin-smoke.ts\n' +
+      '  La forma del archivo está en docs/data-maestra-y-publicacion.md. El repo no trae uno de ejemplo:\n' +
+      '  por eso este arnés no está en ningún gate, y eso es un dato, no un olvido.',
+  )
+  process.exit(2)
+}
+const entities = parseMasterDataConfig(parseYaml(readFileSync(masterData, 'utf8')))
 const adminSeed = (process.env['VERGIS_ADMIN_SEED'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
 // Registro de PIs simulado (sin specs reales): PI-01 lee fact_saldos (fuente SAP, oferta horaria).

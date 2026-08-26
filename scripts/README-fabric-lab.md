@@ -39,6 +39,29 @@ export FAB_SP_TOKEN=$(curl -s -X POST \
 Sin él, P5 **no se salta en verde**: declara que la pregunta quedó sin responder. Medir `UNMASK` con
 la cuenta propia no contesta nada — un admin humano siempre lo tiene.
 
+## ¿Cada cuánto se corre? — la cadencia, declarada
+
+**Al cortar cada versión, ANTES de empujar el tag.** Ésa es la cadencia y no hay otra.
+
+Se declara acá porque un arnés sin cadencia se pudre igual que uno sin gate, y **éste no puede tener
+gate**: exige capacidad prendida, credenciales y plata, así que ningún CI lo va a correr. Lo que
+reemplaza al gate no es la buena memoria de nadie — es que la regla esté escrita donde se lee al
+cortar (`CHANGELOG.md` §«Antes de cortar») y que el propio arnés traiga su centinela (P10), que hace
+ruidosa la ausencia de la precondición en vez de dejarla pasar en verde.
+
+**El precedente que la fija:** el DDL del centinela de #238 se midió contra Fabric **veinte minutos
+después** de empujar `v0.21.0`. Salió bien, y eso es exactamente lo que lo vuelve un mal precedente:
+la versión ya estaba publicada cuando se supo. Publicar empieza en el tag, no en el aviso.
+
+La ventana entera es **un solo comando de shell** —con la pausa en el `trap`— y cuesta del orden de
+dos centavos. Entra bajo **POL-01** y se corre sin preguntar.
+
+```bash
+npm run fab:sql                                        # gratis: el SQL emitido, sin motor y sin gasto
+npm run fab:resume && npm run fab:proof && npm run fab:pause
+npm run fab:state                                      # y se verifica que quedó `Paused`
+```
+
 ## ¿Qué contesta y qué no?
 
 | | Arnés local (`lab:proof`) | Este terreno (`fab:proof`) |
