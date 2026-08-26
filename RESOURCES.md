@@ -20,6 +20,19 @@
 > `az ad …` **no acepta `--subscription`**: para Entra se pide token de Graph con
 > `az account get-access-token --subscription $VERGIS_FAB_SUB --resource https://graph.microsoft.com`
 > y se llama la API directo, en vez de cambiar el default global por debajo.
+>
+> ⚠ **Y `--tenant` NO es sustituto de `--subscription`** — medido el 2026-08-26:
+> `az account get-access-token --tenant 41eb660f-… ` **falla** con
+> `AADSTS50020: … does not exist in tenant 'ultraBASE'`, porque la cuenta activa es la del cliente y
+> no existe en el tenant propio. La misma petición **con `--subscription $VERGIS_FAB_SUB` funciona**
+> (token de datos obtenido, ventana de Fabric corrida). La suscripción sí está en la lista de la
+> cuenta activa; el tenant no. Alcanzar el **plano de Fabric** (no ARM) sí exige un login propio:
+> `az login --tenant 41eb660f-56d9-407a-93e0-c1e5eb7be21c --scope "https://api.fabric.microsoft.com/.default"`.
+>
+> ⚠ **`az resource list` NO ve una capacidad Trial ni una licencia PPU** — no son recursos ARM, viven
+> en el plano de Fabric. Su vacío significa **«no pude medir»**, jamás «no existen»: el instrumento
+> que decide es `GET https://api.fabric.microsoft.com/v1/capacities`, y ése exige el login de arriba.
+> Medido el 2026-08-26 al re-derivar la ficha de las dos capacidades preexistentes.
 
 ## Terreno Fabric propio (issue #186)
 
