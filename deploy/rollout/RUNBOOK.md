@@ -173,14 +173,18 @@ Arranca el poller (§0) y **déjalo corriendo**. Dos requisitos que se cumplen a
 vergis-rollout promote <versión>
 ```
 
-La herramienta hace, en orden: **pre-flight** → **handover del plano de control** → **flip del
-borde** → **smoke** → **registro**. Qué verificar en cada uno:
+La herramienta hace, en orden: **pre-flight** (incluido el del borde) → **intent de handover** →
+**flip del borde** → **handover del plano de control** → **smoke** → **registro**. El flip va
+**antes** del handover a propósito: desde el flip ningún request nuevo llega al nodo que está por
+soltar el control, y los que entran mientras el candidato todavía no sirve quedan **retenidos** por la
+sala de espera. Qué verificar en cada paso:
 
 | Paso | Verificación | Si falla |
 |--|--|--|
-| **Pre-flight** | El candidato corre la imagen registrada, responde, y su `/contrato` declara que soporta el esquema del archivo de **cada** store | **No se tocó nada.** Un pre-flight que no logra medir **se niega**: sin `RINGS_ADMIN_EMAIL` no puede leer `/contrato` y aborta. Eso es correcto, no un obstáculo que saltar |
-| **Handover** | El candidato declara `serving`; el anterior queda **en espera y sigue sirviendo lecturas** | El control vuelve al anterior y **el tráfico jamás se movió**. Si el mensaje dice que hay **cero** controladores, eso sí es un incidente: ve a §6 |
+| **Pre-flight** | El candidato corre la imagen registrada, responde, y su `/contrato` declara que soporta el esquema del archivo de **cada** store. **Y el borde**: valida su config vigente y responde | **No se tocó nada.** Un pre-flight que no logra medir **se niega**: sin `RINGS_ADMIN_EMAIL` no puede leer `/contrato` y aborta. Un borde que no valida aborta también — con el flip primero, descubrirlo después sería descubrirlo con el tráfico ya comprometido |
+| **Intent** | Se escribió `control.handover.json` nombrando al candidato (vence con el presupuesto) | Se **avisa** y se continúa: rige el protocolo de siempre (marca de release + stale window), o sea un relevo más lento y disputado. Si la promoción se demora, la causa es ésta |
 | **Flip** | `active.caddy` apunta al anillo nuevo; la config **se validó** antes de recargar | Una config inválida restaura la línea anterior y **no** recarga. El borde sigue con lo que tenía |
+| **Handover** | El candidato declara `serving` **y el borde lo entrega** (predicado completo por el conmutador); el anterior queda en espera y sigue sirviendo lecturas | **Vuelta atrás, y lo primero que vuelve es el tráfico**: flip al anterior, intent nombrándolo a él, y recién entonces SIGUSR2 al candidato. Lo capturado en la ventana estuvo **retenido**, no respondido con error. Si el mensaje dice que hay **cero** controladores, eso sí es un incidente: ve a §6 |
 | **Smoke** | Por el borde, con el predicado completo | La herramienta **vuelve atrás** por el mismo camino. Confírmalo con `status` y con el poller, no con el mensaje en pantalla |
 | **Registro** | `vergis-rollout status`: el nuevo activo, el anterior como **previo** (caliente) | Si el registro y la realidad no coinciden, **para y reporta lo observado** — no «corrijas» sobre una lectura no confirmada |
 
@@ -188,6 +192,12 @@ borde** → **smoke** → **registro**. Qué verificar en cada uno:
 del candidato (segundos) las **escrituras** responden **409 explícitos**; las **lecturas se sirven
 todo el tiempo** y el serving no se interrumpe. Si en esa ventana hay gente guardando cambios, verá
 un conflicto claro y podrá reintentar — no un error crudo ni un guardado que se perdió.
+
+**Y el costo que trae el flip primero, que es nuevo:** el tráfico se compromete **antes** de que el
+candidato tenga el control, así que un relevo que no llega deja gente esperando en la sala de espera
+—latencia, no errores— hasta que la vuelta atrás devuelve el borde al anillo anterior. Por eso el
+presupuesto por default bajó a **10 s**. Lo que le hace a esos requests retenidos el `caddy reload`
+del flip-back **no está medido**: se declara, no se supone.
 
 ## 5 · Después (esto es la parte que se olvida)
 
@@ -261,9 +271,15 @@ pierde.
   que sí se exige es `pis.serving == pis.total`, y lo funcional lo verifica un humano (§5.2).
 - **`ring.args` es un espejo manual** del servicio `vergis` del compose. Nada verifica que estén
   sincronizados: si cambias un env o un montaje en uno, cámbialo en el otro.
-- **El handover tiene una carrera declarada**: quien suelta el control no nombra sucesor, así que
-  cualquier anillo caliente puede tomarlo. La herramienta converge insistiendo y lo dice en pantalla
-  mientras lo hace.
+- **El handover es dirigido, con alcance parcial declarado**: la herramienta escribe un intent
+  (`control.handover.json`) que **nombra al sucesor** antes de que el activo suelte, y los demás
+  anillos se abstienen mientras esté vigente. El intent **ordena la fila; jamás otorga el control** —
+  adquirir sigue pasando por el lease entero, y por eso la marca de release sigue siendo subasta
+  abierta para cualquier camino que no consulte el intent al relevar. `insistir_handover` queda como
+  red y sus avisos son el **detector** de que la fila no se ordenó.
+- **Lo que este orden le hace a la ventana sin-predicado NO está medido.** Se cambió el orden de
+  operaciones y se declara la capacidad; cuánta ventana elimina es una hipótesis hasta que exista una
+  corrida que la habría refutado.
 
 ## Lo medido y lo que NO
 

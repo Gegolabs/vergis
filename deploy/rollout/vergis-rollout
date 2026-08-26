@@ -7,7 +7,7 @@
 # traslada el plano de control de un proceso a otro y conmuta el borde en caliente.
 #
 #   install <versión>    pull + create + start; el anillo queda EN ESPERA (standby), verificado
-#   promote <versión>    pre-flight → handover del control → flip del borde → smoke → registro
+#   promote <versión>    pre-flight → intent + flip del borde → handover del control → smoke → registro
 #   rollback [<versión>] promote al previo (o a la versión dada)
 #   retire  <versión>    detiene y borra un anillo (jamás el activo ni el previo)
 #   prune   [--retain N] retira lo que sobra de la ventana de retención (jamás activo ni previo)
@@ -41,7 +41,7 @@ RINGS_ACTIVE_FILE=${RINGS_ACTIVE_FILE:-$RINGS_DIR/active.caddy}
 RINGS_EDGE=${RINGS_EDGE:-caddy}                      # contenedor del borde (Caddy)
 RINGS_EDGE_CONFIG=${RINGS_EDGE_CONFIG:-/etc/caddy/Caddyfile}
 RINGS_EDGE_URL=${RINGS_EDGE_URL:-http://caddy:8079}  # el conmutador, visto desde la red interna
-RINGS_PROMOTE_TIMEOUT=${RINGS_PROMOTE_TIMEOUT:-30}   # s de espera a que el candidato declare serving
+RINGS_PROMOTE_TIMEOUT=${RINGS_PROMOTE_TIMEOUT:-10}   # PRESUPUESTO de la ventana de relevo (ver cmd_promote)
 RINGS_STANDBY_TIMEOUT=${RINGS_STANDBY_TIMEOUT:-90}   # s de espera a que un anillo recién iniciado responda
 RINGS_ADMIN_EMAIL=${RINGS_ADMIN_EMAIL:-}             # identidad admin para leer /contrato (pre-flight)
 RINGS_GATE_TOKEN=${RINGS_GATE_TOKEN:-}               # VERGIS_GATE_SECRET, si la instancia lo exige
@@ -259,16 +259,16 @@ live_active() {
   printf '\n'
 }
 
-# Lleva el plano de control AL CANDIDATO, insistiendo.
+# Espera a que el plano de control llegue AL CANDIDATO, con una RED por si no llega.
 #
-# ¿Por qué hace falta insistir? Porque el activo suelta el lease y **cualquier** anillo caliente puede
-# tomarlo: el previo también está en espera y también poltea. El release no nombra sucesor, así que hay
-# una CARRERA, y el ganador no es necesariamente el que se quiso promover. Quien acaba de soltar tiene un
-# enfriamiento antes de volver a aspirar, así que pedirle soltar al que ganó por error hace converger la
-# cosa en a lo más tantas vueltas como anillos calientes haya (hoy dos).
+# El sucesor lo nombra el INTENT DE HANDOVER (`control.handover.json`, escrito antes del flip): quien no
+# es el nombrado se abstiene de aspirar mientras el intent esté vigente, así que la carrera del lease
+# entre anillos calientes no debería ocurrir. Esta función queda como **espera** y como **red**: si aun
+# así el control lo tomó otro, se le pide soltarlo y se sigue esperando al candidato.
 #
-# El arreglo durable NO es de esta herramienta: sería un handover DIRIGIDO en el Producto (el release
-# nombrando al sucesor). Mientras no exista, esto es explícito y acotado en vez de silencioso.
+# Sus `warn` son ahora un DETECTOR: cada uno delata que el intent no ordenó la fila —un anillo sin
+# identidad de anillo, un intent que no se pudo escribir, un camino de adquisición que no pasa por
+# `intentarRelevo`—. Un solo warn en una promoción es una señal, no ruido.
 insistir_handover() {
   _cand=$1 _secs=$2
   _i=0
@@ -280,8 +280,9 @@ insistir_handover() {
     if [ -n "$_h" ]; then
       _hn=$(jget "$(ring_line "$_h")" name)
       if [ -n "$_hn" ] && [ "$_hn" != "$_cand" ]; then
-        warn "el control lo tomó '$_h', no el candidato (carrera del lease entre anillos calientes): se
-        le pide soltarlo. Nadie recibió tráfico nuevo — el borde no se ha tocado."
+        warn "el control lo tomó '$_h', no el candidato que nombra el intent de handover: se le pide
+        soltarlo. Esto NO debería ocurrir con el intent vigente — anótalo, delata que la fila no se
+        ordenó. El tráfico ya apunta al candidato: lo que entre queda retenido, no falla."
         docker_cli kill -s USR2 "$_hn" >/dev/null 2>&1 || true
       fi
     fi
@@ -290,6 +291,32 @@ insistir_handover() {
   done
   printf '%s\n' "${_ph:-sin-respuesta}"
   return 1
+}
+
+# ─── El INTENT de handover: nombrar al sucesor ANTES de soltar ──────────────────────────────────────
+# `${VERGIS_OUT}/control.handover.json` = `{successor, expiresAt}`, hermano del archivo de lease y en el
+# mismo volumen (mismo modelo de confianza: quien puede escribir el lease puede escribir esto). Se
+# escribe DENTRO de un anillo por `docker exec` — el volumen es del contenedor, no del host, y la
+# herramienta no supone dónde lo montó el operador: se lo pregunta al proceso por su propia env.
+#
+# El intent ORDENA LA FILA; jamás otorga el control. Quien lo consume sigue adquiriendo por `acquire()`
+# con sus reglas enteras. Ver la doctrina en `packages/capabilities/src/control-lease.ts`.
+#
+# El marcador `handover` al inicio del programa es deliberado: es lo que permite reconocer esta llamada
+# entre las demás sondas `node -e` (también en el docker falso de las pruebas).
+INTENT_JS='/*handover*/const fs=require("node:fs");const [s,secs]=process.argv.slice(1);const d=(process.env.VERGIS_OUT||"").replace(/\/$/,"");if(!d){process.stderr.write("VERGIS_OUT no definido en este anillo\n");process.exit(2)}const f=d+"/control.handover.json";if(!s){try{fs.unlinkSync(f)}catch(e){if(e.code!=="ENOENT"){process.stderr.write(String(e.message)+"\n");process.exit(3)}}process.stdout.write("borrado\n")}else{const t=f+"."+process.pid+".tmp";fs.writeFileSync(t,JSON.stringify({successor:s,expiresAt:new Date(Date.now()+Number(secs)*1000).toISOString()},null,2)+"\n");fs.renameSync(t,f);process.stdout.write("escrito\n")}'
+
+# intent_write <contenedor-donde-escribir> <sucesor> <segundos-de-vigencia>
+intent_write() {
+  docker_cli exec "$1" node -e "$INTENT_JS" "$2" "$3" >/dev/null 2>&1
+}
+
+# intent_clear <contenedor>. El intent es del ACTO, no del estado: se borra al cerrar. Su `expiresAt`
+# es la red por si esta herramienta muere antes de llegar acá.
+intent_clear() {
+  docker_cli exec "$1" node -e "$INTENT_JS" '' '' >/dev/null 2>&1 ||
+    warn "no se pudo borrar el intent de handover en '$1'. Vence solo por su expiresAt; mientras tanto,
+    ningún otro anillo aspira al control. Míralo si el próximo relevo tarda."
 }
 
 # ─── Pre-flight del esquema del store (§6.3): compara candidato vs archivo, leyendo /contrato ──────
@@ -385,6 +412,99 @@ edge_flip() {
     die "el borde no recargó (caddy reload falló). Se restauró la línea anterior."
   }
   say "  borde: conmutado a '$_name' (caddy reload en caliente, sin cortar conexiones)"
+}
+
+# ─── Lo que el BORDE dice de sí mismo ──────────────────────────────────────────────────────────────
+# Pre-flight del borde: valida en seco la config VIGENTE y comprueba que el conmutador responde. Con el
+# flip primero, un borde enfermo tiene que descubrirse ANTES de comprometer tráfico — después ya hay
+# usuarios esperando. Se pide que RESPONDA, no que satisfaga el predicado: si hoy no hay ningún anillo
+# sirviendo, el conmutador contesta la sala de espera, y eso es una respuesta legítima.
+edge_preflight() {
+  _c=$1
+  if ! edge_validate; then
+    die "pre-flight ABORTADO: el borde ('$RINGS_EDGE') NO valida su config vigente (caddy validate
+    falló). Con el flip antes del handover, promover sobre un borde que no recarga dejaría el tráfico
+    comprometido y sin vuelta. No se tocó nada."
+  fi
+  _out=$(probe "$_c" "$RINGS_EDGE_URL/healthz" 2>/dev/null) || {
+    die "pre-flight ABORTADO: el conmutador ($RINGS_EDGE_URL) no respondió. No se pudo medir el borde,
+    y mover tráfico hacia un borde que no se sabe si funciona no es una promoción: no se tocó nada."
+  }
+  say "  borde: config vigente válida · el conmutador responde $(probe_status "$_out")"
+}
+
+# ¿El BORDE declara sano al anillo? Se le pregunta AL BORDE, que es la verdad de qué se rutea: el
+# healthz del nodo dice cómo está el nodo, no a dónde va el tráfico. Una respuesta por el conmutador que
+# satisface el predicado completo ES la declaración de salud del borde, observada desde afuera y con el
+# mismo predicado del health check — sin depender de ningún campo del API de administración.
+esperar_borde_sano() {
+  _c=$1 _secs=$2
+  _i=0
+  while [ "$_i" -lt "$_secs" ]; do
+    _out=$(probe "$_c" "$RINGS_EDGE_URL/healthz" 2>/dev/null || printf '\n')
+    if serving_ok "$(probe_status "$_out")" "$(probe_body "$_out")"; then return 0; fi
+    _i=$((_i + 1))
+    sleep 1
+  done
+  return 1
+}
+
+# La vista del PROPIO borde sobre su pool de upstreams (API de administración, por `docker exec` y nunca
+# por red). Es INFORMATIVA y best-effort: se imprime para el registro del acto. Ninguna decisión cuelga
+# de ella — este proyecto no ha medido qué declara ese endpoint sobre la salud ACTIVA de un upstream, y
+# gatear sobre un campo no medido sería inventar la medición. `wget -q -T 2 -O-` está verificado contra
+# el BusyBox de la imagen `caddy:2` (RUNBOOK §«lo medido sobre las herramientas»).
+edge_upstreams() {
+  docker_cli exec "$RINGS_EDGE" wget -q -T 2 -O- http://127.0.0.1:2019/reverse_proxy/upstreams 2>/dev/null || printf ''
+}
+
+# ─── El presupuesto de la ventana, y la vuelta atrás ────────────────────────────────────────────────
+# `_fin` es el instante (epoch s) en que se agota el presupuesto de la ventana de relevo; lo fija
+# `cmd_promote` justo antes del flip. `resta` devuelve lo que queda, con piso 1 para que la última
+# espera alcance a muestrear al menos una vez en vez de saltarse la medición.
+_fin=0
+resta() {
+  _r=$((_fin - $(date +%s)))
+  if [ "$_r" -lt 1 ]; then printf '1\n'; else printf '%s\n' "$_r"; fi
+}
+
+# LA VUELTA ATRÁS — espejo exacto del orden de ida, y en ese orden por una razón: lo primero que hay que
+# devolver es el TRÁFICO, porque es lo único que un usuario está esperando.
+#
+#   1. flip de vuelta al viejo (los retenidos pasan a esperar por él, que sí puede volver a servir);
+#   2. el intent nombra AL VIEJO — así re-adquiere sin pagar la ventana de gracia que se impuso al
+#      soltar (sin esto tarda hasta un stale window entero en volver a aspirar);
+#   3. recién entonces se le pide al candidato que suelte lo que haya tomado.
+#
+# Costo declarado: los requests capturados durante el intento quedan retenidos hasta que el viejo
+# vuelva a servir. Qué le hace a esa retención el `caddy reload` de este flip-back NO está medido por
+# este proyecto — se dice, no se supone.
+volver_atras() {
+  _cand=$1 _viejo=$2 _secs=$3
+  if [ -n "$_viejo" ]; then
+    say "· vuelta atrás: el tráfico primero"
+    edge_flip "$_viejo"
+    intent_write "$_cand" "$_viejo" "$_secs" ||
+      warn "no se pudo reescribir el intent nombrando a '$_viejo': re-adquirirá por el protocolo de
+      siempre, que puede tardar su ventana de gracia."
+    docker_cli kill -s USR2 "$_cand" >/dev/null 2>&1 || true
+    if ph_old=$(wait_phase "$_viejo" "serving" "$_secs"); then
+      say "  el anillo anterior re-adquirió el control (fase: $ph_old)"
+    else
+      warn "el anillo anterior NO volvió a 'serving' (fase: $ph_old). Hay CERO controladores — que es
+      el modo de falla elegido (nunca dos), pero exige atención: mira 'docker logs $_viejo'."
+    fi
+  else
+    say "· vuelta atrás: no hay anillo anterior al que devolver el tráfico; se restaura la línea previa"
+    docker_cli kill -s USR2 "$_cand" >/dev/null 2>&1 || true
+    edge_restore_active
+    # Best-effort a propósito: se está volviendo atrás y ni la validación ni la recarga deben cambiar
+    # el desenlace (el llamador muere con `die` en cualquier caso).
+    if edge_validate >/dev/null 2>&1; then
+      edge_reload >/dev/null 2>&1 || true
+    fi
+  fi
+  intent_clear "$_cand"
 }
 
 # ─── Smoke a través del borde (post-flip) ──────────────────────────────────────────────────────────
@@ -598,58 +718,93 @@ cmd_promote() {
     esquema del archivo del store. Si no lo soporta, esto se descubrirá DESPUÉS del flip."
   fi
 
-  # 2 · Handover del plano de control. El serving del activo no se interrumpe: solo suelta la escritura.
+  # ── EL ORDEN DE OPERACIONES ────────────────────────────────────────────────────────────────────
+  # El flip del borde va ANTES del handover del control, y el handover va DIRIGIDO por un intent que
+  # nombra al sucesor. Qué produce cada mitad:
+  #
+  #   · flip primero  — desde el flip, ningún request nuevo llega al viejo. Los in-flight terminan
+  #     contra él, que TODAVÍA es el activo y sirve (respuestas válidas); los nuevos van al candidato,
+  #     que aún es standby y por lo tanto NO es sano bajo el predicado → la sala de espera del borde
+  #     los RETIENE en vez de responderlos. La retención nace bajo la config nueva.
+  #   · intent dirigido — el candidato adquiere el control en cuanto el viejo lo suelta, sin esperar
+  #     el tick de su poller ni disputarle el lease al anillo previo.
+  #
+  # El COSTO, dicho de frente: si el candidato no llega a `serving`, hay usuarios esperando — con el
+  # orden anterior un handover fallido no movía tráfico. Por eso el presupuesto de esta ventana es
+  # corto (`--timeout`, default 10 s) y por eso la vuelta atrás empieza devolviendo el tráfico.
+  #
+  # LO QUE ESTE COMENTARIO NO AFIRMA: cuánto de la ventana sin-predicado elimina este orden. Eso se
+  # mide, y mientras no se haya medido es conjetura — acá se declara la CAPACIDAD, no el resultado.
+  _fin=$(($(date +%s) + timeout))
+
+  # A quién hay que pedirle el control (observado, no leído del registro).
   activo_name=
   if [ -n "$activo_ver" ]; then
     activo_name=$(jget "$(ring_line "$activo_ver")" name)
   fi
+
+  # Pre-flight del borde: lo último que se verifica antes de comprometer tráfico.
+  edge_preflight "$name"
+
+  # 2 · INTENT DE HANDOVER. Se nombra al sucesor ANTES de mover nada: si el acto muere entre esta línea
+  # y el flip, lo único que quedó escrito es un archivo que vence solo.
+  say "· intent de handover: el sucesor es '$name' (vence en ${timeout}s)"
+  intent_write "$name" "$name" "$timeout" ||
+    warn "el intent de handover NO se pudo escribir en '$name'. Se continúa: el protocolo de siempre
+    (marca de release + stale window) sigue vigente, pero el relevo vuelve a ser una carrera entre los
+    anillos calientes y puede tardar el tick del poller. Si esta promoción se demora, la causa es ésta."
+
+  # 3 · FLIP DEL BORDE — lo único que mueve tráfico, y desde acá está movido.
+  edge_flip "$name"
+
+  # 4 · HANDOVER: SIGUSR2 al viejo, que ya no recibe tráfico nuevo. Su serving no se interrumpe: suelta
+  # la escritura y queda en standby.
   if [ -n "$activo_name" ] && container_running "$activo_name"; then
-    say "· handover: SIGUSR2 a '$activo_name' (suelta el control; sigue sirviendo lecturas)"
-    docker_cli kill -s USR2 "$activo_name" >/dev/null ||
-      die "no se pudo enviar SIGUSR2 a '$activo_name': el handover no empezó y nada se tocó."
-    if ! ph_old=$(wait_phase "$activo_name" "standby" 20); then
-      warn "el activo no declaró 'standby' en 20s (fase: $ph_old); se continúa observando al candidato —
-      el relevo lo decide el lease, no esta herramienta."
+    say "· handover: SIGUSR2 a '$activo_name' (suelta el control; ya sin tráfico nuevo)"
+    if ! docker_cli kill -s USR2 "$activo_name" >/dev/null; then
+      warn "no se pudo enviar SIGUSR2 a '$activo_name' → se vuelve atrás"
+      volver_atras "$name" "$activo_name" "$timeout"
+      die "promoción ABORTADA: el handover no empezó. El borde volvió a apuntar a '$activo_name'."
+    fi
+    if ! ph_old=$(wait_phase "$activo_name" "standby" "$(resta)"); then
+      warn "el activo no declaró 'standby' (fase: $ph_old); se continúa observando al candidato — el
+      relevo lo decide el lease, no esta herramienta."
     fi
   else
     say "· no hay anillo activo vivo: el candidato tomará el control por relevo del lease"
   fi
 
-  say "· esperando que el candidato declare 'serving' (hasta ${timeout}s)…"
-  if ! ph=$(insistir_handover "$name" "$timeout"); then
-    warn "el candidato NO llegó a 'serving' (fase: $ph). El tráfico jamás se movió: no hubo daño."
-    say "· devolviendo el control: SIGUSR2 al candidato para que suelte lo que haya tomado"
-    docker_cli kill -s USR2 "$name" >/dev/null 2>&1 || true
-    if [ -n "$activo_name" ]; then
-      if ph_old=$(wait_phase "$activo_name" "serving" 30); then
-        say "  el anillo anterior re-adquirió el control (fase: $ph_old)"
-      else
-        warn "el anillo anterior NO volvió a 'serving' (fase: $ph_old). Hay CERO controladores — que es
-        el modo de falla elegido (nunca dos), pero exige atención: mira 'docker logs $activo_name'."
-      fi
-    fi
-    die "promoción ABORTADA en el handover. El borde sigue apuntando a donde apuntaba."
+  # 5 · RELEVO DIRIGIDO. El candidato ve el intent por su watch (o, si el evento se pierde, por su poll
+  # de respaldo), adquiere sin carrera y sin esperar gracia, reabre stores en escritura y arma lazos.
+  say "· esperando que el candidato declare 'serving' (presupuesto: ${timeout}s desde el flip)…"
+  if ! ph=$(insistir_handover "$name" "$(resta)"); then
+    warn "el candidato NO llegó a 'serving' (fase: $ph). El borde YA apunta a él: lo que entró en esta
+    ventana quedó RETENIDO en la sala de espera. Se vuelve atrás."
+    volver_atras "$name" "$activo_name" "$timeout"
+    die "promoción ABORTADA en el handover. El borde volvió a apuntar a '${activo_name:-la línea anterior}'."
   fi
   say "  candidato en 'serving'"
 
-  # 3 · Flip del borde (lo único que mueve tráfico).
-  edge_flip "$name"
+  # 6 · DETECCIÓN Y LIBERACIÓN. No basta que el nodo declare `serving`: hace falta que EL BORDE lo
+  # entregue, que es lo que suelta a los retenidos. El borde es la verdad de qué se rutea.
+  if ! esperar_borde_sano "$name" "$(resta)"; then
+    warn "el candidato declara 'serving' pero el conmutador todavía no entrega el predicado completo
+    dentro del presupuesto. Se vuelve atrás en vez de dejar a la gente en la sala de espera."
+    volver_atras "$name" "$activo_name" "$timeout"
+    die "promoción ABORTADA: el borde no llegó a entregar tráfico del candidato."
+  fi
+  _ups=$(edge_upstreams)
+  if [ -n "$_ups" ]; then
+    say "  borde: entrega el predicado completo · upstreams: $_ups"
+  else
+    say "  borde: entrega el predicado completo (el API de administración no se pudo leer: informativo, no gatea)"
+  fi
 
-  # 4 · Verificación. Falla ⇒ vuelta atrás por el mismo camino.
+  # 7 · Verificación. Falla ⇒ vuelta atrás por el mismo camino, en el mismo orden.
   if [ "$smoke" = 1 ]; then
     if ! smoke_edge "$name"; then
       warn "SMOKE FALLIDO tras el flip → volviendo al anillo anterior"
-      if [ -n "$activo_name" ]; then
-        docker_cli kill -s USR2 "$name" >/dev/null 2>&1 || true
-        wait_phase "$activo_name" "serving" 30 >/dev/null || warn "el anterior no volvió a 'serving'"
-        edge_flip "$activo_name"
-      else
-        edge_restore_active
-        # Best-effort igual que en `edge_flip`: se va a morir con `die` en cualquier caso.
-        if edge_validate >/dev/null 2>&1; then
-          edge_reload >/dev/null 2>&1 || true
-        fi
-      fi
+      volver_atras "$name" "$activo_name" "$timeout"
       die "promoción REVERTIDA por el smoke. Registro sin cambios."
     fi
   else
@@ -682,6 +837,9 @@ cmd_promote() {
     ring_set_state "$v" retenido
   done <"$TMPD/calientes"
   save_reg
+  # 8 · El intent es del ACTO, no del estado: se borra al cerrar. Dejarlo vivo haría que los demás
+  # anillos se abstuvieran de aspirar hasta que venciera.
+  intent_clear "$name"
   say "✓ $version es el anillo ACTIVO. Previo (rollback en caliente): ${PREVIOUS:-ninguno}."
   say "  El serving no se interrumpió; la escritura estuvo congelada durante el handover (409 explícitos)."
 }
