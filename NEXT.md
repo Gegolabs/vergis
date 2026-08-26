@@ -10,8 +10,10 @@ cambió de orden), el presupuesto de ventana en 10 s, y el `health_interval` de 
 **La instancia del cliente sigue en 0.18.0** — medido por el frente arbol contra la VM viva. Ahora son
 **cuatro minors de gap**, y el aviso que los declara sigue sin enviarse porque **es acto de César**.
 
-> **`main` ya no tiene trabajo sin publicar.** El corte de 0.22.0 lo vació: «Sin publicar» dice *(nada
-> todavía)*. Lo que aterrice desde ahora vuelve a acumularse ahí.
+> **`main` ya tiene trabajo sin publicar otra vez**, y empezó el mismo día del corte: `phase_reportada()`
+> (PR #259) — el lector de fase del diagnóstico del `smoke`, que **viaja al operador**. Con eso el arnés
+> de aceptación del conmutador queda **completo en local** (V1 · V2–V13 · V-14, cada uno con su control
+> negativo). Lo único sin medir es **producción**, y eso es fase gated de César.
 
 ## Lo que espera, y de quién es
 

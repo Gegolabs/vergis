@@ -6,6 +6,36 @@ cerrar.
 
 ## Cerradas con veredicto
 
+### Cerrada por el frente arbol — 2026-08-26 · el gate no iba donde la ficha decía
+
+- **El extractor de fase del rollout se llama SIN el gate de status en el camino de diagnóstico** —
+  `phase_of()` (`deploy/rollout/vergis-rollout:206`) saca la fase del cuerpo con un `sed`. El
+  **veredicto** está protegido: `serving_ok` exige `200` antes de mirarla. El **`warn` del smoke**
+  (`:402`) no: llama a `phase_of` sobre el cuerpo de un fallo, así que cualquier cuerpo de error que
+  contenga el literal imprime una fase falsa **justo cuando alguien está diagnosticando**.
+  **La ocurrencia concreta ya se cortó en la fuente** el 2026-08-26 —`deploy/edge/espera.html`, que es
+  el cuerpo del 503 del borde, llevaba el literal en un comentario; medido con el extractor real y su
+  control positivo—. Queda el **defecto de forma**: el lector sigue sin gate, así que el próximo
+  cuerpo de error que traiga el literal reabre lo mismo. Cortar en la fuente fue lo correcto (los
+  lectores se multiplican, la fuente es una), pero no es lo mismo que arreglar al lector.
+  **No se tocó**, y la razón es de custodia, no de criterio: `deploy/rollout/` es del frente **arbol**
+  y lo está editando ahora mismo. Avisado por mensaje directo el 2026-08-26. `reg 2026-08-26`
+  **✅ CERRADA 2026-08-26 (PR #259, `aacea73`) — y el arreglo CORRIGE ESTA FICHA, que tenía el síntoma
+  bien y la causa a medias.**
+  Esta ficha pedía «ponerle el gate al lector». **Eso habría estado mal**, y el frente arbol lo vio: la
+  fase `starting` se sirve con **HTTP 503** (`server/routes.ts`), así que gatear `phase_of()` por 200
+  habría dejado **ciego a quien espera un arranque**. El gate no iba donde esta ficha señalaba.
+  **La salida correcta fue un lector aparte**: `phase_reportada()` exige el 200 **en el camino de
+  diagnóstico** y dice `sin-fase(http-503)` cuando no lo hubo; `phase_of()` queda intacto donde un
+  no-200 es legítimo. **Son dos lectores porque son dos preguntas** — y esa distinción no está en esta
+  ficha, la puso quien la atendió.
+  **Control negativo, y vive en la suite** (no en una corrida que haya que recordar): con el cuerpo
+  envenenado, el lector sin gate sigue diciendo `serving` y el gateado no. Verificado por esta casa
+  quitándole el gate al lector: cae **exactamente** el test que sostiene la promesa, y ninguno más.
+  **Lo que queda dicho para el próximo que lea:** cortar en la fuente (`espera.html`) fue correcto, y
+  **no** era suficiente ni tampoco lo era «ponerle el gate al lector». Lo suficiente fue separar las
+  dos preguntas. Declarado en «Sin publicar» porque `vergis-rollout` viaja al operador.
+
 ### Refutaciones — 2026-08-26 · hipótesis medidas y descartadas, que no eran pendientes
 
 > Las dos tienen **veredicto**: una hipótesis refutada y un instrumento medido como inservible para
