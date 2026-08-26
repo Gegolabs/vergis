@@ -18,6 +18,29 @@ sh scripts/bench.sh estado       # qué hay vivo y a quién apunta el borde, le�
 sh scripts/bench.sh limpiar      # baja y borra lo `benchv14-`, y nada más
 ```
 
+**El resto del arnés de aceptación** (V2–V13 de `lab/work/209` §3 y `lab/work/210` §10) vive en los
+mismos comandos, y **cada uno trae su control negativo adentro**: no hay forma de correr el brazo
+positivo sin el que demuestra que el instrumento ve el fallo.
+
+```sh
+sh scripts/bench.sh v2           # V2  lease exclusivo: activo 200 · standby 409 (+ CN: la LECTURA sí responde)
+sh scripts/bench.sh v3 330       # V3  el standby no controla: ticks de lazo, ≥5 min de observación
+sh scripts/bench.sh v8           # V8  sin colateral: promoción + smoke 9/9 con CONTENIDO verificado
+sh scripts/bench.sh v9           # V9  takeover ante crash (SIGKILL al activo con standby vivo)
+sh scripts/bench.sh v9neg 600    # V9  CONTROL NEGATIVO: 10 min sin kill — lento a propósito, no se recorta
+sh scripts/bench.sh v11          # V11 gate de esquema contra el store REAL (+ CN: versión correcta procede)
+sh scripts/bench.sh v12          # V12 sala de espera (+ CN: `lb_try_duration 1ms` produce el error)
+npx tsx experimentos/v10-fencing.ts   # V10 el fencing delata al doble escritor (nativo, sin docker)
+```
+
+**V4, V7 y V13 no tienen comando propio**: son propiedades del acto, y las mide `v14`/`carrera` con su
+poller y su loop de mutaciones. `v4-conf` en `CORRIDAS.md` es una corrida de confirmación de `v14`.
+**V5 y V6 son de producción y están gated**; el banco no los corre.
+
+> ⚠ **No se edita `bench.sh` mientras `bench.sh` corre.** `sh` lee el script por desplazamiento de
+> bytes: una edición en vuelo mueve el offset y el shell retoma en medio del archivo. Ya pasó una vez
+> (26-ago, a mitad de V3) y terminó ejecutando `limpiar` y muriendo con un error de sintaxis.
+
 Todo es **idempotente y re-corrible**: `preparar` no recrea lo que ya está, y cada `cn2` promueve al anillo que hoy **no** tiene el control — corriéndolo dos veces se mide la ida y la vuelta.
 
 Los datos crudos quedan en `.run/datos/` (gitignored): `*-poller.jsonl` (una línea por request), `*-mutaciones.jsonl`, `*-ventana.json` (los dos sellos del acto), `cn2-log-{viejo,candidato,borde}.txt` (tramos internos con timestamp) y `*-veredicto.json` (lo computado del crudo).
@@ -32,6 +55,12 @@ Los datos crudos quedan en `.run/datos/` (gitignored): `*-poller.jsonl` (una lí
 | **El veredicto** | Se computa del JSONL, nunca de la consola. Separa las familias de lo fuera-de-predicado en vez de fundirlas en un número | `scripts/veredicto.mjs` |
 | **El mundo** | ClickHouse (la fuente), el borde derivado del `Caddyfile.reference`, y el poller y el mutador como **hermanos** que el acto no recrea | `compose.bench.yml`, `Caddyfile.bench` |
 | **Los anillos** | NO los declara el compose: los crea `vergis-rollout install` como `vergis-9-9-1` y `vergis-9-9-2` — que es la propiedad que permite promover sin recrear nada | `rings/ring.args.tmpl` |
+
+**Bloque de gobierno.** Los anillos llevan `VERGIS_ADMIN_SEED` (`rings/ring.args.tmpl`). Sin él la
+instancia no abre `governance.sqlite`, `/contrato` responde **403** y el **gate de esquema del
+`promote` aborta el pre-flight** — que es por lo que el banco corría con `--no-schema-gate` y por lo
+que V11 no se podía medir. Con el seed hay store real (`schemaSupported 1`), el gate se ejerce, y las
+mutaciones gobernadas del mutador tienen store donde caer.
 
 **Nueve PIs** (`specs/pi-01..09.yaml`, rutas `/bench-01`…`/bench-09`), sintéticos y todos sobre el mismo dataset sembrado: lo que el banco necesita de la instancia es carga de arranque y de serving representativa, no variedad de piezas. `preparar` verifica los nueve y deja el conteo en `.run/datos/pis-servidos.json`.
 
