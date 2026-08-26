@@ -56,6 +56,61 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### La promoción de anillos conmuta el borde ANTES del handover, y el relevo va DIRIGIDO por un intent (#232, parcial)
+
+**Cambia el orden de operaciones de `vergis-rollout promote`** (y del `rollback`, que delega en él):
+antes era pre-flight → handover del control → flip del borde; ahora es pre-flight → **intent de
+handover** → **flip del borde** → handover → smoke. Desde el flip, ningún request nuevo llega al nodo
+que está por soltar el control: los que entran mientras el candidato todavía no sirve quedan
+**retenidos** por la sala de espera del borde en vez de responderse por un nodo en espera.
+
+**Qué afirma esta entrada, y con qué alcance — medido, no prometido (V-14, 2026-08-26, arnés local
+`deploy/rollout/bench/`, 9 PIs sobre motor clickhouse):** bajo el orden nuevo, **cero respuestas fuera
+del predicado** (`200 ∧ phase=serving`) en 3 promociones, 3 rollbacks —medidos aparte, y la corrida
+destapó y corrigió que `rollback` descartaba sus flags— y una carrera de **20 promociones seguidas**
+(5.604 muestras crudas, 0 `200∧standby`, 0 5xx, 0 sin-medir, 0 warns de carrera del lease). El mismo
+instrumento, contra el **orden viejo**, anotó el defecto tres veces (9, 18 y 27 respuestas
+`200∧standby`, ventanas de 234–762 ms que abre el release y cierra el health check) — control
+negativo del mecanismo, sin el cual esta cifra no valdría. La latencia del acto es **retención, no
+error**: p50 4–6 ms, p100 0,5–2,5 s, todos los retenidos terminados en `200∧serving`.
+**Qué NO afirma:** nada sobre producción — la medición es del arnés local; el comportamiento del
+flip-back sobre requests retenidos (tramo (b)) sigue **sin medir** y su banco (V-15) está pendiente.
+
+**El handover dirigido.** La herramienta escribe `${VERGIS_OUT}/control.handover.json` =
+`{successor, expiresAt}` —hermano del archivo de lease, mismo volumen y mismo modelo de confianza—
+antes de pedirle al activo que suelte. El nodo nombrado adquiere **de inmediato**, saltándose la
+ventana de gracia que se impone a sí mismo quien acaba de soltar; los demás **se abstienen** mientras
+el intent esté vigente. El nodo lo consume por un **watch** (la misma infraestructura que el resto de
+los watches del proceso, visible en `/contrato`) y, si el evento se pierde, por su poll de relevo, que
+ahora también lo lee: un watch perdido enlentece el protocolo, no lo rompe. Un intent **vencido**, o
+ilegible, es inexistente — el `expiresAt` es lo que impide que un intent huérfano (la herramienta
+murió, o el sucesor nombrado nunca llegó) congele los relevos.
+
+**Lo que queda garantizado y lo que no — cierre PARCIAL de #232, por diseño.** El intent **ordena la
+fila; jamás otorga el control**: `acquire()` y el fencing de época no se tocan, y el modo de falla
+sigue siendo hacia cero controladores, nunca hacia dos. Consecuencia, dicha con todas sus letras:
+`releaseSync()` deja `{holder:'', epoch}` y `#attempt()` concede ese archivo al **primero que llegue
+sin mirar quién**, así que el intent ordena la fila **solo entre quienes pasan por `intentarRelevo`**;
+la marca de release sigue siendo **subasta abierta** para cualquier camino que no pase por ahí.
+Cerrarlo del todo exigiría meter el intent dentro de `acquire()` —convertirlo en autoridad—, que es
+justamente lo que este cambio no hace. Hay un test que lo mide como límite, no como bug.
+
+**Costo declarado del orden nuevo.** El tráfico se compromete **antes** de que el candidato tenga el
+control: un relevo que no llega deja gente esperando en la sala de espera —latencia, no errores—
+hasta la vuelta atrás. Por eso el presupuesto por default de la ventana baja de 30 s a **10 s**
+(`RINGS_PROMOTE_TIMEOUT` / `--timeout`), y por eso la vuelta atrás **empieza devolviendo el tráfico**
+al anillo anterior, después reescribe el intent nombrándolo a él —para que re-adquiera sin pagar su
+ventana de gracia— y solo entonces le pide al candidato que suelte. Qué le hace a los requests
+retenidos el `caddy reload` de ese flip-back **no está medido**: se declara, no se supone.
+
+**Para el operador de la instancia.** `Caddyfile.reference` baja `health_interval` de `1s` a `250ms`,
+con su costo declarado al lado (4 req/s por upstream contra `/healthz`, un JSON de conteos sin gate):
+es recorte de la **cola de latencia** —cuánto tarda la sala de espera en soltar a los retenidos una vez
+que el anillo nuevo satisface el predicado—, **no** correctitud; lo que evita rutear a un nodo en
+espera sigue siendo el predicado `200 ∧ phase=serving ∧ pis.serving=pis.total`, que no se toca. El
+Caddyfile es una plantilla: adoptar el valor es decisión de quien opera. Un despliegue que no use
+anillos no cambia en nada.
+
 ### La sala de espera del borde ya no envenena a un lector de fase por expresión regular
 
 `deploy/edge/espera.html` —el cuerpo del **503** que Caddy sirve cuando ningún anillo declara la fase

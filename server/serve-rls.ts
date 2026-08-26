@@ -101,6 +101,8 @@ import {
   SqliteGovernanceStore,
   createControlPlane,
   resolveControlPlaneConfig,
+  controlHandoverFile,
+  evaluarRelevo,
   openNotasStore,
   llaveDeFila,
   canonicalKey,
@@ -237,6 +239,12 @@ const contractEnv: NodeJS.ProcessEnv = new Proxy(process.env, {
 // El env se lee por `contractEnv` a propósito: así estas claves quedan registradas en `/contrato` sin
 // declararlas dos veces.
 const CONTROL_CONFIG = resolveControlPlaneConfig(contractEnv, config.outDir)
+/**
+ * El INTENT DE HANDOVER (`control.handover.json`, hermano del lease en el mismo volumen). Lo escribe
+ * el operador del acto —la herramienta de anillos— para NOMBRAR al sucesor de un relevo, y este nodo
+ * lo consume al entrar a `intentarRelevo`. Ver la doctrina completa en `control-lease.ts`.
+ */
+const CONTROL_HANDOVER_FILE = controlHandoverFile(config.outDir)
 /** Anillo que ejecuta este proceso (versión + digest). Informativo: viaja en el lease y en `/contrato`. */
 const RING_NAME = (contract.env('VERGIS_RING') ?? '').trim() || null
 const RING_DIGEST = (contract.env('VERGIS_RING_DIGEST') ?? '').trim() || null
@@ -2330,9 +2338,31 @@ async function controlPerdido(reason: ControlLeaseReason, detail: string): Promi
  * acá solo se pregunta, y se falla hacia CERO controladores: si los stores no reabren, se suelta.
  */
 let intentandoRelevo = false
+/** Última abstención por intent ajeno que se logueó: el poll corre cada 2 s y no debe inundar el log. */
+let intentAjenoLogueado = ''
 async function intentarRelevo(): Promise<void> {
   if (intentandoRelevo || plane.hasControl()) return
-  if (Date.now() < noAspirarHasta) return // ventana de gracia de un release explícito: es del sucesor
+  // EL INTENT ORDENA LA FILA; JAMÁS OTORGA EL CONTROL. Quien no es el sucesor nombrado se abstiene
+  // mientras el intent esté vigente; el nombrado aspira YA, saltándose la ventana de gracia que se
+  // impone a sí mismo el nodo que acaba de soltar. Adquirir sigue pasando por `acquire()` entero
+  // (marca de release, stale window, época, fencing): nada de eso se toca acá.
+  //
+  // ALCANCE — cierre PARCIAL de #232, por diseño: `releaseSync()` deja `{holder:'', epoch}` y
+  // `#attempt()` concede ese archivo al PRIMERO que llegue sin mirar quién, así que el intent ordena
+  // la fila SOLO entre quienes pasan por `intentarRelevo`; la marca de release sigue siendo subasta
+  // abierta para cualquier camino que no pase por ahí. No es un hueco por tapar: convertir el intent
+  // en autoridad exigiría meterlo dentro de `acquire()`, y eso es justamente lo que no se hace.
+  const decision = evaluarRelevo({ file: CONTROL_HANDOVER_FILE, self: RING_NAME, noAspirarHasta })
+  if (decision.verdict === 'ilegible') console.warn(`[control] intent de handover ilegible: ${decision.detail}. Rige el protocolo de siempre.`)
+  if (!decision.aspirar) {
+    if (decision.verdict === 'ajeno' && decision.detail !== intentAjenoLogueado) {
+      intentAjenoLogueado = decision.detail ?? ''
+      console.log(`[control] relevo: este nodo NO aspira — ${decision.detail}`)
+    }
+    return
+  }
+  intentAjenoLogueado = ''
+  if (decision.saltaGracia) console.log(`[control] relevo DIRIGIDO: ${decision.detail} — se aspira sin esperar la ventana de gracia.`)
   intentandoRelevo = true
   try {
     if (!(await plane.acquire())) return
@@ -2350,9 +2380,21 @@ async function intentarRelevo(): Promise<void> {
   }
 }
 if (plane.mode === 'lease') {
-  // Cadencia = la de renovación: un poll es leer un JSON chico, y esperar más alargaría el hueco de
-  // control tras un crash sin comprar nada. El timer va `unref`: un standby esperando su turno no es
-  // razón para que el proceso no pueda terminar.
+  // EL WATCH DEL INTENT — el camino rápido. La aparición (o el cambio) de `control.handover.json`
+  // dispara el relevo de inmediato, sin esperar el tick del poll. Va por `contract.watch` como todos
+  // los demás watches del proceso: instalar y registrar en una sola llamada, y así queda visible en
+  // `/contrato`. NO cuelga de `VERGIS_HOT_RELOAD`: esto es del plano de control, no de la recarga de
+  // configuración — apagar el hot-reload de specs no debe dejar el relevo dirigido sin su camino rápido.
+  contract.watch(
+    { envs: [], reloads: 'intent de handover: despierta el relevo dirigido (el intent nombra al sucesor; no otorga el control)' },
+    [CONTROL_HANDOVER_FILE],
+    () => void intentarRelevo(),
+  )
+  // EL POLL DE RESPALDO. Cadencia = la de renovación: un poll es leer un JSON chico, y esperar más
+  // alargaría el hueco de control tras un crash sin comprar nada. Ahora lee TAMBIÉN el intent, así que
+  // un evento de watch perdido —inotify no propagado por un bind-mount, ráfaga comida— enlentece el
+  // protocolo hasta el próximo tick, no lo rompe. El timer va `unref`: un standby esperando su turno
+  // no es razón para que el proceso no pueda terminar.
   const relevo = setInterval(() => void intentarRelevo(), Math.max(500, CONTROL_CONFIG.renewMs))
   relevo.unref?.()
 }

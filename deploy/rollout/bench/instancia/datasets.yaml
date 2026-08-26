@@ -1,0 +1,16 @@
+# Datasets del nodo (VERGIS_DATASETS) — motor B (ClickHouse), banco V-14.
+#
+# `seed` en vez de `ingest`: el banco no tiene DWH de origen ni lo necesita. Lo que se mide es el
+# ACTO DE PROMOCIÓN, no la ingesta — y una fuente externa metería en la medición una variable que
+# no es del sujeto.
+datasets:
+  - table: bench.areas
+    columns:
+      area: String
+      total: UInt32
+      present: UInt32
+    seed:
+      - { area: "Norte", total: 120, present: 113 }
+      - { area: "Centro", total: 90, present: 71 }
+      - { area: "Sur", total: 140, present: 138 }
+      - { area: "Oriente", total: 60, present: 41 }

@@ -98,7 +98,11 @@ export {
   createControlPlane,
   resolveControlPlaneConfig,
   controlLeaseFile,
+  controlHandoverFile,
+  readHandoverIntent,
+  evaluarRelevo,
   CONTROL_LEASE_FILENAME,
+  CONTROL_HANDOVER_FILENAME,
   DEFAULT_RENEW_MS,
   DEFAULT_STALE_MS,
 } from './control-lease'
@@ -110,6 +114,10 @@ export type {
   ControlLeaseRecord,
   ControlLeaseStatus,
   ControlLeaseReason,
+  HandoverIntent,
+  HandoverVerdict,
+  HandoverReading,
+  RelevoDecision,
 } from './control-lease'
 export {
   parseMasterDataConfig,
