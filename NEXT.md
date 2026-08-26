@@ -1,21 +1,24 @@
 # NEXT — Vergis
 
-**0.21.0 es la versión publicada** (tag `v0.21.0`, 2026-08-19). **Es la primera versión que EXIGE algo
-nuevo de la instancia**: el principal de serving debe poder leer el valor real de las columnas
-gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el centinela exista.
-**La instancia del cliente sigue en 0.18.0** — medido por el frente arbol contra la VM viva
-(`docker ps` → `ghcr.io/gegolabs/vergis:0.18.0`), o sea **tres minors de gap**.
+**0.22.0 es la versión publicada** (tag `v0.22.0`, 2026-08-26, commit `d1e3ac1`). Imagen **verificada
+contra el registry**: `0.22.0`, `0.22` y `latest` responden 200 con la revisión exacta en los labels.
 
-> **`main` tiene trabajo sin publicar.** La sesión del 2026-08-19 (noche) dejó en «Sin publicar» dos
-> capacidades del DSL (#235, #246), el healthcheck por fase y la corrección de E3/E5. **Nadie puede
-> consumirlo hasta que se corte una versión** — ver «Lo que espera».
+**NO exige nada nuevo del motor ni de la base** — quien ya satisfizo 0.21.0 no concede nada más. Lo
+que exige es del **procedimiento de despliegue**: la herramienta de anillos de este repo (el `promote`
+cambió de orden), el presupuesto de ventana en 10 s, y el `health_interval` de 250 ms como plantilla.
+
+**La instancia del cliente sigue en 0.18.0** — medido por el frente arbol contra la VM viva. Ahora son
+**cuatro minors de gap**, y el aviso que los declara sigue sin enviarse porque **es acto de César**.
+
+> **`main` ya no tiene trabajo sin publicar.** El corte de 0.22.0 lo vació: «Sin publicar» dice *(nada
+> todavía)*. Lo que aterrice desde ahora vuelve a acumularse ahí.
 
 ## Lo que espera, y de quién es
 
 | Partida | ¿De quién? | Estado |
 |---|---|---|
-| **Cortar 0.22.0** | **Nuestro** | `main` acumula **#235, #246, #248, #228** y el healthcheck por fase, más la corrección de E3/E5. Sin corte, nada de eso es consumible |
-| **El aviso al operador** — de 0.18.0 → la versión que se corte | **César** | Comunicación saliente. **Redactado al pie de este archivo**, y **corregido**: la capacidad de desenmascarar tiene **dos** vías y la del `GRANT` es mejor |
+| ~~**Cortar 0.22.0**~~ | — | **HECHO el 2026-08-26.** Precondición cumplida ANTES del tag (ventana de Fabric: 26 hallazgos, 0 fallos, 0 sin medir), sección cotejada con `corte:cotejo`, imagen verificada contra el registry |
+| **El aviso al operador** — de 0.18.0 → **0.22.0** | **César** | Comunicación saliente: publicar es nuestro y está hecho, avisar es suyo. **Redactado al pie de este archivo y HAY QUE ACTUALIZARLO**: el salto creció y suma el conmutador determinista (con su cambio de *procedimiento*) y la recomendación corregida de E3 |
 | **Issue #245** — hay `UNMASK` **granular por columna** en Fabric | **César decide**: ¿el emisor lo emite (a), o se documenta como vía del operador (b)? | Medido con control positivo, negativo y revoke verificado. **Recomiendo (b)** por frontera: los privilegios del principal los decide quien opera |
 | **E4 de #238** — ¿la aptitud vale toda la vida de la conexión? | **Nuestro** | Sigue **sin medir**, y ahora se sabe qué cuesta: por la vía del rol arrastra la staleness (>20 min, techo desconocido) y deja el terreno inutilizable; **por la vía del `GRANT` es viable** y cabe en una ventana propia |
 | **`tsconfig.json` no incluye `scripts/`** | **Nuestro** | `npm run typecheck` **nunca** chequeó `fabric-lab-proof.ts` ni `tsql-lab-proof.ts`. Descubierto al promover el arnés; no se tapó porque tocar el `include` afecta a otros scripts |
@@ -72,21 +75,18 @@ es **rancio parcial** — `ww:deuda` ya lee la política; la vista de `ww:work` 
 
 ## Próximo paso
 
-**Cortar 0.22.0**, que es lo único que vuelve consumible el trabajo de `main`. Lo que el corte tiene que
-declarar ya está escrito en «Sin publicar» del CHANGELOG, y trae dos cosas que el operador necesita: el
-healthcheck para su plantilla y la corrección de E3 (que **cambia la recomendación** de cómo concederle
-la capacidad al principal de serving).
+**El aviso al operador — y es tuyo, César.** Es lo único que queda entre 0.22.0 y que alguien la pueda
+usar: la instancia corre 0.18.0 y el salto ya es de cuatro minors. El borrador está al pie de este
+archivo y **necesita una pasada** antes de salir (creció con el conmutador determinista y con la
+recomendación corregida de E3).
 
-**Antes de taggear, y esta vez en el orden correcto:** correr `npm run fab:proof` con su ventana. La
-lección de 0.21.0 fue que el DDL del centinela se midió **20 minutos después** de empujar el tag; ahora
-P10 existe justamente para que el corte no dependa de que alguien se acuerde. Su cabecera lo declara.
+**Y dos decisiones tuyas que el corte dejó al descubierto**, ninguna urgente:
 
-```bash
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-npm run typecheck && npm test && npm run build && npm run lint:shell
-npm run fab:sql          # gratis: revisa el SQL emitido antes de gastar
-# y la ventana, UN solo comando de shell con la pausa en trap (ver más abajo)
-```
+- **#245** — ¿el emisor emite el `GRANT UNMASK` (a), o se documenta como vía del operador (b)? 0.22.0
+  publicó la recomendación de **(b)**, que es el statu quo; si eliges (a), es código y otra versión.
+- **#232** — el cierre parcial está publicado y nombrado. Perseguir la propiedad completa exige meter
+  el intent dentro de `acquire()`, o sea **mover la frontera de confianza** a un archivo que escribe una
+  herramienta externa. Esa es la pregunta, y es tuya.
 
 ## La ventana de Fabric, que ya no se pide
 
