@@ -1,0 +1,71 @@
+# ARNÉS T-SQL EN UN GATE — el que medía la semántica que el compilador da por supuesta y no corría
+# nunca.
+#
+# El defecto que cierra (`PENDINGS.md`): `scripts/tsql-lab-proof.ts` queda fuera de `npm test` a
+# propósito —la suite es hermética y sin Docker— y quedaba también fuera del CI. Consecuencia
+# previsible: el compilador Fabric cambia, el arnés sigue en verde por no haberse corrido, y volvemos
+# al estado del que este arnés nos sacó. Un arnés que solo corre cuando alguien se acuerda se pudre.
+#
+# POR QUÉ UN WORKFLOW PROPIO Y NO UN JOB DE `build.yml`: el filtro de `paths` es por workflow, no por
+# job. Acá la cadencia es el punto —solo corre cuando cambia lo que mide—, así que el filtro tiene que
+# ser nativo y no un `if` con un paso que compara archivos.
+#
+# LO QUE NO CUBRE, y por eso NO reemplaza a nadie: la semántica T-SQL de SQL Server, no el SKU de
+# Fabric. Un negativo de acá refuta para las dos familias; un positivo NO garantiza Fabric. Ese otro
+# arnés (`fab:proof`) no puede vivir en un CI —exige capacidad prendida, credenciales y plata—: su
+# cadencia es el corte de versión, y está declarada en `scripts/README-fabric-lab.md`.
+name: tsql-lab
+
+on:
+  push:
+    paths: &sujeto
+      - 'packages/policy/**'
+      - 'scripts/tsql-lab-proof.ts'
+      - '.github/workflows/tsql-lab.yml'
+  pull_request:
+    paths: *sujeto
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    # Cota explícita: si el motor no está listo en este tiempo, el resultado es «no se pudo medir» y
+    # tiene que verse en rojo, no colgar el runner hasta el techo de 6 h de la plataforma.
+    timeout-minutes: 15
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'Vergis!Lab2026'
+          MSSQL_PID: Developer
+        ports:
+          - 11433:1433
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: esperar al motor (y decir cuánto tardó)
+        run: |
+          set -eu
+          # NO se usa un `--health-cmd` del servicio: la imagen 2022 dejó de traer `sqlcmd`, así que
+          # el health check idiomático mediría la ausencia de una herramienta y no la salud del motor.
+          # Se sondea el puerto, que es lo que el arnés necesita de verdad.
+          inicio=$(date +%s)
+          for i in $(seq 1 90); do
+            if (echo >/dev/tcp/127.0.0.1/11433) 2>/dev/null; then
+              echo "motor aceptando conexiones tras $(( $(date +%s) - inicio ))s (intento $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "NO SE PUDO MEDIR: el motor no aceptó conexiones en 180s" >&2
+          docker ps -a
+          exit 1
+      - run: npm run lab:proof
