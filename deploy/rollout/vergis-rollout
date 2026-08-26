@@ -845,12 +845,25 @@ cmd_promote() {
 }
 
 # ─── rollback ───────────────────────────────────────────────────────────────────────────────────────
+# Es `promote` con otro argumento, y por eso acepta LOS MISMOS flags: el primer argumento que no
+# empieza por `-` es la versión destino (o `$PREVIOUS` si no viene ninguna) y todo lo demás viaja tal
+# cual a `cmd_promote`. Que no viajaran era un agujero medido: `rollback` quedaba con el gate de
+# esquema forzado a ON, sin manera de correr el camino del rollback donde el gate no aplica —
+# y el aborto del pre-flight se lee igual que un acto que salió bien y no movió nada.
 cmd_rollback() {
   load_reg
-  target=${1:-$PREVIOUS}
+  target='' resto=''
+  for _a in "$@"; do
+    case "$_a" in
+    -*) resto="$resto $_a" ;;
+    *) if [ -z "$target" ]; then target=$_a; else resto="$resto $_a"; fi ;;
+    esac
+  done
+  [ -n "$target" ] || target=$PREVIOUS
   [ -n "$target" ] || die "no hay anillo previo registrado: nombra la versión ('rollback 0.18.0')."
   say "· rollback a $target (mismo camino y mismo pre-flight que una promoción)"
-  cmd_promote "$target"
+  # shellcheck disable=SC2086 # `resto` son flags y deben partirse en palabras: es su formato.
+  cmd_promote "$target" $resto
 }
 
 # ─── retire ─────────────────────────────────────────────────────────────────────────────────────────
