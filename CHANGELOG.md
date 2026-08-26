@@ -49,6 +49,11 @@ v0.21.0:CHANGELOG.md`, con `--changelog`—: lo habría atrapado.
 es invisible, y por eso su salida termina diciéndolo. Los commits sin ninguna referencia se listan
 aparte, para mirarlos a mano.
 
+**Y el corte es también la cadencia del arnés de Fabric.** `npm run fab:proof` no puede vivir en un CI
+—exige capacidad prendida, credenciales y plata—, así que su cadencia declarada es ésta: se corre
+**antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
+veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
+
 ## Sin publicar
 
 ### Dependencias
