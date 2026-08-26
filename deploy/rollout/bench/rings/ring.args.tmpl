@@ -30,6 +30,12 @@ VERGIS_OUT=/governance
 VERGIS_REFRESH_MS=0
 -e
 VERGIS_CSRF_SECRET=@SECRETO@
+# BLOQUE DE GOBIERNO. Sin un admin semilla la instancia no abre `governance.sqlite`, `/contrato`
+# responde 403 y el GATE DE ESQUEMA del `promote` no tiene con qué medir — que es exactamente lo que
+# obligaba a correr todo el banco con `--no-schema-gate`. Con el seed, el gate se ejerce de verdad
+# (V11 de `work/210` §10) y las mutaciones de gobierno tienen store real donde caer (V2).
+-e
+VERGIS_ADMIN_SEED=banco@v14.local
 # El plano de control: `lease` es lo que hace posible dos nodos vivos sin pisarse las escrituras.
 -e
 VERGIS_CONTROL=lease

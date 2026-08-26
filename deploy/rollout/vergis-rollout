@@ -205,6 +205,21 @@ probe_body() { printf '%s' "$1" | sed '1d'; }
 
 phase_of() { printf '%s' "$1" | sed -n 's/.*"phase":"\([a-z-]*\)".*/\1/p' | head -1; }
 
+# `phase_of` lee CUALQUIER cuerpo: le basta con que contenga el literal. En el camino de DIAGNÓSTICO el
+# cuerpo suele NO ser del nodo —una página de error del borde, por ejemplo— y entonces imprime una fase
+# que nadie declaró, justo cuando alguien está averiguando qué pasó. Ya ocurrió: `deploy/edge/espera.html`
+# —el cuerpo del 503 del borde— llevaba `"phase":"serving"` en un comentario. Se cortó en la fuente; el
+# LECTOR seguía sin gate, y el próximo cuerpo de error con el literal reabría lo mismo.
+#
+# `phase_reportada` exige el `200` del healthz antes de leer la fase, y cuando no lo hay lo DICE en vez
+# de callarlo. NO reemplaza a `phase_of` en los caminos que legítimamente esperan un no-200: la fase
+# `starting` se sirve con HTTP 503 (`server/routes.ts`), así que gatear ahí por 200 dejaría ciego a
+# quien espera un arranque. Este es el lector del diagnóstico, no el del protocolo.
+phase_reportada() {
+  [ "$1" = 200 ] || { printf 'sin-fase(http-%s)\n' "${1:-sin-respuesta}"; return 0; }
+  phase_of "$2"
+}
+
 # healthz de un anillo, por dentro de sí mismo (localhost: no depende de DNS ni del borde).
 health_of() { probe "$1" "http://127.0.0.1:8080/healthz" 2>/dev/null || printf '\n'; }
 
@@ -519,7 +534,7 @@ smoke_edge() {
   st=$(probe_status "$out")
   body=$(probe_body "$out")
   if ! serving_ok "$st" "$body"; then
-    warn "smoke: por el borde se observó status=$st fase='$(phase_of "$body")' pis=$(jnum "$body" serving)/$(jnum "$body" total) — el predicado 200 ∧ phase=serving ∧ pis.serving=pis.total NO se cumple"
+    warn "smoke: por el borde se observó status=$st fase='$(phase_reportada "$st" "$body")' pis=$(jnum "$body" serving)/$(jnum "$body" total) — el predicado 200 ∧ phase=serving ∧ pis.serving=pis.total NO se cumple"
     return 1
   fi
   say "  smoke: por el borde → 200 · phase=serving · PIs $(jnum "$body" serving)/$(jnum "$body" total)"

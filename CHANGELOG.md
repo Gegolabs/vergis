@@ -56,7 +56,19 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### El diagnóstico del smoke deja de leer la fase de un cuerpo que no fue 200 (`phase_reportada()`)
+
+**Cambia `vergis-rollout`, que viaja al operador.** El `warn` del smoke leía la fase con `phase_of()`
+sin gate de status: ante un cuerpo de error que contenga el literal `"phase":"serving"` —la familia
+que `espera.html` tuvo hasta 0.22.0— el diagnóstico imprimía `fase='serving'` justo cuando alguien
+está averiguando qué pasó. El lector nuevo, `phase_reportada()`, exige el `200` antes de leer la fase
+y **dice** cuando no lo hubo (`sin-fase(http-503)`). **No sustituye a `phase_of()` donde un no-200 es
+legítimo**: `starting` se sirve con 503, y gatear ahí cegaría al que espera un arranque — son dos
+lectores porque son dos preguntas. El control negativo vive en la suite (cuerpo envenenado: el lector
+sin gate sigue diciendo `serving`, el gateado no), no en una corrida que haya que acordarse de repetir.
+
+*(El resto de esta rama —extensiones del banco `deploy/rollout/bench/` y el registro del arnés
+V2–V13— no viaja al operador y no lleva entrada.)*
 
 ## 0.22.0 — 2026-08-26
 
