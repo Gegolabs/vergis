@@ -61,6 +61,19 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
+- **El extractor de fase del rollout se llama SIN el gate de status en el camino de diagnóstico** —
+  `phase_of()` (`deploy/rollout/vergis-rollout:206`) saca la fase del cuerpo con un `sed`. El
+  **veredicto** está protegido: `serving_ok` exige `200` antes de mirarla. El **`warn` del smoke**
+  (`:402`) no: llama a `phase_of` sobre el cuerpo de un fallo, así que cualquier cuerpo de error que
+  contenga el literal imprime una fase falsa **justo cuando alguien está diagnosticando**.
+  **La ocurrencia concreta ya se cortó en la fuente** el 2026-08-26 —`deploy/edge/espera.html`, que es
+  el cuerpo del 503 del borde, llevaba el literal en un comentario; medido con el extractor real y su
+  control positivo—. Queda el **defecto de forma**: el lector sigue sin gate, así que el próximo
+  cuerpo de error que traiga el literal reabre lo mismo. Cortar en la fuente fue lo correcto (los
+  lectores se multiplican, la fuente es una), pero no es lo mismo que arreglar al lector.
+  **No se tocó**, y la razón es de custodia, no de criterio: `deploy/rollout/` es del frente **arbol**
+  y lo está editando ahora mismo. Avisado por mensaje directo el 2026-08-26. `reg 2026-08-26`
+
 - ~~**El arnés de Fabric mide la discriminación con el principal EQUIVOCADO, y así se coló #238**~~ —
   todas las comprobaciones de discriminación corrían como `admin` (`fabric-lab-proof.ts:232-233` y
   `:346-347`); el único sondeo que usaba el service principal era P5. El admin **siempre** tiene

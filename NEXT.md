@@ -23,7 +23,7 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 | **Issue #250** — el fallback de `?page=` desconocido no se declara al USUARIO | **César decide** entre tres caminos (404 · como está · declararlo en la nav) | Abierto por el frente arbol y **reescrito por él** tras refutarle esta casa la mitad falsa (sí hay evento `mira-page-unknown` con sus tests). **Recomiendo declararlo en la nav** conservando el 200. No se implementó por dos vías: es elemento visible nuevo y es diseño abierto |
 | **Cuenta de bot en GitHub** · **`CONTRIBUTING.md`** · **capacidades Fabric del tenant** · **header del theme `default`** | **César** | Sin cambios |
 | **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding` | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; propuesto, sin mergear |
-| **#232** (lease: el release no nombra sucesor) | **arbol, EN VUELO** | Aviso previo del 2026-08-26: rama `feat/225-flip-first` (promoción con el flip del borde **antes** del handover + intent dirigido `control.handover.json`), encargo de César bajo PAQ-01. **Cierra el issue PARCIALMENTE y por diseño**: no toca `acquire`/fencing, así que la marca de release sigue siendo subasta abierta por cualquier otra puerta — y eso condiciona qué puede declarar el CHANGELOG. **#228 CERRADO** — PR #247 con su invariante verificado por esta casa |
+| **#232** (lease: el release no nombra sucesor) | **César decide si se persigue la propiedad completa** | **PR #257 MERGEADO el 2026-08-26** (`9b9fcb0`), del frente arbol: (promoción con el flip del borde **antes** del handover + intent dirigido `control.handover.json`), encargo de César bajo PAQ-01. **Cierra el issue PARCIALMENTE y por diseño** —verificado en el diff, no creído: el hunk de `control-lease.ts` es inserción pura y `acquire`/fencing quedan iguales—. Lo entregado es «la promoción orquestada es determinista»; el título del issue pide «soltar el control es una entrega». **Cerrarlo del todo exige meter el intent dentro de `acquire()`, o sea mover la frontera de confianza a un archivo que escribe una herramienta externa: eso es tuyo.** Medido V-14: 0 fuera de predicado en 6 actos + carrera de 20, con CN-2 reproduciendo el tramo viejo 3 veces. **Sin medir y así declarado**: producción, la dispersión del tramo (234–762 ms) y el `caddy reload` del flip-back. **#228 CERRADO** — PR #247 con su invariante verificado por esta casa |
 | **Drift de specs en la instancia** — `pi04` y `pi12` desplegadas difieren del repo | **arbol** | Detectado al medir #248 (`md5sum` de `/opt/mira/specs/` contra el árbol: 7 de 9 idénticos). **No toca controles** —verificado leyendo sus bloques vivos—, así que no invalidó esa medición |
 
 ## Lo que cambió en la sesión del 2026-08-19 (noche)
@@ -47,8 +47,7 @@ después. Detalle en `BITACORA.md`; lo que hay que saber para retomar:
 
 ## Lo que cambió en la sesión del 2026-08-26 (saldado autónomo del pasivo)
 
-**Tres PRs aterrizados** —#253 (del frente arbol, con su control negativo re-corrido acá), #252 y
-#254— y **un issue nuevo**, #255. **`main` acumula más trabajo sin publicar**, así que el corte de
+**Cinco PRs aterrizados** —#253 y **#257** (del frente arbol, los dos con control negativo re-corrido acá), #252, #254 y #256— y **un issue nuevo**, #255. **`main` acumula más trabajo sin publicar**, así que el corte de
 0.22.0 sigue siendo el próximo paso y ahora trae más cosas.
 
 **Seis partidas del pasivo interno cerradas, todas de la misma familia: un control que no
