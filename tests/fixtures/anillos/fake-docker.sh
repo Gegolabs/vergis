@@ -219,6 +219,21 @@ exec)
   case "${1:-}" in
   node)
     # `docker exec <c> node -e <js> <url> <headers>` → tras el shift: $1=node $2=-e $3=js $4=url
+    #
+    # El INTENT DE HANDOVER va por el mismo camino (`node -e`) y se reconoce por el marcador del
+    # programa, igual que lo haría un lector humano: $4=sucesor (vacío ⇒ borrar), $5=segundos. El mundo
+    # falso lo guarda en un archivo para poder AFIRMAR que se escribió, cuándo y a nombre de quién.
+    case "$3" in
+    *handover*)
+      if [ -z "${4:-}" ]; then
+        rm -f "$W/handover"
+      else
+        printf '%s %s\n' "$4" "${5:-}" >"$W/handover"
+        printf '%s %s\n' "$4" "${5:-}" >>"$W/handover.log"
+      fi
+      exit 0
+      ;;
+    esac
     url=$4
     ph=$(cval "$c" phase)
     case "$url" in
@@ -248,6 +263,12 @@ exec)
   caddy)
     # `caddy validate` / `caddy reload` del borde: éxito salvo que el mundo pida lo contrario.
     if [ -f "$W/edge-fails" ]; then exit 1; fi
+    ;;
+  wget)
+    # API de administración del borde: el pool de upstreams, derivado de la línea que dejó el flip.
+    # Es informativo para la herramienta (no gatea nada); acá se modela para que la llamada no falle.
+    tgt=$(sed -n 's/^reverse_proxy \([^:]*\):8080.*/\1/p' "${FAKE_RINGS_DIR:-/nope}/active.caddy" 2>/dev/null | head -1)
+    printf '[{"address":"%s:8080","num_requests":0,"fails":0}]\n' "$tgt"
     ;;
   *) exit 1 ;;
   esac
