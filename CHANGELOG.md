@@ -34,7 +34,50 @@ así que `:0` prometería una compatibilidad que nadie sostuvo.
 declara qué trae y qué exige; qué versión corre cada instancia, cuándo entra y bajo qué control de
 cambio lo decide quien opera esa instancia.
 
+## Antes de cortar: el cotejo
+
+`npm run corte:cotejo` contrasta las referencias `#NNN` de los commits del rango contra el texto de la
+sección del CHANGELOG, en las dos direcciones: lo que el tag traería sin declarar, y lo que la sección
+declararía sin que el tag lo traiga.
+
+**Existe porque el corte comparaba lo que el humano recuerda.** La entrada de anillos I7+I8 quedó bajo
+«Sin publicar» con su código dentro de `v0.21.0` (#242) y lo encontró una revisión de custodia por
+casualidad. Retro-test contra el CHANGELOG **tal como estaba al taggear** —`git show
+v0.21.0:CHANGELOG.md`, con `--changelog`—: lo habría atrapado.
+
+**No es un veredicto.** Coteja por número: un cambio que nadie referenció en su mensaje de commit le
+es invisible, y por eso su salida termina diciéndolo. Los commits sin ninguna referencia se listan
+aparte, para mirarlos a mano.
+
+**Y el corte es también la cadencia del arnés de Fabric.** `npm run fab:proof` no puede vivir en un CI
+—exige capacidad prendida, credenciales y plata—, así que su cadencia declarada es ésta: se corre
+**antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
+veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
+
 ## Sin publicar
+
+### La sala de espera del borde ya no envenena a un lector de fase por expresión regular
+
+`deploy/edge/espera.html` —el cuerpo del **503** que Caddy sirve cuando ningún anillo declara la fase
+`serving`— llevaba ese literal escrito en un comentario. Cualquier lector que extraiga la fase del
+cuerpo por regexp leía `serving` **de la página que significa justo lo contrario**.
+
+**El veredicto de ruteo NO estaba comprometido** y va dicho para no inflar el hallazgo: `serving_ok`
+de `deploy/rollout/vergis-rollout` exige `200` **antes** de mirar la fase, y esta página se sirve con
+503. Lo que sí mentía era el **diagnóstico**: el `warn` del smoke llama al extractor sin ese gate, así
+que ante un 503 imprimía `fase='serving'` — exactamente cuando alguien está averiguando qué pasó.
+
+Medido con sus dos controles: el extractor real (`sed`) sobre la página anterior devuelve `serving`,
+sobre la corregida devuelve vacío, y sobre un `/healthz` de verdad sigue devolviendo `serving` — o sea
+que se cortó la trampa sin romper el instrumento. **Se corta en la fuente y no en cada lector**: los
+lectores se multiplican, este archivo es uno.
+
+Hallado por el frente `arbol` midiendo el banco del conmutador de anillos.
+
+### Dependencias
+
+- `tedious` ^19.2.1 → **^19.2.2** (#252) — patch dentro del mismo minor; el salto a v20 sigue
+  esperando su propio cooldown de 14 días (ADR-001). Sin cambio de comportamiento observable.
 
 ### Las acciones por proceso de Frescura validan la PERTENENCIA del proceso al dominio (#253)
 

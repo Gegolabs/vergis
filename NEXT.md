@@ -19,11 +19,11 @@ gobernadas, y hay que regenerar y re-aplicar la DDL de la política para que el 
 | **Issue #245** — hay `UNMASK` **granular por columna** en Fabric | **César decide**: ¿el emisor lo emite (a), o se documenta como vía del operador (b)? | Medido con control positivo, negativo y revoke verificado. **Recomiendo (b)** por frontera: los privilegios del principal los decide quien opera |
 | **E4 de #238** — ¿la aptitud vale toda la vida de la conexión? | **Nuestro** | Sigue **sin medir**, y ahora se sabe qué cuesta: por la vía del rol arrastra la staleness (>20 min, techo desconocido) y deja el terreno inutilizable; **por la vía del `GRANT` es viable** y cabe en una ventana propia |
 | **`tsconfig.json` no incluye `scripts/`** | **Nuestro** | `npm run typecheck` **nunca** chequeó `fabric-lab-proof.ts` ni `tsql-lab-proof.ts`. Descubierto al promover el arnés; no se tapó porque tocar el `include` afecta a otros scripts |
-| **PRs #201 y #175** (Renovate) | **Nadie, todavía** | **No se mergean**: su `renovate/stability-days` está en `pending` — es el cooldown de 14 días del ADR-001 (6 y 2 días cumplidos). Se aterrizan solos cuando pase. Ver `DECISIONS.md` D-51 |
+| **PRs #251, #201 y #175** (Renovate) | **Nadie, todavía** | **No se mergean**: su `renovate/stability-days` sigue en `pending` (cooldown de 14 días del ADR-001). **#252 SÍ aterrizó el 2026-08-26**: su check pasó a `pass`, que era la condición que D-51 dejó escrita. **Corrección a lo que decía esta fila:** «se aterrizan solos cuando pase» **no está sostenido** — Renovate corrió con éxito el 24-ago y **no re-emitió** el status de #175 ni #201, que siguen fechados el día que nacieron. Probablemente haga falta tildar `rebase-branch` en el dashboard #169, y **eso es conjetura: no se midió** |
 | **Issue #250** — el fallback de `?page=` desconocido no se declara al USUARIO | **César decide** entre tres caminos (404 · como está · declararlo en la nav) | Abierto por el frente arbol y **reescrito por él** tras refutarle esta casa la mitad falsa (sí hay evento `mira-page-unknown` con sus tests). **Recomiendo declararlo en la nav** conservando el 200. No se implementó por dos vías: es elemento visible nuevo y es diseño abierto |
 | **Cuenta de bot en GitHub** · **`CONTRIBUTING.md`** · **capacidades Fabric del tenant** · **header del theme `default`** | **César** | Sin cambios |
 | **PR #2 en `protocolos`** — enmienda a la Regla 1 de `ww:wingcoding` | **César** | El Reglamento lo escribe él. Rama `wingcoding/quien-aplica-el-criterio`; propuesto, sin mergear |
-| **#232** (lease: el release no nombra sucesor) | **arbol** | Sin empezar. **#228 CERRADO** — PR #247 mergeado con su invariante de runtime verificado por esta casa |
+| **#232** (lease: el release no nombra sucesor) | **arbol, EN VUELO** | Aviso previo del 2026-08-26: rama `feat/225-flip-first` (promoción con el flip del borde **antes** del handover + intent dirigido `control.handover.json`), encargo de César bajo PAQ-01. **Cierra el issue PARCIALMENTE y por diseño**: no toca `acquire`/fencing, así que la marca de release sigue siendo subasta abierta por cualquier otra puerta — y eso condiciona qué puede declarar el CHANGELOG. **#228 CERRADO** — PR #247 con su invariante verificado por esta casa |
 | **Drift de specs en la instancia** — `pi04` y `pi12` desplegadas difieren del repo | **arbol** | Detectado al medir #248 (`md5sum` de `/opt/mira/specs/` contra el árbol: 7 de 9 idénticos). **No toca controles** —verificado leyendo sus bloques vivos—, así que no invalidó esa medición |
 
 ## Lo que cambió en la sesión del 2026-08-19 (noche)
@@ -44,6 +44,32 @@ después. Detalle en `BITACORA.md`; lo que hay que saber para retomar:
 - **El arnés de Fabric tiene P9 y P10**: el control de premisa (mide **leyendo**, en el plano de datos) y
   el centinela. Y `npm run fab:sql` imprime el SQL emitido **sin motor y sin gasto** — es la revisión
   previa a abrir una ventana.
+
+## Lo que cambió en la sesión del 2026-08-26 (saldado autónomo del pasivo)
+
+**Tres PRs aterrizados** —#253 (del frente arbol, con su control negativo re-corrido acá), #252 y
+#254— y **un issue nuevo**, #255. **`main` acumula más trabajo sin publicar**, así que el corte de
+0.22.0 sigue siendo el próximo paso y ahora trae más cosas.
+
+**Seis partidas del pasivo interno cerradas, todas de la misma familia: un control que no
+controlaba.** Lo que hay que saber para retomar:
+
+- **`npm run corte:cotejo` es parte del corte ahora**, y está escrito en el CHANGELOG §«Antes de
+  cortar». Contrasta las referencias del rango contra la sección. **No es un veredicto** —coteja por
+  número—, pero su retro-test contra el CHANGELOG de entonces atrapa #233, que es el defecto de #242.
+- **El typecheck ya mira `scripts/`.** Si tocas un script y el gate se pone rojo, es real: antes daba
+  verde **por ausencia**. Lo destapó cuatro errores y **dos instrumentos rotos** — `notas-smoke` moría
+  al cerrar y `admin-smoke` reportaba con un stack crudo.
+- **El arnés T-SQL tiene gate propio** (`.github/workflows/tsql-lab.yml`), disparado por cambios en
+  `packages/policy/**`. Corre en **31 s** — medido, no estimado.
+- **El arnés de Fabric tiene cadencia declarada**: el corte de versión, **antes** de empujar el tag.
+- **`PENDINGS.md` pasó de 34 a 21 fichas.** Un tercio era peso muerto que nunca egresó. Tres cerradas
+  se quedaron **a propósito**: declaran mitad viva.
+
+**Y una cosa que NO se hizo, con su razón:** la ficha de `/ww:work` + `POLICIES.md` vive en el repo
+`protocolos`, que otro frente está escribiendo hoy (W-01, ocurrencia 39, visto **antes** de escribir).
+Quedó como hand-off: enmienda **por PR y sin self-merge**, coordinada con ese frente. Y se re-derivó:
+es **rancio parcial** — `ww:deuda` ya lee la política; la vista de `ww:work` sigue sin filtrar.
 
 ## Próximo paso
 

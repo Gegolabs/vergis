@@ -11,9 +11,9 @@ import { createServer } from 'node:http'
 import { rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createRequestHandler } from '../server/routes.ts'
-import { createNotas } from '../server/notas.ts'
-import { csrfFactory } from '../server/ui.ts'
+import { createRequestHandler } from '../server/routes'
+import { createNotas } from '../server/notas'
+import { csrfFactory } from '../server/ui'
 import { SqliteNotasStore, renderHtmlPiece, type ResolvedNode } from '@vergis/capabilities'
 import type { MiraSpec } from '@vergis/mira'
 
@@ -62,7 +62,7 @@ const arbolDe = (user: string): ResolvedNode => ({
   ancla: { dataset: 'empleados', entity: 'dbo.dim_empleado', key: ['rut'], comentarios: {} },
 })
 
-const REPORT = { code: 'PI-16', slug: 'pi-16', name: 'Folios', specPath: '/dev/null', tables: [], databaseRefs: [] }
+const REPORT = { code: 'PI-16', slug: 'pi-16', name: 'Folios', specName: 'Folios', specPath: '/dev/null', tables: [], databaseRefs: [] }
 const userDe = (h: Record<string, unknown>): string => String(h['x-test-user'] ?? '')
 
 const store = await SqliteNotasStore.open(DB)
@@ -268,7 +268,11 @@ console.log('\n9 · Retiro del esquema viejo y forma del congelado')
   ok(!payloadCong.drills || payloadCong.drills.length === 0, 'el payload del congelado va sin drills (es documento, no vista)')
   ok(!vista.includes('notas-imprimir'), 'y sin la bandeja de notas viva')
   ok(existsSync(DB), 'el store persistió a disco')
-  const store2 = await SqliteNotasStore.open(DB)
+  // Handle de INSPECCIÓN (`mode: 'read'`), no un segundo escritor: el store de arriba sigue vivo y
+  // abierto. Con el default (`write`) este `open` arma su propio fencing y su `close` vuelca el
+  // archivo, con lo que el handle original encuentra un inodo que no es el que dejó y aborta su
+  // volcado — que es el fencing HACIENDO SU TRABAJO, no un defecto del store.
+  const store2 = await SqliteNotasStore.open(DB, { mode: 'read' })
   ok((await store2.getImpresion(impId)) !== null, 'y se re-abre desde el archivo con sus datos')
   await store2.close()
 }
