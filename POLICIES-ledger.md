@@ -13,7 +13,7 @@
 
 ## POL-01 · Recursos externos con costo — US$50/mes, US$10 por acto
 
-**Mes en curso: 2026-08.** Pote US$50 · **gastado US$0,24** · disponible **US$49,76**.
+**Mes en curso: 2026-08.** Pote US$50 · **gastado US$0,25** · disponible **US$49,75**.
 El pote repone el día 1 y no acumula.
 
 | Fecha | Acto | Recurso | Medida | Monto | Asentado por |
@@ -46,3 +46,4 @@ en background con su propio vigilante.
 ---
 
 • *Generado con Wingworking*
+| 2026-08-26 | Ventana de Fabric previa al corte de 0.22.0 — la cadencia declarada en D-57: el arnés se corre ANTES del tag, no después | Capacidad F2 `vergisfablab` | 2 min 09 s encendida (13:12:21→13:14:30 UTC), a US$0,36/h | **US$0,013** | el agente |
