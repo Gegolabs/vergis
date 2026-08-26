@@ -61,114 +61,6 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
 
 ## Código / CI
 
-- **`tsconfig.json` no incluye `scripts/`, así que `npm run typecheck` NUNCA los chequeó** — descubierto
-  al promover el control de premisa y el centinela al arnés (P9/P10): `scripts/fabric-lab-proof.ts` y
-  `scripts/tsql-lab-proof.ts` están **fuera** del `include`, o sea que el gate del repo daba verde sobre
-  ellos **por ausencia**, no por corrección. Se typechequearon aparte con un tsconfig temporal (verde),
-  y el hueco quedó abierto a propósito: tocar el `include` afecta a los demás scripts a la vez y puede
-  destapar errores preexistentes en archivos que nadie estaba mirando. Es de la familia del instrumento
-  que no sabe reportar su propio fallo — **un gate que no mira un directorio no dice «no medí», dice
-  «verde»**. Lo barato: agregar `scripts/` al `include` en su propia rama y ver qué sale. `reg 2026-08-19`
-
-- **El pin de shellcheck está escrito en DOS lugares y nada mecánico impide que se desincronicen** —
-  `SHELLCHECK_ESPERADO` en `scripts/lint-shell.sh` y `SHELLCHECK_VERSION`/`SHELLCHECK_SHA256` en
-  `.github/workflows/build.yml`, con comentario cruzado en ambos. Si divergen, el modo estricto del CI
-  (`LINT_SHELL_STRICT=1`) lo delata en **rojo** —no en silencio, que es lo importante— pero el aviso
-  llega después del push. Es exactamente la pareja que driftea que el guard de labels de la imagen ya
-  resolvió para su caso (`tests/imagen-anillo-labels.test.ts`): un test que compare los dos literales
-  cerraría esto igual. No se hizo para no ampliar el alcance del frente. `reg 2026-08-19`
-
-- **El corte de versión no tiene ningún chequeo de que el CHANGELOG declare lo que el tag contiene** —
-  es la causa raíz de #242 y sigue viva: el corte compara **lo que el humano recuerda**, no lo que el
-  tag trae. La entrada de anillos I7+I8 quedó bajo «Sin publicar» con su código dentro de `v0.21.0`, y
-  lo detectó una revisión de custodia por casualidad, no un gate. **Difícil de automatizar bien**
-  —mapear entrada→commit exige una convención que hoy no existe—, pero hay una versión barata y
-  honesta: al cortar, listar los issues/PRs cuyos commits están en el tag y contrastarlos a mano contra
-  los encabezados de la sección. Anotado para que el próximo corte no dependa otra vez de la suerte.
-  `reg 2026-08-19`
-
-
-- **✅ RESUELTO (2026-08-19) — los dos compose juzgan por la FASE, y el instrumento demostró que sabe
-  reprobar.** La ficha decía que el `healthcheck` de `docker-compose.yml` juzgaba por `r.ok` y que desde
-  0.20.0 eso daba «sano» a un nodo en `standby` (que responde HTTP 200 con `ok:true` por diseño). Ahora
-  el predicado es el canónico —el mismo del borde y de `rollout/vergis-rollout` (`serving_ok`)—:
-  **`HTTP 200 ∧ "phase":"serving" ∧ (sin bloque pis ∨ pis.serving == pis.total)`**, con el cuerpo
-  **parseado** y no grepeado, y con todo lo no medible (vacío, no-JSON, conexión rechazada) contando
-  como fallo. El `pis` se exige **solo si viene**: `/healthz` lo omite cuando el motor no tiene
-  servibilidad por PI (`VERGIS_ENGINE` ≠ `fabric`), y exigirlo incondicionalmente habría dejado el modo
-  Free en `unhealthy` perpetuo — ese detalle era el que decidía el diseño.
-  **También se le agregó healthcheck al servicio `vergis` de `deploy/compose.reference.yml`**, que no
-  tenía ninguno, porque el modo un-solo-nodo está documentado como válido en ese archivo y ahí un
-  `docker ps` que dice `healthy` sobre un standby es la mentira más cara en un incidente. Va con el
-  comentario que desarma las dos malas lecturas: es **diagnóstico, no ruteo** (quien rutea es el
-  conmutador del borde), y **no viaja a los anillos** — `rollout/ring.args` no lleva healthcheck, y no
-  le hace falta porque la salud de un anillo la mide el borde, el único que puede actuar sobre ella.
-  El healthcheck del borde `caddy` **se deja intacto**: es un proxy sin fases y su comentario ya explica
-  por qué juzga por HTTP.
-  **Verificado con arnés propio** (`spawn` asíncrono + servidor de mentira; el comando se **extrae** del
-  YAML, no se copia a mano): 10 casos, 0 discrepancias — `serving` con y sin `pis` → 0; `standby`,
-  `degraded`, `serving` con `pis` incompletos, 503, cuerpo vacío, cuerpo no-JSON, la trampa del grep
-  (`"serving"` fuera de `phase`) y conexión rechazada → 1. Con **control negativo**: el comando viejo
-  (`r.ok`) contra el cuerpo `standby` da **0**, que es exactamente el defecto que esto cierra.
-  **NO se verificó contra un contenedor real corriendo**: el arnés mide el **predicado**, no el montaje
-  —ni que Docker interprete el `test` como se espera, ni el `start_period`, ni la transición
-  `starting → healthy → unhealthy` de un nodo vivo—. Tampoco se midió el caso de un nodo reiniciado que
-  espera el vencimiento del lease anterior; se **razonó** que cabe en el `start_period` (lease stale
-  10 s por default contra 40 s de gracia) y eso es conjetura, no medición. El gemelo del lado del
-  operador lo lleva el frente arbol (`P-239`) y sigue siendo suyo. `reg 2026-08-18`
-
-- ~~**867 líneas de shell entrarán al repo sin linter en CI**~~ — **✅ RESUELTO (2026-08-19)**: el gate
-  existe y es `npm run lint:shell` (`scripts/lint-shell.sh`), con job hermano `shell` en
-  `.github/workflows/build.yml` y `image` colgado de `needs: [test, shell]` — o sea que **ninguna
-  imagen se publica con el shell en rojo**. El gate **descubre, no enumera**: `git ls-files --cached
-  --others --exclude-standard` filtrado por `*.sh` **o por shebang**, así que cubre los dos scripts
-  extensionless (un glob `**/*.sh` habría medido 259 de 1130 líneas) y **también el script de shell
-  que alguien agregue mañana sin tocar ninguna lista**. El dialecto lo deriva shellcheck del shebang:
-  no se fuerza `-s bash`, que volvería el gate ciego a los bashismos que la VM objetivo no soporta
-  (medido: el falsificador con `[ $1 == x ]` sale rojo por SC3014). Los 15 hallazgos que había se
-  **arreglaron**, sin ningún `disable` nuevo en los tres archivos: 9×SC1007 (`var=` → `var=''`),
-  1×SC2020 (`tr '{}' '\n\n'` → dos `tr` de un carácter: POSIX declara *unspecified* el segundo
-  conjunto más corto) y 2×SC2015 (`A && B || C` → `if`). El gate se falsificó en tres direcciones
-  (script nuevo no enumerado, bug inyectado en el archivo grande, shellcheck ausente) y las tres
-  salieron rojas.
-  **Lo que NO cubre, dicho con esas palabras:** (a) un script de shell **ignorado por `.gitignore`**
-  —`local/`, por ejemplo— no se lintea, por construcción; (b) el CI usa el `shellcheck` preinstalado
-  del runner, que **no está pinneado**: su versión puede diferir de la local (0.11.0) y un upgrade de
-  imagen del runner puede traer hallazgos nuevos — se verá como un rojo en el job `shell`, no como un
-  falso verde; (c) shellcheck queda con su severidad por defecto (`style`), **sin** los *optional
-  checks*; y (d) los dos SC2015 se arreglaron como **remoción de un peligro estructural**, no como
-  cierre de un bug demostrado: no se logró construir una corrida en que la forma anterior diera una
-  respuesta falsa — el detalle está en el PR y en el comentario de cada línea. `reg 2026-08-18`
-
-
-- ~~**La medición de #164 NO está en el arnés de Fabric**~~ — **SALDADO 2026-08-18**: es P7 de
-  `fab:proof` (PR #219) y ya corrió contra el SKU. Resultado en el comentario de #164
-- **✅ SALDADO (2026-08-19) — el secreto del SP está en la máquina y P5 (#163) quedó respondida:
-  `Viewer` NO tiene `UNMASK`.** La ficha pedía «regenerar el secreto», y esa premisa era **falsa a
-  medias**: la app tenía una credencial vigente (`lab-186`); lo perdido era **su valor**. Se emitió
-  `lab-186-b` con `--append`, por mandato explícito de César en sesión; vive en
-  `local/fabric-lab-sp.env` (ver `RESOURCES.md`).
-  **Esta ficha afirmó primero lo contrario y se corrige el mismo día.** La corrida de la mañana midió
-  el SP en `Viewer` leyendo **en claro** y publicó «el DDM le es inerte». **Era residuo de la
-  revocación no propagada** del 16-ago: el experimento del rol de la tarde, con conexión nueva, token
-  nuevo y sin tocar DDL, midió el baseline **enmascarado**. El registro del 16-ago era el correcto.
-  **La lección, que vale más que el dato:** el arnés tenía su control positivo en verde y aun así
-  entregó un veredicto falso, porque **el control positivo prueba que la lectura ocurrió, no que la
-  premisa del sujeto sea la declarada**. `FAB_SP_ROLE=Viewer` era cierto en el plano de control y
-  falso en el plano de datos, y ningún control del arnés mira esa diferencia.
-
-- **El eslabón «renombrar en la consola → catálogo servido» de #207 no tiene test de integración** —
-  está medido que el override no se congela en el memo del escáner y que sobrevive al reinicio del
-  nodo (SQLite en disco), pero la cadena *POST → `refreshDisplayNames()` → `discover()`* solo está
-  cubierta por lectura: exige el server levantado, como `serve-rls-proof.ts`. Es exactamente la clase
-  de eslabón donde el frente vecino (#139) ya encontró un fallo real —la observación del boot corría
-  antes del registro de los watches—, así que no es celo. `reg 2026-08-17`
-- **Las facetas client-side (`interactions.filters`) no recibieron el tope+buscador de #209** — el
-  frente cubrió los filtros **server-side** de la bandeja, que es donde estaba el caso medido (47
-  opciones con cascada). Las facetas son otra superficie y **no fueron lo reportado**, así que esto no
-  es un pendiente escondido del issue sino la pregunta abierta de si el roce también aparece allá. Si
-  aparece, nace issue propio. `reg 2026-08-17`
-
 - ~~**El arnés de Fabric mide la discriminación con el principal EQUIVOCADO, y así se coló #238**~~ —
   todas las comprobaciones de discriminación corrían como `admin` (`fabric-lab-proof.ts:232-233` y
   `:346-347`); el único sondeo que usaba el service principal era P5. El admin **siempre** tiene
@@ -251,6 +143,23 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   declaradas en `RESOURCES.md`. Consumen presupuesto o licencia y **la decisión de qué hacer con
   ellas es de César** (gasto). Se anota acá porque el hallazgo es del agente, no encargo suyo.
   `reg 2026-08-16`
+  **RE-DERIVADA 2026-08-26 — y lo importante es lo que NO se pudo medir.**
+  Medido: la **suscripción** ultraBASE tiene hoy **un solo recurso ARM**, `vergisfablab` (F2,
+  `westus2`). Sin filtro de tipo, sin nada en `chilecentral`, y cero capacidades
+  `Microsoft.PowerBIDedicated`.
+  **Eso NO cierra la ficha, y el porqué es el punto**: un **Trial** y una **PPU** no son recursos ARM
+  —viven en el plano de Fabric— así que `az resource list` **no puede verlos**. Un vacío ahí significa
+  *«no pude medir»*, no *«no existen»*. Tratarlo como cierre sería exactamente el instrumento que
+  falla hacia el verde.
+  **El instrumento que sí decide** es `GET https://api.fabric.microsoft.com/v1/capacities` contra el
+  tenant ultraBASE, y **no se pudo correr**: la cuenta `az` activa en esta máquina es la **del
+  cliente** (`arboltec@grupohijuelas.com`) y el tenant propio la rechaza —
+  `AADSTS50020: … does not exist in tenant 'ultraBASE'`. Destrabarlo es **un login interactivo de
+  César**, que es credencial y no gasto:
+  `az login --tenant 41eb660f-56d9-407a-93e0-c1e5eb7be21c --scope "https://api.fabric.microsoft.com/.default"`.
+  **Una inferencia, etiquetada como tal**: el Trial arrancó el 2026-05-25 y los trials de Fabric duran
+  60 días, así que a hoy lleva **93** — probablemente ya murió. **Es inferencia de la documentación,
+  no medición**, y no se escribe como cierre. `act 2026-08-26`
 - **Una consulta de instancia sigue abierta, y ya no es sobre la severidad de #197 sino sobre
   `UNMASK`** (*act 2026-08-19: la pregunta ya NO es si el mecanismo existe —se midió en terreno propio,
   y con `Viewer` el SP de laboratorio lee en claro—, sino qué ocurre en la instancia del cliente*) —
@@ -259,18 +168,6 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   misma pregunta que P5 por otra vía, y **es una consulta contra la instancia, no un frente**.
   Conserva valor la otra mitad, con otro sentido: **¿algún PI nombra una `vw_mask_*`?** — ya no mide
   el daño, mide **a quién le sirve el arreglo**. `reg 2026-08-16 · act 2026-08-18`
-
-- **El arnés T-SQL no corre en ningún gate, y un arnés que solo corre cuando alguien se acuerda se
-  pudre** — `scripts/tsql-lab-proof.ts` queda fuera de `npm test` **a propósito** (la suite es
-  hermética y sin Docker) y fuera del CI. La consecuencia es previsible: el compilador Fabric puede
-  cambiar y el arnés seguir en verde por no haberse corrido, que es exactamente el estado del que
-  este arnés nos sacó. **Lo que NO se sabe todavía**: si el runner de GitHub aguanta la imagen de SQL
-  Server (amd64, ~1,5 GB, arranque de ~40 s) dentro del presupuesto del workflow — no medido. Camino
-  probable: job propio, opcional, disparado por cambios en `packages/policy/**`. **Y desde el
-  2026-08-16 son DOS los arneses fuera de todo gate**: `fabric-lab-proof.ts` está aún más lejos del
-  CI —exige capacidad prendida, credenciales y plata—, así que para él la vía no es un job sino una
-  **cadencia declarada**: cuándo se corre y quién se acuerda. Sin eso, el terreno que costó levantar
-  se pudre igual que el local. `reg 2026-08-16 · act 2026-08-16`
 
 - **El frente de authz dejó cuatro cosas sin medir — quedan DOS, y ya no por falta de terreno**
   (*encogido el 2026-08-14 con el arnés T-SQL local; la premisa «ninguna se puede medir sin terreno
@@ -308,16 +205,9 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   llamada `rut` veta probes que nombren el `rut` de OTRA tabla del `FROM`. Consciente y documentado;
   se anota porque el primer reporte de «Miranda no me deja consultar algo que sí puedo ver» va a
   venir de acá y conviene no diagnosticarlo desde cero. `reg 2026-08-13`
-
-- **✅ RESUELTO (2026-08-18) — #164 medido en los dos motores y publicado en 0.19.0.** La ficha decía
-  «hecha a MEDIAS, falta Fabric», y eso dejó de ser cierto: el `ADD FILTER PREDICATE` sin argumento se
-  midió **aceptado en el SKU F2** con control positivo y verificando que la tabla siga sirviendo sus
-  filas (no deny silencioso), y después el codegen se midió **con el SQL emitido** en los dos motores
-  —SQL Server 2022 y Fabric— **con el control que el issue pedía y ninguna corrida había hecho**: con
-  la policy instalada, el `ALTER` sobre una columna de negocio **se acepta**. `schemaDependencies` de
-  un allow-all pasa a `[]`: la dependencia no se declara mejor, **se quita**. `bindColumn` retirado
-  del contrato (D-40). Lo construido antes (`schemaDependencies` como mitigación) cumplió su papel de
-  puente y ya no hace falta para el allow-all. Ver #164, PR #223.
+  **Veredicto (act 2026-08-26): ESTADO ACEPTADO, no pendiente.** Se sella para que el barrido de TTL
+  no la archive como «vencida **sin** veredicto» — no le falta trabajo, le sobra archivo: su casa
+  natural es `docs/`, y mudarla es decisión de César.
 
 - **El render de gráficos: queda un residuo que ninguna capa detiene** — un exploit de Vega que haga
   E/S **sin pasar por su loader** (p. ej. vía una dependencia transitiva) atraviesa el gate
@@ -326,27 +216,6 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   driver, la fs se cierra con el permission model y **la red se cierra en la red del contenedor**,
   no en Node. `reg 2026-08-13`
 
-- **✅ RESUELTO (2026-08-13) — el aviso de incumplimiento del contrato `_logs/` ya aparece.** El lazo
-  mide `corridasSinLog` por tick (con caché del listado compartida con el resolver, un solo listado
-  por vuelta) y lo persiste en `intake_watch_state.corridas_sin_log`; la consola lo lee de la
-  proyección. **La trampa que se evitó**: parecía que el conteo salía gratis de la fase RESOLVER, y
-  es falso —`resolverSlot` hace `if (!pendientes.length) return`—, con lo que **el conteo se habría
-  congelado justo en el slot incumplidor**, que resuelve todo como `sin-informe` y después no tiene
-  pendientes. El aviso habría callado exactamente donde hace falta. Commit `870fa69`.
-  **Dos límites declarados**: el conteo se congela si el listado falla tick tras tick (deliberado —
-  *no medir no es medir cero*—, y la consola lo muestra bajo el banner `ultima-conocida`); y **satura
-  en 10** porque el wiring pide 10 instancias al motor, así que el texto diría «las últimas 10»
-  cuando podrían ser más. `reg 2026-08-13 · resuelto 2026-08-13`
-- **✅ RESUELTO (2026-08-13) — hay umbrales de vigilancia por slot y opt-out.** Bloque `watch:`
-  fail-closed en la config del slot: `false` (opt-out total, incluido el resolver) o
-  `{max_age_minutes, max_run_minutes}`. Una declaración malformada **rompe el arranque nombrando el
-  slot**, no se degrada en silencio a los defaults. Commits `b839c78` (parse) y `76b51de` (el lazo lo
-  consume). **Lo delicado era el silencio al apagar**: al pasar a `watch: false` la clave se retira
-  del estado de alertas **sin emitir «recuperado»** — no sanó, lo callaron, y un aviso de
-  recuperación falso entrena a desconfiar de los verdaderos.
-  **Gate de despliegue pendiente (C7)**: comprobar que ningún `slots.yaml` de instancia traiga hoy
-  una clave `watch:` inerte que este parse empezaría a interpretar. Verificado que **este** repo no
-  tiene ningún YAML con `slots:`; los de instancia viven en el repo del lab. `reg 2026-08-13 · resuelto 2026-08-13`
 - **✅ RESUELTO PARCIAL, con la pérdida ACEPTADA y protegida (2026-08-13) — el control positivo en
   slots land-only.** La decisión de no correr el control **por-archivo** sin corridas **se ratificó**
   tras evaluar tres variantes de corte: todas fabrican alertas falsas o exigen un contrato externo
@@ -367,78 +236,6 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   real podría quedar fuera y la carga terminaría marcada `varada`. Ambos son de la familia de los
   gates manuales del despliegue. `reg 2026-08-13`
 
-- **✅ RESUELTO (2026-08-13) — los PRs de Renovate nacían con el CI en rojo: era la VERSIÓN DE npm.**
-  Renovate regeneraba el lockfile con **npm 12.0.2**, que **poda las optional deps de otras
-  plataformas**: 156 referencias `@esbuild/` contra las 234 de `main`, y `npm ci` abortaba.
-  **Aislado con control limpio** —mismo árbol, mismo comando, misma imagen, misma plataforma, solo
-  cambia el npm—: **10.9.8 ⇒ 234 · 12.0.2 ⇒ 156**.
-  **Cura** (`d1cb166`): `constraints.npm` fijado a `^10.9.8`, más `allowedVersions: "<11"` como
-  **candado** —Renovate tenía pendiente «update npm tool constraint to v12», que habría vuelto a
-  romperlo todo—. **Verificado end-to-end**: la corrida `31719851935` instaló `npm 10.9.9`
-  (`"command": "install-tool npm 10.9.9"`), regeneró `renovate/typescript-5.x` y su lockfile pasó de
-  **156 → 234**; el **PR #177 nació VERDE** (`test` ✓ `review` ✓ `stability-days` ✓, MERGEABLE/CLEAN).
-  **Por qué costó tres días, y es la lección que sobrevive al caso:** `constraints.npm: ">=10"` se
-  dio por «refutado» dos veces **porque `>=10` PERMITE npm 12** — el constraint era correcto en
-  intención y estaba mal expresado. Y **ninguna medición local reprodujo jamás el defecto**, porque
-  todas se hicieron con el npm del repo (10.9.8): **el instrumento no cubría la variable que
-  importaba**, así que cada experimento «demostraba» que el lockfile estaba bien. También murió así
-  la afirmación del 2026-08-12 de que «no es que npm pode las optional deps» — se midió con un solo
-  npm. **Un experimento que no varía la variable sospechosa no la exonera: la ignora.**
-  El `postUpgradeTasks` que compensaba esto se **retiró** junto con su `RENOVATE_ALLOWED_COMMANDS`:
-  corría de verdad (`Executed post-upgrade task`) pero era inútil, porque Renovate lo ejecutaba con
-  el mismo npm 12 que causaba el defecto. Queda **verificado que la palanca funciona** en este
-  montaje por si alguna vez hace falta. `reg 2026-08-11 · resuelto 2026-08-13`
-
-
-- **✅ RESUELTO (2026-08-13) — el 403 al publicar commit status abortaba la corrida entera de
-  Renovate, con el job en VERDE.** Cadena escrita por el propio Renovate en el mismo milisegundo:
-  `POST /statuses/… = ERR_NON_2XX` → `Caught error setting branch status - aborting` → `Passing
-  repository-changed error up` → `Repository has changed during renovation - aborting`. Efecto: de
-  ~20 ramas candidatas escribía **una** y cortaba; **nunca alcanzaba una rama npm**.
-  **Confirmado por intervención**: César agregó `Commit statuses: Read and write` al PAT, y la
-  corrida `31719085575` dio **cero 403, cero abort y tres PRs** (#175, #176, #177). Beneficio
-  colateral visible: el check `renovate/stability-days` ahora se publica («Updates have met minimum
-  release age requirement») — el cooldown pasó de invisible a evidencia en cada PR.
-  **Historial de esta ficha: se afirmó, se «corrigió» y se re-afirmó el mismo día.** La corrección
-  intermedia era la inválida: declaró refutado el 403 contando ocurrencias **en logs con
-  `LOG_LEVEL=info`, que no imprimen ese DEBUG** — el contador medía el nivel de log, no el fenómeno
-  (403 en las 3 corridas `debug`, en ninguna de las 5 `info`, abort en las 8). **Un instrumento que
-  no distingue «no ocurrió» de «no lo registré» fabrica refutaciones tan falsas como las
-  afirmaciones que pretende arreglar.** `reg 2026-08-12 · resuelto 2026-08-13`
-
-
-- **✅ RESUELTO (2026-08-13) — el pin de nuestra propia imagen se QUITA** (decisión de César).
-  El pin entró con #174 y su churn estaba señalado en el cuerpo del PR antes de mergear:
-  `deploy/compose.reference.yml` fijaba `ghcr.io/gegolabs/vergis:latest@sha256:…`, y **cada build de
-  `main` publica un digest nuevo**, así que el bot trabajaba a perpetuidad sobre una imagen que este
-  repo produce. Vuelve al tag móvil, que además es lo que un lector quiere copiar de una plantilla.
-  **Quitar el digest NO basta y ahí está lo delicado**: `renovate.json` extiende `docker:pinDigests`,
-  que **re-pinearía la imagen sola** en la corrida siguiente. Por eso va con su regla —
-  `matchPackageNames: ghcr.io/gegolabs/vergis` con `pinDigests: false` + `enabled: false`.
-  **El cooldown de supply chain no pierde nada**: su objeto son las dependencias de terceros
-  (`caddy:2` sigue pineada). Aplicarle 14 días de espera a una imagen propia no protege de nada.
-  **Sin verificar todavía** (no se puede sin una corrida): que la regla efectivamente gane sobre el
-  preset. La evidencia será la primera corrida de Renovate que no abra ni reabra
-  `renovate/ghcr.io-gegolabs-vergis-latest`. `renovate-config-validator` pasó, pero él mismo está
-  documentado acá como verificador de FORMA, no de semántica. `reg 2026-08-12 · resuelto 2026-08-13`
-
-- **La hipótesis de que `pin-dependencies` bloqueaba el tablero — REFUTADA por el merge** (2026-08-12).
-  Se mergeó (#174) y la corrida siguiente (`31623564782`) **abortó igual**, ahora tras
-  `renovate/ghcr.io-gegolabs-vergis-latest`. Esa rama no tenía nada de especial: **el abort ocurre
-  tras escribir la primera rama, sea cual sea.** El merge sirvió: era el experimento que la refutaba.
-  `reg 2026-08-12`
-
-
-- **El `reportType` de Renovate NO sirve para detectar el abort** — medido el 2026-08-12 antes de
-  colgarle un gate encima (corrida `31599885826`). El reporte se genera (45 KB) con shape
-  `{problems: [], repositories: {"Gegolabs/vergis": {problems: [], branches: [], packageFiles: {…}}}}`:
-  es un **inventario de dependencias**, no un resultado de corrida. En una corrida que **sí abortó**,
-  el reporte no contiene `repository-changed` y `problems` viene vacío. **Un gate colgado de ahí
-  habría dado verde siempre** — un control inerte con cara de control. Falta encontrar la vía real
-  (candidata sin probar: `LOG_FILE` a `/tmp`, que el runner ve por el bind mount `/tmp:/tmp`, y
-  grepear la frase del abort). `reg 2026-08-12`
-
-
 - **Header del theme `default`: el título quedó como marca enlazada** (desviación declarada de #136 —
   ese theme no tiene logo). Es un elemento visible nuevo, no solo un wrapper; merece ojo humano.
   La instancia A.R.B.O.L. usa el theme `arbol`, así que no la afecta. `reg 2026-08-06`
@@ -456,18 +253,19 @@ multi-tenancy (004/11 E5) y re-evaluación de licencia del kernel (004/11 E4).)*
   que hoy no se cumple sola**, y se anota con esas palabras en vez de darla por hecha (Norma 6).
   Lo barato: que el Paso de enumeración de `/ww:work` lea `POLICIES.md` del proyecto y filtre.
   `reg 2026-08-18`
+  **RE-DERIVADA 2026-08-26 contra la fuente viva — RANCIO PARCIAL: media ficha ya no es cierta.**
+  `grep -rl POLICIES ~/.claude/skills/ww/` devuelve hoy **tres** archivos, no uno: el Reglamento,
+  `ww:start` y —esto es lo nuevo— **`ww:deuda`**, cuyo Paso 4 declara que *«si `POLICIES.md` declara un
+  presupuesto vigente, lo que cabe bajo su techo sí se decide y se ejecuta, y se asienta en el
+  ledger»*. O sea que **el gate de decisión sí lee la política**; lo que sigue sin implementarse es la
+  otra mitad, la que la ficha citaba: **la vista de `/ww:work` no filtra el bloque Decisiones por
+  política vigente** — `ww:work/SKILL.md` no nombra `POLICIES.md` ni una vez.
+  **Por qué no se arregló hoy pese al mandato de saldar:** el sujeto vive en el repo `protocolos`, y al
+  mirarlo antes de tocarlo aparecieron los dos reconocedores de **W-01** a la vez — tres commits del
+  día que esta sesión no hizo (programa `sov`) y un archivo sin commitear ajeno. Registrado como
+  **ocurrencia 39** en `~/.claude/WATCH-logs.md`, sin colisión material porque se vio antes de escribir.
+  **Queda como hand-off con su forma dicha**: una enmienda al Paso de enumeración de `ww:work`,
+  propuesta **por PR y sin self-merge** —la pluma del Reglamento es de César, como el PR #2 pendiente
+  de `wingcoding`—, y **coordinada con el frente que está escribiendo `protocolos`**.
+  `act 2026-08-26`
 
-
-
-- **✅ RESUELTO (2026-08-13) — `~/evals-finaliza/` es repo git local, sin remoto** (decisión de
-  César: se aplicó la recomendación). `git init` + commit inicial `68b2785`: 12 archivos, 992
-  líneas — la clave del espécimen, las 3 rondas anonimizadas, las 2 corridas en seco, los 2 juicios
-  ciegos, el reporte de bug de autoidentificación y `RESULTADOS.md`.
-  **Sin remoto a propósito**, y queda dicho: contienen salidas crudas de sesiones sobre proyectos
-  reales; publicarlas arrastraría ese contenido sin aportar nada. El día que haga falta un remoto,
-  que sea decisión tomada y no herencia del `git init`.
-  **Lo que faltaba para cerrarlo de verdad no era el `git init`**: la corrida que detectó esto
-  (`C.md` del espécimen) pedía **dejarlo dicho en el arnés**, para que la próxima no se lo vuelva a
-  preguntar. Hecho en `protocolos`, `evals/finaliza/ARNES-v1.0.md` §7 (commit `3a834c5`), más un
-  `README.md` en el repo nuevo que separa método (allá) de corridas (acá).
-  `reg 2026-08-07 · resuelto 2026-08-13`
