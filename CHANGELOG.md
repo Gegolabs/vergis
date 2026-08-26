@@ -64,9 +64,17 @@ handover** → **flip del borde** → handover → smoke. Desde el flip, ningún
 que está por soltar el control: los que entran mientras el candidato todavía no sirve quedan
 **retenidos** por la sala de espera del borde en vez de responderse por un nodo en espera.
 
-**Qué NO afirma esta entrada:** cuánta ventana sin-predicado elimina el orden nuevo. Se cambió el
-orden y se declara la capacidad; el efecto sobre la ventana es una hipótesis hasta que exista una
-corrida que la habría refutado, y esa corrida no es parte de este cambio.
+**Qué afirma esta entrada, y con qué alcance — medido, no prometido (V-14, 2026-08-26, arnés local
+`deploy/rollout/bench/`, 9 PIs sobre motor clickhouse):** bajo el orden nuevo, **cero respuestas fuera
+del predicado** (`200 ∧ phase=serving`) en 3 promociones, 3 rollbacks —medidos aparte, y la corrida
+destapó y corrigió que `rollback` descartaba sus flags— y una carrera de **20 promociones seguidas**
+(5.604 muestras crudas, 0 `200∧standby`, 0 5xx, 0 sin-medir, 0 warns de carrera del lease). El mismo
+instrumento, contra el **orden viejo**, anotó el defecto tres veces (9, 18 y 27 respuestas
+`200∧standby`, ventanas de 234–762 ms que abre el release y cierra el health check) — control
+negativo del mecanismo, sin el cual esta cifra no valdría. La latencia del acto es **retención, no
+error**: p50 4–6 ms, p100 0,5–2,5 s, todos los retenidos terminados en `200∧serving`.
+**Qué NO afirma:** nada sobre producción — la medición es del arnés local; el comportamiento del
+flip-back sobre requests retenidos (tramo (b)) sigue **sin medir** y su banco (V-15) está pendiente.
 
 **El handover dirigido.** La herramienta escribe `${VERGIS_OUT}/control.handover.json` =
 `{successor, expiresAt}` —hermano del archivo de lease, mismo volumen y mismo modelo de confianza—
