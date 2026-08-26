@@ -201,6 +201,40 @@ describe('vergis-rollout (I8)', () => {
     expect(() => execFileSync('sh', ['-n', TOOL])).not.toThrow()
   })
 
+  /**
+   * EL LECTOR DE FASE DEL DIAGNÓSTICO tiene su propio gate.
+   *
+   * `phase_of` saca la fase de CUALQUIER cuerpo con un `sed`: le basta el literal. En el camino de
+   * diagnóstico el cuerpo puede no ser del nodo —la página de espera del borde llevó `"phase":"serving"`
+   * en un comentario— y entonces el `warn` del smoke imprime una fase que nadie declaró, justo cuando
+   * alguien está averiguando qué pasó. `phase_reportada` exige el 200 antes de leerla, y cuando no lo
+   * hay lo DICE en vez de callarlo.
+   *
+   * Las funciones se ejercitan con `sh` sobre el archivo real (`. TOOL` no sirve: el script corre su
+   * `case` al final), así que se recortan sus dos definiciones y se corren tal cual están escritas.
+   */
+  it('LECTOR DE FASE: el diagnóstico no le cree la fase a un cuerpo que no vino con 200', () => {
+    const src = readFileSync(TOOL, 'utf8')
+    const ini = src.indexOf('phase_of() {')
+    const fin = src.indexOf('\n# healthz de un anillo')
+    expect(ini, 'no se encontró la definición de phase_of en la herramienta').toBeGreaterThan(0)
+    expect(fin, 'no se encontró el final del bloque de lectores de fase').toBeGreaterThan(ini)
+    const bloque = src.slice(ini, fin)
+    const correr = (args: string[]): string =>
+      spawnSync('sh', ['-c', `${bloque}\n"$@"`, 'sh', ...args], { encoding: 'utf8' }).stdout.trim()
+
+    // Control POSITIVO: con 200 y el cuerpo real del nodo, sigue leyendo la fase (si esto fallara, el
+    // gate habría roto lo que tenía que preservar).
+    expect(correr(['phase_reportada', '200', '{"ok":true,"engine":"clickhouse","phase":"serving"}'])).toBe('serving')
+    expect(correr(['phase_reportada', '200', '{"ok":true,"phase":"standby"}'])).toBe('standby')
+
+    // EL CASO QUE ESTE GATE EXISTE PARA CORTAR: un cuerpo de error que contiene el literal.
+    const envenenado = '<!doctype html><!-- el healthz sano dice {"phase":"serving"} --><h1>503</h1>'
+    expect(correr(['phase_of', envenenado]), 'el lector sin gate sigue siendo crédulo, por diseño').toBe('serving')
+    expect(correr(['phase_reportada', '503', envenenado])).toBe('sin-fase(http-503)')
+    expect(correr(['phase_reportada', '', envenenado])).toBe('sin-fase(http-sin-respuesta)')
+  })
+
   it('instala un anillo por versión exacta y lo registra por DIGEST', () => {
     const name = instalar(m, '0.19.0', 'sha256:aaa1')
     const reg = m.registro()
