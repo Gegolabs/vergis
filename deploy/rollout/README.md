@@ -63,7 +63,7 @@ Variables (todas opcionales salvo las dos del pre-flight):
 | `RINGS_EDGE_URL` | `http://caddy:8079` | El conmutador, visto desde la red interna (smoke) |
 | `RINGS_ADMIN_EMAIL` | — | **Un admin de la instancia**: sin esto el pre-flight de esquema no puede leer `/contrato` y la promoción **se niega** |
 | `RINGS_GATE_TOKEN_FILE` | — | Archivo con el `VERGIS_GATE_SECRET`, si la instancia exige gate |
-| `RINGS_PROMOTE_TIMEOUT` | `30` | Segundos de espera a que el candidato declare `serving` |
+| `RINGS_PROMOTE_TIMEOUT` | `10` | **Presupuesto de la ventana de relevo**: segundos, desde el flip, para que el candidato declare `serving` y el borde lo entregue. Corto a propósito — con el flip primero, hay tráfico retenido esperando |
 | `RINGS_SMOKE` | `1` | Smoke por el borde después del flip |
 
 ## El ciclo
@@ -71,7 +71,7 @@ Variables (todas opcionales salvo las dos del pre-flight):
 ```sh
 vergis-rollout install 0.20.0        # pull + create + start → queda EN ESPERA, verificado
 vergis-rollout status                # el registro + la fase VIVA de cada anillo + a quién apunta el borde
-vergis-rollout promote 0.20.0        # pre-flight → handover → flip → smoke → registro
+vergis-rollout promote 0.20.0        # pre-flight → intent + flip → handover → smoke → registro
 vergis-rollout rollback              # vuelve al previo (flip puro, en caliente)
 vergis-rollout rollback 0.18.0       # a un retenido: arranca primero (la sala de espera cubre el boot)
 vergis-rollout prune --dry-run       # qué retiraría la retención vigente
@@ -140,12 +140,19 @@ toca, `--retain 1` no los toca. Es la línea que este comando no cruza.
   sería peor que no medirlo. El invariante que sí se exige es `pis.serving == pis.total`.
 - `ring.args` es un espejo manual del servicio `vergis` del compose. Nada verifica que estén
   sincronizados.
-- **El handover tiene una carrera.** El nodo que suelta el control no nombra sucesor, así que cualquier
-  anillo caliente puede tomar el lease — también el previo. La herramienta lo resuelve **insistiendo**:
-  si el control lo tomó otro, le pide soltarlo y sigue esperando al candidato, y lo dice en pantalla
-  mientras lo hace. Converge porque quien suelta queda un rato sin aspirar. **Medido en un e2e local**;
-  el arreglo durable sería un handover **dirigido** en el motor (que el release nombre al sucesor), y no
-  es de esta herramienta.
+- **El handover es DIRIGIDO, y su alcance es parcial.** Antes del flip, la herramienta escribe
+  `${VERGIS_OUT}/control.handover.json` = `{successor, expiresAt}`: el anillo nombrado adquiere sin
+  esperar su ventana de gracia y los demás se abstienen mientras el intent esté vigente. **El intent
+  ordena la fila; jamás otorga el control** — adquirir sigue pasando por el lease entero. Por eso el
+  alcance es parcial **por diseño**: el intent ordena la fila solo entre los aspirantes que consultan
+  el intent al relevar; la marca de release sigue siendo subasta abierta para cualquier camino que no
+  pase por ahí. `insistir_handover` queda como red, y **cada uno de sus `warn` es un detector**: si
+  aparece, la fila no se ordenó.
+- **El flip del borde va ANTES del handover**, y eso tiene un costo declarado: si el candidato no llega
+  a `serving`, hay tráfico ya comprometido esperando en la sala de espera. Por eso el presupuesto es
+  corto (`--timeout`, default 10 s) y la vuelta atrás **empieza devolviendo el tráfico** al anillo
+  anterior, después reescribe el intent nombrándolo a él y solo entonces le pide al candidato que
+  suelte. Qué le hace a los requests retenidos el `caddy reload` de ese flip-back **no está medido**.
 - **Editar el `Caddyfile` en el host puede no llegar al contenedor.** El compose lo monta como
   **archivo**, y un editor —o un `sed -i`— que reemplaza el archivo cambia su inodo: el contenedor
   sigue viendo el contenido viejo y `caddy reload` recarga… lo mismo de antes, en silencio. **Medido en

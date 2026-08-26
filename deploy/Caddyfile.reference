@@ -42,8 +42,20 @@
 	# POR DISEÑO: está sano, sirve lecturas y NO tiene el plano de control — sus mutaciones contestan
 	# 409. Rutear tráfico ahí sería peor que no rutear nada, y cualquier chequeo que juzgue por el
 	# código HTTP lo declararía sano. `health_body` es una regexp contra el cuerpo de `/healthz`.
+	#
+	# El INTERVALO no decide correctitud: decide CUÁNTO TARDA la sala de espera en soltar a los
+	# retenidos una vez que el anillo nuevo ya satisface el predicado. Es recorte de la COLA DE
+	# LATENCIA del acto de promover, no el mecanismo que evita rutear a un standby — eso lo hace el
+	# predicado de arriba.
+	#
+	# SU COSTO, para que quien opera decida si adopta este valor: el sondeo es
+	# `frecuencia × upstreams declarados` contra `/healthz`. A 250 ms son **4 req/s por upstream** —
+	# hoy `rings/active.caddy` declara UNO (el anillo activo), así que son 4 req/s; una instancia que
+	# declare más upstreams multiplica por esa cuenta. `/healthz` es un JSON de conteos, sin gate de
+	# identidad y sin consulta al motor. Volver a `1s` divide esa carga por cuatro y alarga la
+	# retención en la misma proporción: la elección es del operador, no del Producto.
 	health_uri /healthz
-	health_interval 1s
+	health_interval 250ms
 	health_timeout 2s
 	health_status 2xx
 	health_body `"phase":"serving"`

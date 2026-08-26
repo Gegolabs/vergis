@@ -65,6 +65,128 @@ export function controlLeaseFile(outDir: string): string {
   return `${outDir.replace(/\/$/, '')}/${CONTROL_LEASE_FILENAME}`
 }
 
+// ─── El INTENT de handover: quién es el sucesor de este relevo ─────────────────────────────────
+
+/**
+ * EL INTENT DE HANDOVER — `${VERGIS_OUT}/control.handover.json`, hermano del archivo de lease.
+ *
+ * Lo escribe **el operador del acto** (la herramienta de anillos, antes de pedirle al activo que
+ * suelte) y lo consumen los aspirantes al entrar al relevo:
+ *
+ *   `{ "successor": "<anillo>", "expiresAt": "<ISO-8601>" }`
+ *
+ * Qué produce, y qué NO:
+ *
+ * - **Ordena la fila**: un aspirante que el intent NO nombra se abstiene de aspirar mientras el
+ *   intent esté vigente; el nombrado aspira **ya**, sin esperar la ventana de gracia que se impone a
+ *   sí mismo el nodo que acaba de soltar.
+ * - **JAMÁS otorga el control.** Adquirir sigue siendo `acquire()` con sus reglas enteras (marca de
+ *   release, stale window, época monótona, confirmación por relectura). El fencing no se toca. El
+ *   modo de falla sigue siendo hacia **cero** controladores, nunca hacia dos.
+ *
+ * **Alcance de lo que garantiza (cierre PARCIAL de #232, por diseño).** `releaseSync()` deja
+ * `{holder:'', epoch}` y `#attempt()` concede ese archivo al PRIMERO que llegue sin mirar quién: el
+ * intent ordena la fila SOLO entre quienes pasan por `intentarRelevo`; la marca de release sigue
+ * siendo subasta abierta para cualquier camino que no pase por ahí. Es una decisión de diseño —el
+ * intent no es autoridad—, no un hueco por tapar: convertirlo en autoridad exigiría meterlo dentro
+ * de `acquire()`, que es exactamente lo que este frente no hace.
+ *
+ * **Vencimiento**: un intent con `expiresAt` pasado es **inexistente**. Sin eso, un intent huérfano
+ * —la herramienta murió tras escribirlo, o el sucesor nombrado nunca llegó— congelaría los relevos
+ * para siempre: los demás aspirantes se abstendrían de un turno que nadie va a tomar. Pasado el
+ * plazo rige el protocolo de siempre (marca de release y stale window).
+ *
+ * **Ilegible = inexistente, y ruidoso**: un archivo a medio escribir o con otra forma no manda. Se
+ * prefiere el protocolo de siempre antes que congelar el relevo por un archivo que nadie entiende.
+ */
+export const CONTROL_HANDOVER_FILENAME = 'control.handover.json'
+
+/** Ruta del intent de handover en el volumen de gobierno. */
+export function controlHandoverFile(outDir: string): string {
+  return `${outDir.replace(/\/$/, '')}/${CONTROL_HANDOVER_FILENAME}`
+}
+
+/** El intent tal como vive en el archivo. */
+export interface HandoverIntent {
+  /** Identidad del anillo sucesor: el mismo valor que el nodo lleva en `VERGIS_RING`. */
+  successor: string
+  /** Instante (ISO-8601) tras el cual el intent deja de mandar. */
+  expiresAt: string
+}
+
+/** Qué dice el intent respecto de ESTE nodo. Vocabulario cerrado, reportable en el log. */
+export type HandoverVerdict = 'sin-intent' | 'nombrado' | 'ajeno' | 'vencido' | 'ilegible'
+
+export interface HandoverReading {
+  verdict: HandoverVerdict
+  /** El intent leído, cuando se pudo parsear (también si está vencido o nombra a otro). */
+  intent?: HandoverIntent
+  detail?: string
+}
+
+function parseIntent(raw: string): HandoverIntent | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!isRecord(parsed)) return null
+  const { successor, expiresAt } = parsed
+  if (typeof successor !== 'string' || successor === '') return null
+  if (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt))) return null
+  return { successor, expiresAt }
+}
+
+/**
+ * Lee el intent y lo juzga respecto de `self` (la identidad de anillo de este nodo, `VERGIS_RING`).
+ * Un nodo SIN identidad de anillo (`self` nulo o vacío) no puede ser nombrado jamás: ante un intent
+ * vigente queda `ajeno`, que es la lectura correcta —no es el sucesor— y no un caso especial.
+ */
+export function readHandoverIntent(file: string, self: string | null, now: number = Date.now()): HandoverReading {
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ENOENT') return { verdict: 'sin-intent' }
+    return { verdict: 'ilegible', detail: `el intent de handover no se pudo leer: ${(e as Error).message}` }
+  }
+  const intent = parseIntent(raw)
+  if (!intent) return { verdict: 'ilegible', detail: 'el intent de handover no tiene la forma esperada; no manda' }
+  if (Date.parse(intent.expiresAt) <= now) {
+    return { verdict: 'vencido', intent, detail: `el intent nombraba a '${intent.successor}' y venció el ${intent.expiresAt}` }
+  }
+  if (self && intent.successor === self) return { verdict: 'nombrado', intent }
+  return { verdict: 'ajeno', intent, detail: `el intent vigente nombra a '${intent.successor}', no a '${self ?? '(nodo sin identidad de anillo)'}'` }
+}
+
+export interface RelevoDecision {
+  /** ¿Corresponde intentar `acquire()` ahora mismo? */
+  aspirar: boolean
+  verdict: HandoverVerdict
+  /** `true` cuando el intent nombra a este nodo y por eso se ignora la ventana de gracia propia. */
+  saltaGracia: boolean
+  detail?: string
+}
+
+/**
+ * La decisión de entrada al relevo: intent primero, ventana de gracia después. Pura respecto del
+ * lease —no lo toca ni lo consulta—: quien la llama decide si invoca `acquire()`, y `acquire()` sigue
+ * siendo el único que otorga el control.
+ */
+export function evaluarRelevo(args: { file: string; self: string | null; noAspirarHasta: number; now?: number }): RelevoDecision {
+  const now = args.now ?? Date.now()
+  const r = readHandoverIntent(args.file, args.self, now)
+  if (r.verdict === 'nombrado') {
+    return { aspirar: true, verdict: r.verdict, saltaGracia: true, detail: `el intent de handover nombra a este nodo ('${args.self}')` }
+  }
+  if (r.verdict === 'ajeno') {
+    return { aspirar: false, verdict: r.verdict, saltaGracia: false, detail: r.detail }
+  }
+  // `sin-intent`, `vencido` e `ilegible` caen todos al protocolo de siempre.
+  return { aspirar: now >= args.noAspirarHasta, verdict: r.verdict, saltaGracia: false, detail: r.detail }
+}
+
 type Env = Record<string, string | undefined>
 
 /** Config del plano de control resuelta UNA vez desde el entorno; quien la consuma no re-parsea envs. */

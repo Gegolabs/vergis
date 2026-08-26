@@ -44,6 +44,9 @@ interface Mundo {
   registro: () => { active: string; previous: string; rings: { version: string; state: string; digest: string }[] }
   activeCaddy: () => string
   llamadas: () => string
+  intent: () => string
+  intents: () => string[]
+  campo: (name: string, k: string, v: string) => void
 }
 
 function nuevoMundo(): Mundo {
@@ -104,6 +107,18 @@ function nuevoMundo(): Mundo {
     },
     activeCaddy: () => readFileSync(join(rings, 'active.caddy'), 'utf8'),
     llamadas: () => (existsSync(join(world, 'calls.log')) ? readFileSync(join(world, 'calls.log'), 'utf8') : ''),
+    /** El intent de handover VIGENTE en el mundo falso (vacío si se borró o nunca se escribió). */
+    intent: () => (existsSync(join(world, 'handover')) ? readFileSync(join(world, 'handover'), 'utf8').trim() : ''),
+    /** Todos los intents que se escribieron, en orden: es lo que permite afirmar a quién se nombró. */
+    intents: () => (existsSync(join(world, 'handover.log')) ? readFileSync(join(world, 'handover.log'), 'utf8').trim().split('\n') : []),
+    /** Cambia UN campo de un contenedor sin pisar el resto (el mundo lo lee línea a línea). */
+    campo: (name: string, k: string, v: string) => {
+      const f = join(world, 'containers', name)
+      const txt = readFileSync(f, 'utf8')
+        .split('\n')
+        .filter((l) => l && !l.startsWith(`${k}=`))
+      writeFileSync(f, [...txt, `${k}=${v}`].join('\n') + '\n')
+    },
   }
 }
 
@@ -124,6 +139,10 @@ describe('el borde que conmuta (I7)', () => {
     expect(CADDYFILE).toMatch(/health_uri\s+\/healthz/)
     expect(CADDYFILE).toMatch(/health_body\s+`"phase":"serving"`/)
     expect(CADDYFILE).toMatch(/health_status\s+2xx/)
+    // El intervalo es COLA DE LATENCIA, no correctitud: acota cuánto tardan en soltarse los retenidos
+    // una vez que el anillo nuevo satisface el predicado. La plantilla declara su costo al lado.
+    expect(CADDYFILE).toMatch(/health_interval\s+250ms/)
+    expect(CADDYFILE).toMatch(/4 req\/s por upstream/)
   })
 
   it('retiene los requests en la sala de espera en vez de devolver 502', () => {
@@ -368,14 +387,68 @@ describe('vergis-rollout (I8)', () => {
     expect(t.out).toMatch(/serving/)
   })
 
-  it('si el borde rechaza la config, restaura la línea anterior y no recarga', () => {
+  it('un borde que no valida se descubre en el PRE-FLIGHT, antes de comprometer tráfico', () => {
+    // Con el flip antes del handover, el borde es lo primero que hay que poder mover: si no valida su
+    // config vigente, la promoción se niega SIN tocar nada. Antes esto se descubría después del
+    // handover — o sea, con el plano de control ya movido.
     const v18 = instalar(m, '0.18.0', 'sha256:v18')
     m.run('promote', '0.18.0')
-    instalar(m, '0.19.0', 'sha256:v19')
+    const v19 = instalar(m, '0.19.0', 'sha256:v19')
     writeFileSync(join(m.world, 'edge-fails'), '1')
     const r = m.run('promote', '0.19.0')
     expect(r.code).not.toBe(0)
-    expect(r.err).toMatch(/RECHAZÓ la config|no recargó/)
+    expect(r.err).toMatch(/pre-flight ABORTADO: el borde .* NO valida su config vigente/)
     expect(m.activeCaddy()).toContain(`reverse_proxy ${v18}:8080`)
+    // Nada se movió: ni el control, ni el intent, ni la fase del candidato.
+    expect(m.llamadas()).not.toContain('kill -s USR2')
+    expect(m.intent()).toBe('')
+    expect(m.fase(v19)).toBe('standby')
+  })
+
+  it('EL FLIP VA ANTES DEL HANDOVER, y el intent nombra al sucesor antes del flip', () => {
+    const viejo = instalar(m, '0.18.0', 'sha256:v18')
+    expect(m.run('promote', '0.18.0').code).toBe(0)
+    const nuevo = instalar(m, '0.19.0', 'sha256:v19')
+    const antes = m.llamadas().split('\n').length
+
+    const r = m.run('promote', '0.19.0')
+    expect(r.code, r.err).toBe(0)
+    const nuevas = m.llamadas().split('\n').slice(antes)
+    const iFlip = nuevas.findIndex((l) => l.startsWith('exec caddy caddy reload'))
+    const iHandover = nuevas.findIndex((l) => l === `kill -s USR2 ${viejo}`)
+    expect(iFlip, 'el borde tiene que recargar en esta promoción').toBeGreaterThanOrEqual(0)
+    expect(iHandover, 'el handover tiene que ocurrir').toBeGreaterThanOrEqual(0)
+    // EL ORDEN es lo que este test existe para fijar: primero se compromete el tráfico, después se
+    // pide el control. Invertirlo devuelve el orden que dejaba al viejo-standby como único upstream.
+    expect(iFlip).toBeLessThan(iHandover)
+
+    // El intent nombró al candidato ANTES del flip, y se borró al cerrar: es del acto, no del estado.
+    expect(m.intents().at(-1)).toContain(nuevo)
+    expect(m.intent()).toBe('')
+    expect(m.fase(nuevo)).toBe('serving')
+    expect(m.registro().active).toBe('0.19.0')
+  })
+
+  it('si el candidato no llega a serving, LO PRIMERO que vuelve es el tráfico (y el intent nombra al viejo)', () => {
+    const viejo = instalar(m, '0.18.0', 'sha256:v18')
+    expect(m.run('promote', '0.18.0').code).toBe(0)
+    const nuevo = instalar(m, '0.19.0', 'sha256:v19')
+    // El candidato queda inhabilitado para tomar el control: su enfriamiento no vence en toda la
+    // corrida. Es el fracaso del relevo, con el tráfico YA comprometido — el costo del flip-first.
+    m.campo(nuevo, 'cooled_until', String(Math.floor(Date.now() / 1000) + 3600))
+
+    const r = m.run('promote', '0.19.0', '--timeout', '3')
+    expect(r.code).not.toBe(0)
+    expect(r.err).toMatch(/promoción ABORTADA en el handover/)
+    expect(r.err).toMatch(/RETENIDO en la sala de espera/)
+    // El borde volvió al viejo y el viejo volvió a servir.
+    expect(m.activeCaddy()).toContain(`reverse_proxy ${viejo}:8080`)
+    expect(m.fase(viejo)).toBe('serving')
+    // El intent de la vuelta atrás nombró AL VIEJO (así re-adquiere sin pagar su ventana de gracia),
+    // y al cerrar no quedó ninguno vivo.
+    expect(m.intents().at(-1)).toContain(viejo)
+    expect(m.intent()).toBe('')
+    // El registro no cambió: sigue mandando el 0.18.0.
+    expect(m.registro().active).toBe('0.18.0')
   })
 })
