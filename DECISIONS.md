@@ -5,9 +5,50 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados · 2026-08-19 · P5 medido, experimento del rol, y la implementación de #238 (diseño de Fable, ratificado por César) |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados · 2026-08-19 · P5 medido, experimento del rol, y la implementación de #238 (diseño de Fable, ratificado por César) · 2026-08-26 · saldado autónomo del pasivo: los controles que no controlaban (`/ww:work run`) |
 
 ---
+
+## D-58 · 2026-08-26 — Las facetas client-side de #209 NO se implementan: se MIDE y nace issue
+
+- **Bifurcación**: la ficha dejó abierta la pregunta de si el roce de #209 aparece también en las facetas client-side. Con el mandato de saldar, ¿se implementa el tope+buscador allá, o se mide y se levanta?
+- **Decidido**: **medir y levantar issue** (#255). Y no por prudencia genérica: la medición destapó una **pregunta de diseño viva** que hace que copiar la solución sea incorrecto. El tope de #209 es CSS-only precisamente para que sin JS ninguna opción quede inalcanzable; las facetas client-side **no existen sin JS**, así que el argumento que forzó esa forma no aplica. Implementar «lo mismo» habría arrastrado una restricción que esta superficie no tiene.
+- **Alternativa descartada**: implementar el tope+buscador acá mismo. Se descartó por lo anterior y porque **no se midió cuántos PIs vivos tienen una faceta de más de 12 opciones** — el dato que decide si esto vale hoy, y que es de instancia.
+- **Lo medido, con control positivo**: mismo catálogo de 47 opciones por el mismo `renderHtmlPiece`; la superficie client-side materializa las 47 sin tope ni buscador, la server-side trae los dos. Sin el control positivo la sonda no habría probado que sabe verlos.
+- **Costo de revertir**: nulo — es un issue.
+
+## D-57 · 2026-08-26 — La cadencia del arnés de Fabric es EL CORTE DE VERSIÓN, y se declara en dos sitios
+
+- **Bifurcación**: el arnés de Fabric no puede tener gate (capacidad, credenciales, plata). ¿Se le declara una cadencia por calendario (semanal/mensual) o se le ata a un evento del proyecto?
+- **Decidido**: **al evento — el corte de versión, antes de empujar el tag.** Una cadencia por calendario mide cuando no ha pasado nada y no mide cuando sí; atarla al corte la pone exactamente donde su resultado cambia una decisión (qué declara la versión que se publica).
+- **Alternativa descartada**: cadencia por calendario con recordatorio. Se descartó porque depende de que alguien la mire, que es el defecto que la ficha nombra.
+- **Dónde se declara, y por qué en dos**: en `scripts/README-fabric-lab.md` (donde vive el arnés) y en `CHANGELOG.md` §«Antes de cortar» (donde se lee **al cortar**). Una regla escrita solo en la casa del mecanismo no la lee quien ejecuta el evento.
+- **El precedente que la fija**: el centinela de #238 se midió **20 min después** de empujar `v0.21.0`. Salió bien, y eso es lo que lo vuelve mal precedente.
+- **Costo de revertir**: nulo — es documentación.
+
+## D-56 · 2026-08-26 — El arnés T-SQL entra al CI como WORKFLOW PROPIO con filtro de `paths`, no como job de `build.yml`
+
+- **Bifurcación**: la ficha proponía «job propio, opcional, disparado por cambios en `packages/policy/**`». En GitHub Actions el filtro de `paths` es **por workflow, no por job**: dentro de `build.yml` la cadencia habría que emularla con un `if` sobre un paso que compara archivos.
+- **Decidido**: **workflow propio** (`.github/workflows/tsql-lab.yml`). La cadencia *es* el punto de esta partida —un arnés que corre siempre no se distingue de uno que no corre nunca, en costo—, así que el filtro tiene que ser nativo y no una emulación que se rompe en silencio.
+- **Y se resolvió la incógnita que la ficha declaraba «no medida»** —si el runner aguanta la imagen de SQL Server dentro del presupuesto—: **sí, y sobra**. Job completo en **31 s**, pull de la imagen **14 s**, motor aceptando conexiones al primer sondeo, `lab:proof` sin fallos y 6 hallazgos. Medido en la corrida `32970287379`, disparada por el propio push que agregó el workflow.
+- **Decisión menor dentro de ésta**: el motor **no** lleva `--health-cmd` del servicio. La imagen 2022 dejó de traer `sqlcmd`, así que el health check idiomático mediría la ausencia de una herramienta y no la salud del motor. Se sondea el puerto, con cota de 180 s y salida **en rojo** que dice «NO SE PUDO MEDIR».
+- **Costo de revertir**: nulo — borrar el archivo.
+
+## D-55 · 2026-08-26 — `notas-smoke` se arregla con un handle de INSPECCIÓN, no cerrando el store antes
+
+- **Bifurcación**: el smoke moría al cerrar. Abría un segundo store de **escritura** sobre el mismo archivo para verificar la persistencia, su `close()` volcaba, y el fencing del primer handle abortaba el volcado. Dos salidas: cerrar el store original antes de reabrir, o abrir el segundo en `mode: 'read'`.
+- **Decidido**: **`mode: 'read'`.** Cerrar el primero antes habría hecho pasar el test **cambiando lo que mide**: el paso 9 verifica que el archivo en disco tenga el dato **mientras el nodo sigue vivo**, que es la condición real. Y sobre todo: el fencing **tenía razón** — dos handles de escritura del mismo archivo son dos escritores, exactamente lo que existe para impedir. El defecto era del instrumento.
+- **Alternativa descartada**: desarmar el fencing en el smoke (`fencing: false`). Habría apagado el único control que delató el problema.
+- **Verificado**: 37/37 con el arreglo; y el crash reproducido contra la versión de `main` **antes** de tocar nada, para no atribuirme un fallo ajeno.
+- **Costo de revertir**: nulo.
+
+## D-54 · 2026-08-26 — `scripts/` entra al `include` del `tsconfig`, aunque destape errores
+
+- **Bifurcación**: la ficha dejaba el hueco abierto a propósito —«tocar el `include` afecta a los demás scripts y puede destapar errores preexistentes»—. ¿Se mete el directorio entero, o se typechequean aparte con un tsconfig propio para no arriesgar el gate?
+- **Decidido**: **entra al `include` del gate real.** Un segundo tsconfig sería otro instrumento que hay que acordarse de correr, que es la misma enfermedad un piso más abajo. Y el riesgo era acotable midiéndolo en vez de estimándolo: **cuatro errores, todos en un solo archivo**.
+- **Lo que destapó, y justifica la decisión sola**: además de los cuatro errores de tipo, `scripts/notas-smoke.ts` **moría al correr** (ver D-55) y `admin-smoke.ts` reportaba la falta de su env con un stack crudo de `node:fs`. El gate ciego no decía «no medí»: decía «verde».
+- **Control negativo corrido**: el mismo error deliberado en un script es **rojo** con `scripts/**/*` en el include y **verde** sin él. Lo que cambió no es que los scripts estén correctos — es que ahora se miran.
+- **Costo de revertir**: nulo — quitar una línea del `include`.
 
 ## D-53 · 2026-08-19 — Se emprende #235 (`defaultField`) en modo autónomo, con #246 como prerrequisito
 
