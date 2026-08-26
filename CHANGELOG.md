@@ -36,6 +36,25 @@ cambio lo decide quien opera esa instancia.
 
 ## Sin publicar
 
+### Las acciones por proceso de Frescura validan la PERTENENCIA del proceso al dominio (#253)
+
+Las tres acciones por proceso de **Frescura** —pausar, reanudar y aplicar cadencia— se autorizaban
+**solo por el dominio de la URL** (`canMng`). El proceso sobre el que actúan, en cambio, llega en el
+**formulario**, y su pertenencia a ese dominio no se comprobaba en ninguna capa: la autorización cubría
+*la página*, no *el objeto sobre el que la página actúa*. Un steward del dominio A podía pausar un
+proceso del dominio B fabricando el `process` del form.
+
+**El arreglo replica el mecanismo que ya rige en las rutas hermanas del mismo módulo** —`runLogs.refOf`
+y la consola de Cargas—, no inventa un eje de autorización nuevo: la pertenencia **se hereda de la
+fuente que ingesta**, que es el mismo criterio con que la vista de Frescura arma su lista. El predicado
+es puro y **fail-closed**: proceso desconocido, fuente desconocida o fuente sin dominio ⇒ se niega.
+
+Verificado con control negativo por los dos frentes: neutralizado el predicado —la conducta previa al
+arreglo— **5 tests quedan en rojo**, y otros 4 si la ruta deja de entregarle el dominio a las acciones.
+
+**Un steward que opera su propio dominio no nota diferencia**: no cambia el contrato hacia el usuario,
+ni la configuración, ni las dependencias.
+
 ### Los tres experimentos que 0.21.0 declaró «sin medir» quedaron medidos — y uno cambia la recomendación (#238 · E3/E4/E5)
 
 **0.21.0 exige que el principal de serving pueda leer el valor real de las columnas gobernadas, y dijo
