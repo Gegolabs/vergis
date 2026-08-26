@@ -28,6 +28,7 @@ El pote repone el día 1 y no acumula.
 | 2026-08-19 | **E3/E4/E5 de #238** — cerrar los tres experimentos que 0.21.0 publicó como «sin medir». **Dos ventanas.** La primera: E5 murió en el arranque porque el runner no le exportó `FAB_SP_TOKEN` (lo exige pre-obtenido, a diferencia del script de E3), y E3 respondió en negativo — el SP **no tiene principal propio en la BD** y Fabric rechaza `CREATE USER … FROM EXTERNAL PROVIDER`, así que E4 quedó sin medir por depender de E3. La segunda ventana corrigió el token y agregó **E3-bis**, la escalera contra `public` que la primera no probó por filtrar los roles de la consulta de recon: **`GRANT UNMASK ON <tabla>(<columna>) TO [public]` se acepta, surte efecto, la vista discrimina y el revoke se verificó en el plano de datos** (issue #245). E5 quedó verde | Capacidad Fabric **F2** `vergisfablab` | ~3 min (01:29–01:32 UTC) + ~4 min (01:32–01:36 UTC) ≈ 7 min, US$0,36/h | **US$0,04** | Simón Alero |
 
 | 2026-08-19 | **Verificación de P9 y P10** — los dos sondeos nuevos del arnés (el control de premisa con la discriminación como el SP, y el centinela) corridos contra el SKU **con sus predicciones escritas antes de medir**. Salieron las siete: premisa `enmascarado` coincidiendo con el rol declarado, control negativo verde (0/2 celdas con el valor real ni con el claim), las 3 sentencias del centinela aceptadas, idempotencia en 1 fila tras dos pasadas, descubrimiento y `sys` corroborando, control positivo del instrumento (el admin lee el valor esperado) y retiro verificado leyendo. `26 hallazgos · 0 sin medir · exit 0` | Capacidad Fabric **F2** `vergisfablab` | ~4 min encendida (01:59–02:03 UTC), US$0,36/h | **US$0,02** | Simón Alero |
+| 2026-08-26 | Ventana de Fabric previa al corte de 0.22.0 — la cadencia declarada en D-57: el arnés se corre ANTES del tag, no después | Capacidad F2 `vergisfablab` | 2 min 09 s encendida (13:12:21→13:14:30 UTC), a US$0,36/h | **US$0,013** | Simón Alero |
 
 ### Cómo se mide este recurso
 
@@ -46,4 +47,3 @@ en background con su propio vigilante.
 ---
 
 • *Generado con Wingworking*
-| 2026-08-26 | Ventana de Fabric previa al corte de 0.22.0 — la cadencia declarada en D-57: el arnés se corre ANTES del tag, no después | Capacidad F2 `vergisfablab` | 2 min 09 s encendida (13:12:21→13:14:30 UTC), a US$0,36/h | **US$0,013** | el agente |
