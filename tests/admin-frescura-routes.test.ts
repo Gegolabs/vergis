@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createAdmin, type AdminHandler, type DomainEntityFreshness } from '../server/admin'
-import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, SqliteMasterDataStore, SqliteAdminStore, type SourceRow, type ProcessRow, type RunRecord } from '@vergis/capabilities'
+import { parseMasterDataConfig, parseDomainsConfig, parseIntakeConfig, processBelongsToDomain, SqliteMasterDataStore, SqliteAdminStore, type SourceRow, type ProcessRow, type RunRecord } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 
 const SECRET = 'test-secret'
@@ -47,7 +47,7 @@ function mockRes(): MockRes {
 describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
   let admin: AdminHandler
   let audit: LogEventInput[]
-  let applied: { processId: string; by: string }[]
+  let applied: { domainId: string; processId: string; by: string }[]
 
   beforeEach(async () => {
     audit = []
@@ -59,7 +59,7 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
       domains: DOMAINS,
       sourceRegistry: async () => ({ sources: SOURCES, processes: PROCESSES, outputs: OUTPUTS }),
       domainFreshness: async () => FRESHNESS,
-      applyCadence: async (processId: string, by: string) => { applied.push({ processId, by }); return { action: 'set', desiredSeconds: 7200 } },
+      applyCadence: async (domainId: string, processId: string, by: string) => { applied.push({ domainId, processId, by }); return { action: 'set', desiredSeconds: 7200 } },
       identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
       audit: (e) => audit.push(e),
       secret: SECRET,
@@ -332,14 +332,14 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     const res = await go(mockReq('POST', '/admin/dominio/cartera/frescura', STEWARD, body, 'application/x-www-form-urlencoded'))
     expect(res.statusCode).toBe(303)
     expect(res.headers['location']).toContain('/admin/dominio/cartera/frescura?msg=')
-    expect(applied).toEqual([{ processId: 'p_sap', by: STEWARD }])
+    expect(applied).toEqual([{ domainId: 'cartera', processId: 'p_sap', by: STEWARD }])
   })
 })
 
 // Issue #107: pausar/reanudar un proceso es gestión de DOMINIO (steward), junto a «Aplicar cadencia».
 // La verdad de la pausa vive en Vergis; el motor la refleja. El lazo automático la respeta (#105/D6).
 describe('admin · pausar y reanudar un proceso desde Frescura (#107)', () => {
-  const conPausa = async (rows: DomainEntityFreshness[], sink: { calls: { processId: string; paused: boolean; by: string }[]; fail?: string }) =>
+  const conPausa = async (rows: DomainEntityFreshness[], sink: { calls: { domainId: string; processId: string; paused: boolean; by: string }[]; fail?: string }) =>
     createAdmin({
       entities: ENTITIES,
       mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
@@ -347,9 +347,9 @@ describe('admin · pausar y reanudar un proceso desde Frescura (#107)', () => {
       domains: DOMAINS,
       domainFreshness: async () => rows,
       applyCadence: async () => ({ action: 'set', desiredSeconds: 7200 }),
-      pauseProcess: async (processId, paused, by) => {
+      pauseProcess: async (domainId, processId, paused, by) => {
         if (sink.fail) throw new Error(sink.fail)
-        sink.calls.push({ processId, paused, by })
+        sink.calls.push({ domainId, processId, paused, by })
       },
       identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
       audit: () => {},
@@ -363,7 +363,7 @@ describe('admin · pausar y reanudar un proceso desde Frescura (#107)', () => {
   const csrf = (html: string): string => html.match(/name="_csrf" value="([0-9a-f]+)"/)![1]
 
   it('POST accion=pausar y accion=reanudar invocan pauseProcess y redirigen con su mensaje', async () => {
-    const sink = { calls: [] as { processId: string; paused: boolean; by: string }[] }
+    const sink = { calls: [] as { domainId: string; processId: string; paused: boolean; by: string }[] }
     const a = await conPausa(FRESHNESS, sink)
     const t = csrf((await run(a, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
     const post = (accion: string) => run(a, mockReq('POST', '/admin/dominio/cartera/frescura', STEWARD, `_csrf=${t}&process=p_sap&accion=${accion}`, 'application/x-www-form-urlencoded'))
@@ -374,13 +374,13 @@ describe('admin · pausar y reanudar un proceso desde Frescura (#107)', () => {
     const r = await post('reanudar')
     expect(decodeURIComponent(r.headers['location'])).toContain('Proceso reanudado.')
     expect(sink.calls).toEqual([
-      { processId: 'p_sap', paused: true, by: STEWARD },
-      { processId: 'p_sap', paused: false, by: STEWARD },
+      { domainId: 'cartera', processId: 'p_sap', paused: true, by: STEWARD },
+      { domainId: 'cartera', processId: 'p_sap', paused: false, by: STEWARD },
     ])
   })
 
   it('si el motor rechaza la pausa, la página lo dice y NADA se afirma como pausado', async () => {
-    const sink = { calls: [] as { processId: string; paused: boolean; by: string }[], fail: 'fabric-scheduler: deshabilitar falló (403)' }
+    const sink = { calls: [] as { domainId: string; processId: string; paused: boolean; by: string }[], fail: 'fabric-scheduler: deshabilitar falló (403)' }
     const a = await conPausa(FRESHNESS, sink)
     const t = csrf((await run(a, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
     const res = await run(a, mockReq('POST', '/admin/dominio/cartera/frescura', STEWARD, `_csrf=${t}&process=p_sap&accion=pausar`, 'application/x-www-form-urlencoded'))
@@ -389,7 +389,7 @@ describe('admin · pausar y reanudar un proceso desde Frescura (#107)', () => {
   })
 
   it('fila activa con schedule observado: ofrece Pausar; fila pausada: lo dice y ofrece Reanudar, no Aplicar', async () => {
-    const sink = { calls: [] as { processId: string; paused: boolean; by: string }[] }
+    const sink = { calls: [] as { domainId: string; processId: string; paused: boolean; by: string }[] }
     const activa = await conPausa(FRESHNESS, sink)
     const bodyActiva = (await run(activa, mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body
     expect(bodyActiva).toContain('value="pausar"')
@@ -489,5 +489,121 @@ describe('admin · Frescura muestra la salud de su propia proyección (#105)', (
     const body = await conFilas(conProyeccion({ observedAt: '2026-06-24T09:02:00Z', stale: true, lastError: null, off: true }))
     expect(body).toContain('refresco apagado — datos de')
     expect(body).not.toContain('el refresco no está corriendo') // apagado no es «se rompió»
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PERTENENCIA del proceso al dominio. La ruta autoriza el DOMINIO de la URL (`canMng`), pero el
+// `process` sobre el que se actúa llega en el FORMULARIO: sin validar que ese proceso pertenezca al
+// dominio, la autorización de la URL no gobierna la acción. Es la misma validación fail-closed que
+// `runLogs.refOf` ya hacía para los logs por corrida; acá se replica para las acciones de Frescura.
+// Los tests montan las deps con el predicado REAL del wiring, no con un mock permisivo.
+describe('admin · Frescura: las acciones por proceso respetan la pertenencia al dominio', () => {
+  const DOS_DOMINIOS = parseDomainsConfig({
+    domains: [
+      { id: 'cartera', label: 'Cartera / Finanzas', stewards: [STEWARD] },
+      { id: 'personas', label: 'Personas', stewards: ['otro@gh.cl'] },
+    ],
+  })
+  // `p_buk` pertenece a `personas` — el steward de `cartera` no tiene nada que hacer con él.
+  const SOURCES_2: SourceRow[] = [
+    { id: 'sap', label: 'SAP B1', oferta: 'PT1H', domain: 'cartera', connectedBy: 'cesar@x.com' },
+    { id: 'buk', label: 'Buk', oferta: 'P1D', domain: 'personas', connectedBy: 'cesar@x.com' },
+  ]
+  const PROCESSES_2: ProcessRow[] = [
+    { id: 'p_sap', label: 'Ingesta SAP', sourceId: 'sap', engine: { workspaceId: 'WS', itemId: 'SJD', jobType: 'sparkjob' } },
+    { id: 'p_buk', label: 'Ingesta Buk', sourceId: 'buk', engine: { workspaceId: 'WS2', itemId: 'SJD2', jobType: 'sparkjob' } },
+  ]
+
+  interface Efectos { pausas: { processId: string; paused: boolean }[]; cadencias: string[] }
+
+  const mkAdmin = async (fx: Efectos): Promise<AdminHandler> =>
+    createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOS_DOMINIOS,
+      domainFreshness: async () => FRESHNESS,
+      // Las deps reproducen el wiring: validan la pertenencia con el predicado real ANTES de tocar el motor.
+      applyCadence: async (domainId, processId) => {
+        if (!processBelongsToDomain(domainId, processId, PROCESSES_2, SOURCES_2)) throw new Error(`Proceso desconocido en el dominio: ${processId}`)
+        fx.cadencias.push(processId)
+        return { action: 'set', desiredSeconds: 7200 }
+      },
+      pauseProcess: async (domainId, processId, paused) => {
+        if (!processBelongsToDomain(domainId, processId, PROCESSES_2, SOURCES_2)) throw new Error(`Proceso desconocido en el dominio: ${processId}`)
+        fx.pausas.push({ processId, paused })
+      },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+
+  const efectos = (): Efectos => ({ pausas: [], cadencias: [] })
+  const correr = async (a: AdminHandler, req: IncomingMessage): Promise<MockRes> => {
+    const res = mockRes()
+    await a.tryHandle(req, res as unknown as ServerResponse)
+    return res
+  }
+  const tok = (html: string): string => html.match(/name="_csrf" value="([0-9a-f]+)"/)![1]
+  const postear = async (a: AdminHandler, dominio: string, cuerpo: string): Promise<MockRes> => {
+    const t = tok((await correr(a, mockReq('GET', `/admin/dominio/${dominio}/frescura`, STEWARD))).body)
+    return correr(a, mockReq('POST', `/admin/dominio/${dominio}/frescura`, STEWARD, `_csrf=${t}&${cuerpo}`, 'application/x-www-form-urlencoded'))
+  }
+
+  it('la ruta le pasa a las acciones el dominio de la URL (sin él no hay pertenencia que validar)', async () => {
+    const vistos: { cadencia?: string; pausa?: string } = {}
+    const a = createAdmin({
+      entities: ENTITIES,
+      mdStore: await SqliteMasterDataStore.open(null, ENTITIES),
+      adminStore: await SqliteAdminStore.open(null, [ADMIN]),
+      domains: DOS_DOMINIOS,
+      domainFreshness: async () => FRESHNESS,
+      applyCadence: async (domainId) => { vistos.cadencia = domainId; return { action: 'set', desiredSeconds: 7200 } },
+      pauseProcess: async (domainId) => { vistos.pausa = domainId },
+      identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
+      audit: () => {},
+      secret: SECRET,
+    })
+    await postear(a, 'cartera', 'process=p_sap')
+    await postear(a, 'cartera', 'process=p_sap&accion=pausar')
+    expect(vistos).toEqual({ cadencia: 'cartera', pausa: 'cartera' })
+  })
+
+  it('cross-dominio: el steward de cartera NO pausa ni re-cadencia un proceso de personas', async () => {
+    const fx = efectos()
+    const a = await mkAdmin(fx)
+
+    const pausa = await postear(a, 'cartera', 'process=p_buk&accion=pausar')
+    expect(pausa.statusCode).toBe(303)
+    expect(decodeURIComponent(pausa.headers['location'])).toContain('Error: Proceso desconocido en el dominio: p_buk')
+
+    const reanudar = await postear(a, 'cartera', 'process=p_buk&accion=reanudar')
+    expect(decodeURIComponent(reanudar.headers['location'])).toContain('Error: Proceso desconocido en el dominio: p_buk')
+
+    const cadencia = await postear(a, 'cartera', 'process=p_buk')
+    expect(decodeURIComponent(cadencia.headers['location'])).toContain('Error: Proceso desconocido en el dominio: p_buk')
+
+    expect(fx).toEqual({ pausas: [], cadencias: [] }) // ni un solo efecto sobre el dominio ajeno
+  })
+
+  it('el proceso propio del dominio sigue funcionando (la validación no es un portazo general)', async () => {
+    const fx = efectos()
+    const a = await mkAdmin(fx)
+    const pausa = await postear(a, 'cartera', 'process=p_sap&accion=pausar')
+    expect(decodeURIComponent(pausa.headers['location'])).toContain('Proceso pausado.')
+    const cadencia = await postear(a, 'cartera', 'process=p_sap')
+    expect(decodeURIComponent(cadencia.headers['location'])).toContain('Cadencia aplicada al motor.')
+    expect(fx).toEqual({ pausas: [{ processId: 'p_sap', paused: true }], cadencias: ['p_sap'] })
+  })
+
+  it('fail-closed: un `process` vacío o desconocido se niega, no se «resuelve» al dominio de la URL', async () => {
+    const fx = efectos()
+    const a = await mkAdmin(fx)
+    for (const cuerpo of ['process=&accion=pausar', 'accion=pausar', 'process=p_inexistente&accion=pausar', 'process=p_inexistente']) {
+      const res = await postear(a, 'cartera', cuerpo)
+      expect(decodeURIComponent(res.headers['location'])).toContain('Error: Proceso desconocido en el dominio:')
+    }
+    expect(fx).toEqual({ pausas: [], cadencias: [] })
   })
 })
