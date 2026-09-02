@@ -81,6 +81,35 @@ sin gate sigue diciendo `serving`, el gateado no), no en una corrida que haya qu
 *(El resto de esta rama —extensiones del banco `deploy/rollout/bench/` y el registro del arnés
 V2–V13— no viaja al operador y no lleva entrada.)*
 
+### Las facetas de un dashboard reciben el tope + buscador de #209, y su hoja deja de viajar solo cuando hay filtros server-side (#255)
+
+**Cambia lo que ve quien usa un PI con facetas de catálogo grande.** El patrón de #209 —tope de
+opciones visibles, «Ver las N restantes» y buscador— existía solo en los filtros server-side
+(`renderTrayFilters`), pese a que las facetas client-side comparten el mismo `.faceta-options` de
+220 px con scroll interno: dentro de un catálogo de 47 valores la opción buscada se encontraba
+scrolleando a ciegas, que es exactamente el síntoma que motivó #209.
+
+**Y con él viajaba un defecto que nadie había reportado**: el CSS del patrón y el script del buscador
+se inyectaban bajo `if (trayFilters)`, así que un dashboard con **solo** facetas emitía las marcas
+(`vflt-extra`, `vflt-search`) sin la hoja que las pliega ni la función que las busca — el «ver más»
+quedaba inerte y el tope, invisible. El gate ahora también reconoce las facetas.
+
+**La opción marcada no se pliega, y eso lo resuelve el runtime, no el render.** En los filtros
+server-side la selección viaja en la URL y el HTML nace sabiéndola; en las facetas el estado vive en
+el DOM y cambia sin re-render, así que `update()` —el único punto por el que pasan el change del
+checkbox, el ✕ del chip, «limpiar» y la restauración de una vista guardada— aplica y retira
+`vflt-keep`. La precedencia de la hoja es deliberada: `keep` gana a `extra`, `miss` gana a `keep`, de
+modo que una búsqueda sin coincidencia oculta también lo marcado, igual que en server-side.
+
+El plegado sigue siendo **CSS-only** aunque acá el filtrado ya dependa de JS: es una sola
+implementación del patrón para las dos superficies (cero deriva) y degrada igual en papel, donde el
+script no viaja.
+
+**Lo que se midió**: los ocho tests de `tests/facetas-tope-buscador.test.ts`, cada uno con su corrida
+de contraste contra el código anterior. **Lo que NO se midió**: el comportamiento en un navegador
+real —el `new Function` del test valida sintaxis, no conducta—, así que la interacción efectiva de
+`vflt-keep` bajo el cursor de una persona sigue sin verificarse con los ojos.
+
 ## 0.22.0 — 2026-08-26
 
 ### Qué exige esta versión
