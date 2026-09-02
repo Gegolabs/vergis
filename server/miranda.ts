@@ -772,3 +772,22 @@ export function resolvePolicyFor(store: Map<string, PolicyDecl>, table: string):
   const candidatos = [...store.keys()].filter((k) => k.toLowerCase().endsWith(sufijo))
   return candidatos.length === 1 ? store.get(candidatos[0]) : undefined
 }
+
+/**
+ * Vista de Miranda para `/contrato` (#266 · #265), PURA para poder medirla sin servidor. Dos orígenes
+ * de apagado y un solo campo: `disabledReason` viene de la configuración que no alcanza o del arranque
+ * que falló (`bootFailure`). `requested` dice si la instancia la pidió, `enabled` si de verdad sirve.
+ */
+export function mirandaContractView(
+  cfg: { enabled: boolean; disabledReason?: string; model: string; apiKey: string; baseUrl?: string },
+  bootFailure: string | null,
+): { enabled: boolean; requested: boolean; disabledReason?: string; model?: string; baseUrl?: string } {
+  const reason = cfg.disabledReason ?? bootFailure ?? undefined
+  const enabled = cfg.enabled && !bootFailure
+  return {
+    enabled,
+    requested: cfg.enabled || cfg.disabledReason != null,
+    ...(reason ? { disabledReason: reason } : {}),
+    ...(enabled ? { model: cfg.model, baseUrl: mirandaDestination(cfg) } : {}),
+  }
+}

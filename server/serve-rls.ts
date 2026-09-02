@@ -74,6 +74,7 @@ import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec,
 import {
   createMiranda,
   createMirandaUnavailable,
+  mirandaContractView,
   mirandaTransportFrom,
   mirandaDestination,
   mirandaValidateCaps,
@@ -195,6 +196,9 @@ if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGI
 // Config VALIDADA de los env numéricos (lanza claro al arranque si PORT/REFRESH/TTL/MAX_ROWS no son
 // números — antes `PORT=abc` daba `listen(NaN)` tarde y feo). El secreto CSRF se maneja aparte.
 const config = configFromEnv(process.env, () => '')
+// #266 (segunda mitad): si el ARRANQUE de Miranda falla (catálogo, roster, store), la superficie se apaga
+// y la razón vive acá — el contrato la lee igual que la de configuración. Antes ese fallo re-lanzaba.
+let mirandaBootFailure: string | null = null
 // Envs retirados que siguen en despliegues vivos: se avisan y se ignoran (nunca se imprime su valor).
 for (const w of deprecatedEnvWarnings(process.env)) console.warn(`[vergis-rls] ${w}`)
 const PORT = config.port
@@ -218,13 +222,7 @@ const contract = createContractRegistry({
   control: () => controlContract(),
   // Bloque `miranda` (#266 · #265): una superficie opcional ahora puede quedar APAGADA sin tumbar el
   // nodo — si el contrato no lo dijera, la degradación sería silenciosa. Closure sobre la config viva.
-  miranda: () => ({
-    enabled: config.miranda.enabled,
-    requested: config.miranda.enabled || config.miranda.disabledReason != null,
-    ...(config.miranda.disabledReason ? { disabledReason: config.miranda.disabledReason } : {}),
-    ...(config.miranda.enabled ? { model: config.miranda.model } : {}),
-    ...(config.miranda.enabled ? { baseUrl: mirandaDestination(config.miranda) } : {}),
-  }),
+  miranda: () => mirandaContractView(config.miranda, mirandaBootFailure),
 })
 contract.envKeys(configEnvKeys())
 // Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
@@ -1978,6 +1976,26 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
 }
 // ── MIRANDA (cluster 077) — el agente conversacional que autora specs. TODO detrás del flag ────────
 // MIRANDA_ENABLED. Con el flag apagado nada de esto corre: `miranda` queda null → superficie cero.
+// ── Miranda DEGRADADA (#266): un solo camino para «pedida y no disponible» ──────────────────────
+// Sirve a los dos orígenes —la configuración que no alcanza y el arranque que falla— por tres canales:
+// el log, `/contrato` (caveat + sección `miranda`) y un 503 con causa en su propia ruta, solo para el
+// grupo. Antes el fallo de arranque re-lanzaba y, con `restart: unless-stopped`, dejaba el nodo en
+// crashloop: caían TODOS los PIs por una superficie que usa un grupo.
+const degradeMiranda = (reason: string, origen: 'configuración' | 'arranque'): MirandaHandler => {
+  console.warn(`[miranda] deshabilitada por ${origen}: ${reason}`)
+  contract.caveat(`Miranda pedida (MIRANDA_ENABLED) y APAGADA por ${origen}: ${reason}`)
+  const govForGate = governance
+  return createMirandaUnavailable({
+    reason,
+    identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
+    // Mismo gate de grupo que la Miranda viva. Sin store de gobierno nadie tiene scope: fail-closed —
+    // la razón es superficie de operación y no se filtra a quien no le corresponde.
+    hasScope: async (email) =>
+      govForGate ? (await govForGate.isAdmin(email)) || (await govForGate.isMember(config.miranda.scopeGroup, email)) : false,
+    brandTitle: INDEX_TITLE,
+  })
+}
+
 if (config.miranda.enabled) {
   try {
     // Store: reusa el de gobierno si existe; si no, abre uno (Miranda necesita persistir sesiones).
@@ -1996,8 +2014,9 @@ if (config.miranda.enabled) {
     })()
     // Roster de identidades inspeccionables en preview (#110·1, D1) — config de instancia. Sin la env
     // NO existe la feature: ni `?as=`, ni links, ni campos nuevos en la tool (superficie cero). Con la
-    // env, un roster ilegible o inválido ABORTA el arranque (el catch de abajo re-lanza): un roster a
-    // medias haría «verificar la RLS» sobre una ficción.
+    // env, un roster ilegible o inválido LANZA, y el catch de abajo APAGA MIRANDA ENTERA con la razón
+    // (#266): lo que #110·1 prohibía era una impersonación a medias sobre una ficción — apagarla toda
+    // no es «a medias», y tumbar los 9 PIs por un roster tampoco era lo que esa decisión protegía.
     const previewRoster: PreviewIdentity[] = (() => {
       const p = config.miranda.previewIdentitiesPath
       if (!p) return []
@@ -2147,27 +2166,14 @@ if (config.miranda.enabled) {
       `[vergis-rls] Miranda ACTIVA · modelo=${config.miranda.model} · destino=${mirandaDestination(config.miranda)} · catálogo=${catalog.length} objeto(s) · scope=${config.miranda.scopeGroup}`,
     )
   } catch (e) {
-    console.error(`[vergis-rls] Miranda deshabilitada por error de arranque: ${e instanceof Error ? e.message : String(e)}`)
-    throw e // el flag está ON: un fallo de arranque no debe degradar en silencio.
+    // El flag está ON y el arranque falló (catálogo, roster, store, schema…): NO se degrada en silencio
+    // —se dice por tres canales— y NO se tumba el nodo. Es la segunda mitad de #266.
+    const msg = e instanceof Error ? e.message : String(e)
+    mirandaBootFailure = msg
+    miranda = degradeMiranda(msg, 'arranque')
   }
 } else if (config.miranda.disabledReason) {
-  // ── MIRANDA DEGRADADA (issue #266) ───────────────────────────────────────────────────────────────
-  // La instancia la PIDIÓ y la configuración no alcanza. Antes esto abortaba el proceso desde
-  // `configFromEnv` y, con `restart: unless-stopped`, dejaba el nodo en crashloop: caían TODOS los PIs
-  // por una superficie que usa un grupo. Ahora la superficie se apaga a sí misma y lo dice por tres
-  // canales: este log, `/contrato` y un 503 en su propia ruta.
-  console.warn(`[miranda] deshabilitada: ${config.miranda.disabledReason}`)
-  contract.caveat(`Miranda pedida (MIRANDA_ENABLED) y APAGADA por configuración: ${config.miranda.disabledReason}`)
-  const govForGate = governance
-  miranda = createMirandaUnavailable({
-    reason: config.miranda.disabledReason,
-    identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
-    // Mismo gate de grupo que la Miranda viva. Sin store de gobierno nadie tiene scope: fail-closed —
-    // la razón es superficie de operación y no se filtra a quien no le corresponde.
-    hasScope: async (email) =>
-      govForGate ? (await govForGate.isAdmin(email)) || (await govForGate.isMember(config.miranda.scopeGroup, email)) : false,
-    brandTitle: INDEX_TITLE,
-  })
+  miranda = degradeMiranda(config.miranda.disabledReason, 'configuración')
 }
 
 // ── Mapa identidad→claims: MIGRACIÓN archivo → store, y el store como fuente (issue #159, hito 2) ──
