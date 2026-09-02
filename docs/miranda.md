@@ -47,7 +47,8 @@ explorando → borrador → validado → autochequeado → publicado   (+ descar
 | Env | Default | Qué hace |
 |--|--|--|
 | `MIRANDA_ENABLED` | `off` | Enciende la capacidad. Apagado ⇒ cero superficie (ni ruta ni nav). |
-| `ANTHROPIC_API_KEY` | — | Obligatoria si el flag está ON (el arranque aborta si falta). Solo en cabecera, jamás en logs/transcripts. |
+| `ANTHROPIC_API_KEY` | — | Necesaria con el flag ON. Si falta, **Miranda se apaga a sí misma** y el nodo arranca igual (ver «¿Qué pasa si la configuración no alcanza?»). Solo en cabecera, jamás en logs/transcripts. |
+| `MIRANDA_API_BASE_URL` | `https://api.anthropic.com` | Destino de la Messages API — un gateway compatible con el protocolo de Anthropic (Azure AI Foundry, un proxy corporativo, un endpoint regional). URL absoluta `http(s)`; el `/` final se recorta. No es secreto: el log de arranque y `/contrato` publican su host. Valor inválido ⇒ Miranda apagada con razón (no aborta). |
 | `MIRANDA_MODEL` | `claude-sonnet-5` | Modelo de la Messages API. |
 | `MIRANDA_RUBRIC_DIR` | — | Directorio con `dsl.md` (se monta al system prompt) y `qc1.md` (rúbrica del self-check). |
 | `MIRANDA_MAX_TURNS` | `40` | Turnos internos (tool-use) máximos por mensaje del usuario. |
@@ -57,6 +58,28 @@ explorando → borrador → validado → autochequeado → publicado   (+ descar
 | `MIRANDA_PROBE_DB` | 1ª conexión | `database_ref` contra el que corren las probes. |
 | `MIRANDA_ANNOUNCE_WEBHOOK` | — | Webhook opcional para anunciar la publicación (patrón espejo Slack; no-fatal). |
 | `MIRANDA_PREVIEW_IDENTITIES` | — | Ruta a un JSON con el **roster** de identidades inspeccionables en preview (`[{label,user,claims}]`). Sin ella la feature no existe. Roster ilegible o inválido (label duplicado, `user`/`claims` ausentes) **aborta el arranque**. |
+
+### ¿Qué pasa si la configuración no alcanza?
+
+**Miranda es una superficie opcional: mal configurada se apaga a sí misma y el nodo sirve los PIs con
+normalidad** (issue #266). Antes abortaba el arranque, y con `restart: unless-stopped` eso dejaba el
+contenedor en crashloop: caían **todos** los PIs de la instancia por una capacidad que usa un grupo.
+
+Degradar no es callar — la razón se declara por tres canales:
+
+| Canal | Qué dice |
+|--|--|
+| Log de arranque | `[miranda] deshabilitada: <razón>` |
+| `GET /contrato` (admins) | Sección `miranda`: `enabled:false`, `requested:true`, `disabledReason`; además un `caveat` |
+| `GET /miranda*` | **503** «Miranda no disponible: `<razón>`» — solo para quien tiene el scope; sin scope, el 403 de siempre y sin la razón |
+
+Casos que degradan: `ANTHROPIC_API_KEY` ausente o vacía con el flag ON · `MIRANDA_API_BASE_URL` que no
+es una URL absoluta `http(s)`.
+
+La clasificación completa **fatal vs degradable** de todas las envs del producto vive en
+`server/config.ts` (`FATAL_ENVS` / `DEGRADABLE_ENVS`). La única pieza de Miranda que sigue siendo fatal
+es `MIRANDA_PREVIEW_IDENTITIES` — por decisión previa (#110·1): un roster de impersonación ilegible no
+debe degradar a una feature a medias.
 
 ## ¿Rutas?
 

@@ -105,6 +105,44 @@ catálogo vacío).
 **Hallazgo del barrido, de paso:** la tabla §9 de `docs/data-maestra-y-publicacion.md` declara el
 mecanismo de publicación y el publish-on-write como «por construir», y el código los tiene
 (`master-data-publish.ts`). El catálogo lo dice donde corresponde; corregir ese doc va aparte.
+### Una superficie opcional ya no tumba el núcleo, y el destino de la API de Miranda es configurable (#266, #265)
+
+**Cambia el arranque del nodo, y es el motivo para adoptarla.** Con `MIRANDA_ENABLED` encendido y sin
+`ANTHROPIC_API_KEY`, `configFromEnv` **lanzaba** y `serve-rls` la invocaba en el top-level del módulo
+sin `try/catch`: el proceso moría, `restart: unless-stopped` lo dejaba en **crashloop** y **todos los
+PIs de la instancia dejaban de servir** — por una capacidad opcional que usa un grupo. Medido contra
+la imagen `0.21.0` en contenedores efímeros, con control negativo (`MIRANDA_ENABLED=0` llega más
+lejos y aborta por otra razón), o sea que la validación de Miranda abortaba **antes que todo lo
+demás**.
+
+Ahora **una superficie opcional mal configurada se apaga a sí misma y lo dice**; el nodo arranca y
+sirve. Degradar no es callar: la razón se declara por tres canales —`[miranda] deshabilitada: <razón>`
+en el arranque, la sección `miranda` de `GET /contrato` (`enabled:false`, `requested:true`,
+`disabledReason`) más un `caveat`, y un **503** «Miranda no disponible: `<razón>`» en `/miranda*` para
+quien tiene el scope (sin scope, el 403 de siempre, y la razón no se filtra).
+
+**Y la distinción fatal vs degradable dejó de ser implícita en el orden de validación**: vive
+declarada en `server/config.ts` (`FATAL_ENVS` / `DEGRADABLE_ENVS`), con el porqué y el lugar donde
+cada clase se hace efectiva. Lo fatal sigue fatal —sin `VERGIS_SPECS_DIR`/`VERGIS_SPECS` no hay nada
+que servir, un `VERGIS_ENGINE` inválido no ejecuta nada, un numérico NaN se propaga al núcleo— y hay
+un control en la suite que lo verifica, porque «no lanza nunca» escondería un nodo que sirve mal.
+`MIRANDA_PREVIEW_IDENTITIES` **sigue siendo fatal a propósito**: un roster de impersonación ilegible
+no debe degradar a una feature a medias (decisión #110·1, que esta versión no deroga).
+
+**Env nueva, opcional: `MIRANDA_API_BASE_URL`** — el destino de la Messages API, para una instancia
+cuyo acceso al modelo llega por un gateway compatible (Azure AI Foundry, un proxy corporativo, un
+endpoint regional). El transporte ya aceptaba `baseUrl` y nadie se lo pasaba; ahora se lee de la
+config y se cablea. Debe ser URL absoluta `http(s)` (el `/` final se recorta); un valor inválido es
+**degradable**, no fatal. El destino es **observable**: el log de arranque publica su host
+(`destino=foundry.example`) y `/contrato` lo expone. **La key jamás se loguea ni se expone.** Sin la
+env, nada cambia: se sigue hablando con `https://api.anthropic.com`.
+
+**Lo que NO se midió, y por qué esta entrada no lo afirma:** no se probó contra un gateway real —el
+acceso vía Foundry de la instancia A.R.B.O.L. llega en una o dos semanas—, así que lo verificado es
+que el destino **llega al transporte**, no que un gateway responda. Y no se midió el arranque de la
+imagen en Docker con el flag encendido y sin key: el mecanismo está medido con arnés propio (config,
+contrato, ruta y su control negativo, en la suite), y el arranque del contenedor lo **corrobora** el
+despliegue.
 
 ### `fast-uri` sube a 3.1.7: el advisory que tenía el CI en rojo
 
