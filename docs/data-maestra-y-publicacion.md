@@ -113,9 +113,30 @@ Un agente que opera o razona sobre este Botlet debe respetar estas **invariantes
 | Store de autoría + CRUD in-app (Administración) | ✅ construido (`MasterDataStore`, `server/admin.ts`) |
 | Contrato declarativo de entidad | ✅ (`master-data.ts`) |
 | Modelo oferta/demanda + derivación de cadencia | ✅ (`freshness.ts`) |
-| **Mecanismo de publicación** (proyección `__replica` a consumidores) | 🔧 diseñado, **por construir** |
-| **Publish-on-write** | 🔧 diseñado, por construir |
-| Convención `__replica` + grants RO | 🔧 estándar fijado, por aplicar en el publicador |
+| **Mecanismo de publicación** (proyección `__replica` a consumidores) | ✅ construido (`createDwhPublisher`, `master-data-publish.ts`) |
+| **Publish-on-write** | ✅ construido (`server/admin.ts` tras cada edición; cableado en `serve-rls.ts`) |
+| Convención `__replica` + grants RO | ✅ aplicada por el publicador (`masterDataPublishPlan`) |
+| Resultado de la publicación **en pantalla**, por target | ✅ construido (#262) |
+| Aislamiento entre targets (uno que falla no cancela a los siguientes) | ✅ construido (#262, `server/master-data-publishing.ts`) |
+| Desfase visible «autoría N · réplica M» por target | ✅ construido (#262, `Publisher.count`) |
+| Republicación manual (`POST /admin/e/<id>/republicar`) | ✅ construido (#262) |
+
+**Lo que #262 vino a corregir, y por qué está acá:** hasta esa versión esta misma tabla decía «por
+construir» de dos piezas que llevaban meses cableadas, y esa afirmación falsa contribuyó a
+diagnosticar mal un incidente real. El defecto que sí existía era otro: la publicación **fallaba en
+silencio** — el usuario guardaba, la pantalla confirmaba el guardado, y el fallo vivía solo en el
+audit log. En la instancia de referencia el desfase duró once días.
+
+Las reglas que quedan fijadas:
+
+- **La publicación no es fatal para la autoría, pero jamás es muda.** Si falla, la fila igual se
+  guardó; el resultado por target vuelve a la pantalla con la causa del fallo, y el audit log
+  (`master-data-publish`) se sigue escribiendo igual que antes.
+- **Cada target se intenta.** El fallo de uno no cancela a los que vienen: se publica a todos y se
+  reporta cada uno. El recorrido es secuencial a propósito (publicar es DDL + INSERT contra un
+  warehouse; el issue pedía aislamiento, no concurrencia).
+- **Un conteo que no se pudo leer se dice «no se pudo leer», con su causa.** Nunca un `0`: un cero
+  fabricado es indistinguible de una réplica vacía de verdad.
 
 > Instancia de referencia (beta): Grupo Hijuelas — ver `arbol-lab/work/037-039`. GH es **contra qué se
 > prueba**, no el molde: esta capacidad es genérica.
