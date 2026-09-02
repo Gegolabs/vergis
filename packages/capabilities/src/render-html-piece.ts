@@ -6,6 +6,7 @@ import { TABLE_RUNTIME_SOURCE } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
+import { CHART_HOVER_CSS, CHART_HOVER_SOURCE } from './chart-hover'
 import { renderInteractiveScript } from './interactive-script'
 import { renderNotasTraySection, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
 import { ctxQuery, fltQuery, formatValue } from './piece-util'
@@ -109,6 +110,11 @@ export const renderHtmlPiece: Capability = {
     if (descargarSection) css += TRAY_PDF_CSS
     if (signals.magnitude) css += MAGNITUDE_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
+    // #263 · el realce del rótulo se emite SOLO si el documento trae un gráfico, y nunca en papel
+    // (#65 · D4: en print no viaja JS). La señal es el propio marcado ya compuesto — un documento sin
+    // charts no paga ni una línea de cromo.
+    const hasChart = !print && body.includes('<section class="chart">')
+    if (hasChart) css += CHART_HOVER_CSS
     if (print) css += PRINT_TRUNC_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
@@ -125,6 +131,7 @@ export const renderHtmlPiece: Capability = {
         `<script type="application/json" id="vergis-notas">${JSON.stringify(notas).replace(/</g, '\\u003c')}</script>` +
         `<script>${NOTAS_RUNTIME_SOURCE}</script>`
     }
+    if (hasChart) tail += `<script>${CHART_HOVER_SOURCE}</script>`
     return { html: theme.wrap({ title: title ?? 'Vergis', body: body + tail, meta, palette: effPalette }) }
   },
 }

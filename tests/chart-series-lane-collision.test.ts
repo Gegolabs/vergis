@@ -11,7 +11,14 @@ const INK_H = 10.5
 
 type Lbl = { x: number; y: number; text: string }
 
-/** `<text>` de las capas de MARCAS (dato) con posición absoluta — acumula los translate anidados. */
+/**
+ * `<text>` VISIBLES de las capas de MARCAS (dato), con posición absoluta — acumula los translate
+ * anidados.
+ *
+ * #263 · Desde el realce al hover, los rótulos que el stride no muestra **siguen en el SVG** con
+ * `opacity="0"` (existen para que el cursor los revele). Un rótulo invisible no puede fundirse con
+ * nada: lo que esta suite mide es tinta sobre tinta, así que se cuentan solo los que se dibujan.
+ */
 function dataLabels(svg: string): Lbl[] {
   const out: Lbl[] = []
   const re = /<g\b([^>]*)>|<\/g>|<text\b([^>]*)>([\s\S]*?)<\/text>/g
@@ -38,7 +45,8 @@ function dataLabels(svg: string): Lbl[] {
     const t = /transform="translate\(([-\d.]+)[, ]+([-\d.]+)\)"/.exec(m[2] as string)
     const dy = Number((/\bdy="([-\d.]+)"/.exec(m[2] as string) ?? [, '0'])[1])
     const text = (m[3] as string).replace(/<[^>]*>/g, '').trim()
-    if (text) out.push({ x: cur.x + (t ? Number(t[1]) : 0), y: cur.y + (t ? Number(t[2]) : 0) + dy, text })
+    const oculto = /\sopacity="0"/.test(m[2] as string)
+    if (text && !oculto) out.push({ x: cur.x + (t ? Number(t[1]) : 0), y: cur.y + (t ? Number(t[2]) : 0) + dy, text })
   }
   return out
 }
