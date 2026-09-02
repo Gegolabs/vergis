@@ -72,6 +72,16 @@ correcto para que quede registrada la respuesta.
   saberlo cuesta más caro deshacerlo que conversarlo.
 - **Lee el ADR-002** (`docs/adr-002-open-core.md`) si tu cambio toca la frontera entre lo abierto
   y lo comercializable. El corte está escrito y derogarlo exige un acto documentado.
+- **Mira el catálogo antes de proponer una capacidad**: `docs/capacidades.md` lista lo que Vergis ya
+  sabe hacer, con identificadores `CAP-NN` citables. Puede que lo que ibas a pedir ya exista.
+
+## Antes de abrir el PR
+
+- **Si tu cambio agrega una capacidad, agrega su fila al catálogo** (`docs/capacidades.md`), en el
+  mismo PR: número `CAP-NN` nuevo —los números no se reusan—, cómo se llama o se declara, desde qué
+  versión, y el enlace a donde se explica. Un catálogo que envejece es peor que ninguno: miente con
+  la autoridad del repo. `npm run capacidades:cotejo` verifica la numeración y que lo declarado en
+  máquina esté citado; lo demás lo pone el autor.
 
 ## Los gates
 
