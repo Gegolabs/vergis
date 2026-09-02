@@ -100,6 +100,7 @@ export const renderHtmlPiece: Capability = {
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
+    if (pages?.unknown) css += PAGES_AVISO_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
     if (chips) css += FILTER_CHIPS_CSS
     // #255 · las facetas client-side usan las MISMAS clases del patrón de #209 ⇒ su hoja y su
@@ -146,6 +147,16 @@ const PAGES_NAV_CSS = `
 `
 
 /**
+ * CSS del AVISO de vista desconocida (#250) — discreto: informa sin competir con el contenido. Viaja
+ * SOLO cuando hay aviso (el caso normal es que no lo haya). En papel se mantiene VISIBLE: un PDF
+ * nacido del mismo enlace roto tiene que decirlo igual que la pantalla.
+ */
+const PAGES_AVISO_CSS = `
+.vpages-aviso{margin:-10px 0 18px;padding:6px 10px;font-size:12px;line-height:1.5;color:var(--fg-dim,#94a3b8);border-left:3px solid var(--border,#e2e8f0)}
+@media print{.vpages-aviso{display:block;margin:0 0 10px;padding:0 0 0 8px;font-size:11px;color:var(--fg-dim,#64748b)}}
+`
+
+/**
  * CSS del grupo «Descargar» de la bandeja (#65 · D9). Paridad visual con el botón de export del kit
  * por-tabla, sin tocar `piece-css.ts` (territorio del runtime de tabla).
  */
@@ -174,7 +185,19 @@ function renderDescargarSection(pdfUrl: string, activePage: string | undefined, 
 }
 
 
-/** Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx). */
+/** Largo máximo del id pedido que se muestra en el aviso: viene de la URL y podría ser arbitrariamente
+ *  largo. Se recorta ANTES de escapar (recortar HTML ya escapado partiría una entidad por la mitad). */
+const AVISO_ID_MAX = 60
+
+/**
+ * Barra de navegación de vistas: un link por página (`?page=<id>`), preservando el carry (ctx).
+ *
+ * Si el spec no declaraba la vista pedida (`pages.unknown`), la barra va seguida de un AVISO: el
+ * fallback a la primera vista conserva el HTTP 200 —no romper enlaces viejos tras renombrar una
+ * vista vale—, pero quien llegó por un marcador roto tiene que enterarse de que lo está. `role=
+ * "status"` para que también lo diga un lector de pantalla, y visible en `@media print` porque un
+ * PDF generado desde ese mismo enlace roto lo necesita igual.
+ */
 function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}, flt: Record<string, string[]> = {}): string {
   const q = ctxQuery(carry) + fltQuery(flt)
   const tabs = pages.items
@@ -183,7 +206,15 @@ function renderPagesNav(pages: PagesNav, carry: CarryCtx = {}, flt: Record<strin
         `<a href="?page=${encodeURIComponent(p.id)}${q}"${p.id === pages.active ? ' class="active" aria-current="page"' : ''}>${escapeHtml(p.title)}</a>`,
     )
     .join('')
-  return `<nav class="vpages" role="tablist">${tabs}</nav>`
+  const nav = `<nav class="vpages" role="tablist">${tabs}</nav>`
+  if (!pages.unknown) return nav
+  const pedida = pages.unknown.length > AVISO_ID_MAX ? `${pages.unknown.slice(0, AVISO_ID_MAX)}…` : pages.unknown
+  const activa = pages.items.find((p) => p.id === pages.active)?.title ?? pages.active
+  return (
+    nav +
+    `<p class="vpages-aviso" role="status">La vista «${escapeHtml(pedida)}» no existe en este informe; ` +
+    `se muestra «${escapeHtml(activa)}».</p>`
+  )
 }
 
 /** CSS de la banda de CONTEXTO ACTIVO (sticky arriba) — la superficie estándar del selector de
