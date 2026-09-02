@@ -56,6 +56,21 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### Un `?page=` que el informe no declara ahora se lo dice al usuario, no solo al operador (#250)
+
+**Cambia lo que ve la persona que llega por un enlace guardado.** Un `?page=<id>` que el spec no
+declara se sirve —deliberadamente— con la primera vista y HTTP 200, para que renombrar una vista no
+rompa los marcadores viejos. El operador ya se enteraba (evento `mira-page-unknown`, con `requested`
+y `served`); la persona no: aterrizaba en otra vista sin que nada le dijera que su enlace apuntaba a
+algo que ya no existe. Ahora la nav de vistas emite, bajo las pestañas, un aviso discreto —«La vista
+«X» no existe en este informe; se muestra «Y»»— con `role="status"` para el lector de pantalla y
+**visible en papel**, porque un PDF generado desde ese mismo enlace roto tiene el mismo problema. El
+id pedido viene de la URL: se recorta a 60 caracteres y se escapa. **Nada cambia en el status HTTP ni
+en el evento** — la salida elegida (D-59) declara el fallback, no lo suprime.
+
+**Lo que NO se midió:** el aviso no se probó con un lector de pantalla real; lo verificado es el
+marcado (`role="status"`) y su presencia en pantalla y en `@media print`.
+
 ### `fast-uri` sube a 3.1.7: el advisory que tenía el CI en rojo
 
 **Cambia una dependencia transitiva que viaja en la imagen.** `fast-uri@3.1.5` (vía `ajv`) recibió

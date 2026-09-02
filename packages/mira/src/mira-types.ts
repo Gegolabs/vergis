@@ -9,6 +9,11 @@ export type CtxValues = Record<string, string | string[]>
 export interface PagesNav {
   items: { id: string; title: string }[]
   active: string
+  /**
+   * La vista PEDIDA que el spec NO declara (`?page=<id>` roto). Presente SOLO cuando hubo fallback a
+   * la primera vista. Es texto crudo de la URL: el render lo trunca y lo escapa antes de emitirlo.
+   */
+  unknown?: string
 }
 
 /** Control de cabecera ya resuelto: opciones + valor(es) seleccionado(s). Viaja al render. */
