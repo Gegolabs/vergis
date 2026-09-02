@@ -63,7 +63,25 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### Un fallo del ARRANQUE de Miranda ya tampoco tumba el nodo — la segunda mitad de #266
+
+**Cambia lo que ve el operador.** 0.23.0 hizo degradable la **configuración** de Miranda (key, `baseUrl`),
+pero el bloque de **arranque** (catálogo, roster de `MIRANDA_PREVIEW_IDENTITIES`, store, schema)
+seguía re-lanzando con el flag encendido: con `restart: unless-stopped`, crashloop y todos los PIs
+fuera. Ahora ese fallo recorre **el mismo camino** que la config: `[miranda] deshabilitada por
+arranque: <razón>` en el log, caveat + sección `miranda` en `/contrato` (`enabled:false`,
+`requested:true`, `disabledReason`), y 503 con causa en su ruta, solo para el grupo.
+
+**El roster (#110·1) cambia de clase, y por qué no deroga esa decisión:** lo que #110·1 prohibía era una
+impersonación **a medias** sobre una ficción. Apagar Miranda **entera** no es a medias — y tumbar la
+instancia por un roster tampoco era lo que protegía. `MIRANDA_PREVIEW_IDENTITIES` pasa de `FATAL_ENVS`
+a `DEGRADABLE_ENVS` con ese argumento escrito. `parsePreviewIdentities` sigue lanzando: es ese throw el
+que el arranque convierte en apagado con razón.
+
+**Lo que NO se midió, dicho así:** el arranque real del nodo con un roster roto — lo medido es la vista
+pura del contrato (`mirandaContractView`) y la clasificación; el catch de `serve-rls.ts` no tiene
+arnés propio. Lo corrobora el primer despliegue con esa condición.
+
 
 ## 0.23.0 — 2026-09-02
 
