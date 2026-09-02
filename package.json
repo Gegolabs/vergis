@@ -1,7 +1,7 @@
 {
   "name": "vergis",
   "private": true,
-  "version": "0.23.0",
+  "version": "0.23.1",
   "description": "Vergis — Meta-Cognitive Platform · implementación de referencia de AgencyDomains",
   "type": "module",
   "engines": {

@@ -63,6 +63,19 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+*(nada todavía)*
+
+## 0.23.1 — 2026-09-02
+
+### Qué exige esta versión
+
+> **Nada.** Es la Z que existe para esto: una corrección que un operador querría adoptar **sin** tragarse
+> capacidades nuevas — y de la familia que la justifica (ver 0.16.1): algo que inducía a operar mal.
+> Quien corre 0.23.0 sube sin tocar env, compose ni base. Cambia **una conducta**: con
+> `MIRANDA_ENABLED=1`, un roster ilegible o cualquier fallo del arranque de Miranda ya no deja el nodo en
+> crashloop — arranca con Miranda apagada y lo declara. Quien contara con ese aborto como aviso, lo lee
+> ahora en el log y en `/contrato`.
+
 ### Un fallo del ARRANQUE de Miranda ya tampoco tumba el nodo — la segunda mitad de #266
 
 **Cambia lo que ve el operador.** 0.23.0 hizo degradable la **configuración** de Miranda (key, `baseUrl`),
