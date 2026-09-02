@@ -6,13 +6,21 @@
 import { describe, expect, it } from 'vitest'
 import { renderHtmlPiece, seriesLabelStride, vtFormat, type ResolvedNode } from '@vergis/capabilities'
 
-/** Contenidos de los `<text>` de las capas de rótulos (excluye ejes y leyenda). */
+/**
+ * Contenidos de los `<text>` VISIBLES de las capas de rótulos (excluye ejes y leyenda).
+ *
+ * #263 · Los rótulos que el stride no deja pasar **siguen existiendo en el DOM** con `opacity="0"`
+ * —están ahí para que el hover los revele—, así que contarlos todos ya no mide «cuántos se ven».
+ * Lo que este archivo verifica es la lectura impresa, y ésa es la de los visibles.
+ */
 function dataLabels(html: string): string[] {
   const out: string[] = []
   let i = html.indexOf('mark-text role-mark')
   while (i >= 0) {
     const seg = html.slice(i, html.indexOf('</g>', i))
-    out.push(...[...seg.matchAll(/>([^<>]*)<\/text>/g)].map((m) => m[1]))
+    for (const m of seg.matchAll(/<text([^>]*)>([^<>]*)<\/text>/g)) {
+      if (!/\sopacity="0"/.test(m[1])) out.push(m[2])
+    }
     i = html.indexOf('mark-text role-mark', i + 1)
   }
   return out
