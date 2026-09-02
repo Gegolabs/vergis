@@ -62,6 +62,7 @@ import { fileURLToPath } from 'node:url'
 // sola llamada — ver server/contract.ts), que es quien lo invoca.
 import { swapRecordInPlace, reloadLiveList } from './hot-reload'
 import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES } from './instance-config'
+import { masterDataPublishing } from './master-data-publishing'
 import { type NavQuery } from './nav'
 import { hostname, tmpdir } from 'node:os'
 import { resolve, join, dirname } from 'node:path'
@@ -1810,16 +1811,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         : undefined,
       groupStore: govStore,
       settingStore: govStore,
-      onWrite: connections
-        ? (() => {
-            const publisher = createDwhPublisher(connections)
-            return async (entity: MasterDataEntity) => {
-              if (!entity.targets?.length) return
-              const rows = await mdStore.list(entity)
-              for (const t of entity.targets) await publisher.publish(entity, rows, { database_ref: t.database_ref })
-            }
-          })()
-        : undefined,
+      // Publicación de data maestra (#262). Un solo publicador para las dos deps: comparte el pool por
+      // `database_ref`, así el conteo de la pantalla no abre conexiones aparte.
+      ...(connections ? masterDataPublishing(createDwhPublisher(connections), mdStore) : {}),
       ingestionMap: async () => deriveIngestionMap((await freshnessInputs()).mapInput),
       // Registro de fuentes (vista de Fuentes en Plataforma): fuentes + procesos + salidas (topología técnica).
       sourceRegistry: async () => {
