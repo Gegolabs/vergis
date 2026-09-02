@@ -15,8 +15,13 @@ describe('config · Miranda tras el flag', () => {
     expect(c.miranda.tokenBudget).toBe(500_000)
     expect(c.miranda.scopeGroup).toBe('miranda')
   })
-  it('flag encendido SIN key → aborta con error claro', () => {
-    expect(() => configFromEnv({ MIRANDA_ENABLED: '1' }, fixedSecret)).toThrow(/ANTHROPIC_API_KEY/)
+  // #266: la key ausente ya NO aborta el proceso — apaga SOLO a Miranda, con su razón. El detalle y
+  // sus controles viven en `miranda-degradable.test.ts`; acá queda el puntero para que nadie lea este
+  // archivo y crea que sigue siendo fatal.
+  it('flag encendido SIN key → degrada (no aborta): apagada con razón', () => {
+    const c = configFromEnv({ MIRANDA_ENABLED: '1' }, fixedSecret)
+    expect(c.miranda.enabled).toBe(false)
+    expect(c.miranda.disabledReason).toMatch(/ANTHROPIC_API_KEY/)
   })
   it('flag encendido CON key → OK, envs overridables', () => {
     const c = configFromEnv({ MIRANDA_ENABLED: 'on', ANTHROPIC_API_KEY: 'sk-x', MIRANDA_MODEL: 'claude-opus-5', MIRANDA_MAX_TURNS: '20' }, fixedSecret)

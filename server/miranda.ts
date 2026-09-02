@@ -29,6 +29,7 @@ import {
   type IntentSummary,
   type ColumnShield,
   UNKNOWN_SHIELD,
+  fetchAnthropicTransport,
 } from '@vergis/miranda'
 import { columnRules, type PolicyDecl } from '@vergis/policy'
 import { page, readForm, redirect, send, csrfFactory, requireCsrf, CsrfError } from './ui'
@@ -150,6 +151,70 @@ const IDENT_RE = /^[A-Za-z0-9_]+$/
 /** Normalización de email para comparar dueño vs requester (misma semántica que `normEmail` del
  *  store de gobierno: trim + lowercase). Local para no ampliar la superficie exportada del paquete. */
 const normEmail = (e: string | undefined): string => (e ?? '').trim().toLowerCase()
+
+/**
+ * El transporte de Miranda A PARTIR DE SU CONFIG (issue #265) — función pura y testeable, extraída de
+ * `serve-rls.ts` porque el cable que faltaba (`baseUrl`) no se podía verificar sin levantar el server
+ * entero.
+ *
+ * `make` inyecta la fábrica real (`fetchAnthropicTransport`) para que un test observe con QUÉ opciones
+ * se construye. La key NUNCA se loguea ni viaja a ningún otro lado; el destino sí es observable.
+ */
+export function mirandaTransportFrom(
+  cfg: { apiKey: string; baseUrl?: string },
+  make: (opts: { apiKey: string; baseUrl?: string }) => AnthropicTransport = fetchAnthropicTransport,
+): AnthropicTransport {
+  return make({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}) })
+}
+
+/** El HOST del destino de Miranda, para logs y `/contrato`. Nunca la key, nunca el path completo. */
+export function mirandaDestination(cfg: { baseUrl?: string }): string {
+  if (!cfg.baseUrl) return 'api.anthropic.com (default)'
+  try {
+    return new URL(cfg.baseUrl).host
+  } catch {
+    return cfg.baseUrl
+  }
+}
+
+/**
+ * Handler de Miranda DEGRADADA (issue #266): la instancia la pidió (`MIRANDA_ENABLED` encendido) pero
+ * la configuración no alcanza. En vez de tumbar el nodo, `/miranda*` responde **503** con la razón —
+ * información útil para el único afectado real.
+ *
+ * El gate NO se afloja: el mismo scope de hoy. Quien no pertenece al grupo ve el 403 idéntico al de
+ * siempre y **no ve la razón** (es superficie de operación, no de consumo).
+ */
+export function createMirandaUnavailable(deps: {
+  reason: string
+  identityOf(headers: IncomingMessage['headers']): { user?: string }
+  hasScope(email: string | undefined): Promise<boolean>
+  brandTitle?: string
+}): MirandaHandler {
+  const pg = (title: string, body: string) => page(`${deps.brandTitle ?? 'Vergis'} · Miranda`, title, body)
+  return {
+    async tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+      const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/miranda'
+      if (path !== '/miranda' && !path.startsWith('/miranda/')) return false
+      const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
+      if (!(await deps.hasScope(email))) {
+        send(res, 403, pg('Sin acceso', `<p class="msg err">No tienes el scope <code>miranda</code>. Pídeselo a un administrador.</p><p><a href="/">← Catálogo</a></p>`))
+        return true
+      }
+      send(
+        res,
+        503,
+        pg(
+          'Miranda no disponible',
+          `<p class="msg err">Miranda no disponible: ${escapeHtml(deps.reason)}</p>` +
+            `<p>La plataforma sirve con normalidad; solo esta capacidad está apagada. Corrige la configuración del nodo y reinícialo.</p>` +
+            `<p><a href="/">← Catálogo</a></p>`,
+        ),
+      )
+      return true
+    },
+  }
+}
 
 export function createMiranda(deps: MirandaServerDeps): MirandaHandler {
   const csrf = csrfFactory(deps.secret)
