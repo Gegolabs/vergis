@@ -44,6 +44,16 @@ describe('resolveActiveView · multi-vista', () => {
     expect(v.pageUnknown).toBe(true)
   })
 
+  it('page desconocida → la nav lleva `unknown` con la vista PEDIDA (#250: el usuario se entera)', () => {
+    const v = resolveActiveView(spec, 'nope', {})
+    expect(v.pagesNav?.unknown).toBe('nope')
+  })
+
+  it('page conocida o sin page → nav SIN `unknown` (control: navegación normal no avisa nada)', () => {
+    expect(resolveActiveView(spec, 'detalle', { socio: 'A' }).pagesNav?.unknown).toBeUndefined()
+    expect(resolveActiveView(spec, undefined, {}).pagesNav?.unknown).toBeUndefined()
+  })
+
   it('page conocida o sin page → pageUnknown falsy (no se audita navegación normal)', () => {
     expect(resolveActiveView(spec, 'detalle', { socio: 'A' }).pageUnknown).toBeFalsy()
     expect(resolveActiveView(spec, undefined, {}).pageUnknown).toBeFalsy()

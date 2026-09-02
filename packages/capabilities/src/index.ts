@@ -28,7 +28,7 @@ export { FILTER_VISIBLE_MAX } from './render-html-piece'
 export { TABLE_SSR_MAX_ROWS, TABLE_PRINT_MAX_ROWS, magnitudeColumns } from './render-table'
 export { MAGNITUDE_CSS } from './piece-css'
 export { renderCsvPiece } from './render-csv-piece'
-export type { ResolvedNode, TableColumn, ChartSort, FilterResolved } from './piece-types'
+export type { ResolvedNode, TableColumn, ChartSort, FilterResolved, PagesNav } from './piece-types'
 export { renderNotasTraySection, llaveCanonicaDeFila, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
 export type { NotasRenderContext, TablaAncla } from './notas-render'
 export {

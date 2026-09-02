@@ -24,11 +24,14 @@ export function resolveActiveView(
   const pages = spec.pages!
   const requested = pageParam != null ? pages.find((p) => p.id === pageParam) : undefined
   const active = requested ?? pages[0]
-  // `?page=<id>` con un id que no existe cae en silencio a la 1ª página. Señalamos el fallback para que
-  // el caller lo audite (`mira-page-unknown`) en vez de que un enlace roto se vea como navegación normal.
+  // `?page=<id>` con un id que no existe cae en silencio a la 1ª página. El fallback se declara por DOS
+  // vías, una por destinatario: al OPERADOR con el evento `mira-page-unknown` (lo emite `mira.ts` desde
+  // `pageUnknown`), y al USUARIO con el aviso de la nav (`pagesNav.unknown` → `.vpages-aviso`), para que
+  // quien llegó por un enlace guardado sepa que su enlace está roto y no lo lea como navegación normal.
   const pageUnknown = pageParam != null && requested === undefined
   const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
   const pagesNav: PagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
+  if (pageUnknown) pagesNav.unknown = pageParam
   const missing = (active.context ?? []).filter((c) => !ctxValues[c])
   if (missing.length > 0) {
     return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [], pageUnknown }
