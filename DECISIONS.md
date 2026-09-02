@@ -5,9 +5,53 @@ el registro existe para que revertirla sea barato.
 
 | Campo | Contenido |
 |---|---|
-| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados · 2026-08-19 · P5 medido, experimento del rol, y la implementación de #238 (diseño de Fable, ratificado por César) · 2026-08-26 · saldado autónomo del pasivo: los controles que no controlaban (`/ww:work run`) |
+| Sesión | 2026-08-06 · atención de los requests abiertos (work/002) · 2026-08-07 · solicitudes #138/#139 (work/003) · 2026-08-08 · ejecución de atendibles (work/005) · 2026-08-08 · fase 2 de #107 (work/006) · 2026-08-10 · trabajo del pasivo (`/ww:work run`) · 2026-08-14 · atención de #178 y corte de 0.16.0 · 2026-08-14 (noche) · arnés T-SQL local y corrección del plano de columna de #163 · 2026-08-16 · terreno Fabric propio (#186) y medición del plano de columna · 2026-08-17 · atención autónoma del pasivo externo (`/ww:work run external`) · 2026-08-18 · ventana de capacidad Fabric: P6 (#197) y P7 (#164) medidos · 2026-08-18 (tarde) · retome `/ww:go`: #197 y #164 implementados, medidos con el SQL emitido, mergeados y cerrados · 2026-08-19 · P5 medido, experimento del rol, y la implementación de #238 (diseño de Fable, ratificado por César) · 2026-08-26 · saldado autónomo del pasivo: los controles que no controlaban (`/ww:work run`) · 2026-09-02 · custodia por mandato: cerrar todos los issues de producto y publicar (César: «asume el rol del mantenedor… cierra todos los issues de producto y déjalos publicados») |
 
 ---
+
+## D-64 · 2026-09-02 — El catálogo `CAP-NN` (#264) vive en `docs/capacidades.md` con cotejo mecánico parcial, sin gate de CI sobre el CHANGELOG
+
+- **Bifurcación**: (a) wiki · (b) archivo del repo barrido a mano · (c) archivo del repo con gate de CI «PR que toca CHANGELOG toca el catálogo».
+- **Decidido**: **(b) + un cotejo derivado del schema** (`scripts/capacidades-cotejo.ts`, corrido como test): IDs únicos y sin reuso, y **cada tipo de pieza / formato / clave de `interactions` del schema tiene fila**. El gate sobre el CHANGELOG **no** se automatiza: distinguir «capacidad nueva» de «corrección» en un `###` es heurístico y fallaría en silencio en los dos sentidos. En su lugar, el corte de versión exige el cotejo en verde y la regla queda escrita en «Antes de cortar».
+- **Alternativa descartada**: (a) por lo que el issue ya argumenta (caché sin invalidación); (c) por frágil.
+- **Lo que esto NO garantiza, dicho**: el catálogo puede omitir capacidades que no están en el schema (rutas HTTP, gobierno, plano de control): esas se barrieron a mano y pueden faltar.
+- **Costo de revertir**: nulo — docs y un test.
+
+## D-63 · 2026-09-02 — #262 se construye entero: las cuatro piezas, no solo el aviso en pantalla
+
+- **Bifurcación**: el issue pide cuatro piezas en orden de valor (resultado en pantalla · un target fallido no frena a los demás · «autoría N · réplica M» · republicación manual). ¿Se entrega la primera y se abre el resto, o entero?
+- **Decidido**: **entero.** La pieza 1 sin la 4 deja al operador viendo el fallo sin poder reintentar (hoy tiene que editar una fila al azar), y la 3 es lo único que habría detectado el desfase de 11 días sin conocimiento de dominio. Sin la 2, un consumidor nuevo hereda los fallos del primero.
+- **Regla que se le impuso al realizador**: un conteo de réplica que no se pudo leer dice «no se pudo leer», **jamás** 0 ni un número inventado — es la misma disciplina de «sin medir ≠ negativo».
+- **Lo que queda fuera**: `VERGIS_MASTER_DATA` fuera del hot-reload (hallazgo vecino del issue) — no se toca en este hito; si merece issue, se abre aparte.
+- **Costo de revertir**: revertir el PR.
+
+## D-62 · 2026-09-02 — Fatal vs degradable se vuelve explícito en la config (#266), y #265 va en el mismo PR
+
+- **Bifurcación**: (a) `try/catch` alrededor de `configFromEnv` que apague Miranda al fallar · (b) que `mirandaConfig` no lance y devuelva `enabled:false` con `disabledReason`, y que la config declare cuáles envs son fatales y cuáles degradables.
+- **Decidido**: **(b).** (a) arregla el síntoma y deja la distinción implícita en el orden de validación, que es exactamente lo que el issue nombra como defecto. La propiedad es «el núcleo no cae por una superficie opcional», y se cumple haciéndola legible: `disabledReason` viaja al log de arranque, a `/contrato` y a la ruta de Miranda (503 con causa, solo para el grupo).
+- **#265 en el mismo PR** porque es la misma función (`mirandaConfig`) y la misma regla: un `MIRANDA_API_BASE_URL` inválido también **degrada**, no aborta.
+- **Lo que NO se mide antes de publicar**: el arranque de la imagen real con el flag encendido y sin key (lo corrobora el despliegue de la instancia, y así se declara en el CHANGELOG), y ningún gateway real (Foundry llega en 1-2 semanas).
+- **Costo de revertir**: revertir el PR.
+
+## D-61 · 2026-09-02 — #186 se cierra: sus dos criterios abiertos están cumplidos u obsoletos
+
+- **Bifurcación**: dejarlo abierto hasta «barrer `PENDINGS.md`» o cerrarlo.
+- **Decidido**: **cerrar.** La medición de #164 en Fabric se corrió el 2026-08-19 (P7/P8, #236). `PENDINGS.md` ya no existe (D-57, pase a finish-v2): el criterio protegía que ninguna medición quedara trabada por falta de terreno, y eso está cumplido — el terreno contestó las cinco preguntas que solo Fabric contesta.
+- **Costo de revertir**: reabrir.
+
+## D-60 · 2026-09-02 — #232 se cierra sin perseguir la propiedad completa (el intent NO entra en `acquire()`)
+
+- **Bifurcación**: la que el custodio dejó escrita el 2026-08-26 para César: meter el intent dentro de `acquire()`, o decidir que no.
+- **Decidido**: **no.** El intent es un archivo del volumen de gobierno que escribe una herramienta externa; darle autoridad sobre quién controla mueve la frontera de confianza fuera del plano de control. Lo entregado (#257, V-14: 0 fuera de predicado con control CN-2) cubre la promoción **orquestada**, que es la única forma en que hay un sucesor que nombrar.
+- **Condición de reapertura, escrita en el issue**: un caso medido en que un release no orquestado produzca un ganador equivocado con impacto observable.
+- **Costo de revertir**: reabrir; el código no cambia.
+
+## D-59 · 2026-09-02 — #250: salida (A), aviso en la nav conservando el 200
+
+- **Bifurcación**: (A) aviso en la nav con 200 · (B) 404 · (C) dejar como está. El custodio la había dejado a César por ser elemento visible nuevo y diseño abierto; con el mandato de custodia, la decide esta casa.
+- **Decidido**: **(A).** No rompe marcadores tras renombrar vistas (caso real) y le dice a la persona lo único que hoy no sabe: que su enlace estaba roto. Cuesta un `<p>` y un campo; la pestaña activa ya se marca. (B) convierte un typo en pantalla de error; (C) deja el daño intacto.
+- **Elemento visible nuevo**: se verifica con captura antes del merge (Norma 8).
+- **Costo de revertir**: revertir el PR.
 
 ## D-58 · 2026-08-26 — Las facetas client-side de #209 NO se implementan: se MIDE y nace issue
 
