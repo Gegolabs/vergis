@@ -102,6 +102,24 @@ export interface ControlContract {
   }[]
 }
 
+/**
+ * Estado de MIRANDA tal como el nodo lo vive (issue #266). Existe porque una superficie opcional ahora
+ * puede quedar APAGADA sin tumbar el proceso: si el contrato no lo dijera, la degradación sería
+ * silenciosa — exactamente lo que #266 no quiere. Derivado del estado vivo, no declarado.
+ */
+export interface MirandaContract {
+  /** ¿Está sirviendo? */
+  enabled: boolean
+  /** ¿La instancia la pidió (`MIRANDA_ENABLED`)? `false` + `enabled:false` = nadie la pidió: sano. */
+  requested: boolean
+  /** Por qué está apagada PESE a haberla pedido. Ausente si nadie la pidió o si está viva. */
+  disabledReason?: string
+  /** Modelo configurado. */
+  model?: string
+  /** Destino de la API (host). No es secreto; la key jamás aparece acá ni en ningún log. */
+  baseUrl?: string
+}
+
 export interface ContractSnapshot {
   /** Versión del producto (`VERGIS_VERSION`, build-time). `null` = ausencia honesta. */
   version: string | null
@@ -124,6 +142,8 @@ export interface ContractSnapshot {
   caveats: string[]
   /** Plano de control del nodo (#210 · I6). `null`/ausente = el proceso no cableó uno (tests, utilitarios). */
   control?: ControlContract | null
+  /** Miranda (#266 · #265). `null`/ausente = el proceso no cableó el proveedor (tests, utilitarios). */
+  miranda?: MirandaContract | null
 }
 
 export interface ContractRegistry {
@@ -187,6 +207,12 @@ export function createContractRegistry(opts: {
    * driftear. Ausente ⇒ `control: null` — un proceso sin plano de control cableado lo dice, no lo finge.
    */
   control?: () => ControlContract
+  /**
+   * Proveedor del bloque `miranda` (#266). CLOSURE sobre el estado vivo del proceso —igual que
+   * `control`—, para que «apagada por configuración» no pueda driftear de lo que el nodo realmente
+   * montó. Ausente ⇒ `miranda: null`: un proceso que no la cableó lo dice, no lo finge.
+   */
+  miranda?: () => MirandaContract
 }): ContractRegistry {
   const envSource = opts.envSource ?? process.env
   const clock = opts.now ?? ((): Date => new Date())
@@ -205,6 +231,17 @@ export function createContractRegistry(opts: {
       return opts.control()
     } catch (e) {
       console.error(`[contrato] no se pudo derivar el plano de control: ${errMsg(e)}`)
+      return null
+    }
+  }
+
+  /** Igual que `control`: observabilidad, jamás un 500 en `/contrato`. */
+  const miranda = (): MirandaContract | null => {
+    if (!opts.miranda) return null
+    try {
+      return opts.miranda()
+    } catch (e) {
+      console.error(`[contrato] no se pudo derivar el estado de Miranda: ${errMsg(e)}`)
       return null
     }
   }
@@ -298,6 +335,7 @@ export function createContractRegistry(opts: {
         env: { bootOnly, reloadableContent, unknown },
         caveats: [...caveats],
         control: control(),
+        miranda: miranda(),
       }
     },
   }

@@ -189,14 +189,18 @@ describe('config · configEnvKeys (derivado con Proxy, no declarado)', () => {
   })
 
   it('una config INVÁLIDA no rompe la enumeración: devuelve lo registrado HASTA el fallo', () => {
-    // MIRANDA_ENABLED sin API key aborta `configFromEnv`: se conservan las claves ya accedidas y se
-    // pierden las posteriores — el contrato prefiere una lista parcial a no responder.
+    // Un engine inválido aborta `configFromEnv` en su primera línea: se conservan las claves ya
+    // accedidas y se pierden las posteriores — el contrato prefiere una lista parcial a no responder.
+    expect(configEnvKeys({ VERGIS_ENGINE: 'no-existe' })).toEqual(['VERGIS_ENGINE'])
+  })
+
+  it('Miranda degradada (#266) ya NO corta la enumeración: la lista sale COMPLETA', () => {
+    // Antes `MIRANDA_ENABLED` sin key lanzaba y la lista quedaba trunca en `ANTHROPIC_API_KEY`. Ahora
+    // degrada, así que `configFromEnv` termina y el contrato enumera todo lo que el proceso consume.
     const keys = configEnvKeys({ MIRANDA_ENABLED: '1' })
     expect(keys).toContain('MIRANDA_ENABLED')
     expect(keys).toContain('ANTHROPIC_API_KEY')
-    expect(keys).not.toContain('VERGIS_POLICIES')
-    // Y un engine inválido corta antes todavía.
-    expect(configEnvKeys({ VERGIS_ENGINE: 'no-existe' })).toEqual(['VERGIS_ENGINE'])
+    expect(keys).toContain('VERGIS_POLICIES')
   })
 })
 
