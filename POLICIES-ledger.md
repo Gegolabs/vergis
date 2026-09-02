@@ -48,3 +48,4 @@ en background con su propio vigilante.
 
 • *Generado con Wingworking*
 | 2026-09-02 | Ventana de Fabric previa al corte de 0.23.0 — la cadencia de D-57: `fab:proof` ANTES del tag. Sin fallos, 26 hallazgos, 0 sin medir | Capacidad F2 `vergisfablab` | 2 min 31 s encendida (22:46:02→22:48:33 UTC), a US$0,36/h | **US$0,015** | Simón Alero |
+| 2026-09-02 | Ventana de Fabric previa al corte de 0.23.1 (D-57): `fab:proof` sin fallos, 26 hallazgos, 0 sin medir | Capacidad F2 `vergisfablab` | 2 min 25 s encendida (23:11:15→23:13:40 UTC), a US$0,36/h | **US$0,015** | Simón Alero |
