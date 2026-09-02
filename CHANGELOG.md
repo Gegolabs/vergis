@@ -66,6 +66,27 @@ abiertos sin señal de CI. El bump es quirúrgico (solo la entrada de `fast-uri`
 fijado con `overrides` en `package.json`, para que ninguna resolución futura lo baje sin decirlo.
 No se tocó ninguna otra dependencia: `npm audit fix` además dedupaba entradas de esbuild, y un
 parche de seguridad no lleva pasajeros.
+### El rótulo del punto apuntado se realza, y el gráfico gana su segundo gesto estándar (#263)
+
+**Cambia lo que ve quien mira un gráfico en pantalla; en papel no cambia nada.** En una línea con
+muchos puntos el rótulo del valor solo se dibuja cada N puntos (anti-colisión de #94), así que la
+mayoría de los puntos no dice su valor por ningún medio salvo el tooltip nativo de #208, que hay que
+ir a buscar uno por uno. Ahora **todos** los rótulos existen en el SVG —los que el stride no muestra
+viajan con `opacity="0"`— y el que está bajo el cursor se revela y se agranda, junto con el de su
+punto. Aplica igual a líneas y a barras: es **una decisión de plataforma, no configurable por spec**.
+
+**Cómo funciona, y por qué hay JS:** el `<path>` de la marca y el `<text>` de su rótulo comparten la
+llave `aria-label` (el canal `description` de vega-lite la escribe en ambos), pero viven en `<g>`
+distintos — capas separadas del layer. **Medido sobre el SVG que emite Vega**: ningún selector CSS
+cruza de un grupo al hijo de otro, `:has()` incluido. El emparejamiento lo hace un listener delegado
+de ~15 líneas sobre el SVG ya horneado: no hay motor de gráficos en el cliente, no hay runtime de
+Vega, no viaja dato y no hay estado que sincronizar. En `print` no viaja nada (#65 · D4), y un
+documento sin gráficos no paga ni una línea de CSS.
+
+**Lo que NO se midió, dicho como tal:** no se probó con lector de pantalla que los `<text>` con
+`opacity="0"` no se anuncien de más. Si molestara, marcarlos `aria-hidden` es el siguiente paso.
+También queda declarado que en táctil no hay realce — no hay hover que capturar, igual que el
+tooltip nativo.
 
 ### El diagnóstico del smoke deja de leer la fase de un cuerpo que no fue 200 (`phase_reportada()`)
 
