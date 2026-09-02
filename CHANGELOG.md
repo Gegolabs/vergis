@@ -49,6 +49,13 @@ v0.21.0:CHANGELOG.md`, con `--changelog`—: lo habría atrapado.
 es invisible, y por eso su salida termina diciéndolo. Los commits sin ninguna referencia se listan
 aparte, para mirarlos a mano.
 
+**El corte exige además `npm run capacidades:cotejo` en verde**, y que cada `###` de capacidad nueva
+bajo «Sin publicar» tenga su fila con `CAP-NN` en [`docs/capacidades.md`](docs/capacidades.md). El
+catálogo es lo que un frente externo lee para saber si algo ya existe; una capacidad publicada sin
+entrar ahí lo vuelve un índice que miente con la autoridad del repo. **No hay gate de CI que lo
+exija** —un «este PR toca el CHANGELOG, ¿toca el catálogo?» es heurístico y frágil—: el cotejo verifica
+la numeración y que lo declarado en máquina esté citado, y esta línea cubre el resto.
+
 **Y el corte es también la cadencia del arnés de Fabric.** `npm run fab:proof` no puede vivir en un CI
 —exige capacidad prendida, credenciales y plata—, así que su cadencia declarada es ésta: se corre
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
@@ -70,6 +77,34 @@ en el evento** — la salida elegida (D-59) declara el fallback, no lo suprime.
 
 **Lo que NO se midió:** el aviso no se probó con un lector de pantalla real; lo verificado es el
 marcado (`role="status"`) y su presencia en pantalla y en `@media print`.
+### El catálogo de capacidades: `CAP-NN` estables para que una petición se conteste con una cita (#264)
+
+Nace [`docs/capacidades.md`](docs/capacidades.md), un **índice de superficie** del Producto: qué
+existe, cómo se llama, desde qué versión y dónde se explica, con identificadores `CAP-NN` **estables
+que jamás se reusan** (una capacidad retirada conserva su número con estado `retirada`). No es un
+manual de uso ni el roadmap: lo que no está construido no entra, salvo lo que el propio documento de
+diseño declara como diseñado-y-no-construido, marcado como tal.
+
+**Qué defecto cierra.** Desde afuera del repo no hay lista que leer, así que una petición que la
+plataforma ya satisface se abre igual como issue. El caso que lo motivó: dos issues del mismo día
+pidiendo capacidades que existían hace meses. Ahora se contestan con una URL y un ancla.
+
+**Cómo se hizo, dicho con precisión.** El catálogo se **barrió a mano** sobre `CHANGELOG.md` entero,
+`docs/`, el schema y el código. **Lo derivado mecánicamente son solo los tipos de pieza, los tokens de
+formato, los tokens de `sort`, las claves de `interactions`, `controls[]` y `filters[]`, y las
+clasificaciones — el resto puede tener omisiones.**
+
+**Qué lo sostiene.** `npm run capacidades:cotejo` (y `tests/capacidades-catalogo.test.ts`, que corre en
+la suite) verifica dos cosas y solo dos: la numeración —formato, duplicados, huecos no declarados
+como retiro— y que **cada** elemento de esos conjuntos cerrados esté citado en alguna fila. Sus
+derivaciones están **ancladas** a construcciones concretas del código: si una se mueve, el cotejo
+falla nombrando el ancla perdida en vez de derivar una lista vacía y aprobar por omisión. Su control
+negativo son fixtures que deben reprobar (ID duplicado, hueco sin retiro, tipo del schema ausente,
+catálogo vacío).
+
+**Hallazgo del barrido, de paso:** la tabla §9 de `docs/data-maestra-y-publicacion.md` declara el
+mecanismo de publicación y el publish-on-write como «por construir», y el código los tiene
+(`master-data-publish.ts`). El catálogo lo dice donde corresponde; corregir ese doc va aparte.
 
 ### `fast-uri` sube a 3.1.7: el advisory que tenía el CI en rojo
 
