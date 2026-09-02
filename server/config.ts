@@ -95,13 +95,30 @@ export interface PdfConfig {
 
 /**
  * Config de Miranda. Con `enabled=false` (default) NADA se activa: ni rutas, ni nav, ni la dependencia
- * de la API. Con `enabled=true` la API key es OBLIGATORIA — su ausencia aborta el arranque con un
- * error claro (no un fallo runtime sorpresa al primer mensaje).
+ * de la API.
+ *
+ * Miranda es una superficie OPCIONAL, así que su configuración incompleta la deshabilita a ella y
+ * JAMÁS aborta el arranque del nodo (issue #266): con el flag encendido y la key ausente/vacía —o con
+ * un `MIRANDA_API_BASE_URL` que no es una URL absoluta— el resultado es `enabled=false` +
+ * `disabledReason`, que el log de arranque, `/contrato` y la propia ruta `/miranda` (503) declaran.
+ * La distinción fatal vs degradable está declarada en `FATAL_ENVS`/`DEGRADABLE_ENVS`.
  */
 export interface MirandaConfig {
   enabled: boolean
   model: string
   apiKey: string
+  /**
+   * Por qué la capacidad quedó apagada PESE a que la instancia la pidió (`MIRANDA_ENABLED` encendido).
+   * `undefined` en los dos casos sanos: flag apagado (nadie la pidió) o flag encendido y bien
+   * configurada. Presente ⇒ hubo intención y falta configuración: es lo que se muestra al operador.
+   */
+  disabledReason?: string
+  /**
+   * Destino de la API de Anthropic (`MIRANDA_API_BASE_URL`, issue #265) — un gateway compatible
+   * (Foundry, un proxy corporativo, un endpoint regional). `undefined` ⇒ el default del transporte
+   * (`https://api.anthropic.com`). No es secreto: se loguea y se expone en `/contrato`.
+   */
+  baseUrl?: string
   /** Directorio con el DSL (`dsl.md`) y la rúbrica QC① (`qc1/…`) que se montan al system prompt. */
   rubricDir: string | undefined
   /** Turnos internos (tool-use) máximos por mensaje del usuario. */
@@ -272,6 +289,92 @@ function parseGateClaims(raw: string): Record<string, string> {
 }
 
 /**
+ * Normaliza el destino de una API: URL absoluta `http(s)` sin `/` final. `undefined` = inválida.
+ * Deliberadamente estricta — un valor relativo o con otro esquema no se «arregla», se rechaza, y el
+ * rechazo es DEGRADABLE (apaga la superficie, no el nodo).
+ */
+function normalizeBaseUrl(raw: string): string | undefined {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return undefined
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined
+  return u.toString().replace(/\/$/, '')
+}
+
+/** Una clase de env, con dónde se valida y qué pasa si está mal. */
+export interface EnvClass {
+  envs: string[]
+  /** Qué se pierde si falta o está mal. */
+  why: string
+  /** Dónde se hace efectiva la validación. */
+  where: string
+}
+
+/**
+ * ═══ FATAL vs DEGRADABLE — la distinción, EXPLÍCITA (issue #266) ══════════════════════════════════
+ *
+ * Antes era implícita en el ORDEN en que se validaban las cosas, y por eso una superficie opcional mal
+ * configurada (Miranda sin key) abortaba el proceso ANTES que todo lo demás: `restart: unless-stopped`
+ * lo dejaba en crashloop y **todos los PIs de la instancia dejaban de servir**. Asimetría de radio:
+ * falla lo que casi nadie usa, cae todo lo que todos usan.
+ *
+ * La regla, y la única pregunta que decide de qué lado cae un env nuevo:
+ *
+ *   **FATAL** — sin esto NO HAY NADA QUE SERVIR, o servir sería incorrecto. Lanza: el nodo no arranca.
+ *   **DEGRADABLE** — esto apaga UNA superficie opcional. Jamás lanza: la superficie queda apagada con
+ *   su razón, y lo dicen el log de arranque, `/contrato` y la propia ruta (503).
+ *
+ * Degradar NO es callar: una superficie apagada por configuración lo declara por tres canales. Y lo
+ * fatal sigue fatal — degradar de más escondería un nodo que sirve mal.
+ */
+export const FATAL_ENVS: EnvClass[] = [
+  {
+    envs: ['VERGIS_SPECS_DIR', 'VERGIS_SPECS', 'VERGIS_SPEC'],
+    why: 'Sin specs no hay ningún PI que servir: el nodo no tendría razón de estar arriba.',
+    where: 'serve-rls.ts (arranque), tras `configFromEnv`',
+  },
+  {
+    envs: ['VERGIS_ENGINE'],
+    why: 'Un motor desconocido no puede ejecutar ninguna consulta: todo PI fallaría en runtime.',
+    where: 'configFromEnv',
+  },
+  {
+    envs: ['PORT', 'VERGIS_REFRESH_MS', 'VERGIS_DATA_CACHE_TTL_MS', 'VERGIS_INTERACTIVE_MAX_ROWS', 'VERGIS_PDF_TIMEOUT_MS'],
+    why: 'Un numérico inválido se propaga como NaN al núcleo (listen(NaN), topes de materialización).',
+    where: 'configFromEnv (`num`/`numOpt`)',
+  },
+  {
+    envs: ['MIRANDA_PREVIEW_IDENTITIES'],
+    why:
+      'Fatal POR DECISIÓN PREVIA (#110·1): un roster de identidades ilegible no debe degradar a una ' +
+      'feature de impersonación a medias. Es la única pieza de Miranda que sigue abortando el arranque, ' +
+      'y #266 no la movió a propósito — revertirla sería derogar esa decisión sin discutirla.',
+    where: 'serve-rls.ts (arranque), `parsePreviewIdentities`',
+  },
+]
+
+export const DEGRADABLE_ENVS: EnvClass[] = [
+  {
+    envs: ['MIRANDA_ENABLED', 'ANTHROPIC_API_KEY', 'MIRANDA_API_BASE_URL'],
+    why: 'Miranda es opcional y de alcance restringido (un grupo). Mal configurada se apaga a sí misma con su razón; los PIs siguen sirviendo.',
+    where: 'mirandaConfig → `MirandaConfig.disabledReason`',
+  },
+  {
+    envs: ['VERGIS_PDF_SERVICE_URL'],
+    why: 'Sin sidecar de PDF no hay botón «Descargar PDF»; el resto del PI sirve igual (fail-closed por valor vacío).',
+    where: 'configFromEnv (`pdf.serviceUrl` vacío = feature inexistente)',
+  },
+  {
+    envs: ['VERGIS_DEV_IDENTITY'],
+    why: 'Identidad de desarrollo: inválida o con gate real presente se ignora, jamás aborta (fail-safe).',
+    where: 'decideDevIdentity',
+  },
+]
+
+/**
  * Construye la config desde un env (default `process.env`). Puro y validado.
  * `randomSecret` inyecta el generador del secreto efímero (por defecto crypto) — inyectable en tests.
  */
@@ -354,15 +457,35 @@ export function configEnvKeys(env: Env = process.env): string[] {
   return [...seen].sort()
 }
 
-/** Parsea y VALIDA la config de Miranda. Con el flag encendido, la key es obligatoria (aborta si falta). */
+/**
+ * Parsea y VALIDA la config de Miranda — **degradable, nunca fatal** (issue #266).
+ *
+ * Con el flag encendido y la configuración incompleta NO lanza: devuelve la capacidad apagada con la
+ * razón puesta (`disabledReason`). El núcleo arranca y sirve los PIs; el único afectado es quien entra
+ * a `/miranda`, que recibe un 503 con esa misma razón. El texto de la razón conserva el del error que
+ * antes abortaba el proceso — es accionable y ya estaba probado en terreno.
+ */
 function mirandaConfig(env: Env): MirandaConfig {
-  const enabled = TRUTHY.has((env['MIRANDA_ENABLED'] ?? '').toLowerCase())
-  const apiKey = env['ANTHROPIC_API_KEY'] ?? ''
-  if (enabled && !apiKey) {
-    throw new Error('MIRANDA_ENABLED está encendido pero falta ANTHROPIC_API_KEY. Define la key (env/KV) o apaga MIRANDA_ENABLED.')
+  const wanted = TRUTHY.has((env['MIRANDA_ENABLED'] ?? '').toLowerCase())
+  const apiKey = (env['ANTHROPIC_API_KEY'] ?? '').trim()
+  const rawBase = (env['MIRANDA_API_BASE_URL'] ?? '').trim()
+  const baseUrl = rawBase ? normalizeBaseUrl(rawBase) : undefined
+
+  // Razones de degradación, en orden de descubrimiento. La primera manda (es la que el operador arregla
+  // primero); las demás aparecerán en el arranque siguiente si siguen ahí.
+  let disabledReason: string | undefined
+  if (wanted && !apiKey) {
+    disabledReason =
+      'MIRANDA_ENABLED está encendido pero falta ANTHROPIC_API_KEY. Define la key (env/KV) o apaga MIRANDA_ENABLED.'
+  } else if (wanted && rawBase && !baseUrl) {
+    disabledReason = `MIRANDA_API_BASE_URL no es una URL absoluta http(s): '${rawBase}'. Corrígela o quítala para hablar con https://api.anthropic.com.`
   }
+  const enabled = wanted && !disabledReason
+
   return {
     enabled,
+    ...(disabledReason ? { disabledReason } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     model: env['MIRANDA_MODEL'] ?? 'claude-sonnet-5',
     apiKey,
     rubricDir: env['MIRANDA_RUBRIC_DIR'],

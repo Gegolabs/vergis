@@ -70,8 +70,17 @@ import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, DEFAULT_GATE_MAPPING, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
 import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
-import { createMiranda, mirandaValidateCaps, previewIdentityFor, resolvePolicyFor, type MirandaServerDeps } from './miranda'
-import { fetchAnthropicTransport, buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
+import {
+  createMiranda,
+  createMirandaUnavailable,
+  mirandaTransportFrom,
+  mirandaDestination,
+  mirandaValidateCaps,
+  previewIdentityFor,
+  resolvePolicyFor,
+  type MirandaServerDeps,
+} from './miranda'
+import { buildSystemPrompt, type CatalogEntry, type SpecRef } from '@vergis/miranda'
 import {
   bootstrapClickHouse,
   createIngestClickHouse,
@@ -206,6 +215,15 @@ const contract = createContractRegistry({
   // cada store—, no una copia. `controlContract` está declarada abajo (hoisting) y solo se invoca en el
   // GET, cuando el plano ya existe.
   control: () => controlContract(),
+  // Bloque `miranda` (#266 · #265): una superficie opcional ahora puede quedar APAGADA sin tumbar el
+  // nodo — si el contrato no lo dijera, la degradación sería silenciosa. Closure sobre la config viva.
+  miranda: () => ({
+    enabled: config.miranda.enabled,
+    requested: config.miranda.enabled || config.miranda.disabledReason != null,
+    ...(config.miranda.disabledReason ? { disabledReason: config.miranda.disabledReason } : {}),
+    ...(config.miranda.enabled ? { model: config.miranda.model } : {}),
+    ...(config.miranda.enabled ? { baseUrl: mirandaDestination(config.miranda) } : {}),
+  }),
 })
 contract.envKeys(configEnvKeys())
 // Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
@@ -2055,7 +2073,8 @@ if (config.miranda.enabled) {
 
     const mirandaDeps: MirandaServerDeps = {
       gov: govForMiranda,
-      transport: fetchAnthropicTransport({ apiKey: config.miranda.apiKey }),
+      // #265: el destino sale de la config (`MIRANDA_API_BASE_URL`); sin ella, el default del transporte.
+      transport: mirandaTransportFrom(config.miranda),
       model: config.miranda.model,
       systemPrompt,
       rubric,
@@ -2130,11 +2149,31 @@ if (config.miranda.enabled) {
         : undefined,
     }
     miranda = createMiranda(mirandaDeps)
-    console.log(`[vergis-rls] Miranda ACTIVA · modelo=${config.miranda.model} · catálogo=${catalog.length} objeto(s) · scope=${config.miranda.scopeGroup}`)
+    console.log(
+      `[vergis-rls] Miranda ACTIVA · modelo=${config.miranda.model} · destino=${mirandaDestination(config.miranda)} · catálogo=${catalog.length} objeto(s) · scope=${config.miranda.scopeGroup}`,
+    )
   } catch (e) {
     console.error(`[vergis-rls] Miranda deshabilitada por error de arranque: ${e instanceof Error ? e.message : String(e)}`)
     throw e // el flag está ON: un fallo de arranque no debe degradar en silencio.
   }
+} else if (config.miranda.disabledReason) {
+  // ── MIRANDA DEGRADADA (issue #266) ───────────────────────────────────────────────────────────────
+  // La instancia la PIDIÓ y la configuración no alcanza. Antes esto abortaba el proceso desde
+  // `configFromEnv` y, con `restart: unless-stopped`, dejaba el nodo en crashloop: caían TODOS los PIs
+  // por una superficie que usa un grupo. Ahora la superficie se apaga a sí misma y lo dice por tres
+  // canales: este log, `/contrato` y un 503 en su propia ruta.
+  console.warn(`[miranda] deshabilitada: ${config.miranda.disabledReason}`)
+  contract.caveat(`Miranda pedida (MIRANDA_ENABLED) y APAGADA por configuración: ${config.miranda.disabledReason}`)
+  const govForGate = governance
+  miranda = createMirandaUnavailable({
+    reason: config.miranda.disabledReason,
+    identityOf: (h) => ({ user: identityFor(h as GateHeaders).user }),
+    // Mismo gate de grupo que la Miranda viva. Sin store de gobierno nadie tiene scope: fail-closed —
+    // la razón es superficie de operación y no se filtra a quien no le corresponde.
+    hasScope: async (email) =>
+      govForGate ? (await govForGate.isAdmin(email)) || (await govForGate.isMember(config.miranda.scopeGroup, email)) : false,
+    brandTitle: INDEX_TITLE,
+  })
 }
 
 // ── Mapa identidad→claims: MIGRACIÓN archivo → store, y el store como fuente (issue #159, hito 2) ──
