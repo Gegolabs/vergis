@@ -101,7 +101,11 @@ export const renderHtmlPiece: Capability = {
     if (pages) css += PAGES_NAV_CSS
     if (contextStrip) css += CONTEXT_BAR_CSS
     if (chips) css += FILTER_CHIPS_CSS
-    if (trayFilters) css += TRAY_FILTERS_CSS
+    // #255 · las facetas client-side usan las MISMAS clases del patrón de #209 ⇒ su hoja y su
+    // buscador se inyectan también cuando la bandeja solo trae facetas (antes se gateaban por
+    // `trayFilters`, así que un dashboard sin filtros server-side emitía las marcas sin su CSS).
+    const facetasClientSide = !print && !!interactive && (interactive.filters?.length ?? 0) > 0
+    if (trayFilters || facetasClientSide) css += TRAY_FILTERS_CSS
     if (descargarSection) css += TRAY_PDF_CSS
     if (signals.magnitude) css += MAGNITUDE_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
@@ -112,7 +116,7 @@ export const renderHtmlPiece: Capability = {
     // #209 · El buscador de los filtros de bandeja. Es local por construcción (el catálogo ya viaja
     // completo en el HTML) y no depende del runtime de tabla: un dashboard sin tablas también tiene
     // filtros. En papel no va: ahí no hay quién escriba.
-    if (trayFilters && !print) tail += `<script>${TRAY_FILTER_SEARCH_SOURCE}</script>`
+    if ((trayFilters || facetasClientSide) && !print) tail += `<script>${TRAY_FILTER_SEARCH_SOURCE}</script>`
     // La capa de NOTAS va DESPUÉS del runtime de tabla: decora un tbody que ya existe y se engancha
     // a sus re-renders. Su contexto viaja como JSON (endpoints + CSRF + recorte), nunca interpolado
     // en el script — el recorte lo escribe el usuario y no puede acabar como código.
@@ -316,6 +320,7 @@ const TRAY_FILTERS_CSS = `
 .vflt-allbox:checked ~ .faceta-options .vflt-extra{display:block}
 .vflt-allbox:checked ~ .vflt-showall{display:none}
 .faceta-options .vflt-opt.vflt-hit{display:block}
+.faceta-options .vflt-opt.vflt-keep{display:block}
 .faceta-options .vflt-opt.vflt-miss{display:none}
 .vflt-nohit{display:none;font-size:11px;color:var(--fg-dim,#64748b);padding:2px 0}
 .faceta.vflt-empty .vflt-nohit{display:block}
@@ -699,19 +704,50 @@ function renderTrayShell(
   )
 }
 
-/** Sección de la bandeja específica del dashboard: las facetas (catálogo-selector) por filtro. */
+/**
+ * Sección de la bandeja específica del dashboard: las facetas (catálogo-selector) por filtro.
+ *
+ * #255 · Recibe el MISMO tope + buscador que #209 le dio a los filtros server-side. La asimetría
+ * previa no era una decisión: esta superficie comparte el `.faceta-options` de 220px con scroll
+ * interno, así que un catálogo de 47 opciones se recorría a ciegas exactamente igual — medido con
+ * las dos superficies renderizadas por el mismo `renderHtmlPiece` y el server-side de control.
+ *
+ * La diferencia con el server-side, y por qué el «no plegar lo seleccionado» se resuelve en otro
+ * lado: allá la selección viaja en la URL y el HTML nace sabiéndola; acá el estado vive en el DOM y
+ * cambia sin re-render, así que la marca la pone el runtime (`vflt-keep`, `interactive-script`).
+ */
 function renderDashboardFacets(it: Interactive): string {
   return it.filters
     .map((f) => {
       const rows = it.datasets[f.dataset] ?? []
       const values = [...new Set(rows.map((r) => String(r[f.field] ?? '')))].sort((a, b) => a.localeCompare(b, 'es'))
+      const grande = values.length > FILTER_VISIBLE_MAX
+      const label = f.label ?? f.field
       const checks = values
-        .map((v) => `<label><input type="checkbox" data-field="${escapeHtml(f.field)}" value="${escapeHtml(v)}"> ${escapeHtml(v)}</label>`)
+        .map((v, i) => {
+          const extra = grande && i >= FILTER_VISIBLE_MAX
+          return (
+            `<label class="vflt-opt${extra ? ' vflt-extra' : ''}" data-v="${escapeHtml(v.toLowerCase())}">` +
+            `<input type="checkbox" data-field="${escapeHtml(f.field)}" value="${escapeHtml(v)}"> ${escapeHtml(v)}</label>`
+          )
+        })
         .join('')
+      // Mismo plegado CSS-only del server-side: checkbox + hermano general, de modo que sin JS el
+      // «Ver las N restantes» sigue funcionando y ninguna opción queda inalcanzable.
+      const restantes = values.length - FILTER_VISIBLE_MAX
+      const buscador = grande
+        ? `<input type="search" class="vflt-search" placeholder="Buscar entre ${values.length}…"` +
+          ` aria-label="Buscar en ${escapeHtml(label)}" oninput="vfltSearch(this)">`
+        : ''
+      const verTodas = grande
+        ? `<input type="checkbox" class="vflt-allbox" id="vflt-all-fct-${escapeHtml(f.field)}">` +
+          `<label class="vflt-showall" for="vflt-all-fct-${escapeHtml(f.field)}">Ver las ${restantes} restantes</label>`
+        : ''
       return (
         `<div class="faceta" data-field="${escapeHtml(f.field)}">` +
-        `<div class="faceta-title">${escapeHtml(f.label ?? f.field)}<button type="button" class="faceta-clear" data-field="${escapeHtml(f.field)}">limpiar</button></div>` +
-        `<div class="faceta-options">${checks}</div>` +
+        `<div class="faceta-title">${escapeHtml(label)}<button type="button" class="faceta-clear" data-field="${escapeHtml(f.field)}">limpiar</button></div>` +
+        `${buscador}${verTodas}<div class="faceta-options">${checks}</div>` +
+        `<div class="vflt-nohit">Ninguna opción coincide.</div>` +
         `</div>`
       )
     })

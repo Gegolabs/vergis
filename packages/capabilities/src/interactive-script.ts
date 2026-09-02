@@ -89,6 +89,12 @@ export function renderInteractiveScript(it: Interactive): string {
     fltbar.hidden = !fltbar.querySelector('.vflt-chip');
   }
   function update(){
+    // #255 · una opción marcada no puede quedar plegada bajo «Ver las N restantes». En los filtros
+    // server-side la selección viaja en la URL y el HTML nace sabiéndola; acá vive en el DOM y
+    // cambia sin re-render, así que la marca la pone el runtime en cada recompute — y va acá porque
+    // update() es el único punto por el que pasan TODAS las mutaciones del estado: el change del
+    // checkbox, el ✕ del chip, «limpiar», y dashApply al restaurar una vista guardada.
+    boxes.forEach(function(b){ var o = b.closest ? b.closest('.vflt-opt') : null; if (o) o.classList.toggle('vflt-keep', b.checked); });
     if (countEl){ var n = totalSelected(); countEl.textContent = n ? String(n) : ''; }
     paintChips();
     document.querySelectorAll('[data-agg]').forEach(function(el){
