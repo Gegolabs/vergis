@@ -19,6 +19,52 @@
 Gracias por el interés. Vergis es software libre bajo **AGPL-3.0-or-later**, y las contribuciones
 son bienvenidas.
 
+## ¿Cómo empezar?
+
+Necesitas **Node 22 o superior** y **npm 10.9.9 o superior** — es lo que declara `engines` en
+`package.json`, lo que corre el CI (`.github/workflows/build.yml`) y la base de la imagen
+(`Dockerfile`: `node:22-slim`). Con eso:
+
+```bash
+git clone https://github.com/Gegolabs/vergis.git && cd vergis
+npm ci
+./bin/vergis run examples/hello.yaml   # escribe hello.html + vergis.log.jsonl
+npm test                               # suite hermética: no necesita red ni credenciales
+```
+
+Si `hello.html` existe y la suite está verde, tienes todo lo que hace falta para trabajar en el
+motor. Lo que **no** hace falta —y por eso no lo pedimos— es una cuenta de Fabric, un SQL endpoint ni
+una instancia desplegada: las credenciales y los specs de cada instancia entran **desde afuera**
+(`VERGIS_CONNECTIONS`, `VERGIS_SPECS`) y nunca viven en este repo. Los scripts `lab:*` y `fab:*` de
+`package.json` son arneses de los mantenedores contra motores reales; exigen capacidad prendida y
+plata, y ningún PR depende de ellos.
+
+## ¿Cómo se abre un buen issue?
+
+**Un issue, un problema.** No porque la burocracia lo pida, sino porque un issue que mezcla dos
+problemas no se puede cerrar hasta que se resuelvan los dos, y el segundo suele quedar enterrado en
+el hilo del primero. La separación es de *issues*, no de *PRs*: un mismo PR puede cerrar varios
+(`Fixes #A`, `Fixes #B` en su descripción) si la corrección es una sola.
+
+Lo que sí agrupa es el **tracking issue**, y se declara como tal en su primera línea — mira #113 o
+#110: «no es un requerimiento accionable», enumera frentes y dice que cada uno se abre como issue
+propio cuando se priorice. Un tracking issue no se cierra con un PR; se cierra cuando sus piezas ya
+tienen issue propio o dejaron de importar.
+
+Lo que vuelve **accionable** un reporte de defecto, en este orden:
+
+1. **Qué esperabas** y **qué pasó** — dos frases separadas; la brecha entre ellas es el defecto.
+2. **Cómo reproducirlo**: el spec (o el mínimo que lo dispara — `examples/` es un buen punto de
+   partida), el comando y la salida. Un log `vergis.log.jsonl` vale más que una descripción del log.
+3. **La versión**: el tag de la imagen o `git rev-parse HEAD` si corres desde el árbol.
+
+Sin el punto 2 el issue es una hipótesis; se agradece igual, pero nadie puede cerrarlo con un test
+que demuestre que estaba roto.
+
+**¿Dónde preguntar?** En un issue. Este repo no tiene Discussions habilitadas, y una pregunta cuya
+respuesta debió estar en la documentación es un defecto de la documentación — el issue es el lugar
+correcto para que quede registrada la respuesta.
+
 ## Antes de escribir código
 
 - **Abre un issue primero** si el cambio no es trivial. Vergis tiene decisiones de arquitectura
@@ -45,6 +91,55 @@ Dos expectativas que van más allá de «los tests pasan»:
 - **Las justificaciones se verifican o se declaran conjetura.** Si afirmas que algo pasa *porque*
   otra cosa, o lo mediste, o lo etiquetas como supuesto con tus palabras. Una justificación falsa
   no solo desinforma: decide por quien venga después.
+
+## Ramas, commits y el PR
+
+**Rama:** `tipo/NNN-descripcion-corta`, en kebab-case, con el número del issue cuando lo hay:
+`fix/229-instrucciones-viajan-con-la-imagen`, `feat/207-nombre-visible-editable`,
+`docs/changelog-253`. Es lo que se ve en `git branch -r`, y sirve para que el nombre de la rama ya
+diga a qué issue responde.
+
+**Mensaje de commit:** `tipo(ámbito): resultado`, en español, con el resultado escrito como **la
+frase que un lector del `git log` querría leer** — qué quedó distinto, no qué archivos se tocaron:
+
+```
+fix(164): el allow-all deja de tomar rehén a una columna de negocio (#223)
+store(sqlite): plano de escritura único — gate de esquema y fencing de escritura concurrente (#220)
+docs(changelog): #253 entra a «Sin publicar» — la pertenencia del proceso al dominio (#254)
+```
+
+Dos honestidades sobre esa convención, para que no te la creas más rígida de lo que es:
+
+- **El conjunto de tipos es abierto.** Conviven los clásicos (`feat`, `fix`, `docs`, `chore`,
+  `release`) con el área tocada usada como tipo (`store`, `control`, `schema`, `server`, `deploy`,
+  `lab`, `bench`). Ningún gate lo valida; lo que se exige es que el prefijo le diga al lector dónde
+  mirar.
+- **Lo que sí importa es la referencia `#NNN`.** El corte de una versión corre `npm run corte:cotejo`,
+  que contrasta los `#NNN` de los commits contra el `CHANGELOG.md`: un commit que no cita su issue
+  **es invisible para ese cotejo** y puede quedar publicado sin declararse. Por eso el número va en
+  el mensaje —en el ámbito, `fix(164)`, o al final, `(#223)`— y no solo en la rama.
+
+Cada commit lleva `-s` (ver «Certificado de origen»).
+
+**El PR** dice tres cosas que el diff no puede decir por sí mismo: qué issue cierra (`Fixes #N`),
+cómo demostraste que el test reprueba con el código viejo, y —si el cambio lo amerita— qué entrada
+del `CHANGELOG.md` trae. **Quién mergea:** un mantenedor del repo, nunca el autor del PR, aunque
+tenga permisos. No es desconfianza: es el único punto donde alguien verifica que tu pieza **compone**
+con las demás que están en vuelo, y el día que dos frentes mergearon lo suyo sin ese punto el corte
+de versión quedó bloqueado porque nadie podía declarar qué traía.
+
+## ¿Cuándo va una entrada en el `CHANGELOG.md`?
+
+Cuando el cambio **viaja al operador**: toca la imagen, el DSL, el contrato operativo (`/contrato`),
+la herramienta de despliegue (`deploy/rollout/`) o cualquier comportamiento que quien opera una
+instancia notaría al actualizar. La entrada va bajo **«Sin publicar»**, en el mismo PR que el
+cambio, y cuenta **qué cambia para él y por qué** — el CHANGELOG de este repo no es una lista de
+commits sino la explicación que el operador leería antes de decidir si adopta la versión. Un
+cambio que no le llega (un test, un banco de medición, un documento interno) **no lleva entrada**, y
+si la rama mezcla ambos, la sección lo dice para que el cotejo no lo reclame.
+
+Si la migración de un store rompe el rollback, la entrada es obligatoria y tiene frase fija — ver
+la sección siguiente.
 
 ## Migraciones del store embebido: la regla que hace posible el rollback
 
@@ -139,6 +234,16 @@ titularidad de tu copyright y todos tus derechos sobre ella.
 - Sin dependencias externas nuevas en `packages/botler` ni `packages/policy`: su presupuesto de
   dependencias es **cero** por contrato (ADR-001). En cualquier otro workspace, una dependencia
   nueva es una decisión que se argumenta en el PR, no un default.
+
+## Código de conducta
+
+Este proyecto adopta el [Contributor Covenant 2.1](https://www.contributor-covenant.org/es/version/2/1/code_of_conduct/)
+sin modificaciones. No lo reescribimos aquí porque un código de conducta redactado en casa es una
+promesa que nadie más ha probado; el Covenant ya tiene definido qué se espera, qué no se tolera y
+cómo se responde a un reporte. Lo único propio es el canal para reportar un incidente, y ese
+canal todavía no está definido <!-- TODO (mantenedor, antes de publicar): decidir el correo de
+contacto para reportes de conducta y copiar el texto íntegro del Covenant 2.1 —sin alterarlo— a
+CODE_OF_CONDUCT.md; ese archivo GitHub lo publica al instante, por eso no nace con el borrador -->.
 
 ## Seguridad
 
