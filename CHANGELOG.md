@@ -56,6 +56,17 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### `fast-uri` sube a 3.1.7: el advisory que tenía el CI en rojo
+
+**Cambia una dependencia transitiva que viaja en la imagen.** `fast-uri@3.1.5` (vía `ajv`) recibió
+cuatro advisories `high` (GHSA-5jgf-p345-68v8, -f65p-4m7j-42xc, -fph4-wmhf-6fwf, -jqff-g426-hqxp:
+confusión de host y SSRF por normalización de URIs) posteriores al último verde de `main`, y
+`npm audit --audit-level=high` dejó de pasar **antes** de typecheck y suite — con cuatro PRs
+abiertos sin señal de CI. El bump es quirúrgico (solo la entrada de `fast-uri` en el lock) y queda
+fijado con `overrides` en `package.json`, para que ninguna resolución futura lo baje sin decirlo.
+No se tocó ninguna otra dependencia: `npm audit fix` además dedupaba entradas de esbuild, y un
+parche de seguridad no lleva pasajeros.
+
 ### El diagnóstico del smoke deja de leer la fase de un cuerpo que no fue 200 (`phase_reportada()`)
 
 **Cambia `vergis-rollout`, que viaja al operador.** El `warn` del smoke leía la fase con `phase_of()`
