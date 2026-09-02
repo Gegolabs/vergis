@@ -63,6 +63,43 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+*(nada todavía)*
+
+## 0.23.0 — 2026-09-02
+
+### Qué exige esta versión
+
+> **Nada nuevo del motor ni de la base.** Quien satisfizo 0.21.0 no concede nada más; y de 0.22.0 sigue
+> valiendo lo del procedimiento de anillos para quien los use. Lo que 0.23.0 cambia es **conducta
+> observable del nodo y de Administración**, y conviene leerlo antes del `pull`:
+
+- **`MIRANDA_ENABLED=1` sin `ANTHROPIC_API_KEY` ya NO aborta el arranque** (#266). El nodo arranca con
+  Miranda apagada y lo declara — en el log (`[miranda] deshabilitada: …`), en `/contrato` (sección
+  `miranda` + caveat) y en la ruta de Miranda (503 con causa, solo para el grupo). Quien usara ese aborto
+  como aviso, ahora lo lee ahí. La distinción **fatal vs degradable** está escrita en `server/config.ts`
+  (`FATAL_ENVS` / `DEGRADABLE_ENVS`): sin specs o con `PORT` inválido sigue sin arrancar.
+- **Env nueva, opcional: `MIRANDA_API_BASE_URL`** (#265). URL absoluta `http(s)`; ausente ⇒
+  `api.anthropic.com`; inválida ⇒ Miranda apagada con razón, no aborto. El destino efectivo se lee en
+  el log de arranque y en `/contrato`.
+- **`/contrato` gana la sección `miranda`.** Un lector que compare snapshots entre boots verá ese delta
+  la primera vez; no es regresión.
+- **Administración de data maestra** (#262): la página de una entidad hace ahora un `SELECT COUNT(*)`
+  **por destino al abrirse** (lectura en línea, sin timeout propio: con un warehouse lento el GET lo
+  espera; si no se puede leer dice «no se pudo leer», jamás 0). Ruta nueva `POST /admin/e/<id>/republicar`,
+  con el mismo CSRF y autorización que las otras escrituras. **El primer despliegue sobre una réplica
+  aún inexistente cae por diseño en «no se pudo leer»** — es predicción, no medición.
+- **Contrato interno:** `onWrite` pasa de `Promise<void>` a `Promise<PublishTargetResult[]>`. Solo
+  afecta a quien embeba el server como librería.
+- **Cambia lo que ve el usuario en tres sitios, sin acción del operador:** el realce del rótulo bajo el
+  cursor en gráficos (#263), el aviso de vista desconocida bajo la nav (#250) y el tope + buscador en
+  las facetas client-side (#255). Ninguno se configura por spec: son convención de plataforma.
+- **Dependencias:** `fast-uri` 3.1.7 vía `overrides` (advisories `high`, sin cambio funcional).
+
+**Lo que esta versión NO midió antes de publicarse, dicho con esas palabras:** el arranque de la imagen
+real con `MIRANDA_ENABLED=1` y sin key; `Publisher.count()` contra un warehouse Fabric real; ningún
+gateway de API real (Foundry llega en 1-2 semanas); lector de pantalla sobre los rótulos ocultos y el
+`role="status"` del aviso. **La instancia A.R.B.O.L. corrobora los dos primeros hoy mismo al desplegar.**
+
 ### Un `?page=` que el informe no declara ahora se lo dice al usuario, no solo al operador (#250)
 
 **Cambia lo que ve la persona que llega por un enlace guardado.** Un `?page=<id>` que el spec no
@@ -231,7 +268,7 @@ documento sin gráficos no paga ni una línea de CSS.
 También queda declarado que en táctil no hay realce — no hay hover que capturar, igual que el
 tooltip nativo.
 
-### El diagnóstico del smoke deja de leer la fase de un cuerpo que no fue 200 (`phase_reportada()`)
+### El diagnóstico del smoke deja de leer la fase de un cuerpo que no fue 200 (`phase_reportada()`, #259)
 
 **Cambia `vergis-rollout`, que viaja al operador.** El `warn` del smoke leía la fase con `phase_of()`
 sin gate de status: ante un cuerpo de error que contenga el literal `"phase":"serving"` —la familia
