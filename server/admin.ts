@@ -57,6 +57,8 @@ import {
   type MasterDataEntity,
   type MasterDataRow,
   type MasterDataStore,
+  type PublishTargetResult,
+  type ReplicaCountResult,
   type RunRecord,
   type RunStatus,
   type IntakeUploadStore,
@@ -276,8 +278,21 @@ export interface AdminDeps {
   intakeBackfill?: (slot: IntakeSlot) => void
   /** Grupos gestionados por Mira (sección «Grupos»). Opcional. */
   groupStore?: GroupStore
-  /** Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional. */
-  onWrite?: (entity: MasterDataEntity) => Promise<void>
+  /**
+   * Publish-on-write: tras editar una entidad maestra, publica sus proyecciones `__replica`. Opcional.
+   *
+   * Devuelve UN resultado POR TARGET (#262): antes era `Promise<void>` y el único que se enteraba de
+   * un fallo era el audit log — el usuario veía el mismo redirect del éxito. El contrato obliga a que
+   * la implementación intente TODOS los targets: un `throw` acá significa que ninguno se pudo
+   * intentar, no que el primero falló.
+   */
+  onWrite?: (entity: MasterDataEntity) => Promise<PublishTargetResult[]>
+  /**
+   * Conteo de la réplica viva por target, para mostrar el desfase «autoría N · réplica M» sin salir
+   * del producto (#262 §3). Opcional: sin esta dep la pantalla NO muestra la línea de réplicas — un
+   * conteo que nadie puede leer no se fabrica. Cada entrada trae `count` o `error`, jamás ambos.
+   */
+  replicaStatus?: (entity: MasterDataEntity) => Promise<ReplicaCountResult[]>
   /** Mapa de ingestión derivado (frente B): cadencia requerida por proceso. Opcional. */
   ingestionMap?: () => Promise<IngestionMapRow[]>
   /** Registro de fuentes (vista Fuentes en Plataforma): fuentes + procesos + salidas (topología). Opcional. */
@@ -338,6 +353,27 @@ export interface AdminHandler {
 export function createAdmin(deps: AdminDeps): AdminHandler {
   const csrf = csrfFactory(deps.secret)
   const allDomains = deps.domains ?? []
+
+  /**
+   * Flash del último resultado de publicación, por (identidad, entidad). El resultado nace en un POST
+   * y hay que mostrarlo tras el redirect (POST-redirect-GET): el detalle por target no cabe en la
+   * query string sin volverse ilegible y manipulable, así que la URL lleva solo `?pub=ok|err` y el
+   * detalle viaja acá. Se CONSUME al leerse (un fallo se muestra una vez, no en cada recarga) y la
+   * clave incluye la identidad para que el resultado de un admin no aparezca en la pantalla de otro.
+   */
+  const pubFlash = new Map<string, PublishTargetResult[]>()
+  const flashKey = (email: string, entityId: string): string => `${email}\u0000${entityId}`
+  const setPubFlash = (email: string, entityId: string, r: PublishTargetResult[]): void => {
+    // Cota dura: es memoria de proceso alimentada por requests. Al llenarse se descarta lo más viejo.
+    if (pubFlash.size >= 200) pubFlash.delete(pubFlash.keys().next().value as string)
+    pubFlash.set(flashKey(email, entityId), r)
+  }
+  const takePubFlash = (email: string, entityId: string): PublishTargetResult[] | undefined => {
+    const k = flashKey(email, entityId)
+    const v = pubFlash.get(k)
+    pubFlash.delete(k)
+    return v
+  }
 
   const entityById = (id: string): MasterDataEntity | undefined => deps.entities.find((e) => e.id === id)
   const domainById = (id: string): DomainDecl | undefined => allDomains.find((d) => d.id === id)
@@ -682,7 +718,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
       }
 
       // ── Data maestra: /admin/e/<id>[/insert|update|delete] ───────────────
-      const m = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)(?:\/(insert|update|delete))?$/)
+      const m = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)(?:\/(insert|update|delete|republicar))?$/)
       if (m) {
         const entity = entityById(m[1])
         if (!entity) {
@@ -700,22 +736,45 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         const op = m[2]
         if (!op && req.method === 'GET') {
           const editPk = url.searchParams.get('edit') ?? undefined
-          send(res, 200, await entityPage(deps, nav, entity, token, editPk))
+          // El detalle de la publicación se consume acá: la URL solo dice `ok|err`, el flash trae el
+          // por-target. Sin `?pub` no se consume — así una recarga limpia no se come el aviso.
+          const pub = url.searchParams.get('pub') ? takePubFlash(email, entity.id) : undefined
+          send(res, 200, await entityPage(deps, nav, entity, token, editPk, pub))
           return true
         }
         if (op && req.method === 'POST') {
           const f = await readForm(req)
           requireCsrf(f, token)
-          await handleEntityWrite(deps, entity, op, f, email)
+          // `republicar` (#262 §4) NO escribe autoría: reintenta la publicación con lo ya guardado.
+          // Existe porque cuando la causa del fallo se corrige afuera (un `database_ref` renombrado),
+          // la única forma de reintentar era editar una fila cualquiera para provocar un `onWrite`.
+          const manual = op === 'republicar'
+          if (!manual) await handleEntityWrite(deps, entity, op, f, email)
           // publish-on-write: publica las proyecciones tras la edición (no-fatal: la autoría ya se
-          // escribió; si la publicación falla, el dato queda en Mira y se republica luego).
+          // escribió; si la publicación falla, el dato queda en Mira y se republica luego). Lo que
+          // NO es admisible es que el usuario no se entere: el resultado va al flash y a la pantalla.
           if (deps.onWrite) {
+            let results: PublishTargetResult[]
             try {
-              await deps.onWrite(entity)
-              deps.audit({ type: 'master-data-publish', entity: entity.id, by: email, ok: true })
+              results = await deps.onWrite(entity)
             } catch (e) {
-              deps.audit({ type: 'master-data-publish', entity: entity.id, by: email, ok: false, error: e instanceof Error ? e.message : String(e) })
+              // `onWrite` lanzó: ni un target se pudo intentar. Se reporta como un fallo global —
+              // fabricar una fila por target diría que se intentaron, y no consta.
+              results = [{ database_ref: '(publicación)', ok: false, error: errMsg(e) }]
             }
+            const fallidos = results.filter((r) => !r.ok)
+            deps.audit({
+              type: 'master-data-publish',
+              entity: entity.id,
+              by: email,
+              ok: fallidos.length === 0,
+              ...(manual ? { manual: true } : {}),
+              ...(fallidos.length ? { error: fallidos.map((r) => `${r.database_ref}: ${r.error ?? 'sin causa'}`).join(' · ') } : {}),
+              targets: results,
+            })
+            setPubFlash(email, entity.id, results)
+            redirect(res, `/admin/e/${entity.id}?pub=${fallidos.length ? 'err' : 'ok'}`)
+            return true
           }
           redirect(res, `/admin/e/${entity.id}`)
           return true
@@ -2416,7 +2475,53 @@ async function rolesPage(deps: AdminDeps, nav: Chrome, token: string, msg?: stri
   )
 }
 
-async function entityPage(deps: AdminDeps, nav: Chrome, entity: MasterDataEntity, token: string, editPk?: string): Promise<string> {
+/**
+ * Cómo se ve el resultado de una publicación (#262 §1). Una línea POR TARGET, con la causa del fallo
+ * escapada: el error viene de un motor externo y su texto es contenido, no marcado.
+ */
+function publishFeedback(results: PublishTargetResult[] | undefined): string {
+  if (!results?.length) return ''
+  const fallidos = results.filter((r) => !r.ok)
+  const lineas = results
+    .map((r) =>
+      r.ok
+        ? `<li><b>${escapeHtml(r.database_ref)}</b> — publicado ✓</li>`
+        : `<li><b>${escapeHtml(r.database_ref)}</b> — falló ✗: ${escapeHtml(r.error ?? 'sin causa reportada')}</li>`,
+    )
+    .join('')
+  const titulo = fallidos.length
+    ? `La publicación falló en ${fallidos.length} de ${results.length} destino${results.length === 1 ? '' : 's'}. La autoría quedó guardada.`
+    : `Publicado en ${results.length} destino${results.length === 1 ? '' : 's'}.`
+  return `<div class="msg ${fallidos.length ? 'err' : 'ok'}"><p>${escapeHtml(titulo)}</p><ul>${lineas}</ul></div>`
+}
+
+/**
+ * El desfase entre la autoría y cada réplica (#262 §3), para no tener que consultar dos warehouses a
+ * mano. Regla dura: si el conteo no se pudo leer se dice **«no se pudo leer»** con su causa — nunca
+ * un 0, que se confundiría con una réplica vacía de verdad.
+ */
+function replicaFeedback(autoria: number, estados: ReplicaCountResult[] | undefined): string {
+  if (!estados?.length) return ''
+  const lineas = estados
+    .map((e) => {
+      const detalle =
+        e.count != null
+          ? `réplica ${e.count}${e.count === autoria ? '' : ' <b>· desfase</b>'}`
+          : `réplica <b>no se pudo leer</b>: ${escapeHtml(e.error ?? 'sin causa reportada')}`
+      return `<li><b>${escapeHtml(e.database_ref)}</b> — autoría ${autoria} · ${detalle}</li>`
+    })
+    .join('')
+  return `<h2>Publicación</h2><ul class="replicas">${lineas}</ul>`
+}
+
+async function entityPage(
+  deps: AdminDeps,
+  nav: Chrome,
+  entity: MasterDataEntity,
+  token: string,
+  editPk?: string,
+  pub?: PublishTargetResult[],
+): Promise<string> {
   const pk = pkColumn(entity)
   const rows = await deps.mdStore.list(entity)
   const editing = editPk != null ? rows.find((r) => String(r[pk.name]) === editPk) : undefined
@@ -2450,16 +2555,34 @@ async function entityPage(deps: AdminDeps, nav: Chrome, entity: MasterDataEntity
     })
     .join('')
 
+  // Estado de las réplicas: se lee en el GET y NUNCA es fatal — si la lectura entera revienta, la
+  // pantalla de la entidad sigue sirviendo (la autoría es lo que el usuario vino a editar).
+  const estados = deps.replicaStatus
+    ? await deps.replicaStatus(entity).catch((e): ReplicaCountResult[] =>
+        (entity.targets ?? []).map((t) => ({ database_ref: t.database_ref, error: errMsg(e) })),
+      )
+    : undefined
+  // Republicar solo se ofrece donde hay a dónde publicar y quién publique.
+  const republicar =
+    deps.onWrite && entity.targets?.length
+      ? `<form method="post" action="/admin/e/${entity.id}/republicar" class="republicar">
+           <input type="hidden" name="_csrf" value="${token}"><button class="add">Republicar ahora</button>
+         </form>`
+      : ''
+
   return adminPage(deps, nav,
     entity.label,
     `<p class="sub"><a href="${back}">← ${escapeHtml(entity.domain ?? 'Administración')}</a></p>
+     ${publishFeedback(pub)}
      <table><thead><tr>${thead}</tr></thead><tbody>${tbody || `<tr><td colspan="${entity.columns.length + 1}" class="sub">Sin registros.</td></tr>`}</tbody></table>
      <h2>${formTitle}</h2>
      <form method="post" action="${action}" class="grid">
        <input type="hidden" name="_csrf" value="${token}">
        ${fields}
        <div class="actions"><button class="add">${editing ? 'Guardar cambios' : 'Agregar'}</button>${editing ? `<a class="cancel" href="/admin/e/${entity.id}">Cancelar</a>` : ''}</div>
-     </form>`,
+     </form>
+     ${replicaFeedback(rows.length, estados)}
+     ${republicar}`,
   )
 }
 

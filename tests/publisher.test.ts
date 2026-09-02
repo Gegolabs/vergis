@@ -68,6 +68,7 @@ describe('publish-on-write', () => {
       secret: 'pw',
       onWrite: async (e: MasterDataEntity) => {
         published.push(e.id)
+        return e.targets!.map((t) => ({ database_ref: t.database_ref, ok: true }))
       },
     })
     const go = async (req: IncomingMessage) => {

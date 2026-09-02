@@ -134,7 +134,7 @@ export {
 } from './master-data-store'
 export type { MasterDataStore, MasterDataRow } from './master-data-store'
 export { createDwhPublisher, replicaTable, replicaStagingTable, masterDataPublishPlan } from './master-data-publish'
-export type { Publisher, PublisherTarget } from './master-data-publish'
+export type { Publisher, PublisherTarget, PublishTargetResult, ReplicaCountResult } from './master-data-publish'
 export { parseDomainsConfig, canManageDomain, manageableDomains, stewardGroupId, STEWARD_GROUP_PREFIX } from './domain'
 export type { DomainDecl } from './domain'
 export { parseIntakeConfig, matchSlot, slotsQueAceptan, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada, slotRunLogsDir } from './intake'

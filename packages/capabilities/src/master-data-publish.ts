@@ -69,9 +69,38 @@ export interface PublisherTarget {
   consumerPrincipals?: string[]
 }
 
+/**
+ * Resultado de publicar UN target. Es el contrato que vuelve visible lo que antes solo sabía el audit
+ * log (#262): el llamador —el handler de Administración— lo lleva a la pantalla, target por target.
+ * `ok:false` trae SIEMPRE el `error`: un fallo sin causa legible es el mismo silencio con otra forma.
+ */
+export interface PublishTargetResult {
+  database_ref: string
+  ok: boolean
+  error?: string
+}
+
+/**
+ * Conteo de la réplica en UN target. `count` y `error` son EXCLUYENTES y ninguno tiene default: una
+ * lectura que falla se dice «no se pudo leer» con su causa, jamás un 0 — un cero fabricado es
+ * indistinguible de una réplica vacía de verdad, y eso es peor que no saber (#262 §3).
+ */
+export interface ReplicaCountResult {
+  database_ref: string
+  count?: number
+  error?: string
+}
+
 export interface Publisher {
   /** Publica/refresca la proyección `__replica` de una entidad en un target (idempotente: DROP+CREATE). */
   publish(entity: MasterDataEntity, rows: MasterDataRow[], target: PublisherTarget): Promise<void>
+  /**
+   * Cuántas filas tiene la réplica VIVA en el target. La cuenta el publicador porque él es el dueño
+   * del nombre de la tabla (`replicaTable`): duplicar la convención afuera la haría derivar sola.
+   * Lanza si no se puede leer (ref no configurado, credencial, tabla inexistente); el llamador
+   * traduce ese throw a «no se pudo leer», nunca a un número.
+   */
+  count(entity: MasterDataEntity, target: PublisherTarget): Promise<number>
   close(): Promise<void>
 }
 
@@ -127,6 +156,14 @@ export function createDwhPublisher(profiles: Record<string, SqlConnectionProfile
       // 3) SWAP: recién ahora se toca la réplica viva (drop de la vieja + sp_rename de la staging + policy
       //    allow-all recreada). Tramo breve y con los datos ya listos.
       for (const stmt of plan.swap) await pool.request().batch(stmt)
+    },
+    async count(entity, target) {
+      const pool = await getPool(target.database_ref)
+      // `replicaTable(entity)` es el MISMO nombre que escribe `publish` (id validado por el parser).
+      const r = await pool.request().query(`SELECT COUNT(*) AS n FROM ${replicaTable(entity)}`)
+      const n = (r.recordset?.[0] as { n?: unknown } | undefined)?.n
+      if (n == null || !Number.isFinite(Number(n))) throw new Error(`count: el conteo de ${replicaTable(entity)} no devolvió un número.`)
+      return Number(n)
     },
     async close() {
       for (const p of pools.values()) {

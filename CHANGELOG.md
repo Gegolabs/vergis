@@ -143,6 +143,61 @@ que el destino **llega al transporte**, no que un gateway responda. Y no se midi
 imagen en Docker con el flag encendido y sin key: el mecanismo está medido con arnés propio (config,
 contrato, ruta y su control negativo, en la suite), y el arranque del contenedor lo **corrobora** el
 despliegue.
+### #262 · La publicación de data maestra deja de fallar en silencio
+
+**Cambia lo que ve quien edita data maestra en Administración.** Hasta ahora, guardar una fila
+disparaba la publicación de las proyecciones `__replica` y, si esa publicación fallaba, el usuario
+veía **exactamente el mismo redirect del éxito**: el fallo vivía solo en el audit log, que él no lee
+y cuya existencia no tiene por qué conocer. En la instancia de referencia eso produjo 30 fallos
+consecutivos (`database_ref 'cartera' no configurado`, por una conexión renombrada) y un desfase de
+**once días** entre la autoría y la réplica, que terminó detectando una persona por conocimiento de
+dominio. El defecto del Producto no era la falla — era su silencio.
+
+Cuatro cambios, y ninguno toca la autoría: si la publicación falla, la fila **igual quedó guardada**.
+
+- **El resultado llega a la pantalla, por destino.** `onWrite` deja de ser `Promise<void>` y devuelve
+  `{database_ref, ok, error?}[]`. El redirect lleva `?pub=ok|err` y el detalle viaja en un flash de
+  proceso por (identidad, entidad), que se consume al mostrarse. La página de la entidad lista cada
+  destino como publicado ✓ o falló ✗ **con la causa escapada** — el texto viene de un motor externo.
+- **Un destino que falla ya no cancela a los siguientes.** El bucle era
+  `for (const t of targets) await publisher.publish(...)`: el primer `throw` abortaba el resto, así
+  que con dos consumidores el segundo se quedaba con datos viejos por un problema ajeno. Ahora cada
+  destino va en su propio `try` y todos se intentan. Sigue siendo **secuencial a propósito**:
+  publicar es DDL + INSERT fila a fila contra un warehouse, y paralelizarlo cambiaría la carga sobre
+  el motor sin que nadie la haya medido — lo que faltaba era aislamiento, no concurrencia.
+- **El desfase es observable sin salir del producto.** Por destino: «autoría N · réplica M», con M
+  leído por un método nuevo `Publisher.count()` que hace `SELECT COUNT(*)` sobre la misma tabla que
+  el publicador escribe (el nombre no se duplica afuera). **Si el conteo no se puede leer, la
+  pantalla dice «no se pudo leer» con su causa — jamás un 0**, que sería indistinguible de una
+  réplica vacía de verdad. Sin la dependencia cableada, la línea no aparece: no se fabrica un conteo
+  que nadie midió.
+- **Republicación manual**: `POST /admin/e/<id>/republicar` (mismo CSRF y misma autorización que las
+  otras escrituras de la entidad) reintenta la publicación con lo ya guardado, sin tener que editar
+  una fila cualquiera para provocar un `onWrite`. Audita `master-data-publish` con `manual: true`.
+
+El audit log **no cambió de contrato**: sigue emitiendo `master-data-publish` con `entity`, `by`,
+`ok` y `error`; se le agregó el detalle `targets[]` (y `manual` en la republicación).
+
+`docs/data-maestra-y-publicacion.md §9` declaraba «Mecanismo de publicación» y «Publish-on-write»
+como **por construir** cuando llevaban meses cableados. Esa afirmación falsa contribuyó a
+diagnosticar mal el incidente y queda corregida, con las piezas de este cambio agregadas.
+
+**Qué se midió:** 10 casos en `tests/master-data-publish-visible.test.ts`, cada uno con su contraste
+contra `main` — con el `admin.ts` de `main` fallan 7 de los 10, y el del aislamiento entre destinos
+falla al restituir el bucle abortivo. Cubren: el segundo destino se publica cuando el primero lanza;
+el HTML trae el error escapado (`<b>` ⇒ `&lt;b&gt;`) y no el crudo; el flash se consume; un conteo
+no legible produce «no se pudo leer» y **no** «réplica 0»; republicar sin CSRF se rechaza con 403 y
+no invoca al publicador, y con CSRF lo invoca una vez, audita `manual: true` y no escribe autoría.
+
+**Qué NO se midió, dicho con esas palabras:** nada de esto se probó contra un warehouse Fabric real
+— **solo contra el arnés de tests, con un publicador de mentira**. En particular, `Publisher.count()`
+nunca ejecutó su `SELECT COUNT(*)` contra un motor: que la consulta sea válida y que su `recordset`
+tenga la forma esperada está razonado desde el resto del módulo, no medido. Tampoco se midió el
+comportamiento con una réplica inexistente en el destino (el caso que un despliegue nuevo produce
+primero), ni cuánto tarda el GET de la entidad cuando el conteo debe esperar a un warehouse lento:
+la lectura se hace en línea y no tiene timeout propio. Y el hallazgo vecino del issue —que
+`VERGIS_MASTER_DATA` no está en el contrato de hot-reload, así que corregir un `database_ref` sigue
+exigiendo reiniciar el nodo— **no se atendió acá**: sigue abierto.
 
 ### `fast-uri` sube a 3.1.7: el advisory que tenía el CI en rojo
 
