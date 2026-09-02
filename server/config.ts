@@ -346,17 +346,18 @@ export const FATAL_ENVS: EnvClass[] = [
     why: 'Un numérico inválido se propaga como NaN al núcleo (listen(NaN), topes de materialización).',
     where: 'configFromEnv (`num`/`numOpt`)',
   },
-  {
-    envs: ['MIRANDA_PREVIEW_IDENTITIES'],
-    why:
-      'Fatal POR DECISIÓN PREVIA (#110·1): un roster de identidades ilegible no debe degradar a una ' +
-      'feature de impersonación a medias. Es la única pieza de Miranda que sigue abortando el arranque, ' +
-      'y #266 no la movió a propósito — revertirla sería derogar esa decisión sin discutirla.',
-    where: 'serve-rls.ts (arranque), `parsePreviewIdentities`',
-  },
 ]
 
 export const DEGRADABLE_ENVS: EnvClass[] = [
+  {
+    envs: ['MIRANDA_PREVIEW_IDENTITIES'],
+    why:
+      'Un roster ilegible o inválido apaga MIRANDA ENTERA con la razón (#266, segunda mitad). Lo que ' +
+      '#110·1 prohibía era una impersonación A MEDIAS sobre una ficción; apagarla toda no es a medias, ' +
+      'y tumbar los PIs de la instancia por un roster tampoco era lo que esa decisión protegía. Vale ' +
+      'para cualquier fallo del arranque de Miranda: catálogo, roster, store, schema.',
+    where: 'serve-rls.ts (catch del arranque de Miranda → degradeMiranda), `parsePreviewIdentities`',
+  },
   {
     envs: ['MIRANDA_ENABLED', 'ANTHROPIC_API_KEY', 'MIRANDA_API_BASE_URL'],
     why: 'Miranda es opcional y de alcance restringido (un grupo). Mal configurada se apaga a sí misma con su razón; los PIs siguen sirviendo.',
@@ -501,9 +502,8 @@ function mirandaConfig(env: Env): MirandaConfig {
 /**
  * Parsea y VALIDA el roster de preview (contenido del archivo `MIRANDA_PREVIEW_IDENTITIES`). Puro:
  * la LECTURA del archivo la hace el consumidor (`serve-rls.ts`), como todo archivo de config de este
- * módulo. Lanza con mensaje accionable ante roster inválido — con Miranda ON eso aborta el arranque
- * (mismo patrón que la API key ausente): un roster ilegible no debe degradar en silencio a una
- * feature a medias.
+ * módulo. Lanza con mensaje accionable ante roster inválido — con Miranda ON eso APAGA Miranda entera
+ * con la razón (#266), nunca una feature a medias ni un nodo caído.
  */
 export function parsePreviewIdentities(raw: string, source = 'MIRANDA_PREVIEW_IDENTITIES'): PreviewIdentity[] {
   const fail = (msg: string): never => {
