@@ -130,6 +130,27 @@ script no viaja.
 de contraste contra el código anterior. **Lo que NO se midió**: el comportamiento en un navegador
 real —el `new Function` del test valida sintaxis, no conducta—, así que la interacción efectiva de
 `vflt-keep` bajo el cursor de una persona sigue sin verificarse con los ojos.
+### La doctrina de gobierno recomienda `GRANT UNMASK` por columna; el rol del workspace queda como alternativa con su costo declarado (#245)
+
+**Cambia documentación que el operador lee para decidir qué privilegio concede.** `docs/gobierno-permisos.md`
+presentaba el **rol del workspace** como lo que «decide» `UNMASK`, y eso empuja a conceder privilegio
+sobre **todo** el workspace —lectura y escritura de todos sus items— para habilitar la lectura de **una
+columna**, con una revocación que **no propagó en más de 20 minutos** y cuyo techo nadie midió. La
+sección pasa a nombrar las **dos vías** con su alcance y su reversión, y a poner primero la sentencia
+copiable `GRANT UNMASK ON [dbo].[<tabla>]([<columna>]) TO [public]` con su `REVOKE`. La vía del rol se
+conserva —hay instancias que ya la usan— diciendo qué concede de más y cuánto tarda en quitarse.
+`scripts/README-fabric-lab.md` y el comentario de `scripts/fabric-lab-proof.ts` dejan de decir que el
+rol «decide» y dicen lo que es cierto: decide el **privilegio del principal**, y el rol es una de las
+dos formas de dárselo.
+
+**Qué se midió y qué no.** Lo medido está en 0.22.0 · E3 y en #245: contra el SKU F2 del terreno propio,
+con el principal verificado en el plano de datos antes de tocar nada, el motor **acepta** la sentencia,
+**surte efecto** en conexión nueva, la vista **sigue discriminando** por el claim, y el `REVOKE` se
+verificó leyendo el dato. **No** se midió en el warehouse de una instancia de cliente, ni con más de un
+principal presente en la base —el alcance real de `public` ahí es semántica, no medición—, ni si el
+`GRANT` sobrevive a un `ALTER` de la tabla o a re-aplicar la política. Los tres límites viajan escritos
+en la doc. Sin cambio de comportamiento del Producto: no se emite `GRANT` alguno, y si el emisor de DDL
+debería emitirlo queda escrito en la doc como **decisión abierta**.
 
 ## 0.22.0 — 2026-08-26
 
@@ -605,7 +626,8 @@ muerte del propio borde. El smoke verifica el predicado de salud y el índice, n
 
 - **Cómo se concede es decisión del operador.** En Fabric, medido: lo decide el **rol del workspace**
   (`Member` lee el valor real, `Viewer` lee la máscara). `GRANT UNMASK` granular **no está medido**
-  en Fabric.
+  en Fabric. *[Medido después del tag — ver 0.22.0 · E3 y #245: `GRANT UNMASK` por columna funciona
+  en Fabric y es la vía recomendada; la doctrina vigente vive en `docs/gobierno-permisos.md`.]*
 - **El Producto verifica la capacidad, no el mecanismo.** No pide un rol concreto: mide si la lectura
   desenmascara.
 - **Hay que regenerar y re-aplicar la DDL de la política**: el centinela nace con ella. Hasta
@@ -622,7 +644,8 @@ serving en vez de confiar en que el motor propague.
 
 ### Lo que sigue sin medirse, dicho con esas palabras
 
-- Que `GRANT UNMASK` granular funcione en **Fabric** (sí está medido el rol de workspace).
+- Que `GRANT UNMASK` granular funcione en **Fabric** (sí está medido el rol de workspace). *[Medido
+  después del tag — ver 0.22.0 · E3 y #245.]*
 - Cuánto **dura** la staleness de revocación y qué la termina — solo hay cota inferior (>20 min).
 - Que la aptitud medida al conectar valga **toda** la vida de la conexión: medido a 60 s, no más.
 
