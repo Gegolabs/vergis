@@ -403,7 +403,13 @@ export function labelledDomain(values: number[], padFrac = 0.1): [number, number
  * dato viaja resuelto y Vega solo pinta); `none` no emite ninguna.
  */
 function labelLayers(horizontal: boolean, tokens: ThemeTokens, mode: LabelMode) {
-  const encoding = { text: { field: LABEL_FIELD, type: 'nominal' as const } }
+  // #263 · el rótulo lleva la MISMA llave (`aria-label`) que su marca: el canal `description` la
+  // emite en el `<text>` igual que en el `<path>`, y esa coincidencia de frase es lo que empareja
+  // punto y rótulo en el navegador. Sin ella el realce no tiene por dónde cruzar de un `<g>` al otro.
+  const encoding = {
+    text: { field: LABEL_FIELD, type: 'nominal' as const },
+    description: { field: TOOLTIP_FIELD, type: 'nominal' as const },
+  }
   if (horizontal) {
     return [
       {
@@ -724,8 +730,11 @@ export async function renderSeries(
       })
     })
   })
+  // #263 · el stride deja de FILTRAR y pasa a ocultar por opacidad: todos los rótulos existen en el
+  // DOM y solo se ven los que `__show` deja pasar. Lo impreso no cambia (los ocultos son invisibles
+  // en papel igual que antes) y el realce del hover tiene algo que revelar en los puntos sin rótulo.
   const pointLabel = (lane: number) => ({
-    transform: [{ filter: `datum.__show === 1 && datum.${LABEL_LANE_FIELD} === ${lane}` }],
+    transform: [{ filter: `datum.${LABEL_LANE_FIELD} === ${lane}` }],
     mark: {
       type: 'text',
       align: 'center',
@@ -734,7 +743,11 @@ export async function renderSeries(
       fontSize: LABEL_FONT_PX,
       color: tokens.chartText,
     } as const,
-    encoding: { text: { field: LABEL_FIELD, type: 'nominal' as const } },
+    encoding: {
+      text: { field: LABEL_FIELD, type: 'nominal' as const },
+      description: { field: TOOLTIP_FIELD, type: 'nominal' as const },
+      opacity: { condition: { test: 'datum.__show === 1', value: 1 }, value: 0 },
+    },
   })
   const labelLayersSeries = Array.from({ length: Math.max(1, series.length) }, (_, k) => pointLabel(k))
   const spec: TopLevelSpec = {
