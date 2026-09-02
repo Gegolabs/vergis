@@ -352,19 +352,64 @@ latencia adicional.
 distinguir de «no traigo el claim»—, y enmascarar en la capa de aplicación —rompe la propiedad de
 que **el valor real nunca sale del motor** hacia la consulta de quien no tiene derecho—.
 
-**Qué decide `UNMASK` en Fabric, medido el 2026-08-16 y RE-MEDIDO el 2026-08-19:** el **rol del
-workspace**. Con `Member` el service principal lee el valor **real**; con `Viewer` lee la máscara.
+### Cómo se concede la capacidad: las dos vías medidas
 
-⚠ **La asimetría de propagación, y por qué invalida mediciones**: conceder propaga a una conexión
-nueva en **≤11 s**; **revocar no propagó en >20 min** (techo sin medir), y **ni una conexión nueva
-ni un token de acceso nuevo la destraban**. Una conexión ya abierta **nunca** vio el cambio dentro
-de la ventana medida. De ahí la regla operativa: **una medición de `UNMASK` solo vale si el rol no
-cambió recientemente, o si el principal nunca tuvo el rol superior.** Un rol recién bajado miente a
-favor del privilegio — pasó el 2026-08-19 y produjo un veredicto falso que duró medio día.
+`UNMASK` es un **privilegio del principal**, no una propiedad de la tabla: quien lo tiene lee el
+valor real de una columna enmascarada; quien no, lee el default del DDM. En Fabric hay **dos vías**
+para dárselo al principal de serving, y no son equivalentes:
 
-**Control obligatorio al verificarlo en una instancia**, en la misma sesión: una consulta a la tabla
-**sin** la vista. Sin él, un negativo no distingue «al principal le falta el permiso» de «la vista no
-se aplicó».
+| | `GRANT UNMASK` por columna — **la recomendada** | Rol `Member` del workspace — alternativa |
+|---|---|---|
+| Alcance | **Una columna de una tabla** | **Todo el workspace**: lectura y escritura de todos sus items |
+| Reversión | **Inmediata**, verificada leyendo el dato tras el `REVOKE` | Conceder propaga en ≤11 s; **revocar no propagó en >20 min**, con techo sin medir |
+| Dónde se ejecuta | DDL del warehouse, donde ya vive el resto de la política | Portal de Fabric, fuera de la política |
+
+La vía recomendada, lista para copiar — una sentencia por columna gobernada:
+
+```sql
+GRANT UNMASK ON [dbo].[<tabla>]([<columna>]) TO [public];
+-- reversión:
+REVOKE UNMASK ON [dbo].[<tabla>]([<columna>]) FROM [public];
+```
+
+**Qué se midió y contra qué:** SKU F2 del terreno propio, 2026-08-20, con el service principal en rol
+`Viewer` y su estado verificado antes **en el plano de datos** (leía la máscara). Cuatro cosas
+quedaron medidas: el motor **acepta** la sentencia; **surte efecto** —el mismo SP pasó a leer el
+valor real en una **conexión nueva**—; la vista de máscara **sigue discriminando** por el claim, o
+sea que la capacidad habilita el mecanismo de esta sección en vez de aplastarlo; y el `REVOKE` se
+verificó **leyendo el dato**, no por ausencia de error. No se midió en el warehouse de ninguna
+instancia de cliente, y la escalera se detuvo en el primer peldaño que funcionó: `OBJECT::`,
+`SCHEMA::` y base entera quedaron sin medir porque el más granular es el que sirve.
+
+**Tres advertencias que viajan con la sentencia:**
+
+1. **`TO [public]` alcanza a todo principal que pueda consultar ese warehouse.** Es mínimo privilegio
+   en el eje de la **columna**, no en el del principal. No se puede afinar más: Fabric rechaza
+   `CREATE USER … FROM EXTERNAL PROVIDER` (medido), así que un service principal no tiene un
+   principal propio en la base al cual conceder. Donde el único que consulta sea el de serving, los
+   dos conjuntos coinciden; donde haya otros, esto los alcanza a todos, y hay que decidirlo sabiéndolo.
+2. **La vía del rol tiene una asimetría de propagación que además invalida mediciones**: conceder
+   propaga a una conexión nueva en **≤11 s**; **revocar no propagó en >20 min** (techo sin medir), y
+   **ni una conexión nueva ni un token de acceso nuevo la destraban**. Una conexión ya abierta
+   **nunca** vio el cambio dentro de la ventana medida. De ahí la regla operativa: **una medición de
+   `UNMASK` por la vía del rol solo vale si el rol no cambió recientemente, o si el principal nunca
+   tuvo el rol superior.** Un rol recién bajado miente a favor del privilegio — pasó el 2026-08-19 y
+   produjo un veredicto falso que duró medio día. Si se revoca el rol, hay que reciclar el serving en
+   vez de confiar en que el motor propague.
+3. **Sin medir: si el `GRANT` sobrevive** a un `ALTER` o reemplazo de la tabla, o a re-aplicar la
+   política. Por eso, tras cada re-aplicación de la DDL, el operador vuelve a verificar la capacidad
+   con el control obligatorio de acá abajo.
+
+**Control obligatorio al verificarlo en una instancia**, en la misma sesión y sea cual sea la vía:
+una consulta a la tabla **sin** la vista. Sin él, un negativo no distingue «al principal le falta el
+permiso» de «la vista no se aplicó».
+
+**Decisión abierta, no tomada:** si el emisor de DDL debería emitir el `GRANT UNMASK` junto al
+`ADD MASKED` de cada columna gobernada — la política ya declara exactamente qué columnas protege, así
+que el `GRANT` es su complemento natural. Concederlo el emisor **elimina** el requisito de
+configuración que 0.21.0 le puso al operador; dejarlo en manos del operador **conserva** el gesto
+explícito de ampliarle a Vergis un privilegio de lectura sobre datos sensibles. Hoy rige lo segundo:
+el Producto **mide** si la lectura desenmascara y le da igual cómo se logró. Ver issue #245.
 
 ### El orden importa: `SCHEMABINDING` inmoviliza la columna (medido)
 

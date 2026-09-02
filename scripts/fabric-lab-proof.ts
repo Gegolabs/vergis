@@ -441,8 +441,11 @@ async function main(): Promise<void> {
     const sp = await conectar(cred.token)
     const w = await sp.request().query('SELECT SUSER_SNAME() AS w')
     console.log(`  principal: ${(w.recordset[0] as { w: string }).w}`)
-    // El ROL del workspace decide `UNMASK` (medido 2026-08-16: Member ve el valor real, Viewer ve la
-    // máscara). Se DECLARA para poder contrastarlo con la medición — no para sustituirla.
+    // El privilegio `UNMASK` del principal decide qué lee; el ROL del workspace es UNA de las dos vías
+    // para concedérselo (medido 2026-08-16: Member ve el valor real, Viewer ve la máscara), y la otra
+    // es `GRANT UNMASK` por columna, que es la recomendada por `docs/gobierno-permisos.md` (ver #245).
+    // Por eso el rol se DECLARA solo para contrastarlo con la medición, jamás para sustituirla: en una
+    // instancia que use el GRANT, el rol no predice nada y el único veredicto válido es el del dato.
     const rolDeclarado = process.env['FAB_SP_ROLE']
     console.log(`  rol declarado por quien corre: ${rolDeclarado ?? '(no declarado — no hay nada que contrastar)'}`)
     const control = await leer(sp, CLAIMS, 'SELECT area FROM [dbo].[areas]')

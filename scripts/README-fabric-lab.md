@@ -101,7 +101,7 @@ de **este SKU** en **este momento**, y Fabric se mueve.
 | ¿La **vista de máscara** se puede consultar? | **No — falla siempre** (`Unsupported data type error`). *Cierto de la forma de entonces; el rediseño de #197 la volvió consultable — ver la ventana del 18-ago abajo* | La columna no enmascarada de la MISMA vista sí pasa |
 | ¿Por qué falla? | `SESSION_CONTEXT()` **dentro de un `CASE`** sobre un scan de tabla | Tres controles: `CASE` sin `SESSION_CONTEXT` pasa · `SESSION_CONTEXT` sin `CASE` con `FROM` tabla pasa · variable local + `CASE` pasa |
 | ¿La row policy discrimina? | **Sí** | Sujeto con 2 grupos ve 2 filas; sujeto sin grupos ve 0 |
-| ¿El SP tiene `UNMASK`? | **Depende del ROL del workspace**: `Member` ve el valor real, `Viewer` ve la máscara | Se cambió el rol en ambos sentidos con el mismo SP |
+| ¿El SP tiene `UNMASK`? | Lo decide el **privilegio `UNMASK` del principal**, y hay dos vías para concedérselo: el **rol del workspace** (`Member` ve el valor real, `Viewer` ve la máscara) o un **`GRANT UNMASK` por columna**, que es la vía recomendada por [`docs/gobierno-permisos.md`](../docs/gobierno-permisos.md) | El rol se cambió en ambos sentidos con el mismo SP; el veredicto sobre el sujeto que sirve lo da P9, leyendo el dato |
 
 **El corolario que más pesa:** que Fabric **acepte** el DDL no significa que el artefacto **sirva**.
 El `CREATE VIEW` pasa en verde y todo `SELECT` sobre ella falla. Un arnés que solo aplicara el setup
@@ -171,8 +171,9 @@ controlada: P6 casteaba el claim a `VARCHAR(8000)` y el compilador emite `NVARCH
 | ¿El `NVARCHAR(MAX)` del `CAST` estorba? | **No** — el diagnóstico que lo aislaba no llegó a correr porque la vista sirvió |
 
 **Lo que esto cierra y lo que no.** Cierra que la vista de máscara del Producto **sirve y protege**
-en el SKU F2. No cierra P5: sigue sin medirse si el service principal de serving tiene `UNMASK`, y
-mientras no se mida, lo que un SP `Viewer` vea por esta vista sigue siendo el DDM de la tabla.
+en el SKU F2. No cierra la pregunta por el sujeto que sirve —la que responde **P9**, leyendo el dato
+con la credencial del SP—: mientras esa medición falte, lo que un SP sin `UNMASK` vea por esta vista
+sigue siendo el DDM de la tabla.
 
 ### P8 (#164) · el allow-all emitido, y el control que decide
 
@@ -194,12 +195,17 @@ motores que el back-end sirve.
 **P5 (#163) — si el service principal de serving tiene `UNMASK`.** Falta `FAB_SP_TOKEN`: el secreto
 del SP vive fuera del repo y no estaba en la máquina. El arnés lo declara y **no lo cuenta como
 verde**, que es lo correcto — medir `UNMASK` con la cuenta de un admin humano no contesta nada,
-porque un admin siempre lo tiene.
+porque un admin siempre lo tiene. El sondeo que hoy da ese veredicto es **P9**, y también exige la
+credencial del SP: sin ella declara «no medido», nunca verde.
 
 ### Lo que sigue valiendo de la asimetría
 
-Estos positivos valen para **este SKU (F2) y este rol**. No se generalizan a cualquier instancia: el
-rol del workspace decide `UNMASK`, y eso ya está medido como variable (Member vs Viewer).
+Estos positivos valen para **este SKU (F2) y el privilegio que el SP tenía en esa corrida**. No se
+generalizan a cualquier instancia: lo que decide la lectura es si el principal tiene `UNMASK`, y eso
+es una **variable** que la instancia fija por una de dos vías — el rol del workspace (medido en ambos
+sentidos, `Member` vs `Viewer`) o un `GRANT UNMASK` por columna (medido el 2026-08-20: aceptado,
+surte efecto en conexión nueva, y el `REVOKE` verificado leyendo el dato). Cuál de las dos usa la
+instancia no cambia lo que el arnés mide: el veredicto se lee del dato, no del plano de control.
 
 ## Lo que este terreno NO hace, por decisión
 
