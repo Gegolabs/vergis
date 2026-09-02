@@ -1,10 +1,12 @@
 # NEXT — Vergis
 
-**0.23.0 es la versión publicada** (tag `v0.23.0`, 2026-09-02, commit `58cf988`). Imagen **verificada
-contra el registry**: 2 plataformas, `org.opencontainers.image.revision=58cf988`, `version=0.23.0`.
+**0.23.1 es la versión publicada** (tag `v0.23.1`, 2026-09-02, commit `0617a6b`). Imagen **verificada
+contra el registry**: 2 plataformas, `org.opencontainers.image.revision=0617a6b`, `version=0.23.1`. Es la Z
+de la segunda mitad de #266 (#276): un fallo del **arranque** de Miranda ya tampoco tumba el nodo.
 
 **La instancia A.R.B.O.L. corre 0.23.0 desde el 2026-09-02 (noche)** — desplegada por el frente arbol
-con corte medido de 7.314 ms, smoke 25/25 y paridad `compose` en 0. El gap de versiones que este
+con corte medido de 7.314 ms, smoke 25/25 y paridad `compose` en 0. **Subir a 0.23.1 no exige nada**
+(ver «Qué exige esta versión») y es un recreate con ventana: gap de un patch, pendiente de César. El gap de versiones que este
 archivo arrastraba (0.18.0 → …) **ya no existe**, y el aviso al operador dejó de tener destinatario:
 el operador era esta misma casa.
 
@@ -18,7 +20,6 @@ el operador era esta misma casa.
 | **PRs de Renovate #261, #260, #251, #201, #175** | Nadie, todavía | `renovate/stability-days` sigue en `pending` para los cinco (cooldown de 14 días, ADR-001). #175 y #201 tienen más de 14 días y el status no se re-emitió: **conjetura no medida** — tildar `rebase-branch` en #169 debería refrescarlo. Se mergean cuando el check pase, con CI verde |
 | **Renombrar `CONTRIBUTING.draft.md` → `CONTRIBUTING.md`** (+ `CODE_OF_CONDUCT.md` y correos) | **César** | #267 mergeó el contenido **sin renombrar, a propósito**: el renombre es el acto de publicación que hace obligar la cláusula de licencia a terceros — revisión suya o de un abogado |
 | **#265 · medir contra un gateway real** | Instancia, cuando llegue Foundry (1-2 semanas desde 2026-09-02) | El cable existe (`MIRANDA_API_BASE_URL`); lo medido es que llega al transporte. El primer request real es la medición |
-| **El residuo de #266**: el bloque de arranque de Miranda en `serve-rls.ts` (~2136: catálogo, roster, store) **sigue tumbando el nodo** si falla con el flag ON | Esta casa decide si abre issue | Al menos una fatalidad es deliberada (#110·1). Declarado en `FATAL_ENVS`. Condición de issue: un arranque tumbado por Miranda con algo que no sea la key ni el `baseUrl` |
 | **`VERGIS_MASTER_DATA` fuera del hot-reload** (hallazgo vecino de #262) | Esta casa | Sin issue propio. Cambiar `entidades.yaml` exige reiniciar el nodo (corte). Abrir issue cuando alguien lo necesite en caliente |
 | **`Publisher.count()` contra un warehouse real** y la **réplica inexistente** en un destino nuevo | Instancia | La página de `empresas_relacionadas` en A.R.B.O.L. es el primer caso real: mirarla es la medición |
 | **E4 de #238** — ¿la aptitud vale toda la vida de la conexión? | Esta casa | Sin medir; por la vía del `GRANT` es viable y cabe en una ventana propia |
