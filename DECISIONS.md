@@ -9,6 +9,20 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-65 · 2026-09-03 — #279 se cierra con su ítem 1 construido; los ítems 2 y 3 quedan declarados fuera de alcance, sin issue nuevo
+
+- **Bifurcación**: (a) construir los tres ítems del issue · (b) construir el 1 y abrir issues para el 2 (filas producidas por corrida) y el 3 (hora local del schedule) · (c) construir el 1 y declarar 2 y 3 fuera de alcance en el cierre.
+- **Decidido**: **(c)**. El ítem 1 es el mecanismo que produjo el daño medido (nueve corridas sobre nada) y el único con demandante en la instancia. El 2 no se puede construir con honestidad desde el Producto: el historial de corridas de Fabric no expone filas producidas, y un conteo fabricado desde el destino sería otra promesa optimista. El 3 pierde su demandante con el 1: los slots manuales ya no reciben schedule, y las fuentes que el motor tira (SAP HANA) fijan su hora por su propio pipeline, no por el clic.
+- **Alternativa descartada**: (b) porque abrir issues sin demandante es pasivo que nadie va a cobrar; si un steward vuelve a pedirlo, el issue se abre con su caso.
+- **Costo de revertir**: nulo — se reabre #279 o se abre el issue con la cita.
+
+## D-66 · 2026-09-03 — #285 y #286 se construyen como convención de plataforma decidida por el dato, sin vocabulario nuevo en el DSL, y la cascada de facetas es simétrica
+
+- **Bifurcación**: orden de la faceta (a) por detección del tipo del conjunto de valores (numérico · fecha ISO · prefijo+número · nombres de mes · texto) · (b) por orden de primera aparición en las filas · (c) declarable en el spec (`filter: { order: … }`). Cascada (d) simétrica estilo autofiltro de Excel · (e) jerárquica declarada (`narrows:`).
+- **Decidido**: **(a) + (d)**. (a) porque es el mismo patrón con que 0.24.0 y 0.25.0 eligen el popover (`vtIsNumericCol`, `vtIsDateCol`): lo decide el dato, aplica a todos los PIs sin ronda de spec, y no degrada las columnas de nombres (que (b) sí degradaría cuando la columna no es la primera llave de orden). (d) porque es el modelo mental del usuario que viene de Excel y no exige que el especificador declare jerarquías; la jerárquica sigue siendo el diseño de `narrows:` para los controles de la bandeja (TX-15 b), que no se toca.
+- **Lo que esto NO garantiza, dicho**: la detección de nombres de mes es una tabla es/en; un PI con meses en otro idioma cae al orden alfabético. Al especificador de PI-30 se le dejó visible la bifurcación simétrica/jerárquica (comentario `11364` de la instancia).
+- **Costo de revertir**: bajo — funciones puras con tests; (c) puede agregarse encima sin deshacer (a).
+
 ## D-64 · 2026-09-02 — El catálogo `CAP-NN` (#264) vive en `docs/capacidades.md` con cotejo mecánico parcial, sin gate de CI sobre el CHANGELOG
 
 - **Bifurcación**: (a) wiki · (b) archivo del repo barrido a mano · (c) archivo del repo con gate de CI «PR que toca CHANGELOG toca el catálogo».
