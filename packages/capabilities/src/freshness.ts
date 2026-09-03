@@ -241,3 +241,27 @@ export function deriveEntityFreshness(input: DeriveMapInput): EntityFreshnessRow
     }
   })
 }
+
+// ─── Alimentación MANUAL vs. alimentación por el motor (#279) ────────────────────────────────────
+/**
+ * Procesos que alimenta una CARGA MANUAL (land-and-trigger): el archivo que alguien sube dispara la
+ * corrida, así que un schedule del motor corre sobre nada — nueve «Completed» de un minuto que no
+ * procesan nada, y un «✓ Listo» que corrobora que el motor arrancó y no que haya dato fresco (#279,
+ * medido en el dominio Finanzas de A.R.B.O.L. el 2026-09-02). Para estos procesos la cadencia
+ * requerida se VIGILA (fases 1 y 2 del lazo siguen intactas), no se PROGRAMA.
+ *
+ * Devuelve los `trigger.processRef` que declaran los slots: son **ids de item del motor**
+ * (`ProcessRow.engine.itemId`), no ids del registro de procesos — el llamador resuelve esa
+ * correspondencia, que es la misma que hace `slotFor` en la página de Frescura.
+ *
+ * PURA. Un slot sin `trigger` es land-only (nadie corre nada) y no entra; varios slots que apunten
+ * al mismo proceso lo declaran una sola vez.
+ */
+export function manualFedProcesses(slots: { trigger?: { processRef?: string } }[]): Set<string> {
+  const out = new Set<string>()
+  for (const s of slots) {
+    const ref = s.trigger?.processRef
+    if (typeof ref === 'string' && ref.trim() !== '') out.add(ref)
+  }
+  return out
+}

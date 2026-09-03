@@ -320,8 +320,14 @@ export interface AdminDeps {
   domainFreshness?: (domainId: string) => Promise<DomainEntityFreshness[]>
   /** Driver del reconciliador: empuja la cadencia derivada de un proceso al schedule del motor. Opcional.
    * Recibe el dominio de la URL (ya autorizado por `canMng`) para que el wiring valide la PERTENENCIA
-   * del proceso a ese dominio, igual que `runLogs.refOf`: el `process` llega en el formulario. */
-  applyCadence?: (domainId: string, processId: string, by: string) => Promise<{ action: 'set' | 'noop'; desiredSeconds: number }>
+   * del proceso a ese dominio, igual que `runLogs.refOf`: el `process` llega en el formulario.
+   * `vigilar` (#279) = el proceso lo alimenta una carga manual: no se programa nada (y si había un
+   * schedule residual del clic anterior, se deshabilita — `disabledSchedule`). */
+  applyCadence?: (
+    domainId: string,
+    processId: string,
+    by: string,
+  ) => Promise<{ action: 'set' | 'noop' | 'vigilar'; desiredSeconds: number; disabledSchedule?: boolean }>
   /** Pausa/reanudación de un proceso (#107): motor primero, store después. Lo implementa el wiring.
    * El `domainId` viaja por la misma razón que en `applyCadence`. */
   pauseProcess?: (domainId: string, processId: string, paused: boolean, by: string) => Promise<void>
@@ -535,7 +541,14 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
               throw new ValidationError('Aplicar cadencia no está disponible en esta instancia.')
             } else {
               const plan = await deps.applyCadence(domain.id, f['process'] ?? '', email)
-              msg = plan.action === 'set' ? 'Cadencia aplicada al motor.' : 'El schedule ya estaba en la cadencia requerida.'
+              msg =
+                plan.action === 'vigilar'
+                  ? // #279 · el feedback dice la VERDAD de por qué no se programó nada: un «listo» acá
+                    // volvería a hacer creer que hay corridas automáticas donde no las hay.
+                    `Este proceso se alimenta por carga manual: la cadencia se vigila, no se programa.${plan.disabledSchedule ? ' Se deshabilitó el schedule que corría sobre nada.' : ''}`
+                  : plan.action === 'set'
+                    ? 'Cadencia aplicada al motor.'
+                    : 'El schedule ya estaba en la cadencia requerida.'
             }
           } catch (e) {
             msg = `Error: ${errMsg(e)}`
@@ -2276,11 +2289,18 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
             ? `<div>${accionForm('pausar', 'Pausar', 'del')}</div>`
             : ''
         : ''
-      const aplicar = drift && !r.paused && deps.applyCadence && r.processId
-        ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
-        : ''
       const slot = slotFor(r)
       if (slot) matched.add(slot.id)
+      // #279 · el slot casa por `trigger.processRef` = item del motor: si hay slot, subir el archivo ES
+      // la corrida (land-and-trigger) y un schedule correría sobre nada. En vez del botón, la razón —
+      // que además explica por qué la fila puede mostrar «sin schedule» sin estar mal.
+      const aplicar = !r.processId || r.paused || !deps.applyCadence
+        ? ''
+        : slot
+          ? `<div class="sub">Alimentado por carga manual (slot <b>${escapeHtml(slot.label)}</b>): la cadencia se vigila, no se programa.</div>`
+          : drift
+            ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
+            : ''
       const alimentar = slot ? uploadForm(domain.id, slot, token) + logDetails(slot.id) : '<span class="sub">automática</span>'
       const pis = r.dependentPis.map((p) => escapeHtml(p)).join(', ')
       return `<tr${warn ? ' style="color:var(--err)"' : ''}>

@@ -63,7 +63,33 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### «Aplicar cadencia» vigila —y ya no programa— los procesos que alimenta una carga manual (#279)
+
+**Cambia lo que hace el botón «Aplicar» en la Frescura de un dominio cuando la entidad se alimenta
+subiendo un archivo.** Antes, el reconciliador empujaba un schedule del motor a **todo** proceso con
+cadencia derivada, sin distinguir el que el motor va a buscar (Buk, SAP HANA: ahí el schedule es la
+única forma de refrescar) del que dispara una carga manual (*land-and-trigger*: subir el archivo ya
+corre la conversión). En el segundo, el schedule corre sobre nada.
+
+Medido en la instancia A.R.B.O.L. (dominio Finanzas, 2026-09-02): **nueve corridas «Completed» de un
+minuto** cada miércoles, y una página de Cargas diciendo «✓ Listo 2026-08-28» mientras el warehouse
+seguía en la semana del 20-jul — porque nadie subía el archivo desde julio. El «Listo» corroboraba
+que el motor arrancó, no que hubiera dato fresco, y así se leyó en un paneo.
+
+Qué ve ahora quien administra el dominio:
+
+- En la fila de una entidad alimentada por carga manual, en lugar del botón: **«Alimentado por carga
+  manual (slot *X*): la cadencia se vigila, no se programa»**. El *slot* nombrado es el archivo a subir.
+- Si igual se envía la acción, el plan del reconciliador devuelve `vigilar` (no `noop`, que diría «ya
+  está como debe estar») y el feedback lo dice; y si había un schedule residual de un clic anterior, se
+  **deshabilita** —reversible, no se borra— y también se dice.
+- El lazo de frescura salta esos procesos en su fase de reconciliación, con un aviso **una sola vez**
+  por proceso. **La vigilancia queda entera**: se siguen observando sus corridas y sigue avisando
+  «atrasada» contra la cadencia requerida — que es justamente lo que se quiere de un dato que depende
+  de que alguien lo suba.
+
+Sin slots declarados (instancia sin intake), la conducta es idéntica a la anterior. El control
+negativo del PR: contra `main`, el motor fake recibe `setScheduleSeconds` para el proceso manual.
 
 ## 0.25.1 — 2026-09-03
 
