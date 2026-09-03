@@ -232,6 +232,7 @@ export {
   OFERTA_EVENTO,
   isEventDriven,
   validateOferta,
+  manualFedProcesses,
 } from './freshness'
 export type { SourceInfo, ProcessInfo, IngestionMapRow, EntityFreshnessRow, DeriveMapInput } from './freshness'
 export { classifyProcess, alertReason, reconcilePlan, freshnessAlerts, diffAlertState, parseAlertState, FRESHNESS_ALERT_STATE_KEY, deriveAsOfIngesta, createAsOfProvider, SIN_DOMINIO_LABEL } from './ingestion-observability'
