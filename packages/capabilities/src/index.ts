@@ -41,6 +41,7 @@ export {
   vtIsCategorical,
   vtFormat,
   vtApply,
+  vtFacetOptions,
   vtNumFilterLabel,
   vtDateFilterLabel,
   vtPopHtml,
