@@ -37,6 +37,7 @@ export {
   vtIsNumericCol,
   vtIsDateCol,
   vtDistinct,
+  vtSortValues,
   vtIsCategorical,
   vtFormat,
   vtApply,

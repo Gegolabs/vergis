@@ -91,6 +91,26 @@ Qué ve ahora quien administra el dominio:
 Sin slots declarados (instancia sin intake), la conducta es idéntica a la anterior. El control
 negativo del PR: contra `main`, el motor fake recibe `setScheduleSeconds` para el proceso manual.
 
+### Las facetas y los grupos de una tabla se ordenan como una persona los escribiría (#285)
+
+**Cambia lo que ve la persona que lee un PI.** El embudo de una columna de texto ordenaba sus valores
+con el alfabeto, y a una serie eso la desarma: en PI-15 la faceta `Mes` abría `Abril, Agosto,
+Diciembre, Enero…` y la faceta `Week` listaba `W1, W10, W11, …, W2`. Ninguna de las dos es una lista
+que se pueda recorrer con el ojo.
+
+Ahora el orden lo decide la **familia del conjunto** de valores —jamás el par, porque un comparador
+que cambia de modo par a par es no-transitivo y `Array.sort` devuelve órdenes arbitrarios—: todos
+numéricos → por número (`2` antes que `10`); todos fecha ISO → cronológico; todos `prefijo corto +
+número` con el mismo prefijo (`W2`, `Q1`, `S-3`) → por el número; todos nombres de mes en español o
+inglés, completos o abreviados, sin distinguir mayúsculas ni acentos → por calendario; y si el
+conjunto no califica en ninguna, el alfabético de siempre. El vacío va siempre al final. Vale para la
+lista del embudo y para las claves de grupo (`vtGroup`, y por herencia el árbol multinivel).
+
+Lo decide el **dato**, no el spec: ninguna spec cambia y no hay vocabulario nuevo del DSL. Medido con
+`vtSortValues` y `vtGroup` en `tests/table-natural-order.test.ts` —las cinco familias, los vacíos, los
+prefijos distintos que NO son serie y el intruso que rompe la familia numérica—, con control negativo
+contra `main` (12 de 13 casos fallan allí; el orden de meses arranca en `Abril`).
+
 ## 0.25.1 — 2026-09-03
 
 ### Qué exige esta versión
