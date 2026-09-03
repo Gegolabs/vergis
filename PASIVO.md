@@ -2,8 +2,8 @@
 vista: "pasivo-obra"
 alcance: "obra/vergis"
 nivel: "obra"
-compilada_de: "2f91db49c8d5"
-compilada_en: "2026-09-03T23:06:26Z"
+compilada_de: "31cce7389aad"
+compilada_en: "2026-09-03T23:24:02Z"
 items: 17
 ---
 # Pasivo — vergis
