@@ -29,6 +29,22 @@ export interface VtState {
    *  (las columnas mostradas y buscables) — así no matchea campos ocultos del payload (tokens de
    *  anotación, claves de drill). Ausente → todos los campos de la fila (back-compat). */
   searchCols?: string[]
+  /** Filtros de NÚMERO por columna: field → rango. Ausente/vacío = sin filtro numérico
+   *  (opcional por back-compat: un estado construido antes de esta capacidad sigue siendo válido). */
+  numFilters?: Record<string, VtNumFilter>
+}
+
+/**
+ * Rango de un filtro de número sobre una columna. Cada borde es opcional y trae su inclusividad:
+ * `> 0` = `{min:0, minIncl:false}` · `< 0` = `{max:0, maxIncl:false}` ·
+ * `= 0` = `{min:0, max:0, minIncl:true, maxIncl:true}` · `entre a y b` = ambos bordes inclusivos.
+ * Un filtro sin `min` ni `max` NO existe: se borra del estado en vez de guardarse vacío.
+ */
+export interface VtNumFilter {
+  min?: number
+  max?: number
+  minIncl?: boolean
+  maxIncl?: boolean
 }
 
 /** Normaliza para comparar: minúsculas + sin acentos. */
@@ -136,13 +152,27 @@ export function vtFormat(value: unknown, format?: string): string {
   return s
 }
 
-/** Aplica facetas + búsqueda (global y por columna) + orden. Devuelve un arreglo nuevo. */
+/** Aplica facetas + filtros de número + búsqueda (global y por columna) + orden. Arreglo nuevo. */
 export function vtApply(rows: Record<string, unknown>[], state: VtState): Record<string, unknown>[] {
   const gq = vtNorm(state.globalSearch)
+  const nf = state.numFilters || {}
   const out = rows.filter((r) => {
     for (const f in state.facets) {
       const sel = state.facets[f]
       if (sel && sel.length && sel.indexOf(String(r[f] == null ? '' : r[f])) === -1) return false
+    }
+    // Filtros de número: se aplican DESPUÉS de las facetas. Una celda vacía o no numérica queda
+    // FUERA cuando su columna tiene filtro numérico activo — «los negativos» no incluye «los que
+    // no tienen dato»: un vacío no es un número que cumpla el predicado.
+    for (const f in nf) {
+      const flt = nf[f]
+      if (!flt || (flt.min == null && flt.max == null)) continue
+      const raw = r[f]
+      if (raw == null || raw === '') return false
+      const n = Number(raw)
+      if (Number.isNaN(n)) return false
+      if (flt.min != null && (flt.minIncl ? n < flt.min : n <= flt.min)) return false
+      if (flt.max != null && (flt.maxIncl ? n > flt.max : n >= flt.max)) return false
     }
     if (gq) {
       let hit = false
@@ -184,6 +214,98 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
     })
   }
   return out
+}
+
+/**
+ * Etiqueta legible de un filtro de número, la que va en el chip: `< 0` · `> 0` · `= 0` ·
+ * `> 1.000` · `entre 1.000 y 5.000`. Los números se formatean con `vtFormat(v, fmt)` si la columna
+ * declara `format`, y si no con `Intl` es-CL (punto de miles) — el chip lee como lee la celda.
+ * Un filtro sin bordes devuelve `''` (no existe, no se pinta chip).
+ *
+ * PURA a propósito, y exportada, para poder testear la etiqueta sin montar un DOM.
+ */
+export function vtNumFilterLabel(filter: VtNumFilter, fmt?: string): string {
+  if (!filter || (filter.min == null && filter.max == null)) return ''
+  const n = function (v: number): string {
+    return fmt ? vtFormat(v, fmt) : new Intl.NumberFormat('es-CL', { maximumFractionDigits: 3 }).format(v)
+  }
+  const lo = filter.min
+  const hi = filter.max
+  if (lo != null && hi != null) return lo === hi ? '= ' + n(lo) : 'entre ' + n(lo) + ' y ' + n(hi)
+  if (lo != null) return (filter.minIncl ? '≥ ' : '> ') + n(lo)
+  return (filter.maxIncl ? '≤ ' : '< ') + n(hi as number)
+}
+
+/**
+ * HTML del popover de una columna. LA convención de plataforma, decidida por el DATO y no por el
+ * spec (`vtIsNumericCol`): `kind='num'` → **Filtros de número** (atajos + operador), `kind='vals'`
+ * → la lista de valores distintos de siempre. Ver el comentario junto a `buildPop`.
+ *
+ * PURA y autocontenida (el escapador es local) para poder verificar el HTML emitido sin navegador;
+ * viaja al browser vía `.toString()` como el resto de PURE_FNS.
+ */
+export function vtPopHtml(kind: string, label: string, optsHtml: string, filter?: VtNumFilter): string {
+  const esc = function (s: unknown): string {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  }
+  if (kind === 'num') {
+    const f: VtNumFilter = filter || {}
+    const isPos = f.min === 0 && !f.minIncl && f.max == null
+    const isNeg = f.max === 0 && !f.maxIncl && f.min == null
+    const isZero = f.min === 0 && f.max === 0 && !!f.minIncl && !!f.maxIncl
+    const q = function (key: string, txt: string, on: boolean): string {
+      return (
+        '<button type="button" class="vt-pop-q' +
+        (on ? ' on' : '') +
+        '" data-q="' +
+        key +
+        '" aria-pressed="' +
+        (on ? 'true' : 'false') +
+        '">' +
+        txt +
+        '</button>'
+      )
+    }
+    return (
+      '<div class="vt-pop-num">' +
+      '<div class="vt-pop-title">Filtros de número — ' +
+      esc(label) +
+      '</div>' +
+      '<div class="vt-pop-quick">' +
+      q('pos', 'Positivos (&gt; 0)', isPos) +
+      q('neg', 'Negativos (&lt; 0)', isNeg) +
+      q('zero', 'En cero', isZero) +
+      '</div>' +
+      '<div class="vt-pop-range">' +
+      '<select class="vt-pop-op" aria-label="Operador del filtro de número">' +
+      '<option value="gt">mayor que</option>' +
+      '<option value="lt">menor que</option>' +
+      '<option value="between">entre</option>' +
+      '<option value="eq">igual a</option>' +
+      '</select>' +
+      '<input class="vt-pop-a" type="number" step="any" placeholder="valor" aria-label="Valor">' +
+      '<input class="vt-pop-b" type="number" step="any" placeholder="y" aria-label="Segundo valor" hidden>' +
+      '</div>' +
+      '<div class="vt-pop-actions">' +
+      '<button type="button" class="vt-pop-apply">Aplicar</button>' +
+      '<button type="button" class="vt-pop-clear">Limpiar</button>' +
+      '</div>' +
+      '</div>'
+    )
+  }
+  return (
+    '<input class="vt-pop-search" type="search" placeholder="Buscar valor…" aria-label="Buscar valor en ' +
+    esc(label) +
+    '">' +
+    '<div class="vt-pop-actions"><button type="button" class="vt-pop-all">Todos</button><button type="button" class="vt-pop-clear">Limpiar</button></div>' +
+    '<div class="vt-pop-opts">' +
+    optsHtml +
+    '</div>'
+  )
 }
 
 /** Agrupa filas (ya filtradas/ordenadas) por una columna. Grupos ordenados alfabéticamente;
@@ -335,6 +457,8 @@ const PURE_FNS = [
   vtIsCategorical,
   vtFormat,
   vtApply,
+  vtNumFilterLabel,
+  vtPopHtml,
   vtGroup,
   vtGroupTree,
   vtCsvCell,
@@ -444,7 +568,7 @@ function vtBootstrap(root){
   function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
-  var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, groupLevels:[], collapsed:{} };
+  var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, numFilters:{}, groupLevels:[], collapsed:{} };
   // Busqueda global acotada a las columnas mostradas y buscables: los campos ocultos del payload
   // (claves de drill) no estan en cols, asi que no se buscan por texto.
   state.searchCols = cols.filter(function(c){ return c.searchable!==false; }).map(function(c){ return c.field; });
@@ -500,6 +624,7 @@ function vtBootstrap(root){
       var filtered = !!state.globalSearch;
       for(var ff in state.facets){ if((state.facets[ff]||[]).length) filtered=true; }
       for(var cf in state.colSearch){ if(state.colSearch[cf]) filtered=true; }
+      for(var nff in state.numFilters){ if(state.numFilters[nff]) filtered=true; }
       var blob = new Blob(['\\ufeff'+vtCsv(rc, view)], {type:'text/csv;charset=utf-8'});
       var a = document.createElement('a');
       a.href = window.URL.createObjectURL(blob);
@@ -526,17 +651,21 @@ function vtBootstrap(root){
   function collapseAll(){ var acc=[]; gatherPaths(vtGroupTree(vtApply(rows,state), state.groupLevels), '', acc); acc.forEach(function(p){ state.collapsed[p]=1; }); }
   function gatherPaths(node, prefix, acc){ if(node.leaf) return; node.groups.forEach(function(g){ var p=prefix+node.field+SEP+g.key; acc.push(p); gatherPaths(g.child, p+SEP, acc); }); }
   function clearAll(){
-    state.facets={}; state.globalSearch=''; state.groupLevels=[]; state.collapsed={};
+    state.facets={}; state.numFilters={}; state.globalSearch=''; state.groupLevels=[]; state.collapsed={};
     if(gs) gs.value='';
     Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop input[type=checkbox]'), function(b){ b.checked=false; });
+    // Los popovers ya construidos se vacían: se reconstruyen al abrirlos, reflejando el estado limpio
+    // (el de una columna numérica no tiene checkboxes que desmarcar — su estado vive en numFilters).
+    Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p.innerHTML) p.innerHTML=''; });
     renderGroupUI(); render();
   }
 
   // ---- Tab "Vistas": presets persistidos por reporte. La UI/persistencia/pin/confirmación viven
   //      en el snippet COMPARTIDO vergisSavedViews; acá solo el snapshot/apply propios de la tabla. ----
-  function snapshot(){ return { facets: JSON.parse(JSON.stringify(state.facets)), globalSearch: state.globalSearch, groupLevels: state.groupLevels.slice(), sort: { field: state.sort.field, dir: state.sort.dir } }; }
+  function snapshot(){ return { facets: JSON.parse(JSON.stringify(state.facets)), numFilters: JSON.parse(JSON.stringify(state.numFilters)), globalSearch: state.globalSearch, groupLevels: state.groupLevels.slice(), sort: { field: state.sort.field, dir: state.sort.dir } }; }
   function applySnapshot(s){
     state.facets = s.facets ? JSON.parse(JSON.stringify(s.facets)) : {};
+    state.numFilters = s.numFilters ? JSON.parse(JSON.stringify(s.numFilters)) : {};
     state.globalSearch = s.globalSearch || '';
     state.groupLevels = (s.groupLevels||[]).slice();
     state.sort = { field: (s.sort&&s.sort.field)||'', dir: (s.sort&&s.sort.dir)||'asc' };
@@ -548,17 +677,53 @@ function vtBootstrap(root){
   }
   vergisSavedViews({ snapshot: snapshot, apply: applySnapshot });
 
-  // ---- Popover por columna (ícono embudo en el header): buscador + selector de valores únicos ----
+  // ---- Popover por columna (ícono embudo en el header) ----
+  //      CONVENCIÓN DE PLATAFORMA, no configurable por spec: una columna NUMÉRICA no ofrece filtro
+  //      por valor —cada monto es único y marcar valores no expresa «los negativos»—: ofrece
+  //      FILTROS DE NÚMERO (atajos + operador, como Excel). Una columna de TEXTO ofrece la lista de
+  //      valores distintos. Lo decide el DATO (vtIsNumericCol), no el spec.
   function closeAllPops(except){ Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p!==except) p.hidden=true; }); }
+  function colFormat(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?c.format:undefined; }
+  function sameNumFilter(a,b){
+    if(!a||!b) return false;
+    return a.min===b.min && a.max===b.max && !!a.minIncl===!!b.minIncl && !!a.maxIncl===!!b.maxIncl;
+  }
+  var VT_QUICK={ pos:{min:0,minIncl:false}, neg:{max:0,maxIncl:false}, zero:{min:0,max:0,minIncl:true,maxIncl:true} };
+  function setNumFilter(field, nf){
+    if(nf) state.numFilters[field]=nf; else delete state.numFilters[field];
+    var th=root.querySelector('th[data-field="'+field+'"]'); var pop=th&&th.querySelector('.vt-col-pop');
+    if(pop && !pop.hidden) buildNumPop(pop, field); else if(pop) pop.innerHTML='';
+    render();
+  }
+  function buildNumPop(pop, field){
+    var cur=state.numFilters[field];
+    pop.innerHTML = vtPopHtml('num', colLabel(field), '', cur);
+    Array.prototype.forEach.call(pop.querySelectorAll('.vt-pop-q'), function(b){
+      b.addEventListener('click', function(){
+        var k=b.getAttribute('data-q');
+        setNumFilter(field, sameNumFilter(state.numFilters[field], VT_QUICK[k]) ? null : VT_QUICK[k]);
+      });
+    });
+    var op=pop.querySelector('.vt-pop-op'), ia=pop.querySelector('.vt-pop-a'), ib=pop.querySelector('.vt-pop-b');
+    function syncOp(){ ib.hidden = op.value!=='between'; }
+    op.addEventListener('change', syncOp); syncOp();
+    pop.querySelector('.vt-pop-apply').addEventListener('click', function(){
+      var a=parseFloat(ia.value), b=parseFloat(ib.value), nf=null;
+      if(op.value==='gt' && !isNaN(a)) nf={min:a,minIncl:false};
+      else if(op.value==='lt' && !isNaN(a)) nf={max:a,maxIncl:false};
+      else if(op.value==='eq' && !isNaN(a)) nf={min:a,max:a,minIncl:true,maxIncl:true};
+      else if(op.value==='between' && !isNaN(a) && !isNaN(b)) nf={min:Math.min(a,b),max:Math.max(a,b),minIncl:true,maxIncl:true};
+      if(nf) setNumFilter(field, nf);
+    });
+    pop.querySelector('.vt-pop-clear').addEventListener('click', function(){ setNumFilter(field, null); });
+  }
   function buildPop(pop, field){
+    if(vtIsNumericCol(rows, field)){ buildNumPop(pop, field); return; }
     var counts=vtCounts(rows, field);
     var vals=vtDistinct(rows, field).slice().sort(function(a,b){return vtNorm(a).localeCompare(vtNorm(b));});
     var sel=state.facets[field]||[];
     var opts=vals.map(function(v){ var ck=sel.indexOf(v)!==-1?' checked':''; return '<label><input type="checkbox" value="'+vtEsc(v)+'"'+ck+'> <span class="vt-pop-val">'+vtEsc(v||'(vacío)')+'</span> <span class="vt-pop-count">'+counts[v]+'</span></label>'; }).join('');
-    pop.innerHTML =
-      '<input class="vt-pop-search" type="search" placeholder="Buscar valor…" aria-label="Buscar valor en '+vtEsc(colLabel(field))+'">' +
-      '<div class="vt-pop-actions"><button type="button" class="vt-pop-all">Todos</button><button type="button" class="vt-pop-clear">Limpiar</button></div>' +
-      '<div class="vt-pop-opts">'+opts+'</div>';
+    pop.innerHTML = vtPopHtml('vals', colLabel(field), opts);
     var ps=pop.querySelector('.vt-pop-search');
     ps.addEventListener('input', function(){ var q=vtNorm(ps.value); Array.prototype.forEach.call(pop.querySelectorAll('.vt-pop-opts label'), function(l){ l.style.display=(!q||vtNorm(l.textContent).indexOf(q)!==-1)?'':'none'; }); });
     var optsBox=pop.querySelector('.vt-pop-opts');
@@ -632,6 +797,7 @@ function vtBootstrap(root){
   if(chipsEl) chipsEl.addEventListener('click', function(e){
     var chip=e.target.closest('.vt-chip'); if(!chip) return;
     if(chip.getAttribute('data-search')==='global'){ state.globalSearch=''; if(gs) gs.value=''; }
+    else if(chip.getAttribute('data-numfield')){ setNumFilter(chip.getAttribute('data-numfield'), null); return; }
     else { var f=chip.getAttribute('data-field'), v=chip.getAttribute('data-val'); state.facets[f]=(state.facets[f]||[]).filter(function(x){return x!==v;}); var th=root.querySelector('th[data-field="'+f+'"]'); var pop=th&&th.querySelector('.vt-col-pop'); if(pop&&pop.innerHTML){ var ins=pop.querySelectorAll('.vt-pop-opts input'); for(var bi=0;bi<ins.length;bi++){ if(ins[bi].value===v){ ins[bi].checked=false; break; } } } }
     render();
   });
@@ -662,15 +828,19 @@ function vtBootstrap(root){
       var f=th.getAttribute('data-field'); var ind=th.querySelector('.vt-sort-ind');
       if(ind) ind.textContent = (state.sort.field===f) ? (state.sort.dir==='asc'?'▲':'▼') : '';
       th.setAttribute('aria-sort', state.sort.field===f ? (state.sort.dir==='asc'?'ascending':'descending') : 'none');
-      var btn=th.querySelector('.vt-filter-btn'); if(btn) btn.classList.toggle('on',(state.facets[f]||[]).length>0);
+      var btn=th.querySelector('.vt-filter-btn'); if(btn) btn.classList.toggle('on',(state.facets[f]||[]).length>0 || !!state.numFilters[f]);
     });
     if(chipsEl){
       var chips=[];
       for(var f in state.facets){ (state.facets[f]||[]).forEach(function(v){ chips.push('<span class="vt-chip" data-field="'+vtEsc(f)+'" data-val="'+vtEsc(v)+'">'+vtEsc(colLabel(f)+': '+(v||'(vacío)'))+' <span class="vt-chip-x">×</span></span>'); }); }
+      for(var nf in state.numFilters){
+        var lab=vtNumFilterLabel(state.numFilters[nf], colFormat(nf));
+        if(lab) chips.push('<span class="vt-chip" data-numfield="'+vtEsc(nf)+'">'+vtEsc(colLabel(nf)+': '+lab)+' <span class="vt-chip-x">×</span></span>');
+      }
       if(state.globalSearch) chips.push('<span class="vt-chip vt-chip-search" data-search="global">buscar: '+vtEsc(state.globalSearch)+' <span class="vt-chip-x">×</span></span>');
       chipsEl.innerHTML = chips.join('');
     }
-    if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
+    if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } for(var nk in state.numFilters){ if(state.numFilters[nk]) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
   }
   // Arranque: si una vista pinneada ya aplicó (applySnapshot → render), no hay nada que hacer.
   // Si el tbody servido ya trae TODAS las filas (ssrComplete) y el estado inicial es vacío (sin
@@ -679,6 +849,7 @@ function vtBootstrap(root){
   // solo el conteo (que de otro modo solo pinta render()). En cualquier otro caso, render() normal.
   var stateEmpty = !state.sort.field && !state.globalSearch && !state.groupLevels.length;
   for(var fk in state.facets){ if((state.facets[fk]||[]).length) stateEmpty=false; }
+  for(var nfk in state.numFilters){ if(state.numFilters[nfk]) stateEmpty=false; }
   if(!rendered){
     // Con 0 filas NO se salta: render() pinta la fila «Sin resultados» (el tbody servido va vacío).
     if(payload.ssrComplete && stateEmpty && rows.length){
