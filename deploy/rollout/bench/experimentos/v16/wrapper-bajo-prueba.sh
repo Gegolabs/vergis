@@ -17,8 +17,10 @@ set -u
 VERSION=${1:?uso: primera-promocion.sh <versión>}
 COMPOSE_NODE=${COMPOSE_NODE:-mira-vergis-1}
 MARCA="no hay anillo activo vivo"
+set -a
 # shellcheck disable=SC1090
-set -a; . "${ROLLOUT_ENV:-/opt/mira/rings/rollout.env}"; set +a
+. "${ROLLOUT_ENV:-/opt/mira/rings/rollout.env}"
+set +a
 RINGS_PROMOTE_TIMEOUT=${PRIMERA_TIMEOUT:-30}   # margen para el relevo manual; después vuelve a 10
 export RINGS_PROMOTE_TIMEOUT
 LOG=${LOG_DIR:-/opt/mira/rings}/promote-$VERSION-$(date +%s).log
