@@ -111,6 +111,25 @@ Lo decide el **dato**, no el spec: ninguna spec cambia y no hay vocabulario nuev
 prefijos distintos que NO son serie y el intruso que rompe la familia numérica—, con control negativo
 contra `main` (12 de 13 casos fallan allí; el orden de meses arranca en `Abril`).
 
+### El embudo de una columna lista solo los valores que sobreviven a los demás filtros (#286)
+
+**Cambia lo que ve la persona que lee un PI.** Con `Mes = Marzo` puesto, la faceta `Week` seguía
+ofreciendo las 52 semanas del año con el conteo del dataset completo: se marcaba una y la tabla
+quedaba vacía, sin que nada avisara por qué. Ahora la lista y los conteos de una faceta se calculan
+sobre las filas que pasan **el resto** del estado —las demás facetas, los filtros de número y de
+fecha, la búsqueda global y la de columna—, que es la convención del autofiltro de Excel. Es
+simétrica, no jerárquica: con `Week = W10` puesto, `Mes` lista solo los meses que tienen W10.
+
+Los valores ya marcados en la propia columna se conservan aunque el resto de los filtros los deje sin
+filas, con conteo `0`, para poder quitarlos; y la propia faceta nunca se auto-acota. El embudo se
+reconstruye al abrirse cuando el resto del estado cambió desde la última vez (sello `data-built-for`),
+así que la lista nunca queda rancia. Las columnas numéricas y de fecha no cambian.
+
+Medido con `vtFacetOptions` en `tests/table-facet-options.test.ts` —dos facetas cruzadas, un filtro de
+número activo, el seleccionado sin filas, la búsqueda global— más una verificación sobre la fuente que
+viaja al navegador (el embudo ya no arma su lista con `vtDistinct(rows, field)` crudo). Control
+negativo contra `main`: la función no existe allí.
+
 ## 0.25.1 — 2026-09-03
 
 ### Qué exige esta versión
