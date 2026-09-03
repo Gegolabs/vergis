@@ -63,7 +63,37 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### El embudo de una columna numérica ofrece filtros de número, no la lista de montos
+
+**Cambia lo que ve la persona que lee un PI.** Hasta ahora el ícono embudo de **cualquier** columna
+abría la lista de valores distintos para marcar. Sobre una columna de montos eso no sirve: cada monto
+es único. El caso medido es PI-01, columna «Deuda Total» — quien quiso ver *los negativos* marcó
+decenas de valores a mano y se quedó con una pared de chips `Deuda Total: -10261752661 ×`.
+
+Ahora el embudo de una columna **numérica** abre **Filtros de número**: tres atajos (`Positivos (> 0)`,
+`Negativos (< 0)`, `En cero`) y una fila de operador (`mayor que` · `menor que` · `entre` · `igual a`)
+con sus valores. El resultado es **un solo chip legible** —`Deuda Total: < 0`, `Deuda Total: entre
+1.000 y 5.000`—, removible con un clic como los demás. Los números del chip se formatean con el
+`format` de la columna (o `Intl` es-CL), así que el chip lee como lee la celda.
+
+**Es convención de plataforma, no algo que el spec declare**: lo decide el **dato** (`vtIsNumericCol`),
+igual que ya ocurre con el orden numérico y con las candidatas al color de magnitud. Las columnas de
+texto **no cambian**: siguen ofreciendo su checklist de valores. Ningún spec se toca y ninguna spec
+puede desactivarlo.
+
+Semántica del filtro, dicha entera: los atajos son estrictos (`> 0` deja fuera el cero), `entre` es
+inclusivo en ambos bordes, y una celda **vacía o no numérica queda FUERA** mientras su columna tenga
+filtro numérico activo — «los negativos» no incluye «los que no tienen dato». El filtro viaja en las
+**vistas guardadas**, lo borra **Limpiar todo**, cuenta para la marca `--filtrado` del CSV descargado
+y suma en el contador de la bandeja.
+
+**Lo que NO se midió, dicho así:** no se probó en un navegador real con **teclado ni lector de
+pantalla** — los atajos son `<button aria-pressed>` y los campos llevan `aria-label`, pero el recorrido
+de foco y el anuncio del cambio no se verificaron con asistencia. La verificación visual fue sobre el
+**HTML generado**, abierto en Chrome headless y accionado por script (popover numérico, control de la
+columna de texto, y el filtro «Negativos» aplicado: 2 filas de 5 con un chip). Tampoco se midió con
+una tabla de decenas de miles de filas.
+
 
 ## 0.23.1 — 2026-09-02
 

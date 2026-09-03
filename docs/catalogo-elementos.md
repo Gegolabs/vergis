@@ -212,6 +212,31 @@ Antecedente: la rampa anterior era `hsl(8, 75%, L%)` —hue 8 es rojo— oscurec
 valor, o sea *la cifra más grande era la más roja*. El cliente lo leyó como negatividad y pidió
 retirarlo; la instancia sacó los 44 `colorscale` de sus 7 specs.
 
+## 4·ter · Filtro de columna en tablas — lo decide el dato, no el spec
+
+El ícono embudo del encabezado abre un popover, y **qué ofrece ese popover depende del dato de la
+columna**, no de lo que el spec declare. Es la misma familia que §4·bis: afordancia del lector.
+
+- **Columna de texto → la lista de valores distintos** (checklist con buscador y conteos). Es lo que
+  sirve cuando los valores se repiten: «Área: Logística».
+- **Columna numérica → «Filtros de número»**, al modo de Excel: tres atajos (`Positivos (> 0)`,
+  `Negativos (< 0)`, `En cero`) y una fila de operador (`mayor que` · `menor que` · `entre` ·
+  `igual a`) con sus valores. **Sin** checklist ni buscador — marcar montos uno a uno no expresa
+  «los negativos».
+- **Lo decide `vtIsNumericCol`**, o sea el dato materializado, no una declaración del spec. Un autor
+  de spec no puede prenderlo ni apagarlo: es convención de plataforma.
+
+**Semántica, escrita entera** (vive en `VtNumFilter`): los atajos son estrictos —`> 0` deja fuera el
+cero—, `entre a y b` es inclusivo en ambos bordes, y una **celda vacía o no numérica queda fuera**
+mientras su columna tenga filtro numérico activo: «los negativos» no incluye «los que no tienen
+dato». El estado produce **un** chip por columna (`Deuda Total: < 0`, `Deuda Total: entre 1.000 y
+5.000`), removible con un clic, formateado con el `format` de la columna para que el chip lea como
+lee la celda. Viaja en las vistas guardadas, lo borra «Limpiar todo» y cuenta para el sufijo
+`--filtrado` del CSV.
+
+Antecedente: en PI-01 la columna «Deuda Total» ofrecía sus montos como valores marcables. Quien
+quiso los negativos marcó decenas a mano y terminó con una pared de chips de un monto cada uno.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de

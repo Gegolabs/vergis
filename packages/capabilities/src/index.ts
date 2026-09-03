@@ -39,6 +39,8 @@ export {
   vtIsCategorical,
   vtFormat,
   vtApply,
+  vtNumFilterLabel,
+  vtPopHtml,
   vtGroup,
   vtGroupTree,
   vtCsvCell,
@@ -46,7 +48,7 @@ export {
   vtCsvName,
   vtDownloadName,
 } from './table-runtime'
-export type { VtState, VtTreeNode } from './table-runtime'
+export type { VtState, VtNumFilter, VtTreeNode } from './table-runtime'
 export {
   openNotasStore,
   SqliteNotasStore,
