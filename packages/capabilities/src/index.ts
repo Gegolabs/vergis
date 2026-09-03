@@ -35,11 +35,13 @@ export {
   TABLE_RUNTIME_SOURCE,
   vtNorm,
   vtIsNumericCol,
+  vtIsDateCol,
   vtDistinct,
   vtIsCategorical,
   vtFormat,
   vtApply,
   vtNumFilterLabel,
+  vtDateFilterLabel,
   vtPopHtml,
   vtGroup,
   vtGroupTree,
@@ -48,7 +50,7 @@ export {
   vtCsvName,
   vtDownloadName,
 } from './table-runtime'
-export type { VtState, VtNumFilter, VtTreeNode } from './table-runtime'
+export type { VtState, VtNumFilter, VtDateFilter, VtTreeNode } from './table-runtime'
 export {
   openNotasStore,
   SqliteNotasStore,

@@ -41,6 +41,9 @@ export const TABLE_INTERACTIVE_CSS = `
 .vtable .vt-pop-range{display:flex;gap:6px;align-items:center}
 .vtable .vt-pop-range select,.vtable .vt-pop-range input{min-width:0;flex:1;box-sizing:border-box;padding:4px 6px;font-size:12px;border:1px solid var(--border,#e2e8f0);border-radius:5px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
 .vtable .vt-pop-range input[hidden]{display:none}
+.vtable .vt-pop-dates{display:flex;gap:6px;align-items:center}
+.vtable .vt-pop-dates label{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--fg-dim,#64748b);font-weight:600}
+.vtable .vt-pop-dates input{width:100%;box-sizing:border-box;padding:4px 6px;font-size:12px;border:1px solid var(--border,#e2e8f0);border-radius:5px;background:var(--bg,#fff);color:var(--fg,#1f2937)}
 .vtable tr.vt-group-head td{background:var(--panel,#f1f5f9);font-weight:700;color:var(--fg,#1f2937);font-size:12px;text-transform:uppercase;letter-spacing:.03em;cursor:pointer;user-select:none}
 .vtable tr.vt-group-head:hover td{color:var(--green,#2563eb)}
 .vtable tr.vt-group-head[data-depth="1"] td{font-size:11px;opacity:.94;text-transform:none;letter-spacing:0}

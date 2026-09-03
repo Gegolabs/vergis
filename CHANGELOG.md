@@ -63,7 +63,43 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### Qué exige esta versión
+
+> **Nada del motor, de la base ni del env.** Quien corre 0.24.x sube con un `pull` + recreate (o una
+> promoción de anillo). Lo que cambia es **conducta visible en toda tabla interactiva** con una columna de
+> **fecha**: su embudo ya no lista los días — ofrece un **rango** (`Desde` / `Hasta`). Lo decide el dato
+> (`vtIsDateCol`), no el spec. Las vistas guardadas siguen valiendo; las nuevas pueden incluir el rango.
+
+### El embudo de una columna de fecha ofrece un rango, no la lista de días (#280)
+
+**Cambia lo que ve la persona que lee un PI.** Hasta ahora una columna de fechas abría, como cualquier
+columna de texto, la lista de valores distintos con casillas: acotar «del 1 al 31 de julio» eran treinta
+clics y el resultado no se leía como un rango sino como una pared de chips de día. El caso medido es
+PI-16 (Informe Factura), cuya spec pide literalmente «Rango de Fechas (Fecha Documento)» y cuyo
+especificador volvió a pedirlo el 2026-09-03.
+
+Ahora el embudo de una columna **de fecha** abre **Rango de fechas**: dos campos `Desde` / `Hasta`
+(`<input type="date">`), tres atajos (`Este mes`, `Mes anterior`, `Últimos 30 días`, calculados en la
+hora local de quien mira) y `Aplicar` / `Limpiar`. El resultado es **un solo chip legible** —`Fecha
+Documento: 01-07-2026 → 31-07-2026`, `desde 01-07-2026`, `hasta 31-07-2026`—, removible con un clic.
+
+**Es convención de plataforma, hermana del filtro de número de 0.24.0**: la decide el **dato**
+(`vtIsDateCol`: todos los valores no vacíos son ISO `YYYY-MM-DD`, con hora opcional), evaluada
+**después** de `vtIsNumericCol`, así que un folio de ocho dígitos sigue siendo numérico y un `2026-7-3`
+sin ceros sigue siendo texto. Ningún spec se toca y ninguna spec puede desactivarlo; una instancia que
+quiera el rango entrega la columna en ISO.
+
+Semántica del filtro, dicha entera: ambos bordes son **inclusivos**; la comparación es **lexicográfica
+sobre los diez primeros caracteres del ISO**, sin `Date.parse` (el orden léxico del ISO es el
+cronológico, y parsear metería husos donde el dato no los tiene); una celda **vacía queda FUERA**
+mientras su columna tenga rango activo; un rango al revés se endereza; un filtro sin bordes **no existe**
+(se borra del estado, como el numérico). El rango viaja en las **vistas guardadas**, lo borra
+**Limpiar todo**, cuenta para la marca `--filtrado` del CSV y suma en el contador de la bandeja. El
+orden de la columna no cambia.
+
+**Lo que NO se midió, dicho así:** el popover se verificó por su **HTML generado** y por la suite
+(detección, predicado, etiqueta del chip, CSS presente), no en un navegador real; teclado y lector de
+pantalla no se probaron. Los atajos dependen del reloj del navegador y no tienen test.
 
 ## 0.24.0 — 2026-09-02
 
