@@ -155,6 +155,7 @@ import {
   type SqlConnectionProfile,
   type TokenSource,
   importIdentityMapFile,
+  singleFlight,
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
@@ -2320,41 +2321,34 @@ async function reabrirStores(): Promise<string | null> {
  */
 let noAspirarHasta = 0
 
-/** Suelta el control de forma ordenada: lazos desarmados (esperando el tick en vuelo) → release. */
-let soltando: Promise<void> | null = null
-function soltarControl(motivo: string): Promise<void> {
-  if (soltando) return soltando
-  soltando = (async () => {
-    try {
-      if (!plane.hasControl()) {
-        console.log(`[control] ${motivo}: este nodo ya estaba en standby (nada que soltar).`)
-        return
-      }
-      noAspirarHasta = Date.now() + CONTROL_CONFIG.staleMs
-      await loops.disarm()
-      console.log(`[control] ${motivo}: lazos desarmados (tick en vuelo esperado).`)
-      // Los stores embebidos NO acumulan escrituras: cada operación termina en su propio volcado, así
-      // que el «persist final» del release ordenado ES esperar el tick en vuelo — no hay buffer que
-      // vaciar. Reabrir en modo LECTURA es lo que garantiza que de acá en adelante este proceso no
-      // pueda volcar nada, ni por un camino que se nos haya pasado.
-      await plane.release()
-      const falló = await reabrirStores()
-      if (falló) {
-        console.error(
-          `[control] ${motivo}: el control quedó soltado pero el store '${falló}' NO se pudo reabrir en modo lectura. ` +
-            `Su handle sigue en escritura: un volcado suyo fallaría ruidoso contra el fencing, no en silencio.`,
-        )
-      }
-      console.log(
-        `[control] ${motivo}: control SOLTADO (época ${plane.status().epoch} conservada en la marca de release). Standby. ` +
-          `Este nodo no vuelve a aspirar al control por ${CONTROL_CONFIG.staleMs} ms, para que el sucesor lo tome.`,
-      )
-    } finally {
-      soltando = null
-    }
-  })()
-  return soltando
-}
+/** Suelta el control de forma ordenada: lazos desarmados (esperando el tick en vuelo) → release.
+ *  «Una sola en vuelo» por `singleFlight` (#282): el patrón a mano se quedaba pegado cuando la rama
+ *  «nada que soltar» retornaba sin await, y el nodo no volvía a soltar el control jamás. */
+const soltarControl = singleFlight(async (motivo: string): Promise<void> => {
+  if (!plane.hasControl()) {
+    console.log(`[control] ${motivo}: este nodo ya estaba en standby (nada que soltar).`)
+    return
+  }
+  noAspirarHasta = Date.now() + CONTROL_CONFIG.staleMs
+  await loops.disarm()
+  console.log(`[control] ${motivo}: lazos desarmados (tick en vuelo esperado).`)
+  // Los stores embebidos NO acumulan escrituras: cada operación termina en su propio volcado, así
+  // que el «persist final» del release ordenado ES esperar el tick en vuelo — no hay buffer que
+  // vaciar. Reabrir en modo LECTURA es lo que garantiza que de acá en adelante este proceso no
+  // pueda volcar nada, ni por un camino que se nos haya pasado.
+  await plane.release()
+  const falló = await reabrirStores()
+  if (falló) {
+    console.error(
+      `[control] ${motivo}: el control quedó soltado pero el store '${falló}' NO se pudo reabrir en modo lectura. ` +
+        `Su handle sigue en escritura: un volcado suyo fallaría ruidoso contra el fencing, no en silencio.`,
+    )
+  }
+  console.log(
+    `[control] ${motivo}: control SOLTADO (época ${plane.status().epoch} conservada en la marca de release). Standby. ` +
+      `Este nodo no vuelve a aspirar al control por ${CONTROL_CONFIG.staleMs} ms, para que el sucesor lo tome.`,
+  )
+})
 
 /** Se invoca cuando el lease se pierde SIN haberlo soltado (relevo ajeno, archivo ilegible, reloj raro). */
 let atendiendoPerdida = false
