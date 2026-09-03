@@ -124,3 +124,4 @@ nadie. Ver [`scripts/README-tsql-lab.md`](scripts/README-tsql-lab.md).
 ---
 
 • *Generado con Wingworking*
+<!-- alma · recursos · compilada_de f18e6a3d23ba · 2026-09-03T21:41:15Z · items 0 -->
