@@ -63,7 +63,20 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-### El embudo de una columna numérica ofrece filtros de número, no la lista de montos
+*(nada todavía)*
+
+## 0.24.0 — 2026-09-02
+
+### Qué exige esta versión
+
+> **Nada del motor, de la base ni del env.** Quien corre 0.23.x sube con un `pull` + recreate. Lo que
+> cambia es **conducta visible en toda tabla interactiva**, sin acción del operador ni del especificador:
+> el embudo de una columna **numérica** ya no lista sus valores — ofrece **filtros de número** (positivos ·
+> negativos · en cero · mayor que · menor que · entre · igual a), con un chip legible por filtro. Las columnas
+> de texto no cambian. **Lo decide el dato** (`vtIsNumericCol`), no el spec: no hay nada que configurar.
+> Las **vistas guardadas** de un usuario siguen valiendo; las nuevas pueden incluir filtros de número.
+
+### El embudo de una columna numérica ofrece filtros de número, no la lista de montos (#277)
 
 **Cambia lo que ve la persona que lee un PI.** Hasta ahora el ícono embudo de **cualquier** columna
 abría la lista de valores distintos para marcar. Sobre una columna de montos eso no sirve: cada monto
