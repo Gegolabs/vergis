@@ -1,0 +1,6 @@
+· imagen: benchv14/vergis:9.9.1
+  digest: sha256:8f1a9e8acf933088f6b03ee9f0431acced7404c32c60e293935c13f459779e87
+· create vergis-9-9-1
+· start vergis-9-9-1 — esperando que responda…
+  fase observada: standby
+✓ anillo 9.9.1 instalado (standby). Retención vigente: 3 — 'prune' retira lo que sobre.

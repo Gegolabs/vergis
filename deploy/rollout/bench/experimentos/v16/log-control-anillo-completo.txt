@@ -1,0 +1,19 @@
+2026-09-03T13:22:16.908198136Z [control] EN ESPERA (standby): el control lo tiene 'vergis@63dff3054d54/6' (época 1 · held-by-other). Este nodo SIRVE LECTURAS, abre sus stores en modo lectura, no arma un solo lazo y responde 409 a las mutaciones.
+2026-09-03T13:22:17.009315136Z [control] lazos DESARMADOS (2 declarado(s): purga-retención, reporte-periódico) — este nodo no tiene el control. Ni observa, ni reconcilia, ni consume archivos, ni purga, ni reporta.
+2026-09-03T13:22:17.074929678Z [control] ingesta del arranque OMITIDA: este nodo no tiene el control (sirve la réplica del activo).
+2026-09-03T13:23:39.593317633Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:23:41.121906550Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:23:43.126999635Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:23:45.123385094Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:23:47.133211470Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:23:49.135697721Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:23:53.178246875Z [control] SIGUSR2 — soltando el control y quedando en standby (el serving no se interrumpe)…
+2026-09-03T13:23:53.178356583Z [control] SIGUSR2: este nodo ya estaba en standby (nada que soltar).
+2026-09-03T13:24:35.596808589Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:24:37.178586007Z [control] relevo DIRIGIDO: el intent de handover nombra a este nodo ('vergis-9-9-1') — se aspira sin esperar la ventana de gracia.
+2026-09-03T13:24:37.194894215Z [control] RELEVO: control adquirido con la época 2. Reabriendo stores desde disco…
+2026-09-03T13:24:37.209494715Z [control] RELEVO completo: lazos ARMADOS (purga-retención, reporte-periódico).
+2026-09-03T13:25:24.880334709Z [control] SIGUSR2 — soltando el control y quedando en standby (el serving no se interrumpe)…
+2026-09-03T14:21:39.211764799Z [control] SIGUSR2 — soltando el control y quedando en standby (el serving no se interrumpe)…
+2026-09-03T14:24:38.505545757Z [control] SIGUSR2 — soltando el control y quedando en standby (el serving no se interrumpe)…
+2026-09-03T14:30:52.140834555Z [control] SIGUSR2 — soltando el control y quedando en standby (el serving no se interrumpe)…

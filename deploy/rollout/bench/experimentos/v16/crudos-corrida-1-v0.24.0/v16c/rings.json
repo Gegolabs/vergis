@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-09-03T13:24:38Z",
+  "active": "9.9.1",
+  "previous": "",
+  "rings": [
+    {"version":"9.9.1","name":"vergis-9-9-1","image":"benchv14/vergis:9.9.1","digest":"sha256:8f1a9e8acf933088f6b03ee9f0431acced7404c32c60e293935c13f459779e87","imageId":"sha256:8f1a9e8acf933088f6b03ee9f0431acced7404c32c60e293935c13f459779e87","installedAt":"2026-09-03T13:22:17Z","state":"activo","promotedAt":"2026-09-03T13:24:38Z"}
+  ]
+}

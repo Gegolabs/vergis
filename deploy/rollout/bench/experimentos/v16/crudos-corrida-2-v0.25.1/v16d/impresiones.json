@@ -1,0 +1,51 @@
+{
+  "ejecutadas": 9,
+  "vivas": 0,
+  "perdidas": [
+    {
+      "id": "dbc221e4-7c11-43ee-943b-c81f0573d74b",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "98eaf731-aff6-40f2-8634-e76b406c1bb1",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "94ca7b11-6d6a-4c92-a3dd-e5dbfb3455c1",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "fd9d9752-711f-4e7e-9254-9d085c65d17b",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "9cc85c80-eb10-4002-8f24-0f716234dc8a",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "fa7a75d3-4ec9-476d-a81b-492c7360086e",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "2b2fdadc-ca45-47a5-a37f-894e53fda6a3",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "78a77fb8-f8ee-41b4-83c3-9e1ed8454c56",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "6f72cc52-ceff-4dfb-b712-52f653124ed3",
+      "status": null,
+      "motivo": "TimeoutError"
+    }
+  ]
+}

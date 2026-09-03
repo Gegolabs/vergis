@@ -417,3 +417,54 @@ re-corrible desde `preparar`. Los crudos quedan en `.run/datos/` (gitignored).
 ---
 
 • *Generado con [Wingworking](https://wingworking.org)*
+
+---
+
+## V-16 · La PRIMERA promoción cuando el activo es un nodo SIN identidad de anillo (2026-09-03)
+
+**Qué se prueba.** El caso que V2…V14 no cubren y que la instancia GH tiene por delante: el activo es
+`benchv14-vergis-1`, un nodo **sin `VERGIS_RING`** ruteado por `active.caddy` como `vergis:8080` (lo que
+`mira-vergis-1` será tras migrar el borde), y el primer anillo (`vergis-9-9-1`, misma imagen) lo releva.
+Orquestador propio: [`scripts/bench16.sh`](scripts/bench16.sh) (no toca `bench.sh`); wrapper bajo prueba:
+[`experimentos/v16/wrapper-bajo-prueba.sh`](experimentos/v16/wrapper-bajo-prueba.sh) (el `07-primera-promocion.sh`
+del lab con rutas parametrizadas). Hipótesis de mecanismo (plan `work/231` §2 del lab): con «no hay anillo
+activo vivo» la herramienta flipea y espera un relevo que el intent no otorga; el titular solo suelta con
+`SIGUSR2`. Predicado y controles: los de V-14, sin relajar.
+
+### Corridas
+
+| # | Imagen | Resultado | Qué enseñó |
+|--|--|--|--|
+| 1 | v0.24.0 | V-16a ✓ · V-16b-cn ✓ (falla como se predijo) · V-16b ✓ · **V-16c ✗** | **#282**: el anillo había recibido un `SIGUSR2` en standby (lo manda `vergis-rollout` al candidato al abortar) y su `soltando` quedó pegado con una promesa resuelta. Medido con el inspector de Node sobre el proceso atascado: `soltando`=Promise, `hasControl()`=true, `loops.armed()`=true, `noAspirarHasta`=0 ([crudo](experimentos/v16/inspector-soltando-cerrojo.txt), [sonda](experimentos/v16/inspector-sonda.mjs)). Corregido en 0.25.1 (`singleFlight`) |
+| 2 | v0.25.1 | V-16c ✓ (7 s) · **V-16d ✗** (estado final malo) | La promoción abortada dejó al candidato con el control y el borde apuntando al nodo compose en standby: la herramienta manda `USR2` al candidato **antes** de que adquiera (14:41:23.314) y éste adquiere 180 ms después (14:41:23.496). CERO serving detrás del borde. → guardia post-abort en el wrapper |
+| 3 | v0.25.1 | inválida | `preparar` no retiraba el anillo de la corrida anterior; el nodo compose nunca llegó a serving y V-16d midió otro mundo |
+| 4 | v0.25.1 + wrapper con guardia | V-16d ✓ (guardia disparada, compose serving a los 8 s) · V-16b ✓ · V-16c con **404 en /impresiones** | Artefacto del banco, no del Producto: `preparar` borraba `control.lease.json` con los stores estampados en época 8; el nodo compose arrancó con época 4 y **deshabilitó notas y administración por diseño** (fail-closed). Las 8 impresiones «perdidas» estaban en el sqlite. Lección de runbook: **jamás borrar el lease con stores estampados** |
+| **5** | **v0.25.1 + wrapper con guardia** | **TODO VERDE** | La que vale. Tabla abajo. [Log](experimentos/v16/corrida-5-v0.25.1-final.log) · [crudos](experimentos/v16/crudos-corrida-5-v0.25.1/) |
+
+### Corrida 5 · cifras (predicado `200 ∧ phase=serving`, poller por `:8079`, mutador 1/s)
+
+| Corrida | Esperado | Medido | Veredicto |
+|--|--|--|--|
+| CN-instrumento A (poller directo al anillo en espera) | 0 OK, todo MAL | 495 MAL · 0 OK | ✓ |
+| CN-instrumento B (destino inexistente) | 0 OK, todo SINMEDIR | 274 SINMEDIR · 0 OK | ✓ |
+| V-16a `install` con el nodo compose activo | anillo standby, compose serving, lease sin cambio | rc=0 · anillo `standby` · compose `serving` · titular idéntico antes/después | ✓ |
+| **V-16b-cn** `promote` A SECAS | el candidato NO llega a serving; la herramienta vuelve atrás | rc=1 · «el candidato NO llegó a 'serving' (fase: standby)… Se vuelve atrás» · **441 respuestas 503 en 13,8 s** (el costo del intento) · 23/23 impresiones vivas | ✓ **mecanismo confirmado: sin señal no hay relevo** |
+| **V-16b** wrapper (`SIGUSR2` al nodo compose al ver el flip) | 0 fuera de predicado, 0 5xx, 0 pérdidas; anillo serving, compose standby | **0 fuera de predicado** · 103/103 OK · retención p95 1.006 ms · p100 1.078 ms · 3/3 mutaciones · 24/24 impresiones vivas **y en sqlite** | ✓ |
+| **V-16c** vuelta atrás manual (anillo → compose) | compose vuelve a serving sin errores crudos; retención ≤ 10 s | **0 fuera de predicado** · 34/34 OK · retención p100 507 ms · «nodo compose re-adquirió a los 7s» · 21/21 vivas y en sqlite | ✓ |
+| **V-16d** promoción abortada (`RINGS_PROMOTE_TIMEOUT=1`) | la herramienta vuelve atrás; compose re-adquiere; sin error crudo | rc=1 · abort · **guardia**: «el candidato tomó el control DESPUÉS del abort… SIGUSR2» → «compose volvió a serving a los 7s» · **51 respuestas 503 en 1,58 s** + retención p100 9.067 ms · 11/12 mutaciones (1 × 503 explícito) · 32/32 impresiones vivas y en sqlite | ✓ con costo declarado: **un abort cuesta ~1,6 s de sala de espera y hasta ~9 s de retención**, no «solo retención» como decía el plan |
+| V-RSS | ambos < 2 GB | compose 99 MiB · anillo 91 MiB · borde 55 MiB (límite 1 GiB en el banco) | ✓ |
+
+Durabilidad, medida en el archivo y no en el nodo que sirve: los 100 ids que recibieron 200 en las cuatro
+corridas medidas (23 + 24 + 21 + 32) están en `notas.sqlite`; `control_meta` firmado por el último titular
+(época 16). Stores del nodo compose al final en modo `write`, épocas sanas.
+
+### Lo que cambia para la instancia
+
+1. **La primera promoción se hace con 0.25.1 o superior** (#282): con 0.24.0, cualquier abort deja al candidato incapaz de soltar el control.
+2. **El wrapper lleva guardia post-abort** (`07-primera-promocion.sh` del lab actualizado en el mismo acto).
+3. **El costo de un abort se declara**: ~1,6 s de 503 y ~9 s de retención, y las escrituras de esa ventana fallan explícitas (503/409), no se pierden.
+4. **El lease no se borra nunca** con stores estampados: un nodo que arranca con época menor que la del archivo deshabilita notas y administración (fail-closed, correcto) y parece «perder» datos.
+
+### Teardown
+
+`sh scripts/bench.sh limpiar` (los `benchv14-*` y `vergis-9-9-1` abajo). Crudos pesados (`poller.jsonl`, `mutaciones.jsonl`, logs) fuera del repo; los veredictos, actos e impresiones de cada corrida en `experimentos/v16/crudos-corrida-N-*/`.

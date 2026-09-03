@@ -1,0 +1,38 @@
+{
+  "ejecutadas": 8,
+  "vivas": 0,
+  "perdidas": [
+    {
+      "id": "8f47de64-cb03-484f-beaf-ae95acc6e15a",
+      "status": 404
+    },
+    {
+      "id": "3bb5ffcf-b1e7-4437-8742-21a155b37930",
+      "status": 404
+    },
+    {
+      "id": "65ecace6-a970-4ddb-b7d3-3d557beefdd6",
+      "status": 404
+    },
+    {
+      "id": "2fd1078d-6cf1-44a2-86e0-eafc6d37d8c9",
+      "status": 404
+    },
+    {
+      "id": "833c2847-3416-4180-8e95-aad1bcbd9bd9",
+      "status": 404
+    },
+    {
+      "id": "a3f28d49-03f1-44a4-a636-2ea7fffc2bbd",
+      "status": 404
+    },
+    {
+      "id": "5b990a0b-69a2-43c1-b844-52321c5e64f8",
+      "status": 404
+    },
+    {
+      "id": "132054c7-430a-4a93-933f-31d6f126a51c",
+      "status": 404
+    }
+  ]
+}

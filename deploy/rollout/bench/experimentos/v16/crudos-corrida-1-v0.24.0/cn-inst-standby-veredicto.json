@@ -1,0 +1,41 @@
+{
+  "etiqueta": "CN-instrumento A · poller directo al anillo EN ESPERA",
+  "ventanaDelActo": {
+    "inicio": 1788441745000,
+    "fin": 1788441760000,
+    "duracionMs": 15000
+  },
+  "muestras": {
+    "total": 507,
+    "enVentana": 489,
+    "OK": 0,
+    "MAL": 489,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 489,
+  "tramoA": {
+    "respuestas200Standby": 489,
+    "ventana": {
+      "desde": 1788441745320,
+      "hasta": 1788441760017,
+      "duracionMs": 14697
+    },
+    "relativoAlActoMs": {
+      "desde": 320,
+      "hasta": 15017
+    }
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": null,
+    "p95": null,
+    "p100": null
+  },
+  "sinmedirDetalle": []
+}
