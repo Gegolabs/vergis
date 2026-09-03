@@ -115,8 +115,8 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-50` | Facetas plegables con tope de opciones visibles y buscador local | tope de 12 + buscador (`.faceta-options`, CSS-only) | 0.18.0 (#209) | [CHANGELOG 0.18.0](../CHANGELOG.md) |
 | `CAP-51` | Carry del alcance y de los filtros en TODA navegación (páginas, drills, chips) | `?ctx.<param>=…` y `&flt.<id>=…` | 0.9.0 | [superficie-de-estado.md §4](superficie-de-estado.md) |
 | `CAP-52` | Cascada `narrows:` entre controles — **(no construido)** | `narrows:` | — | [superficie-de-estado.md §7·2](superficie-de-estado.md) |
-| `CAP-184` | **Filtros de número** en el embudo de una columna numérica (atajos `> 0` / `< 0` / `= 0` + operador `mayor que` · `menor que` · `entre` · `igual a`), con chip legible removible | convención de plataforma, decidida por el dato (`vtIsNumericCol`) — no se declara en el spec | Sin publicar | [catalogo-elementos.md §4·ter](catalogo-elementos.md) |
-| `CAP-185` | **Rango de fechas** en el embudo de una columna de fecha ISO (`Desde` / `Hasta` inclusivos + atajos `Este mes` · `Mes anterior` · `Últimos 30 días`), con chip legible removible | convención de plataforma, decidida por el dato (`vtIsDateCol`, evaluada después de `vtIsNumericCol`) — no se declara en el spec | Sin publicar | [catalogo-elementos.md §4·ter](catalogo-elementos.md) |
+| `CAP-184` | **Filtros de número** en el embudo de una columna numérica (atajos `> 0` / `< 0` / `= 0` + operador `mayor que` · `menor que` · `entre` · `igual a`), con chip legible removible | convención de plataforma, decidida por el dato (`vtIsNumericCol`) — no se declara en el spec | 0.24.0 | [catalogo-elementos.md §4·ter](catalogo-elementos.md) |
+| `CAP-185` | **Rango de fechas** en el embudo de una columna de fecha ISO (`Desde` / `Hasta` inclusivos + atajos `Este mes` · `Mes anterior` · `Últimos 30 días`), con chip legible removible | convención de plataforma, decidida por el dato (`vtIsDateCol`, evaluada después de `vtIsNumericCol`) — no se declara en el spec | 0.25.0 | [catalogo-elementos.md §4·ter](catalogo-elementos.md) |
 
 ## Vistas multi-página
 
