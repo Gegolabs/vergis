@@ -32,6 +32,10 @@ export interface VtState {
   /** Filtros de NÚMERO por columna: field → rango. Ausente/vacío = sin filtro numérico
    *  (opcional por back-compat: un estado construido antes de esta capacidad sigue siendo válido). */
   numFilters?: Record<string, VtNumFilter>
+  /** Filtros de FECHA por columna: field → rango ISO. Ausente/vacío = sin filtro de fecha
+   *  (opcional por back-compat, igual que `numFilters`: un estado guardado antes de esta
+   *  capacidad sigue siendo válido y se lee como «sin filtro»). */
+  dateFilters?: Record<string, VtDateFilter>
 }
 
 /**
@@ -45,6 +49,17 @@ export interface VtNumFilter {
   max?: number
   minIncl?: boolean
   maxIncl?: boolean
+}
+
+/**
+ * Rango de un filtro de FECHA sobre una columna, en ISO `YYYY-MM-DD`. Ambos bordes son opcionales
+ * y ambos son INCLUSIVOS —«del 1 al 31 de julio» incluye el 1 y el 31—: a diferencia del filtro de
+ * número no hay operadores estrictos, porque un rango de fechas se pide por sus extremos y no por
+ * «mayor que». Un filtro sin `min` ni `max` NO existe: se borra del estado en vez de guardarse vacío.
+ */
+export interface VtDateFilter {
+  min?: string
+  max?: string
 }
 
 /** Normaliza para comparar: minúsculas + sin acentos. */
@@ -64,6 +79,28 @@ export function vtIsNumericCol(rows: Record<string, unknown>[], field: string): 
     seen = true
     if (typeof v === 'number') continue
     if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) continue
+    return false
+  }
+  return seen
+}
+
+/**
+ * ¿La columna es de FECHA? Todos sus valores no vacíos son fechas ISO `YYYY-MM-DD`, con hora
+ * opcional (`T`/espacio + `HH:MM[:SS]`). La regla es DELIBERADAMENTE estricta: un folio `20260703`
+ * o un `2026-7-3` no califican, porque un falso positivo cambiaría el popover de una columna que
+ * no es de fechas y le quitaría al lector la lista de valores que sí le servía.
+ *
+ * Se evalúa DESPUÉS de `vtIsNumericCol`: una columna numérica jamás es de fecha (un año suelto,
+ * `2026`, es un número). Autocontenida (la regex es local): viaja al browser vía `.toString()`.
+ */
+export function vtIsDateCol(rows: Record<string, unknown>[], field: string): boolean {
+  const re = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?$/
+  let seen = false
+  for (const r of rows) {
+    const v = r[field]
+    if (v == null || v === '') continue
+    seen = true
+    if (typeof v === 'string' && re.test(v.trim())) continue
     return false
   }
   return seen
@@ -156,6 +193,7 @@ export function vtFormat(value: unknown, format?: string): string {
 export function vtApply(rows: Record<string, unknown>[], state: VtState): Record<string, unknown>[] {
   const gq = vtNorm(state.globalSearch)
   const nf = state.numFilters || {}
+  const df = state.dateFilters || {}
   const out = rows.filter((r) => {
     for (const f in state.facets) {
       const sel = state.facets[f]
@@ -173,6 +211,24 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
       if (Number.isNaN(n)) return false
       if (flt.min != null && (flt.minIncl ? n < flt.min : n <= flt.min)) return false
       if (flt.max != null && (flt.maxIncl ? n > flt.max : n >= flt.max)) return false
+    }
+    // Filtros de fecha: comparación LEXICOGRÁFICA sobre los primeros 10 caracteres del valor
+    // (`YYYY-MM-DD`), sin `Date.parse` — en ISO el orden léxico ES el cronológico, y parsear
+    // introduciría husos horarios donde el dato no los tiene. Ambos bordes inclusivos. Una celda
+    // vacía queda FUERA mientras su columna tenga filtro de fecha activo, igual que en el numérico:
+    // «entre el 1 y el 31 de julio» no incluye «las que no tienen fecha».
+    for (const f in df) {
+      const flt = df[f]
+      // Un borde en cadena vacía es un borde AUSENTE: es lo que entrega un `<input type=date>` sin
+      // valor, y un filtro sin bordes no existe (no puede dejar fuera a las celdas vacías).
+      const lo = flt && flt.min ? flt.min : ''
+      const hi = flt && flt.max ? flt.max : ''
+      if (!lo && !hi) continue
+      const raw = r[f]
+      if (raw == null || raw === '') return false
+      const d = String(raw).slice(0, 10)
+      if (lo && d < lo) return false
+      if (hi && d > hi) return false
     }
     if (gq) {
       let hit = false
@@ -237,20 +293,85 @@ export function vtNumFilterLabel(filter: VtNumFilter, fmt?: string): string {
 }
 
 /**
+ * Etiqueta legible de un filtro de FECHA, la que va en el chip: `01-07-2026 → 31-07-2026` ·
+ * `desde 01-07-2026` · `hasta 31-07-2026`. El ISO del estado se lee al derecho (DD-MM-AAAA), que
+ * es como se escribe una fecha en Chile; el estado sigue siendo ISO. Un filtro sin bordes devuelve
+ * `''` (no existe, no se pinta chip).
+ *
+ * PURA y autocontenida a propósito, y exportada, para testear la etiqueta sin montar un DOM.
+ */
+export function vtDateFilterLabel(filter: VtDateFilter): string {
+  if (!filter || ((filter.min == null || filter.min === '') && (filter.max == null || filter.max === '')))
+    return ''
+  const d = function (iso: string): string {
+    const p = String(iso).slice(0, 10).split('-')
+    return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : String(iso)
+  }
+  const lo = filter.min ? filter.min : ''
+  const hi = filter.max ? filter.max : ''
+  if (lo && hi) return lo === hi ? d(lo) : d(lo) + ' → ' + d(hi)
+  if (lo) return 'desde ' + d(lo)
+  return 'hasta ' + d(hi)
+}
+
+/**
  * HTML del popover de una columna. LA convención de plataforma, decidida por el DATO y no por el
- * spec (`vtIsNumericCol`): `kind='num'` → **Filtros de número** (atajos + operador), `kind='vals'`
- * → la lista de valores distintos de siempre. Ver el comentario junto a `buildPop`.
+ * spec (`vtIsNumericCol` / `vtIsDateCol`): `kind='num'` → **Filtros de número** (atajos + operador),
+ * `kind='date'` → **Rango de fechas** (Desde/Hasta + atajos), `kind='vals'` → la lista de valores
+ * distintos de siempre. Ver el comentario junto a `buildPop`.
  *
  * PURA y autocontenida (el escapador es local) para poder verificar el HTML emitido sin navegador;
  * viaja al browser vía `.toString()` como el resto de PURE_FNS.
  */
-export function vtPopHtml(kind: string, label: string, optsHtml: string, filter?: VtNumFilter): string {
+export function vtPopHtml(
+  kind: string,
+  label: string,
+  optsHtml: string,
+  filter?: VtNumFilter,
+  dateFilter?: VtDateFilter,
+): string {
   const esc = function (s: unknown): string {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
+  }
+  if (kind === 'date') {
+    const f: VtDateFilter = dateFilter || {}
+    const v = function (s?: string): string {
+      return esc(s == null ? '' : String(s).slice(0, 10))
+    }
+    // Los atajos NO se marcan «activos» acá: cuál rango es «este mes» depende del día de hoy, y
+    // esta función es pura (no lee el reloj). El feedback lo dan los dos campos, que quedan con
+    // las fechas que el atajo puso.
+    const q = function (key: string, txt: string): string {
+      return '<button type="button" class="vt-pop-q" data-dq="' + key + '">' + txt + '</button>'
+    }
+    return (
+      '<div class="vt-pop-date">' +
+      '<div class="vt-pop-title">Rango de fechas — ' +
+      esc(label) +
+      '</div>' +
+      '<div class="vt-pop-quick">' +
+      q('mes', 'Este mes') +
+      q('mesant', 'Mes anterior') +
+      q('d30', 'Últimos 30 días') +
+      '</div>' +
+      '<div class="vt-pop-dates">' +
+      '<label>Desde<input class="vt-pop-from" type="date" value="' +
+      v(f.min) +
+      '" aria-label="Fecha desde"></label>' +
+      '<label>Hasta<input class="vt-pop-to" type="date" value="' +
+      v(f.max) +
+      '" aria-label="Fecha hasta"></label>' +
+      '</div>' +
+      '<div class="vt-pop-actions">' +
+      '<button type="button" class="vt-pop-apply">Aplicar</button>' +
+      '<button type="button" class="vt-pop-clear">Limpiar</button>' +
+      '</div>' +
+      '</div>'
+    )
   }
   if (kind === 'num') {
     const f: VtNumFilter = filter || {}
@@ -453,11 +574,13 @@ export function vtDownloadName(
 const PURE_FNS = [
   vtNorm,
   vtIsNumericCol,
+  vtIsDateCol,
   vtDistinct,
   vtIsCategorical,
   vtFormat,
   vtApply,
   vtNumFilterLabel,
+  vtDateFilterLabel,
   vtPopHtml,
   vtGroup,
   vtGroupTree,
@@ -568,7 +691,7 @@ function vtBootstrap(root){
   function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
   // groupLevels = jerarquía de agrupación (orden = anidamiento). collapsed = paths de grupos colapsados.
-  var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, numFilters:{}, groupLevels:[], collapsed:{} };
+  var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, numFilters:{}, dateFilters:{}, groupLevels:[], collapsed:{} };
   // Busqueda global acotada a las columnas mostradas y buscables: los campos ocultos del payload
   // (claves de drill) no estan en cols, asi que no se buscan por texto.
   state.searchCols = cols.filter(function(c){ return c.searchable!==false; }).map(function(c){ return c.field; });
@@ -625,6 +748,7 @@ function vtBootstrap(root){
       for(var ff in state.facets){ if((state.facets[ff]||[]).length) filtered=true; }
       for(var cf in state.colSearch){ if(state.colSearch[cf]) filtered=true; }
       for(var nff in state.numFilters){ if(state.numFilters[nff]) filtered=true; }
+      for(var dff in state.dateFilters){ if(state.dateFilters[dff]) filtered=true; }
       var blob = new Blob(['\\ufeff'+vtCsv(rc, view)], {type:'text/csv;charset=utf-8'});
       var a = document.createElement('a');
       a.href = window.URL.createObjectURL(blob);
@@ -651,7 +775,7 @@ function vtBootstrap(root){
   function collapseAll(){ var acc=[]; gatherPaths(vtGroupTree(vtApply(rows,state), state.groupLevels), '', acc); acc.forEach(function(p){ state.collapsed[p]=1; }); }
   function gatherPaths(node, prefix, acc){ if(node.leaf) return; node.groups.forEach(function(g){ var p=prefix+node.field+SEP+g.key; acc.push(p); gatherPaths(g.child, p+SEP, acc); }); }
   function clearAll(){
-    state.facets={}; state.numFilters={}; state.globalSearch=''; state.groupLevels=[]; state.collapsed={};
+    state.facets={}; state.numFilters={}; state.dateFilters={}; state.globalSearch=''; state.groupLevels=[]; state.collapsed={};
     if(gs) gs.value='';
     Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop input[type=checkbox]'), function(b){ b.checked=false; });
     // Los popovers ya construidos se vacían: se reconstruyen al abrirlos, reflejando el estado limpio
@@ -662,10 +786,11 @@ function vtBootstrap(root){
 
   // ---- Tab "Vistas": presets persistidos por reporte. La UI/persistencia/pin/confirmación viven
   //      en el snippet COMPARTIDO vergisSavedViews; acá solo el snapshot/apply propios de la tabla. ----
-  function snapshot(){ return { facets: JSON.parse(JSON.stringify(state.facets)), numFilters: JSON.parse(JSON.stringify(state.numFilters)), globalSearch: state.globalSearch, groupLevels: state.groupLevels.slice(), sort: { field: state.sort.field, dir: state.sort.dir } }; }
+  function snapshot(){ return { facets: JSON.parse(JSON.stringify(state.facets)), numFilters: JSON.parse(JSON.stringify(state.numFilters)), dateFilters: JSON.parse(JSON.stringify(state.dateFilters)), globalSearch: state.globalSearch, groupLevels: state.groupLevels.slice(), sort: { field: state.sort.field, dir: state.sort.dir } }; }
   function applySnapshot(s){
     state.facets = s.facets ? JSON.parse(JSON.stringify(s.facets)) : {};
     state.numFilters = s.numFilters ? JSON.parse(JSON.stringify(s.numFilters)) : {};
+    state.dateFilters = s.dateFilters ? JSON.parse(JSON.stringify(s.dateFilters)) : {};
     state.globalSearch = s.globalSearch || '';
     state.groupLevels = (s.groupLevels||[]).slice();
     state.sort = { field: (s.sort&&s.sort.field)||'', dir: (s.sort&&s.sort.dir)||'asc' };
@@ -681,7 +806,8 @@ function vtBootstrap(root){
   //      CONVENCIÓN DE PLATAFORMA, no configurable por spec: una columna NUMÉRICA no ofrece filtro
   //      por valor —cada monto es único y marcar valores no expresa «los negativos»—: ofrece
   //      FILTROS DE NÚMERO (atajos + operador, como Excel). Una columna de TEXTO ofrece la lista de
-  //      valores distintos. Lo decide el DATO (vtIsNumericCol), no el spec.
+  //      valores distintos, y una columna de FECHA ofrece un RANGO (Desde/Hasta): acotar «del 1 al
+  //      31 de julio» son dos campos, no treinta clics. Lo decide el DATO (vtIsNumericCol), no el spec.
   function closeAllPops(except){ Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p!==except) p.hidden=true; }); }
   function colFormat(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?c.format:undefined; }
   function sameNumFilter(a,b){
@@ -717,8 +843,47 @@ function vtBootstrap(root){
     });
     pop.querySelector('.vt-pop-clear').addEventListener('click', function(){ setNumFilter(field, null); });
   }
+  // ---- Filtro de RANGO de fechas (hermano del numérico). El estado es ISO YYYY-MM-DD y los
+  //      bordes son inclusivos; el predicado (lexicográfico sobre el ISO) vive en vtApply. ----
+  function vtISODay(d){ var m=String(d.getMonth()+1), dd=String(d.getDate()); return d.getFullYear()+'-'+(m.length<2?'0'+m:m)+'-'+(dd.length<2?'0'+dd:dd); }
+  function vtDateQuick(k){
+    var now=new Date(), y=now.getFullYear(), m=now.getMonth();
+    // new Date(y, m+1, 0) = último día del mes m (día 0 del siguiente). Todo en hora local:
+    // el usuario pide «este mes» según SU calendario, no según UTC.
+    if(k==='mes') return { min:vtISODay(new Date(y,m,1)), max:vtISODay(new Date(y,m+1,0)) };
+    if(k==='mesant') return { min:vtISODay(new Date(y,m-1,1)), max:vtISODay(new Date(y,m,0)) };
+    if(k==='d30') return { min:vtISODay(new Date(y,m,now.getDate()-29)), max:vtISODay(now) }; // hoy incluido
+    return null;
+  }
+  function setDateFilter(field, df){
+    if(df) state.dateFilters[field]=df; else delete state.dateFilters[field];
+    var th=root.querySelector('th[data-field="'+field+'"]'); var pop=th&&th.querySelector('.vt-col-pop');
+    if(pop && !pop.hidden) buildDatePop(pop, field); else if(pop) pop.innerHTML='';
+    render();
+  }
+  function buildDatePop(pop, field){
+    pop.innerHTML = vtPopHtml('date', colLabel(field), '', null, state.dateFilters[field]);
+    var from=pop.querySelector('.vt-pop-from'), to=pop.querySelector('.vt-pop-to');
+    function applyNow(){
+      var a=from.value, b=to.value;
+      // Un filtro sin bordes NO existe: se borra del estado (misma regla que numFilters).
+      if(!a && !b){ setDateFilter(field, null); return; }
+      var df={};
+      if(a) df.min=a;
+      if(b) df.max=b;
+      // Rango al revés (Desde > Hasta) se endereza en vez de devolver cero filas.
+      if(df.min && df.max && df.min>df.max){ var t=df.min; df.min=df.max; df.max=t; }
+      setDateFilter(field, df);
+    }
+    Array.prototype.forEach.call(pop.querySelectorAll('.vt-pop-q'), function(b){
+      b.addEventListener('click', function(){ setDateFilter(field, vtDateQuick(b.getAttribute('data-dq'))); });
+    });
+    pop.querySelector('.vt-pop-apply').addEventListener('click', applyNow);
+    pop.querySelector('.vt-pop-clear').addEventListener('click', function(){ setDateFilter(field, null); });
+  }
   function buildPop(pop, field){
     if(vtIsNumericCol(rows, field)){ buildNumPop(pop, field); return; }
+    if(vtIsDateCol(rows, field)){ buildDatePop(pop, field); return; }
     var counts=vtCounts(rows, field);
     var vals=vtDistinct(rows, field).slice().sort(function(a,b){return vtNorm(a).localeCompare(vtNorm(b));});
     var sel=state.facets[field]||[];
@@ -798,6 +963,7 @@ function vtBootstrap(root){
     var chip=e.target.closest('.vt-chip'); if(!chip) return;
     if(chip.getAttribute('data-search')==='global'){ state.globalSearch=''; if(gs) gs.value=''; }
     else if(chip.getAttribute('data-numfield')){ setNumFilter(chip.getAttribute('data-numfield'), null); return; }
+    else if(chip.getAttribute('data-datefield')){ setDateFilter(chip.getAttribute('data-datefield'), null); return; }
     else { var f=chip.getAttribute('data-field'), v=chip.getAttribute('data-val'); state.facets[f]=(state.facets[f]||[]).filter(function(x){return x!==v;}); var th=root.querySelector('th[data-field="'+f+'"]'); var pop=th&&th.querySelector('.vt-col-pop'); if(pop&&pop.innerHTML){ var ins=pop.querySelectorAll('.vt-pop-opts input'); for(var bi=0;bi<ins.length;bi++){ if(ins[bi].value===v){ ins[bi].checked=false; break; } } } }
     render();
   });
@@ -828,7 +994,7 @@ function vtBootstrap(root){
       var f=th.getAttribute('data-field'); var ind=th.querySelector('.vt-sort-ind');
       if(ind) ind.textContent = (state.sort.field===f) ? (state.sort.dir==='asc'?'▲':'▼') : '';
       th.setAttribute('aria-sort', state.sort.field===f ? (state.sort.dir==='asc'?'ascending':'descending') : 'none');
-      var btn=th.querySelector('.vt-filter-btn'); if(btn) btn.classList.toggle('on',(state.facets[f]||[]).length>0 || !!state.numFilters[f]);
+      var btn=th.querySelector('.vt-filter-btn'); if(btn) btn.classList.toggle('on',(state.facets[f]||[]).length>0 || !!state.numFilters[f] || !!state.dateFilters[f]);
     });
     if(chipsEl){
       var chips=[];
@@ -837,10 +1003,14 @@ function vtBootstrap(root){
         var lab=vtNumFilterLabel(state.numFilters[nf], colFormat(nf));
         if(lab) chips.push('<span class="vt-chip" data-numfield="'+vtEsc(nf)+'">'+vtEsc(colLabel(nf)+': '+lab)+' <span class="vt-chip-x">×</span></span>');
       }
+      for(var dfk in state.dateFilters){
+        var dlab=vtDateFilterLabel(state.dateFilters[dfk]);
+        if(dlab) chips.push('<span class="vt-chip" data-datefield="'+vtEsc(dfk)+'">'+vtEsc(colLabel(dfk)+': '+dlab)+' <span class="vt-chip-x">×</span></span>');
+      }
       if(state.globalSearch) chips.push('<span class="vt-chip vt-chip-search" data-search="global">buscar: '+vtEsc(state.globalSearch)+' <span class="vt-chip-x">×</span></span>');
       chipsEl.innerHTML = chips.join('');
     }
-    if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } for(var nk in state.numFilters){ if(state.numFilters[nk]) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
+    if(badge){ var n=0; for(var k in state.facets){ if((state.facets[k]||[]).length) n++; } for(var nk in state.numFilters){ if(state.numFilters[nk]) n++; } for(var dk in state.dateFilters){ if(state.dateFilters[dk]) n++; } if(state.globalSearch) n++; if(state.groupLevels.length) n++; badge.textContent = n?String(n):''; }
   }
   // Arranque: si una vista pinneada ya aplicó (applySnapshot → render), no hay nada que hacer.
   // Si el tbody servido ya trae TODAS las filas (ssrComplete) y el estado inicial es vacío (sin
@@ -850,6 +1020,7 @@ function vtBootstrap(root){
   var stateEmpty = !state.sort.field && !state.globalSearch && !state.groupLevels.length;
   for(var fk in state.facets){ if((state.facets[fk]||[]).length) stateEmpty=false; }
   for(var nfk in state.numFilters){ if(state.numFilters[nfk]) stateEmpty=false; }
+  for(var dfk2 in state.dateFilters){ if(state.dateFilters[dfk2]) stateEmpty=false; }
   if(!rendered){
     // Con 0 filas NO se salta: render() pinta la fila «Sin resultados» (el tbody servido va vacío).
     if(payload.ssrComplete && stateEmpty && rows.length){

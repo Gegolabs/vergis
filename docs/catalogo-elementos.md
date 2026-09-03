@@ -223,8 +223,13 @@ columna**, no de lo que el spec declare. Es la misma familia que §4·bis: aford
   `Negativos (< 0)`, `En cero`) y una fila de operador (`mayor que` · `menor que` · `entre` ·
   `igual a`) con sus valores. **Sin** checklist ni buscador — marcar montos uno a uno no expresa
   «los negativos».
-- **Lo decide `vtIsNumericCol`**, o sea el dato materializado, no una declaración del spec. Un autor
-  de spec no puede prenderlo ni apagarlo: es convención de plataforma.
+- **Columna de fecha → «Rango de fechas»**: dos campos `Desde` / `Hasta` (inclusivos), tres atajos
+  (`Este mes`, `Mes anterior`, `Últimos 30 días`) y `Aplicar` / `Limpiar`. **Sin** checklist: acotar
+  «del 1 al 31 de julio» son dos campos, no treinta clics.
+- **Lo deciden `vtIsNumericCol` y `vtIsDateCol`**, en ese orden, o sea el dato materializado, no una
+  declaración del spec. Una columna es de fecha solo si **todos** sus valores no vacíos son ISO
+  `YYYY-MM-DD` (hora opcional): un folio de ocho dígitos es número, un `2026-7-3` es texto. Un autor
+  de spec no puede prenderlo ni apagarlo: es convención de plataforma; si quiere el rango, entrega ISO.
 
 **Semántica, escrita entera** (vive en `VtNumFilter`): los atajos son estrictos —`> 0` deja fuera el
 cero—, `entre a y b` es inclusivo en ambos bordes, y una **celda vacía o no numérica queda fuera**
@@ -233,6 +238,13 @@ dato». El estado produce **un** chip por columna (`Deuda Total: < 0`, `Deuda To
 5.000`), removible con un clic, formateado con el `format` de la columna para que el chip lea como
 lee la celda. Viaja en las vistas guardadas, lo borra «Limpiar todo» y cuenta para el sufijo
 `--filtrado` del CSV.
+
+**Semántica del rango de fechas** (vive en `VtDateFilter`): ambos bordes inclusivos; comparación
+lexicográfica sobre los diez primeros caracteres del ISO, sin `Date.parse`; una celda vacía queda
+fuera mientras la columna tenga rango activo; un filtro sin bordes no existe. Un chip por columna
+(`Fecha Documento: 01-07-2026 → 31-07-2026`, `desde …`, `hasta …`), con las mismas reglas de vistas
+guardadas, «Limpiar todo» y `--filtrado`. Antecedente: PI-16, cuya spec pide «Rango de Fechas» y
+cuyo embudo listaba los días uno a uno.
 
 Antecedente: en PI-01 la columna «Deuda Total» ofrecía sus montos como valores marcables. Quien
 quiso los negativos marcó decenas a mano y terminó con una pared de chips de un monto cada uno.
