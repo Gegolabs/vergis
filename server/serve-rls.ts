@@ -121,6 +121,7 @@ import {
   deriveIngestionMap,
   deriveEntityFreshness,
   processBelongsToDomain,
+  manualFedProcesses,
   classifyProcess,
   reconcilePlan,
   createAsOfProvider,
@@ -1617,6 +1618,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           // en vuelo. Con cero destinos, `fanout` es un no-op — el costo de instalarlo siempre es nulo.
           notify: (n: Notification) => fanout(notifySinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
           domains: domainsCfg,
+          // #279 · el arreglo VIVO de slots (hot-reload lo re-puebla in-place): los procesos que un
+          // slot dispara se vigilan pero no se programan.
+          intakeSlots: () => intakeSlotsCfg,
           audit: (e) => auditLog.append(e),
           log: (l) => console.log(`[vergis-rls] ${l}`),
         },
@@ -1922,7 +1926,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         }
       },
       // Driver del reconciliador («aplicar cadencia»): empuja la cadencia derivada del proceso al schedule
-      // del motor (one-way, idempotente). Devuelve el plan (set/noop) para feedback.
+      // del motor (one-way, idempotente). Devuelve el plan (set/noop/vigilar) para feedback.
       applyCadence: async (domainId: string, processId: string, by: string) => {
         const engine = fabricWiring.engine
         if (!engine) throw new Error('Sin conexión al motor: no se puede aplicar la cadencia.')
@@ -1935,7 +1939,26 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // #107 · aplicar cadencia a un pausado lo re-habilitaría (setScheduleSeconds escribe enabled:true).
         if (f.procs.find((p) => p.id === processId)?.pausedAt != null) throw new Error('El proceso está pausado — reanúdalo antes de aplicar cadencia.')
         const actual = await engine.getScheduleSeconds(processId)
-        const plan = reconcilePlan(row.requiredCadenceSeconds, actual)
+        // #279 · ¿lo alimenta una carga manual? El slot declara el ITEM del motor (`trigger.processRef`),
+        // así que la correspondencia se resuelve por `engine.itemId` del proceso, no por su id de
+        // registro. Se lee el arreglo VIVO de slots (hot-reload), nunca una copia del arranque.
+        const itemId = f.procs.find((p) => p.id === processId)?.engine?.itemId
+        const manualFed = itemId != null && manualFedProcesses(intakeSlotsCfg).has(itemId)
+        const plan = reconcilePlan(row.requiredCadenceSeconds, actual, manualFed)
+        if (plan.action === 'vigilar') {
+          // El residuo del clic anterior es exactamente lo que #279 midió: un schedule vivo sobre un
+          // proceso que solo corre cuando alguien sube el archivo. Se DESHABILITA (reversible), no se
+          // borra: la costura del motor no expone un delete y deshabilitar basta para que deje de correr.
+          let disabledSchedule = false
+          if (actual != null) {
+            await engine.setScheduleEnabled(processId, false)
+            disabledSchedule = true
+            const re = await engine.getScheduleSeconds(processId).catch(() => undefined)
+            if (re !== undefined) await govStore.recordObservations([{ processId, observedAt: new Date().toISOString(), scheduleSeconds: re, runs: [] }])
+          }
+          auditLog.append({ type: 'frescura-aplicar-cadencia', process: processId, by, desiredSeconds: row.requiredCadenceSeconds, action: 'vigilar', disabledSchedule })
+          return { ...plan, disabledSchedule }
+        }
         if (plan.action === 'set') {
           await engine.setScheduleSeconds(processId, row.requiredCadenceSeconds)
           // Se RE-OBSERVA y se registra lo leído, nunca lo prometido (#105): el motor redondea el

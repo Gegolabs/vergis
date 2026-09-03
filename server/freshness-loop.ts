@@ -19,6 +19,11 @@
  * steward pausó a propósito sigue siendo observable (sus corridas y su schedule se proyectan igual),
  * pero no produce `missed` —sería ruido que entrena a ignorar alertas— y el lazo jamás le re-habilita
  * el schedule que alguien apagó a mano.
+ *
+ * ALIMENTACIÓN MANUAL (#279): un proceso que dispara un slot de intake (land-and-trigger) queda fuera
+ * de la fase 3 por la misma puerta que los pausados, y por dentro de las fases 1 y 2. Subir el archivo
+ * ES la corrida; un schedule solo agrega corridas de un minuto sobre nada, cuyo «Completed» se lee
+ * como dato fresco. Vigilar la cadencia requerida —y avisar «atrasada»— es justo lo que queda.
  */
 import type { LogEventInput } from '@vergis/botler'
 import {
@@ -28,6 +33,7 @@ import {
   diffAlertState,
   parseAlertState,
   reconcilePlan,
+  manualFedProcesses,
   FRESHNESS_ALERT_STATE_KEY,
   type IngestionEngineClient,
   type RunRecord,
@@ -61,6 +67,13 @@ export interface FreshnessLoopDeps {
   notify?: (n: Notification) => Promise<void>
   /** Dominios DECLARADOS: solo ellos tienen página, y por tanto solo ellos aportan label y enlace. */
   domains: { id: string; label: string }[]
+  /**
+   * Slots de ingesta VIVOS (#279): los que declaran `trigger.processRef` marcan procesos alimentados
+   * por carga manual, que la fase 3 vigila pero no programa. Es una función y no un arreglo porque el
+   * arreglo se recarga en caliente: capturar una copia dejaría al lazo programando lo que la instancia
+   * ya declaró manual. Ausente = ningún slot (instancia sin intake): conducta idéntica a la de antes.
+   */
+  intakeSlots?: () => { trigger?: { processRef?: string } }[]
   audit: (e: LogEventInput) => void
   log: (line: string) => void
   now?: () => number
@@ -82,6 +95,9 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
   let hydrated = false
   // Debounce del reconcile: último `desired` empujado a cada proceso y cuándo.
   const lastPush = new Map<string, { desiredSeconds: number; atMs: number }>()
+  // #279 · procesos ya anunciados como de alimentación manual: el aviso se da UNA vez por proceso. El
+  // lazo tickea cada pocos minutos y el log del lazo es señal, no latido.
+  const manualAnunciados = new Set<string>()
   let inFlight = false
 
   const tick = async (): Promise<void> => {
@@ -97,6 +113,11 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
       const observables = procs.filter((p) => p.engine)
       // Los pausados (#107) se observan igual; quedan fuera de las fases 2 y 3.
       const pausados = new Set(procs.filter((p) => p.pausedAt != null).map((p) => p.id))
+      // #279 · alimentación manual: el slot referencia el ITEM del motor, así que la pertenencia se
+      // resuelve por `engine.itemId`. Quedan fuera de la fase 3 (como los pausados) y DENTRO de las
+      // fases 1 y 2: vigilar es justamente lo que queda cuando no se programa.
+      const refsManuales = manualFedProcesses(deps.intakeSlots?.() ?? [])
+      const manuales = new Set(procs.filter((p) => p.engine?.itemId != null && refsManuales.has(p.engine.itemId)).map((p) => p.id))
       const reqOf = new Map(deriveIngestionMap(mapInput).map((m) => [m.processId, m.requiredCadenceSeconds]))
 
       // ── Fase 1 · observar ────────────────────────────────────────────────────────────────────
@@ -195,6 +216,15 @@ export function createFreshnessLoop(deps: FreshnessLoopDeps, cfg: FreshnessLoopC
           if (o.error != null) continue
           // El lazo JAMÁS re-habilita lo que un steward pausó (#107).
           if (pausados.has(o.processId)) continue
+          // #279 · lo alimenta una carga manual: se vigila, no se programa. Un schedule acá correría
+          // sobre nada y su «Completed» se leería como dato fresco.
+          if (manuales.has(o.processId)) {
+            if (!manualAnunciados.has(o.processId)) {
+              manualAnunciados.add(o.processId)
+              deps.log(`frescura-loop: '${o.processId}' se alimenta por carga manual: se vigila, no se programa`)
+            }
+            continue
+          }
           const desired = reqOf.get(o.processId)
           if (desired == null) continue
           if (reconcilePlan(desired, o.scheduleSeconds ?? null).action !== 'set') continue
