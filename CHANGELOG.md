@@ -91,6 +91,45 @@ Qué ve ahora quien administra el dominio:
 Sin slots declarados (instancia sin intake), la conducta es idéntica a la anterior. El control
 negativo del PR: contra `main`, el motor fake recibe `setScheduleSeconds` para el proceso manual.
 
+### Las facetas y los grupos de una tabla se ordenan como una persona los escribiría (#285)
+
+**Cambia lo que ve la persona que lee un PI.** El embudo de una columna de texto ordenaba sus valores
+con el alfabeto, y a una serie eso la desarma: en PI-15 la faceta `Mes` abría `Abril, Agosto,
+Diciembre, Enero…` y la faceta `Week` listaba `W1, W10, W11, …, W2`. Ninguna de las dos es una lista
+que se pueda recorrer con el ojo.
+
+Ahora el orden lo decide la **familia del conjunto** de valores —jamás el par, porque un comparador
+que cambia de modo par a par es no-transitivo y `Array.sort` devuelve órdenes arbitrarios—: todos
+numéricos → por número (`2` antes que `10`); todos fecha ISO → cronológico; todos `prefijo corto +
+número` con el mismo prefijo (`W2`, `Q1`, `S-3`) → por el número; todos nombres de mes en español o
+inglés, completos o abreviados, sin distinguir mayúsculas ni acentos → por calendario; y si el
+conjunto no califica en ninguna, el alfabético de siempre. El vacío va siempre al final. Vale para la
+lista del embudo y para las claves de grupo (`vtGroup`, y por herencia el árbol multinivel).
+
+Lo decide el **dato**, no el spec: ninguna spec cambia y no hay vocabulario nuevo del DSL. Medido con
+`vtSortValues` y `vtGroup` en `tests/table-natural-order.test.ts` —las cinco familias, los vacíos, los
+prefijos distintos que NO son serie y el intruso que rompe la familia numérica—, con control negativo
+contra `main` (12 de 13 casos fallan allí; el orden de meses arranca en `Abril`).
+
+### El embudo de una columna lista solo los valores que sobreviven a los demás filtros (#286)
+
+**Cambia lo que ve la persona que lee un PI.** Con `Mes = Marzo` puesto, la faceta `Week` seguía
+ofreciendo las 52 semanas del año con el conteo del dataset completo: se marcaba una y la tabla
+quedaba vacía, sin que nada avisara por qué. Ahora la lista y los conteos de una faceta se calculan
+sobre las filas que pasan **el resto** del estado —las demás facetas, los filtros de número y de
+fecha, la búsqueda global y la de columna—, que es la convención del autofiltro de Excel. Es
+simétrica, no jerárquica: con `Week = W10` puesto, `Mes` lista solo los meses que tienen W10.
+
+Los valores ya marcados en la propia columna se conservan aunque el resto de los filtros los deje sin
+filas, con conteo `0`, para poder quitarlos; y la propia faceta nunca se auto-acota. El embudo se
+reconstruye al abrirse cuando el resto del estado cambió desde la última vez (sello `data-built-for`),
+así que la lista nunca queda rancia. Las columnas numéricas y de fecha no cambian.
+
+Medido con `vtFacetOptions` en `tests/table-facet-options.test.ts` —dos facetas cruzadas, un filtro de
+número activo, el seleccionado sin filas, la búsqueda global— más una verificación sobre la fuente que
+viaja al navegador (el embudo ya no arma su lista con `vtDistinct(rows, field)` crudo). Control
+negativo contra `main`: la función no existe allí.
+
 ## 0.25.1 — 2026-09-03
 
 ### Qué exige esta versión
