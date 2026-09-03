@@ -1,0 +1,46 @@
+{
+  "ejecutadas": 8,
+  "vivas": 0,
+  "perdidas": [
+    {
+      "id": "dd7f65cb-c6ed-4c64-9159-63750652199e",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "23d9fccc-ec04-4620-8664-4f2303b86c2d",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "2ffd43a4-d8b5-4593-a630-3258b7b0bea1",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "b1d75f0b-585e-48e7-b7f1-bcecc76f0b46",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "45bb6a8b-b4e4-4677-9305-e796e07c018c",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "6e418a88-8d05-49a4-99b0-3e1da2423de5",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "dddf67bf-700d-463e-ac2d-9b7c3b3c7a97",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "1b317347-6e8a-425f-80bf-5bf4a7af9bdb",
+      "status": null,
+      "motivo": "TimeoutError"
+    }
+  ]
+}

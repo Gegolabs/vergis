@@ -1,0 +1,48 @@
+{
+  "etiqueta": "V-16b · primera promocion CON wrapper (SIGUSR2 al nodo compose)",
+  "ventanaDelActo": {
+    "inicio": 1788447167000,
+    "fin": 1788447170000,
+    "duracionMs": 3000
+  },
+  "muestras": {
+    "total": 793,
+    "enVentana": 102,
+    "OK": 102,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 4,
+    "p95": 504,
+    "p100": 562
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 3,
+    "ejecutadas": 2,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788447167446,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 593
+  }
+}
