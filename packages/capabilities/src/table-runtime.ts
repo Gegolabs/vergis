@@ -121,6 +121,89 @@ export function vtDistinct(rows: Record<string, unknown>[], field: string): stri
 }
 
 /**
+ * ORDEN NATURAL de un conjunto de valores de columna (#285) — el orden en que una persona los
+ * escribiría, no el alfabético del `localeCompare`.
+ *
+ * La regla la decide el CONJUNTO, jamás el par: un comparador que cambia de modo según cada par es
+ * no-transitivo y `Array.sort` devuelve órdenes arbitrarios (la misma disciplina que `vtIsNumericCol`
+ * en `vtApply`). Se prueba una familia tras otra sobre los valores no vacíos, y basta que UNO no
+ * califique para caer a la siguiente:
+ *
+ * 1. Todos numéricos → ascendente por número (`2` antes que `10`).
+ * 2. Todos fecha ISO `YYYY-MM-DD[…]` → lexicográfico, que en ISO ES el cronológico.
+ * 3. Todos `prefijo alfabético corto + número` con EL MISMO prefijo (`W1 W2 … W10`, `Q1 Q2`,
+ *    `S-3`) → por el número. El mismo prefijo es condición: `A1` junto a `B2` no es una serie.
+ * 4. Todos nombres de mes en español o inglés, completos o abreviados a tres letras, insensibles
+ *    a mayúsculas, acentos y punto final → orden calendario (`Enero` antes que `Abril`).
+ * 5. Si no califica ninguna → `vtNorm(a).localeCompare(vtNorm(b))`, el orden de siempre.
+ *
+ * El vacío `''` va SIEMPRE al final, sea cual sea la familia: no es un valor de la serie.
+ * Dentro de una familia, los empates (dos `W3`, un mes repetido) se desempatan por texto para que
+ * el resultado sea determinista.
+ *
+ * AUTOCONTENIDA a propósito —la tabla de meses es local, sin closures ni imports— salvo por su par
+ * `vtNorm`, que también viaja en `PURE_FNS`: esta función se emite al navegador vía `.toString()`.
+ */
+export function vtSortValues(vals: string[]): string[] {
+  // Nombres de mes es/en, completos y abreviados a 3 letras, ya normalizados (minúsculas, sin
+  // acentos). `mar`/`may`/`jun`/`jul` valen para los dos idiomas porque coinciden en el mismo mes.
+  const MONTHS: Record<string, number> = {
+    enero: 1, ene: 1, january: 1, jan: 1,
+    febrero: 2, feb: 2, february: 2,
+    marzo: 3, mar: 3, march: 3,
+    abril: 4, abr: 4, april: 4, apr: 4,
+    mayo: 5, may: 5,
+    junio: 6, jun: 6, june: 6,
+    julio: 7, jul: 7, july: 7,
+    agosto: 8, ago: 8, august: 8, aug: 8,
+    septiembre: 9, setiembre: 9, september: 9, sep: 9, sept: 9, set: 9,
+    octubre: 10, oct: 10, october: 10,
+    noviembre: 11, nov: 11, november: 11,
+    diciembre: 12, dic: 12, december: 12, dec: 12,
+  }
+  const RE_PREFIX = /^\s*([A-Za-z]{1,3})\s*-?\s*(\d+)\s*$/
+  const RE_ISO = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/
+  const monthKey = function (s: string): string {
+    return vtNorm(s).trim().replace(/\.$/, '')
+  }
+  const items: string[] = []
+  const blanks: string[] = []
+  for (const v of vals) {
+    const s = String(v == null ? '' : v)
+    if (s.trim() === '') blanks.push(s)
+    else items.push(s)
+  }
+  const every = function (fn: (s: string) => boolean): boolean {
+    if (items.length === 0) return false
+    for (const s of items) if (!fn(s)) return false
+    return true
+  }
+  let cmp: ((a: string, b: string) => number) | null = null
+  if (every((s) => !Number.isNaN(Number(s.trim())))) {
+    cmp = (a, b) => Number(a.trim()) - Number(b.trim())
+  } else if (every((s) => RE_ISO.test(s.trim()))) {
+    cmp = (a, b) => (a.trim() < b.trim() ? -1 : a.trim() > b.trim() ? 1 : 0)
+  } else if (
+    every((s) => RE_PREFIX.test(s)) &&
+    every((s) => {
+      const m = s.match(RE_PREFIX) as RegExpMatchArray
+      const p0 = (items[0].match(RE_PREFIX) as RegExpMatchArray)[1]
+      return m[1].toLowerCase() === p0.toLowerCase()
+    })
+  ) {
+    cmp = (a, b) =>
+      Number((a.match(RE_PREFIX) as RegExpMatchArray)[2]) - Number((b.match(RE_PREFIX) as RegExpMatchArray)[2])
+  } else if (every((s) => MONTHS[monthKey(s)] != null)) {
+    cmp = (a, b) => MONTHS[monthKey(a)] - MONTHS[monthKey(b)]
+  }
+  const out = items.slice().sort(function (a, b) {
+    const c = cmp ? cmp(a, b) : 0
+    return c !== 0 ? c : vtNorm(a).localeCompare(vtNorm(b))
+  })
+  return out.concat(blanks)
+}
+
+/**
  * ¿Columna categórica? (apta para faceta de filtro y para agrupar). Heurística: no numérica
  * y de baja cardinalidad. `override` (true/false) gana sobre la heurística.
  */
@@ -270,6 +353,68 @@ export function vtApply(rows: Record<string, unknown>[], state: VtState): Record
     })
   }
   return out
+}
+
+/**
+ * OPCIONES DE UNA FACETA acotadas por los demás filtros (#286) — la convención del autofiltro de
+ * Excel, adoptada como convención de plataforma (sin vocabulario nuevo en el DSL).
+ *
+ * Lista y conteos de la columna `field` se calculan sobre las filas que sobreviven a **el resto** del
+ * estado: las demás facetas, `numFilters`, `dateFilters`, `globalSearch` y `colSearch` siguen
+ * aplicando; solo la faceta de `field` se retira. El caso medido en PI-15 (0.25.1): con `Mes = Marzo`
+ * puesto, `Week` ofrecía las 52 semanas con el conteo del dataset completo — se marcaba una y la tabla
+ * quedaba vacía sin que nada explicara por qué.
+ *
+ * Es SIMÉTRICA, no jerárquica: retirar la propia faceta es lo único que la distingue de las demás, así
+ * que `Mes` acota a `Week` exactamente igual que `Week` acota a `Mes`. Y **la propia faceta nunca se
+ * auto-acota**: si se acotara, marcar un valor haría desaparecer a los otros y no habría cómo agregar
+ * un segundo.
+ *
+ * Los valores **ya seleccionados** en `field` que no tengan filas bajo el resto de los filtros se
+ * conservan en la lista con conteo `0`: son justamente los que hay que poder desmarcar para salir del
+ * cero filas. El orden es el natural de `vtSortValues` (#285).
+ *
+ * El `sort` del estado se descarta a propósito: ordenar filas que solo se van a contar es trabajo
+ * tirado, y el orden de la lista lo pone `vtSortValues`.
+ */
+export function vtFacetOptions(
+  rows: Record<string, unknown>[],
+  state: VtState,
+  field: string,
+): { value: string; count: number }[] {
+  const facets: Record<string, string[]> = {}
+  for (const f in state.facets) if (f !== field) facets[f] = state.facets[f]
+  const base = vtApply(rows, {
+    sort: { field: '', dir: 'asc' },
+    globalSearch: state.globalSearch,
+    colSearch: state.colSearch,
+    facets: facets,
+    groupBy: state.groupBy,
+    searchCols: state.searchCols,
+    numFilters: state.numFilters,
+    dateFilters: state.dateFilters,
+  })
+  const counts: Record<string, number> = {}
+  const keys: string[] = []
+  const has = function (k: string): boolean {
+    return Object.prototype.hasOwnProperty.call(counts, k)
+  }
+  for (const r of base) {
+    const k = String(r[field] == null ? '' : r[field])
+    if (!has(k)) {
+      counts[k] = 0
+      keys.push(k)
+    }
+    counts[k] = counts[k] + 1
+  }
+  const sel = state.facets && state.facets[field] ? state.facets[field] : []
+  for (const v of sel) {
+    if (!has(v)) {
+      counts[v] = 0
+      keys.push(v)
+    }
+  }
+  return vtSortValues(keys).map((v) => ({ value: v, count: counts[v] }))
 }
 
 /**
@@ -429,7 +574,8 @@ export function vtPopHtml(
   )
 }
 
-/** Agrupa filas (ya filtradas/ordenadas) por una columna. Grupos ordenados alfabéticamente;
+/** Agrupa filas (ya filtradas/ordenadas) por una columna. Grupos en ORDEN NATURAL (`vtSortValues`:
+ *  meses por calendario, `W2` antes que `W10`, fechas en cronológico, el resto alfabético);
  *  el orden de filas dentro de cada grupo se preserva (hereda el sort activo). */
 export function vtGroup(
   rows: Record<string, unknown>[],
@@ -445,9 +591,7 @@ export function vtGroup(
     }
     buckets[key].push(r)
   }
-  return order
-    .sort((a, b) => vtNorm(a).localeCompare(vtNorm(b)))
-    .map((key) => ({ key, rows: buckets[key] }))
+  return vtSortValues(order).map((key) => ({ key, rows: buckets[key] }))
 }
 
 /** Nodo del árbol de agrupación multinivel. Hoja = filas; interno = grupos por `field`. */
@@ -576,9 +720,11 @@ const PURE_FNS = [
   vtIsNumericCol,
   vtIsDateCol,
   vtDistinct,
+  vtSortValues,
   vtIsCategorical,
   vtFormat,
   vtApply,
+  vtFacetOptions,
   vtNumFilterLabel,
   vtDateFilterLabel,
   vtPopHtml,
@@ -675,7 +821,6 @@ function vtBodyRows(cols, rows, drills, carry, ancla, fltQ){
     return open+cols.map(function(c){return vtCell(c,r);}).join('')+vtDrillActions(drills,r,carry,fltQ)+'</tr>';
   }).join('');
 }
-function vtCounts(rows, field){ var m={}; for(var i=0;i<rows.length;i++){ var k=String(rows[i][field]==null?'':rows[i][field]); m[k]=(m[k]||0)+1; } return m; }
 function vtBootstrap(root){
   var dataEl = root.querySelector('script.vtable-data');
   if(!dataEl) return;
@@ -881,14 +1026,23 @@ function vtBootstrap(root){
     pop.querySelector('.vt-pop-apply').addEventListener('click', applyNow);
     pop.querySelector('.vt-pop-clear').addEventListener('click', function(){ setDateFilter(field, null); });
   }
+  // Sello del RESTO del estado (todo menos la faceta de la propia columna): si cambió desde que se
+  // construyó el embudo, su lista está rancia y hay que rehacerla al abrir. La faceta propia queda
+  // FUERA a propósito — marcar un valor en ella no debe rehacer su propia lista (#286).
+  function facetSello(field){
+    var f={};
+    for(var k in state.facets){ if(k!==field && state.facets[k] && state.facets[k].length) f[k]=state.facets[k]; }
+    return JSON.stringify([f, state.numFilters, state.dateFilters, state.globalSearch, state.colSearch]);
+  }
   function buildPop(pop, field){
     if(vtIsNumericCol(rows, field)){ buildNumPop(pop, field); return; }
     if(vtIsDateCol(rows, field)){ buildDatePop(pop, field); return; }
-    var counts=vtCounts(rows, field);
-    var vals=vtDistinct(rows, field).slice().sort(function(a,b){return vtNorm(a).localeCompare(vtNorm(b));});
+    // Lista y conteos acotados por los demás filtros (#286), en orden natural (#285).
+    var vals=vtFacetOptions(rows, state, field);
     var sel=state.facets[field]||[];
-    var opts=vals.map(function(v){ var ck=sel.indexOf(v)!==-1?' checked':''; return '<label><input type="checkbox" value="'+vtEsc(v)+'"'+ck+'> <span class="vt-pop-val">'+vtEsc(v||'(vacío)')+'</span> <span class="vt-pop-count">'+counts[v]+'</span></label>'; }).join('');
+    var opts=vals.map(function(o){ var v=o.value; var ck=sel.indexOf(v)!==-1?' checked':''; return '<label><input type="checkbox" value="'+vtEsc(v)+'"'+ck+'> <span class="vt-pop-val">'+vtEsc(v||'(vacío)')+'</span> <span class="vt-pop-count">'+o.count+'</span></label>'; }).join('');
     pop.innerHTML = vtPopHtml('vals', colLabel(field), opts);
+    pop.setAttribute('data-built-for', facetSello(field));
     var ps=pop.querySelector('.vt-pop-search');
     ps.addEventListener('input', function(){ var q=vtNorm(ps.value); Array.prototype.forEach.call(pop.querySelectorAll('.vt-pop-opts label'), function(l){ l.style.display=(!q||vtNorm(l.textContent).indexOf(q)!==-1)?'':'none'; }); });
     var optsBox=pop.querySelector('.vt-pop-opts');
@@ -903,7 +1057,11 @@ function vtBootstrap(root){
       var th=btn.closest('th'); var pop=th.querySelector('.vt-col-pop'); var willOpen=pop.hidden;
       closeAllPops(willOpen?pop:null);
       if(willOpen){
-        if(!pop.innerHTML) buildPop(pop, btn.getAttribute('data-field'));
+        // Se reconstruye si nunca se armó, o si el resto del estado cambió desde que se armó (#286).
+        // Los embudos de número y fecha no llevan sello y por eso nunca entran por la segunda vía:
+        // su conducta no cambia.
+        var pf=btn.getAttribute('data-field'); var sello=pop.getAttribute('data-built-for');
+        if(!pop.innerHTML || (sello!==null && sello!==facetSello(pf))) buildPop(pop, pf);
         pop.hidden=false;
         // position:fixed anclado al botón → ningún contenedor con overflow lo recorta
         // (la tabla vive en .vt-scroll, cuyo overflow recortaría un popover absoluto).
