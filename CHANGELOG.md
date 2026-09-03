@@ -63,6 +63,12 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+*(nada todavía)*
+
+## 0.26.0 — 2026-09-03
+
+Tres capacidades con demandante en la instancia A.R.B.O.L.: PI-30 (sobre PI-15) pidió el orden y la cascada de las facetas; el caso de Finanzas (PI-01) mostró el schedule que corría sobre nada. Sin migración, sin variable de entorno nueva, sin cambio de contrato: se toma con `install` + `promote`.
+
 ### «Aplicar cadencia» vigila —y ya no programa— los procesos que alimenta una carga manual (#279)
 
 **Cambia lo que hace el botón «Aplicar» en la Frescura de un dominio cuando la entidad se alimenta
