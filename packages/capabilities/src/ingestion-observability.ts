@@ -53,7 +53,8 @@ export function alertReason(h: ProcessHealth): 'failed' | 'missed' | null {
 }
 
 export interface ReconcilePlan {
-  action: 'set' | 'noop'
+  /** `set` empujar la cadencia · `noop` ya converge · `vigilar` alimentación manual: no se programa (#279). */
+  action: 'set' | 'noop' | 'vigilar'
   desiredSeconds: number
 }
 
@@ -61,8 +62,15 @@ export interface ReconcilePlan {
  * Reconciliador (control loop): el schedule del motor (`actualSeconds`) debe converger a la cadencia
  * derivada (`desiredSeconds`). `noop` si ya coinciden; `set` si no. El *debounce* es operacional (el
  * llamador lo aplica), no de esta función pura.
+ *
+ * `manualFed` (#279) es el tercer camino y gana sobre los otros dos: el proceso lo alimenta una carga
+ * manual (land-and-trigger), así que un schedule correría sobre nada. La cadencia requerida se
+ * **vigila** —las fases de observación y alerta la usan igual para decir «atrasada»— pero no se
+ * programa. Se devuelve `vigilar` y no `noop` a propósito: `noop` diría «ya está como debe estar», y
+ * el feedback de la página tiene que decir la verdad de por qué no se hizo nada.
  */
-export function reconcilePlan(desiredSeconds: number, actualSeconds: number | null): ReconcilePlan {
+export function reconcilePlan(desiredSeconds: number, actualSeconds: number | null, manualFed = false): ReconcilePlan {
+  if (manualFed) return { action: 'vigilar', desiredSeconds }
   return { action: actualSeconds === desiredSeconds ? 'noop' : 'set', desiredSeconds }
 }
 
