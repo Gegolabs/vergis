@@ -63,6 +63,10 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+*(nada todavía)*
+
+## 0.25.1 — 2026-09-03
+
 ### Qué exige esta versión
 
 > **Nada del motor, de la base ni del env.** Corrección aislada, sin capacidad nueva: quien corre 0.25.0
