@@ -2,9 +2,9 @@
 vista: "pasivo-obra"
 alcance: "obra/vergis"
 nivel: "obra"
-compilada_de: "ddf07bb30f63"
-compilada_en: "2026-09-03T22:51:38Z"
-items: 16
+compilada_de: "6cd1cc2e7611"
+compilada_en: "2026-09-03T22:54:20Z"
+items: 17
 ---
 # Pasivo — vergis
 
@@ -48,4 +48,5 @@ obligar a terceros — **renombrarlo ES el acto de publicación**, y ése es tuy
 marcadas dentro del borrador esperan dato: la redacción legal de la cláusula y la dirección de
 contacto de seguridad (`security@gegolabs.com`, sin confirmar). | persona/cesar-obach | esperando | 2026-08-08 | — | persona/cesar-obach — revisar el borrador CONTRIBUTING.draft.md (el o un abogado) y decidir su publicacion; renombrarlo a CONTRIBUTING.md ES el acto de publicacion y es suyo |
 | `d-20260902-14af8921-05` | Validar en un navegador real el realce al hover del PR `vergis#269`: el realizador declaro explicitamente que valido la sintaxis del script y NO la conducta - que el realce se vea bien con un cursor humano encima no lo ha mirado nadie. | persona/cesar-obach | esperando | 2026-09-02 | — | persona/cesar-obach — abrir el PI en un navegador y mirar el realce al pasar el cursor |
+| `d-20260903-84e55866-07` | Reconciliar el `main` local de `vergis` con `origin/main`, que otro actor movio durante el cierre (PRs #285, #286, #288 → `7d2e8ce`). El commit local `bf8269c` (vistas recompiladas del cierre) esta detenido sin pushear. Comando exacto: `cd ~/wworkspace/productos/vergis && git fetch origin main && git rebase origin/main && git push` — revisar antes que el rebase solo mueva `PASIVO.md` y `RESOURCES.md`, que es todo lo que el commit toca. | persona/cesar-obach | esperando | 2026-09-03 | — | persona/cesar-obach — rebasar el commit local bf8269c de vergis sobre origin/main y pushear |
 
