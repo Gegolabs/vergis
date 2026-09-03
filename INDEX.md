@@ -16,7 +16,9 @@
 | 010 | `work/010-cluster-authz-2026-08-13/` — directorio (cluster, con INDEX propio) · el frente de autorización: columna, ancla, sujeto y mapa | 2026-08-13 | 010 | issues #163, #164 |
 | 011 | `work/011-235-default-del-dato/` — directorio · diseño del default que viene del dato (`defaultField`), con los seis puntos donde el issue no calzaba con el código y la semántica cerrada en S1–S7 | 2026-08-19 | 011 | issues #235, #246 |
 
-Próximo disponible: 012
+| 012 | `work/012-facetas-naturales-y-cadencia-manual/` — directorio · plan de los realizadores A (#285 orden natural + #286 opciones acotadas en facetas de `table`) y B (#279 «Aplicar cadencia» vigila y no programa slots manuales); integración y corte 0.26.0 por la custodia | 2026-09-03 | 012 | issues #285, #286, #279 · PI-30, PI-1 de la instancia |
+
+Próximo disponible: 013
 
 ---
 
