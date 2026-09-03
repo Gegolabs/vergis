@@ -1,0 +1,12 @@
+{"level":"info","ts":1788441924.720328,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788441924.721984,"msg":"adapted config to JSON","adapter":"caddyfile"}
+{"level":"info","ts":1788441924.7234676,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x346f56724200"}
+{"level":"info","ts":1788441924.7253387,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x346f56724200"}
+{"level":"info","ts":1788441924.725361,"logger":"http","msg":"servers shutting down with eternal grace period"}
+Valid configuration
+{"level":"info","ts":1788441924.804495,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788441924.8058312,"msg":"adapted config to JSON","adapter":"caddyfile"}
+borde conmutado al nodo compose (13:25:24.850398000)
+vergis-9-9-1
+SIGUSR2 → vergis-9-9-1 (13:25:24.888469000)
+el nodo compose NO volvió a serving en 60 s

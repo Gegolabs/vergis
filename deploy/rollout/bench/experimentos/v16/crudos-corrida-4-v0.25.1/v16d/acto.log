@@ -1,0 +1,22 @@
+[wrapper] 14:52:09 promote 9.9.1 · log /Users/cesar/wworkspace/productos/vergis-wt-v16/deploy/rollout/bench/.run/rings/promote-9.9.1-1788447129.log · nodo compose: benchv14-vergis-1
+[wrapper] 14:52:10.376978000 SIGUSR2 → benchv14-vergis-1 (suelta el control; sigue sirviendo lecturas)
+----- salida de vergis-rollout -----
+· candidato: 9.9.1 (vergis-9-9-1)
+  fase del candidato: standby
+  esquema del store: candidato soporta 1 · archivo en 1 → compatible
+  borde: config vigente válida · el conmutador responde 200
+· intent de handover: el sucesor es 'vergis-9-9-1' (vence en 1s)
+{"level":"info","ts":1788447130.2227907,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788447130.2248063,"msg":"adapted config to JSON","adapter":"caddyfile"}
+  borde: conmutado a 'vergis-9-9-1' (caddy reload en caliente, sin cortar conexiones)
+· no hay anillo activo vivo: el candidato tomará el control por relevo del lease
+· esperando que el candidato declare 'serving' (presupuesto: 1s desde el flip)…
+vergis-rollout: el candidato NO llegó a 'serving' (fase: standby). El borde YA apunta a él: lo que entró en esta
+    ventana quedó RETENIDO en la sala de espera. Se vuelve atrás.
+· vuelta atrás: no hay anillo anterior al que devolver el tráfico; se restaura la línea previa
+  borde: restaurada la línea anterior desde active.caddy.bak
+vergis-rollout: promoción ABORTADA en el handover. El borde volvió a apuntar a 'la línea anterior'.
+-----
+[wrapper] promote rc=1 · señal enviada=1
+[wrapper] 14:52:14.731107000 post-abort: el candidato vergis-9-9-1 tomó el control DESPUÉS del abort con el borde ya restaurado → SIGUSR2 → vergis-9-9-1
+[wrapper] 14:52:22.343009000 post-abort: benchv14-vergis-1 volvió a serving a los 8s

@@ -1,0 +1,135 @@
+{
+  "etiqueta": "CN-instrumento B · poller contra un destino inexistente",
+  "ventanaDelActo": {
+    "inicio": 1788446367000,
+    "fin": 1788446375000,
+    "duracionMs": 8000
+  },
+  "muestras": {
+    "total": 275,
+    "enVentana": 252,
+    "OK": 0,
+    "MAL": 0,
+    "SINMEDIR": 252
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": null,
+    "p95": null,
+    "p100": null
+  },
+  "sinmedirDetalle": [
+    {
+      "t0": 1788446367465,
+      "ms": 31,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367494,
+      "ms": 6,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367523,
+      "ms": 6,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367553,
+      "ms": 6,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367583,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367614,
+      "ms": 4,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367643,
+      "ms": 7,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367673,
+      "ms": 7,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367703,
+      "ms": 17,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367733,
+      "ms": 17,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367763,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367794,
+      "ms": 9,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367824,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367853,
+      "ms": 25,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367884,
+      "ms": 8,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367913,
+      "ms": 25,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367947,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367976,
+      "ms": 9,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446368005,
+      "ms": 11,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446368036,
+      "ms": 8,
+      "motivo": "TypeError:fetch failed"
+    }
+  ]
+}

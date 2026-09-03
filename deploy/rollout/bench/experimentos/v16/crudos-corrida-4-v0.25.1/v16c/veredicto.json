@@ -1,0 +1,42 @@
+{
+  "etiqueta": "V-16c · vuelta atras manual: anillo -> nodo compose",
+  "ventanaDelActo": {
+    "inicio": 1788447195000,
+    "fin": 1788447196000,
+    "duracionMs": 1000
+  },
+  "muestras": {
+    "total": 719,
+    "enVentana": 33,
+    "OK": 33,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 8,
+    "p95": 1008,
+    "p100": 1010
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 1,
+    "ejecutadas": 1,
+    "rechazos409": 0,
+    "fallos": [],
+    "sinmedir": 0,
+    "latenciaMaxMs": 29
+  }
+}

@@ -1,0 +1,13 @@
+{"level":"info","ts":1788446453.6709878,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788446453.673712,"msg":"adapted config to JSON","adapter":"caddyfile"}
+{"level":"info","ts":1788446453.6753242,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x12a04f4a5900"}
+{"level":"info","ts":1788446453.6767185,"logger":"http.handlers.reverse_proxy.health_checker.active","msg":"response body failed expectations","host":"vergis:8080"}
+{"level":"info","ts":1788446453.6768472,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x12a04f4a5900"}
+{"level":"info","ts":1788446453.676867,"logger":"http","msg":"servers shutting down with eternal grace period"}
+Valid configuration
+{"level":"info","ts":1788446453.755266,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788446453.7575989,"msg":"adapted config to JSON","adapter":"caddyfile"}
+borde conmutado al nodo compose (14:40:53.782130000)
+vergis-9-9-1
+SIGUSR2 → vergis-9-9-1 (14:40:53.819592000)
+nodo compose re-adquirió a los 2s

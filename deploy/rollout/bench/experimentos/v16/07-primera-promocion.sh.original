@@ -1,0 +1,46 @@
+#!/bin/sh
+# 07-primera-promocion.sh — la PRIMERA promoción de la instancia GH, cuando el activo todavía es el NODO
+# COMPOSE (`mira-vergis-1`) y no un anillo registrado.
+#
+# Por qué existe (verificado en vergis-rollout v0.24.0, cmd_promote, y en control-lease.ts): cuando no
+# hay anillo activo registrado, la herramienta hace el flip del borde y espera a que el candidato tome
+# el control «por relevo del lease». Pero el intent de handover ORDENA LA FILA, JAMÁS OTORGA el
+# control: el titular (el nodo compose) solo lo suelta con SIGUSR2 o al morir. Sin esta señal, el
+# candidato espera todo el presupuesto y la herramienta vuelve atrás. Este wrapper envía SIGUSR2 al
+# nodo compose en cuanto la herramienta declara el flip, y deja el log de todo el acto.
+#
+# Se corre en la VM (host, root), en /opt/mira, con el poller YA corriendo (work/231 §6).
+# Uso: sh 07-primera-promocion.sh 0.24.0
+# Solo para esta primera vez: desde que el activo es un anillo registrado, `vergis-rollout promote`
+# a secas hace el handover completo y este wrapper NO se usa.
+set -u
+VERSION=${1:?uso: primera-promocion.sh <versión>}
+COMPOSE_NODE=${COMPOSE_NODE:-mira-vergis-1}
+MARCA="no hay anillo activo vivo"
+set -a
+# shellcheck disable=SC1091
+. /opt/mira/rings/rollout.env
+set +a
+RINGS_PROMOTE_TIMEOUT=${PRIMERA_TIMEOUT:-30}   # margen para el relevo manual; después vuelve a 10
+export RINGS_PROMOTE_TIMEOUT
+LOG=/opt/mira/rings/promote-$VERSION-$(date +%s).log
+echo "[wrapper] $(date -u +%T) promote $VERSION · log $LOG · nodo compose: $COMPOSE_NODE"
+vergis-rollout promote "$VERSION" >"$LOG" 2>&1 &
+PID=$!
+enviado=0
+while kill -0 "$PID" 2>/dev/null; do
+  if [ "$enviado" = 0 ] && grep -q "$MARCA" "$LOG"; then
+    if docker kill -s USR2 "$COMPOSE_NODE" >/dev/null; then
+      echo "[wrapper] $(date -u +%T.%N) SIGUSR2 → $COMPOSE_NODE (suelta el control; sigue sirviendo lecturas)"
+    else
+      echo "[wrapper] $(date -u +%T.%N) NO se pudo enviar SIGUSR2 a $COMPOSE_NODE — la herramienta volverá atrás sola"
+    fi
+    enviado=1
+  fi
+  sleep 0.2
+done
+wait "$PID"; RC=$?
+echo "----- salida de vergis-rollout -----"; cat "$LOG"; echo "-----"
+echo "[wrapper] promote rc=$RC · señal enviada=$enviado"
+[ "$enviado" = 1 ] || echo "[wrapper] ATENCIÓN: la marca '$MARCA' nunca apareció — el flujo no fue el esperado; leer el log antes de tocar nada"
+exit "$RC"

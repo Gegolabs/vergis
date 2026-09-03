@@ -1,0 +1,51 @@
+# Sonda con el inspector de Node sobre vergis-9-9-1 atascado tras el SIGUSR2 de V-16c (2026-09-03, repetida para el registro)
+# breakpoint en 'if (soltando) return soltando' (dist/serve-rls.mjs:72257); luego SIGUSR2 y evaluación en el frame
+breakpoint en file:///app/dist/serve-rls.mjs línea 72257 locs 1
+typeof soltando => "object"
+soltando && soltando.constructor && soltando.constructor.name => "Promise"
+plane.hasControl() => true
+loops.armed() => true
+JSON.stringify(loops.status().map(s=>s.name+":"+s.armed)) => "[\"purga-retención:true\",\"reporte-periódico:true\"]"
+noAspirarHasta => 0
+typeof loops.disarm => "function"
+paso 0 → línea 72257 soltarControl
+paso 1 → línea 72257 soltarControl
+paso 2 → línea 72220 
+paso 3 → línea 524 emit
+paso 4 → línea 544 emit
+paso 5 → línea 544 emit
+paso 6 → línea 72 processTicksAndRejections
+paso 7 → línea 74 processTicksAndRejections
+resumido
+
+# /contrato.control del anillo en ese momento
+{
+ "lease": {
+  "holder": "vergis@d48b67a9622c/7",
+  "epoch": 2,
+  "renewedAt": "2026-09-03T14:30:53.417Z",
+  "held": true,
+  "observedHolder": "vergis@d48b67a9622c/7",
+  "observedEpoch": 2,
+  "file": "/governance/control.lease.json"
+ },
+ "loops": {
+  "armed": true,
+  "detail": [
+   {
+    "name": "purga-retención",
+    "everyMs": 86400000,
+    "armed": true,
+    "ticks": 1,
+    "lastTickAt": "2026-09-03T13:24:42.213Z"
+   },
+   {
+    "name": "reporte-periódico",
+    "everyMs": 60000,
+    "armed": true,
+    "ticks": 67,
+    "lastTickAt": "2026-09-03T14:30:37.337Z"
+   }
+  ]
+ }
+}

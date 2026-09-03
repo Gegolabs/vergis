@@ -1,0 +1,413 @@
+
+######## preparar · 14:51:47
+· levantando el mundo (clickhouse + borde)…
+ Container benchv14-clickhouse Creating 
+ Container benchv14-clickhouse Created 
+ Container benchv14-caddy Creating 
+ Container benchv14-caddy Created 
+ Container benchv14-clickhouse Starting 
+ Container benchv14-clickhouse Started 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-caddy Starting 
+ Container benchv14-caddy Started 
+· creando el NODO COMPOSE benchv14-vergis-1 (SIN VERGIS_RING, alias de red 'vergis')…
+  verificado: el nodo compose NO lleva VERGIS_RING ni VERGIS_RING_DIGEST
+  fase del nodo compose: 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+· verificando los 9 PIs por el CONMUTADOR (que es lo que un cliente ve)…
+{"pisServidos":9,"de":9,"malos":[]}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): no existe
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  lease → {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:51:54.139Z",  "pid": 7}
+
+✓ mundo V-16 listo: activo = NODO COMPOSE sin identidad de anillo, ruteado por 'vergis:8080'.
+rc=0
+
+######## v16a · 14:51:55
+── V-16a · install 9.9.1 con el NODO COMPOSE activo ──
+  lease ANTES: {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:51:54.139Z",  "pid": 7}
+· imagen: benchv14/vergis:9.9.1
+  digest: sha256:09f69f311bd5223e8e6348b5952e56a082c9e8cf0d18942f788f3f0bc199d793
+· create vergis-9-9-1
+· start vergis-9-9-1 — esperando que responda…
+  fase observada: standby
+✓ anillo 9.9.1 instalado (standby). Retención vigente: 3 — 'prune' retira lo que sobre.
+  (rc=0)
+rc=0
+fase nodo compose : 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+fase anillo 9.9.1  : 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+lease antes       : {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:51:54.139Z",  "pid": 7}
+
+lease despues     : {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:51:58.148Z",  "pid": 7}
+borde dial        : "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+rc=0
+
+######## v16d · 14:51:59
+── v16d · V-16d · promocion abortada a proposito (timeout 1 s, sin senal) ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 
+  lease → {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:52:00.147Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-mutador Creating 
+ Container benchv14-poller Creating 
+ Container benchv14-mutador Created 
+ Container benchv14-poller Created 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-mutador Starting 
+ Container benchv14-poller Starting 
+ Container benchv14-poller Started 
+ Container benchv14-mutador Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=1 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 0,
+  "vivas": 0,
+  "perdidas": []
+}
+{
+  "etiqueta": "V-16d · promocion abortada a proposito (timeout 1 s, sin senal)",
+  "ventanaDelActo": {
+    "inicio": 1788447129000,
+    "fin": 1788447142000,
+    "duracionMs": 13000
+  },
+  "muestras": {
+    "total": 1119,
+    "enVentana": 434,
+    "OK": 382,
+    "MAL": 52,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 52,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 52,
+    "ventana": {
+      "desde": 1788447130232,
+      "hasta": 1788447131832,
+      "duracionMs": 1600
+    },
+    "relativoAlActoMs": {
+      "desde": 1232,
+      "hasta": 2832
+    },
+    "latenciaMaxMs": 1586
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 5016,
+    "p95": 10035,
+    "p100": 10561
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 13,
+    "ejecutadas": 0,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788447129246,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447131257,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788447130250,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788447141277,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447139270,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447135262,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447134261,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447132258,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447133260,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447137266,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447138268,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447140271,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447136264,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 10031
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 
+  lease → {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 9,  "renewedAt": "2026-09-03T14:52:36.248Z",  "pid": 7}
+rc=0
+
+######## v16b · 14:52:38
+── v16b · V-16b · primera promocion CON wrapper (SIGUSR2 al nodo compose) ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 
+  lease → {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 9,  "renewedAt": "2026-09-03T14:52:38.248Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-mutador Recreate 
+ Container benchv14-poller Recreate 
+ Container benchv14-mutador Recreated 
+ Container benchv14-poller Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-mutador Starting 
+ Container benchv14-poller Starting 
+ Container benchv14-poller Started 
+ Container benchv14-mutador Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=0 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 16,
+  "vivas": 16,
+  "perdidas": []
+}
+{
+  "etiqueta": "V-16b · primera promocion CON wrapper (SIGUSR2 al nodo compose)",
+  "ventanaDelActo": {
+    "inicio": 1788447167000,
+    "fin": 1788447170000,
+    "duracionMs": 3000
+  },
+  "muestras": {
+    "total": 793,
+    "enVentana": 102,
+    "OK": 102,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 4,
+    "p95": 504,
+    "p100": 562
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 3,
+    "ejecutadas": 2,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788447167446,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 593
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis-9-9-1:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis-9-9-1:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@007d7cf1fe12/7",  "ring": "vergis-9-9-1",  "epoch": 10,  "renewedAt": "2026-09-03T14:53:04.672Z",  "pid": 7}
+rc=0
+
+######## v16c · 14:53:06
+── v16c · V-16c · vuelta atras manual: anillo -> nodo compose ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis-9-9-1:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis-9-9-1:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@007d7cf1fe12/7",  "ring": "vergis-9-9-1",  "epoch": 10,  "renewedAt": "2026-09-03T14:53:04.672Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-poller Recreate 
+ Container benchv14-mutador Recreate 
+ Container benchv14-poller Recreated 
+ Container benchv14-mutador Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-mutador Starting 
+ Container benchv14-poller Starting 
+ Container benchv14-mutador Started 
+ Container benchv14-poller Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=0 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 8,
+  "vivas": 0,
+  "perdidas": [
+    {
+      "id": "8f47de64-cb03-484f-beaf-ae95acc6e15a",
+      "status": 404
+    },
+    {
+      "id": "3bb5ffcf-b1e7-4437-8742-21a155b37930",
+      "status": 404
+    },
+    {
+      "id": "65ecace6-a970-4ddb-b7d3-3d557beefdd6",
+      "status": 404
+    },
+    {
+      "id": "2fd1078d-6cf1-44a2-86e0-eafc6d37d8c9",
+      "status": 404
+    },
+    {
+      "id": "833c2847-3416-4180-8e95-aad1bcbd9bd9",
+      "status": 404
+    },
+    {
+      "id": "a3f28d49-03f1-44a4-a636-2ea7fffc2bbd",
+      "status": 404
+    },
+    {
+      "id": "5b990a0b-69a2-43c1-b844-52321c5e64f8",
+      "status": 404
+    },
+    {
+      "id": "132054c7-430a-4a93-933f-31d6f126a51c",
+      "status": 404
+    }
+  ]
+}
+{
+  "etiqueta": "V-16c · vuelta atras manual: anillo -> nodo compose",
+  "ventanaDelActo": {
+    "inicio": 1788447195000,
+    "fin": 1788447196000,
+    "duracionMs": 1000
+  },
+  "muestras": {
+    "total": 719,
+    "enVentana": 33,
+    "OK": 33,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 8,
+    "p95": 1008,
+    "p100": 1010
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 1,
+    "ejecutadas": 1,
+    "rechazos409": 0,
+    "fallos": [],
+    "sinmedir": 0,
+    "latenciaMaxMs": 29
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 11,  "renewedAt": "2026-09-03T14:53:30.341Z",  "pid": 7}
+rc=0
+
+######## rss · 14:53:32
+── V-RSS · los dos nodos sirviendo (docker stats, una muestra) ──
+benchv14-vergis-1	75.72MiB / 1GiB	7.39%	0.51%
+vergis-9-9-1	93.4MiB / 1GiB	9.12%	0.31%
+benchv14-caddy	42.06MiB / 7.75GiB	0.53%	0.57%
+
+  límite de memoria declarado por contenedor:
+  benchv14-vergis-1 → 1073741824 bytes
+  vergis-9-9-1 → 1073741824 bytes
+rc=0
