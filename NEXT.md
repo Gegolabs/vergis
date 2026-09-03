@@ -1,13 +1,13 @@
 # NEXT — Vergis
 
-**0.24.0 es la versión publicada** (tag `v0.24.0`, 2026-09-02, commit `fad4b4c`), verificada contra el registry (2 plataformas). Trae los **filtros de número** en columnas numéricas (#277/#278, decisión de César tras el caso de PI-01) sobre 0.23.1 (segunda mitad de #266). **Issue abierto hoy: #279** — «Aplicar cadencia» programa corridas también en slots de carga manual.
+**0.26.0 es la versión publicada** (tag `v0.26.0`, 2026-09-03, commit `d8f9a80`), verificada contra el registry (2 plataformas): facetas con orden natural y acotadas (#285, #286) y «Aplicar cadencia» que vigila los slots manuales (#279), sobre 0.25.1 (#282) y 0.25.0 (#280). Anteriormente 0.24.0 (`fad4b4c`) trajo Trae los **filtros de número** en columnas numéricas (#277/#278, decisión de César tras el caso de PI-01) sobre 0.23.1 (segunda mitad de #266). **Issue abierto hoy: #279** — «Aplicar cadencia» programa corridas también en slots de carga manual.
 
-**La instancia A.R.B.O.L. corre 0.23.0 desde el 2026-09-02 (noche)** — desplegada por el frente arbol
+**La instancia A.R.B.O.L. corre 0.26.0 desde el 2026-09-03 (23:10Z)**, promovida por anillos sin corte (segunda promoción; previo 0.25.1). Antes: 0.23.0 desde el 2026-09-02 (noche) — desplegada por el frente arbol
 con corte medido de 7.314 ms, smoke 25/25 y paridad `compose` en 0. **Subir a 0.24.0 no exige nada** (ni env ni base) y es un solo recreate con ventana — pendiente de César. El gap de versiones que este
 archivo arrastraba (0.18.0 → …) **ya no existe**, y el aviso al operador dejó de tener destinatario:
 el operador era esta misma casa.
 
-**Todos los issues de producto están cerrados.** Quedan abiertos a propósito **#110, #111, #113**
+**Todos los issues de producto están cerrados** (#279, #285 y #286 cerrados el 2026-09-03 con 0.26.0). Quedan abiertos a propósito **#110, #111, #113**
 (paraguas de roadmap: no son defectos, y cerrarlos borraría el mapa) y **#169** (dashboard de Renovate).
 
 ## Lo que espera, y de quién es
