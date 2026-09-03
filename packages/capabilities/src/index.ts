@@ -261,3 +261,4 @@ export type { Theme, ThemeTokens, DashboardMeta } from './themes'
  * con `createExecuteSqlDwh(profiles)` y se registra aparte.
  */
 export const starterCapabilities: Capability[] = [staticData, renderHtmlPiece, renderCsvPiece, publicarArtefacto]
+export { singleFlight } from './single-flight'

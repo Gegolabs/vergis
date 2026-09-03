@@ -63,7 +63,31 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### Qué exige esta versión
+
+> **Nada del motor, de la base ni del env.** Corrección aislada, sin capacidad nueva: quien corre 0.25.0
+> sube por promoción de anillo o por `pull` + recreate. **Conviene tomarla antes de la primera promoción**
+> de una instancia con anillos, porque el defecto se dispara justamente en una promoción abortada.
+
+### Un `SIGUSR2` recibido en standby dejaba al nodo sin poder soltar el control nunca más (#282)
+
+**Cambia lo que le pasa a un anillo después de una promoción abortada.** `soltarControl` guardaba su
+promesa para no correr dos releases a la vez y la limpiaba en un `finally`; cuando el nodo estaba en
+standby («nada que soltar») retornaba sin ningún `await`, la IIFE terminaba de forma síncrona, el
+`finally` limpiaba la variable **antes** de que la asignación externa guardara la promesa ya resuelta,
+y esa promesa quedaba pegada para siempre: todo `SIGUSR2` posterior era un no-op — «soltando…» en el
+log y nada más, con los lazos armados y el lease renovándose.
+
+Y se disparaba solo: `vergis-rollout` manda `USR2` al **candidato** al volver atrás, así que toda
+promoción abortada dejaba al candidato con el cerrojo puesto; promovido después, ese anillo no podía
+soltar el control en la promoción siguiente ni en un rollback. **Medido en el banco V-16** de la
+instancia GH con el inspector de Node sobre el proceso atascado (`soltando` = promesa resuelta,
+`plane.hasControl()` = true, `loops.armed()` = true, `noAspirarHasta` = 0).
+
+Ahora «una sola en vuelo» lo resuelve `singleFlight` (`@vergis/capabilities`): la promesa se guarda
+antes de poder asentarse y se limpia desde su propio `finally` comparando identidad. Sin cambio de
+conducta cuando sí hay un release en vuelo. El test reproduce el cerrojo con el patrón viejo como
+control y lo cierra con el helper.
 
 ## 0.25.0 — 2026-09-03
 
