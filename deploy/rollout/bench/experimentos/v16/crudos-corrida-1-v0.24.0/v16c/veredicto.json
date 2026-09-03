@@ -1,0 +1,143 @@
+{
+  "etiqueta": "V-16c · vuelta atras manual: anillo -> nodo compose",
+  "ventanaDelActo": {
+    "inicio": 1788441924000,
+    "fin": 1788441995000,
+    "duracionMs": 71000
+  },
+  "muestras": {
+    "total": 2508,
+    "enVentana": 2194,
+    "OK": 27,
+    "MAL": 0,
+    "SINMEDIR": 2167
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 4,
+    "p95": 7,
+    "p100": 12
+  },
+  "sinmedirDetalle": [
+    {
+      "t0": 1788441943096,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943125,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943154,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943184,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943214,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943244,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943274,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943308,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943338,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943368,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943396,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943426,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943459,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943489,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943519,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943549,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943578,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943608,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943637,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    },
+    {
+      "t0": 1788441943666,
+      "ms": 0,
+      "motivo": "tope-en-vuelo"
+    }
+  ],
+  "mutaciones": {
+    "enVentana": 71,
+    "ejecutadas": 1,
+    "rechazos409": 0,
+    "fallos": [],
+    "sinmedir": 70,
+    "latenciaMaxMs": 20016
+  }
+}

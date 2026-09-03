@@ -1,0 +1,42 @@
+{
+  "etiqueta": "V-16b · primera promocion CON wrapper (SIGUSR2 al nodo compose)",
+  "ventanaDelActo": {
+    "inicio": 1788446424000,
+    "fin": 1788446428000,
+    "duracionMs": 4000
+  },
+  "muestras": {
+    "total": 835,
+    "enVentana": 134,
+    "OK": 134,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 507,
+    "p95": 2506,
+    "p100": 2600
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 4,
+    "ejecutadas": 4,
+    "rechazos409": 0,
+    "fallos": [],
+    "sinmedir": 0,
+    "latenciaMaxMs": 2614
+  }
+}

@@ -1,0 +1,706 @@
+
+######## preparar · 14:38:44
+· levantando el mundo (clickhouse + borde)…
+ Container benchv14-clickhouse Creating 
+ Container benchv14-clickhouse Created 
+ Container benchv14-caddy Creating 
+ Container benchv14-caddy Created 
+ Container benchv14-clickhouse Starting 
+ Container benchv14-clickhouse Started 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-caddy Starting 
+ Container benchv14-caddy Started 
+· creando el NODO COMPOSE benchv14-vergis-1 (SIN VERGIS_RING, alias de red 'vergis')…
+  verificado: el nodo compose NO lleva VERGIS_RING ni VERGIS_RING_DIGEST
+  fase del nodo compose: 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+· verificando los 9 PIs por el CONMUTADOR (que es lo que un cliente ve)…
+{"pisServidos":9,"de":9,"malos":[]}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): no existe
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  lease → {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:39:01.131Z",  "pid": 7}
+
+✓ mundo V-16 listo: activo = NODO COMPOSE sin identidad de anillo, ruteado por 'vergis:8080'.
+rc=0
+
+######## v16a · 14:39:04
+── V-16a · install 9.9.1 con el NODO COMPOSE activo ──
+  lease ANTES: {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:39:01.131Z",  "pid": 7}
+· imagen: benchv14/vergis:9.9.1
+  digest: sha256:09f69f311bd5223e8e6348b5952e56a082c9e8cf0d18942f788f3f0bc199d793
+· create vergis-9-9-1
+· start vergis-9-9-1 — esperando que responda…
+  fase observada: standby
+✓ anillo 9.9.1 instalado (standby). Retención vigente: 3 — 'prune' retira lo que sobre.
+  (rc=0)
+rc=0
+fase nodo compose : 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+fase anillo 9.9.1  : 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+lease antes       : {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:39:01.131Z",  "pid": 7}
+
+lease despues     : {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:39:07.156Z",  "pid": 7}
+borde dial        : "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+rc=0
+
+######## cn-instrumento · 14:39:08
+── CN-instrumento · brazo A: poller DIRECTO al anillo en espera (vergis-9-9-1) ──
+  sujeto ANTES de medir: 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-poller Creating 
+ Container benchv14-poller Created 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-poller Starting 
+ Container benchv14-poller Started 
+{
+  "etiqueta": "CN-instrumento A · poller directo al anillo EN ESPERA",
+  "ventanaDelActo": {
+    "inicio": 1788446349000,
+    "fin": 1788446365000,
+    "duracionMs": 16000
+  },
+  "muestras": {
+    "total": 513,
+    "enVentana": 502,
+    "OK": 0,
+    "MAL": 502,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 502,
+  "tramoA": {
+    "respuestas200Standby": 502,
+    "ventana": {
+      "desde": 1788446349891,
+      "hasta": 1788446364982,
+      "duracionMs": 15091
+    },
+    "relativoAlActoMs": {
+      "desde": 891,
+      "hasta": 15982
+    }
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": null,
+    "p95": null,
+    "p100": null
+  },
+  "sinmedirDetalle": []
+}
+
+── CN-instrumento · brazo B: poller contra un destino INEXISTENTE ──
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-poller Recreate 
+ Container benchv14-poller Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-poller Starting 
+ Container benchv14-poller Started 
+{
+  "etiqueta": "CN-instrumento B · poller contra un destino inexistente",
+  "ventanaDelActo": {
+    "inicio": 1788446367000,
+    "fin": 1788446375000,
+    "duracionMs": 8000
+  },
+  "muestras": {
+    "total": 275,
+    "enVentana": 252,
+    "OK": 0,
+    "MAL": 0,
+    "SINMEDIR": 252
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": null,
+    "p95": null,
+    "p100": null
+  },
+  "sinmedirDetalle": [
+    {
+      "t0": 1788446367465,
+      "ms": 31,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367494,
+      "ms": 6,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367523,
+      "ms": 6,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367553,
+      "ms": 6,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367583,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367614,
+      "ms": 4,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367643,
+      "ms": 7,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367673,
+      "ms": 7,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367703,
+      "ms": 17,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367733,
+      "ms": 17,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367763,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367794,
+      "ms": 9,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367824,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367853,
+      "ms": 25,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367884,
+      "ms": 8,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367913,
+      "ms": 25,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367947,
+      "ms": 10,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446367976,
+      "ms": 9,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446368005,
+      "ms": 11,
+      "motivo": "TypeError:fetch failed"
+    },
+    {
+      "t0": 1788446368036,
+      "ms": 8,
+      "motivo": "TypeError:fetch failed"
+    }
+  ]
+}
+
+  LECTURA: A pasa con 0 OK y todo MAL (phase=standby). B pasa con 0 OK y todo SINMEDIR.
+  Un OK en cualquiera de los dos brazos invalida TODA medición de V-16.
+rc=0
+
+######## v16b-cn · 14:39:36
+── v16b-cn · V-16b CONTROL NEGATIVO · promote A SECAS con el activo sin identidad de anillo ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 
+  lease → {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:39:37.172Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-poller Recreate 
+ Container benchv14-mutador Creating 
+ Container benchv14-mutador Created 
+ Container benchv14-poller Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-mutador Starting 
+ Container benchv14-poller Starting 
+ Container benchv14-poller Started 
+ Container benchv14-mutador Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=1 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 22,
+  "vivas": 22,
+  "perdidas": []
+}
+{
+  "etiqueta": "V-16b CONTROL NEGATIVO · promote A SECAS con el activo sin identidad de anillo",
+  "ventanaDelActo": {
+    "inicio": 1788446386000,
+    "fin": 1788446399000,
+    "duracionMs": 13000
+  },
+  "muestras": {
+    "total": 1123,
+    "enVentana": 431,
+    "OK": 44,
+    "MAL": 387,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 387,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 387,
+    "ventana": {
+      "desde": 1788446387307,
+      "hasta": 1788446399831,
+      "duracionMs": 12524
+    },
+    "relativoAlActoMs": {
+      "desde": 1307,
+      "hasta": 13831
+    },
+    "latenciaMaxMs": 12432
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 3,
+    "p95": 12,
+    "p100": 15
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 13,
+    "ejecutadas": 2,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788446395276,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446391269,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446389265,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446390266,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446388263,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446393272,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446396277,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446398281,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446392272,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446397279,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446394272,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 11355
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 
+  lease → {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:40:13.200Z",  "pid": 7}
+rc=0
+
+######## v16b · 14:40:15
+── v16b · V-16b · primera promocion CON wrapper (SIGUSR2 al nodo compose) ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 
+  lease → {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:40:15.201Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-mutador Recreate 
+ Container benchv14-poller Recreate 
+ Container benchv14-poller Recreated 
+ Container benchv14-mutador Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-mutador Starting 
+ Container benchv14-poller Starting 
+ Container benchv14-poller Started 
+ Container benchv14-mutador Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=0 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 25,
+  "vivas": 25,
+  "perdidas": []
+}
+{
+  "etiqueta": "V-16b · primera promocion CON wrapper (SIGUSR2 al nodo compose)",
+  "ventanaDelActo": {
+    "inicio": 1788446424000,
+    "fin": 1788446428000,
+    "duracionMs": 4000
+  },
+  "muestras": {
+    "total": 835,
+    "enVentana": 134,
+    "OK": 134,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 507,
+    "p95": 2506,
+    "p100": 2600
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 4,
+    "ejecutadas": 4,
+    "rechazos409": 0,
+    "fallos": [],
+    "sinmedir": 0,
+    "latenciaMaxMs": 2614
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis-9-9-1:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis-9-9-1:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@54d5ceda9a2e/7",  "ring": "vergis-9-9-1",  "epoch": 5,  "renewedAt": "2026-09-03T14:40:43.411Z",  "pid": 7}
+rc=0
+
+######## v16c · 14:40:44
+── v16c · V-16c · vuelta atras manual: anillo -> nodo compose ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis-9-9-1:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis-9-9-1:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@54d5ceda9a2e/7",  "ring": "vergis-9-9-1",  "epoch": 5,  "renewedAt": "2026-09-03T14:40:43.411Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-poller Recreate 
+ Container benchv14-mutador Recreate 
+ Container benchv14-poller Recreated 
+ Container benchv14-mutador Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-poller Starting 
+ Container benchv14-mutador Starting 
+ Container benchv14-mutador Started 
+ Container benchv14-poller Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=0 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 24,
+  "vivas": 24,
+  "perdidas": []
+}
+{
+  "etiqueta": "V-16c · vuelta atras manual: anillo -> nodo compose",
+  "ventanaDelActo": {
+    "inicio": 1788446453000,
+    "fin": 1788446456000,
+    "duracionMs": 3000
+  },
+  "muestras": {
+    "total": 766,
+    "enVentana": 99,
+    "OK": 99,
+    "MAL": 0,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 0,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 0,
+    "ventana": null,
+    "relativoAlActoMs": null,
+    "latenciaMaxMs": null
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 504,
+    "p95": 2008,
+    "p100": 2014
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 3,
+    "ejecutadas": 3,
+    "rechazos409": 0,
+    "fallos": [],
+    "sinmedir": 0,
+    "latenciaMaxMs": 1050
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 6,  "renewedAt": "2026-09-03T14:41:11.286Z",  "pid": 7}
+rc=0
+
+######## v16d · 14:41:11
+── v16d · V-16d · promocion abortada a proposito (timeout 1 s, sin senal) ──
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@bb3edcfd7175/7",  "ring": null,  "epoch": 6,  "renewedAt": "2026-09-03T14:41:11.286Z",  "pid": 7}
+ Container benchv14-clickhouse Running 
+ Container benchv14-caddy Running 
+ Container benchv14-mutador Recreate 
+ Container benchv14-poller Recreate 
+ Container benchv14-poller Recreated 
+ Container benchv14-mutador Recreated 
+ Container benchv14-clickhouse Waiting 
+ Container benchv14-clickhouse Healthy 
+ Container benchv14-mutador Starting 
+ Container benchv14-poller Starting 
+ Container benchv14-mutador Started 
+ Container benchv14-poller Started 
+· instrumento y mutador arriba; 8 s de línea base…
+  (rc=1 · la duración del comando NO es la medición)
+· 12 s de cierre…
+{
+  "ejecutadas": 9,
+  "vivas": 0,
+  "perdidas": [
+    {
+      "id": "dbc221e4-7c11-43ee-943b-c81f0573d74b",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "98eaf731-aff6-40f2-8634-e76b406c1bb1",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "94ca7b11-6d6a-4c92-a3dd-e5dbfb3455c1",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "fd9d9752-711f-4e7e-9254-9d085c65d17b",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "9cc85c80-eb10-4002-8f24-0f716234dc8a",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "fa7a75d3-4ec9-476d-a81b-492c7360086e",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "2b2fdadc-ca45-47a5-a37f-894e53fda6a3",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "78a77fb8-f8ee-41b4-83c3-9e1ed8454c56",
+      "status": null,
+      "motivo": "TimeoutError"
+    },
+    {
+      "id": "6f72cc52-ceff-4dfb-b712-52f653124ed3",
+      "status": null,
+      "motivo": "TimeoutError"
+    }
+  ]
+}
+{
+  "etiqueta": "V-16d · promocion abortada a proposito (timeout 1 s, sin senal)",
+  "ventanaDelActo": {
+    "inicio": 1788446480000,
+    "fin": 1788446483000,
+    "duracionMs": 3000
+  },
+  "muestras": {
+    "total": 351,
+    "enVentana": 102,
+    "OK": 68,
+    "MAL": 34,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 34,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 34,
+    "ventana": {
+      "desde": 1788446482004,
+      "hasta": 1788446483549,
+      "duracionMs": 1545
+    },
+    "relativoAlActoMs": {
+      "desde": 2004,
+      "hasta": 3549
+    },
+    "latenciaMaxMs": 1519
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 4,
+    "p95": 7,
+    "p100": 12
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 3,
+    "ejecutadas": 2,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788446482969,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 543
+  }
+}
+
+── estado VIVO (leído del sujeto) ──
+  nodo compose (benchv14-vergis-1): 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+  anillo 9.9.1 (vergis-9-9-1): 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+  borde → dial vigente: "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 
+  borde → upstreams: [{"address":"vergis:8080","num_requests":0,"fails":0}]
+  rings.json → active: 9.9.1
+  lease → {  "holder": "vergis@54d5ceda9a2e/7",  "ring": "vergis-9-9-1",  "epoch": 7,  "renewedAt": "2026-09-03T14:44:37.807Z",  "pid": 7}
+rc=0
+
+######## rss · 14:44:39
+── V-RSS · los dos nodos sirviendo (docker stats, una muestra) ──
+benchv14-vergis-1	92.25MiB / 1GiB	9.01%	0.44%
+vergis-9-9-1	88.5MiB / 1GiB	8.64%	0.01%
+benchv14-caddy	75.58MiB / 7.75GiB	0.95%	2.13%
+
+  límite de memoria declarado por contenedor:
+  benchv14-vergis-1 → 1073741824 bytes
+  vergis-9-9-1 → 1073741824 bytes
+rc=0

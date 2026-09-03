@@ -1,0 +1,115 @@
+{
+  "etiqueta": "V-16d · promocion abortada a proposito (timeout 1 s, sin senal)",
+  "ventanaDelActo": {
+    "inicio": 1788447129000,
+    "fin": 1788447142000,
+    "duracionMs": 13000
+  },
+  "muestras": {
+    "total": 1119,
+    "enVentana": 434,
+    "OK": 382,
+    "MAL": 52,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 52,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 52,
+    "ventana": {
+      "desde": 1788447130232,
+      "hasta": 1788447131832,
+      "duracionMs": 1600
+    },
+    "relativoAlActoMs": {
+      "desde": 1232,
+      "hasta": 2832
+    },
+    "latenciaMaxMs": 1586
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 5016,
+    "p95": 10035,
+    "p100": 10561
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 13,
+    "ejecutadas": 0,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788447129246,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447131257,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788447130250,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788447141277,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447139270,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447135262,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447134261,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447132258,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447133260,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447137266,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447138268,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447140271,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      },
+      {
+        "t0": 1788447136264,
+        "status": 404,
+        "cuerpo": "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:system-ui;padding:40px\"><h1>404</h1><p>Producto de Información no encontrado. &lt;a href=&quot;/&quot;&gt;Ver disponibles&lt;/a&gt;</p></body>"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 10031
+  }
+}

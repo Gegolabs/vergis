@@ -1,0 +1,7 @@
+rc=0
+fase nodo compose : 200 {"ok":true,"engine":"clickhouse","phase":"serving"}
+fase anillo 9.9.1  : 200 {"ok":true,"engine":"clickhouse","phase":"standby"}
+lease antes       : {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:51:54.139Z",  "pid": 7}
+
+lease despues     : {  "holder": "vergis@1512a22816f6/7",  "ring": null,  "epoch": 4,  "renewedAt": "2026-09-03T14:51:58.148Z",  "pid": 7}
+borde dial        : "upstreams":[{"dial":"vergis:8080"}]}]}]}}}} 

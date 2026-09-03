@@ -1,0 +1,105 @@
+{
+  "etiqueta": "V-16b CONTROL NEGATIVO · promote A SECAS con el activo sin identidad de anillo",
+  "ventanaDelActo": {
+    "inicio": 1788446386000,
+    "fin": 1788446399000,
+    "duracionMs": 13000
+  },
+  "muestras": {
+    "total": 1123,
+    "enVentana": 431,
+    "OK": 44,
+    "MAL": 387,
+    "SINMEDIR": 0
+  },
+  "fueraDePredicado": 387,
+  "tramoA": {
+    "respuestas200Standby": 0,
+    "ventana": null,
+    "relativoAlActoMs": null
+  },
+  "espera503": {
+    "respuestas": 387,
+    "ventana": {
+      "desde": 1788446387307,
+      "hasta": 1788446399831,
+      "duracionMs": 12524
+    },
+    "relativoAlActoMs": {
+      "desde": 1307,
+      "hasta": 13831
+    },
+    "latenciaMaxMs": 12432
+  },
+  "otrasRespuestasFueraDePredicado": [],
+  "latenciaDeLasOK": {
+    "p50": 3,
+    "p95": 12,
+    "p100": 15
+  },
+  "sinmedirDetalle": [],
+  "mutaciones": {
+    "enVentana": 13,
+    "ejecutadas": 2,
+    "rechazos409": 0,
+    "fallos": [
+      {
+        "t0": 1788446395276,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446391269,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446389265,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446390266,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446388263,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446393272,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446396277,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446398281,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446392272,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446397279,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      },
+      {
+        "t0": 1788446394272,
+        "status": 503,
+        "cuerpo": "<!doctype html> <!-- SALA DE ESPERA del borde (issue #210 · I7). La sirve Caddy con status 503 cuando, agotado `lb_try_duration`, ningún anillo declara la fase `serving`. EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, n"
+      }
+    ],
+    "sinmedir": 0,
+    "latenciaMaxMs": 11355
+  }
+}

@@ -1,0 +1,13 @@
+{"level":"info","ts":1788447195.4312518,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788447195.433623,"msg":"adapted config to JSON","adapter":"caddyfile"}
+{"level":"info","ts":1788447195.4345136,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x66ad4db48600"}
+{"level":"info","ts":1788447195.4353962,"logger":"tls.cache.maintenance","msg":"stopped background certificate maintenance","cache":"0x66ad4db48600"}
+{"level":"info","ts":1788447195.4354143,"logger":"http","msg":"servers shutting down with eternal grace period"}
+{"level":"info","ts":1788447195.435449,"logger":"http.handlers.reverse_proxy.health_checker.active","msg":"HTTP request failed","host":"vergis:8080","error":"Get \"http://vergis:8080/healthz\": validation complete"}
+Valid configuration
+{"level":"info","ts":1788447195.5126529,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+{"level":"info","ts":1788447195.5140877,"msg":"adapted config to JSON","adapter":"caddyfile"}
+borde conmutado al nodo compose (14:53:15.540481000)
+vergis-9-9-1
+SIGUSR2 → vergis-9-9-1 (14:53:15.586940000)
+nodo compose re-adquirió a los 1s
