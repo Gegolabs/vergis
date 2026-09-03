@@ -55,7 +55,11 @@ fase_de() {
 }
 edge_upstreams() { docker exec "$RINGS_EDGE" wget -q -O- "http://127.0.0.1:2019/reverse_proxy/upstreams" 2>/dev/null || printf '[]'; }
 edge_dial() { docker exec "$RINGS_EDGE" wget -q -O- "http://127.0.0.1:2019/config/" 2>/dev/null | tr ',' '\n' | grep -i '"dial"' || printf '(sin dial)'; }
-secreto_cargar() { . "$RUN/secreto.env"; export VERGIS_CSRF_SECRET; }
+secreto_cargar() {
+  # shellcheck disable=SC1091
+  . "$RUN/secreto.env"
+  export VERGIS_CSRF_SECRET
+}
 
 esperar_fase() { # esperar_fase <contenedor> <fase> <segundos>
   _i=0
