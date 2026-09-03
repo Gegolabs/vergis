@@ -1,12 +1,9 @@
 # NEXT — Vergis
 
-**0.23.1 es la versión publicada** (tag `v0.23.1`, 2026-09-02, commit `0617a6b`). Imagen **verificada
-contra el registry**: 2 plataformas, `org.opencontainers.image.revision=0617a6b`, `version=0.23.1`. Es la Z
-de la segunda mitad de #266 (#276): un fallo del **arranque** de Miranda ya tampoco tumba el nodo.
+**0.24.0 es la versión publicada** (tag `v0.24.0`, 2026-09-02, commit `fad4b4c`), verificada contra el registry (2 plataformas). Trae los **filtros de número** en columnas numéricas (#277/#278, decisión de César tras el caso de PI-01) sobre 0.23.1 (segunda mitad de #266). **Issue abierto hoy: #279** — «Aplicar cadencia» programa corridas también en slots de carga manual.
 
 **La instancia A.R.B.O.L. corre 0.23.0 desde el 2026-09-02 (noche)** — desplegada por el frente arbol
-con corte medido de 7.314 ms, smoke 25/25 y paridad `compose` en 0. **Subir a 0.23.1 no exige nada**
-(ver «Qué exige esta versión») y es un recreate con ventana: gap de un patch, pendiente de César. El gap de versiones que este
+con corte medido de 7.314 ms, smoke 25/25 y paridad `compose` en 0. **Subir a 0.24.0 no exige nada** (ni env ni base) y es un solo recreate con ventana — pendiente de César. El gap de versiones que este
 archivo arrastraba (0.18.0 → …) **ya no existe**, y el aviso al operador dejó de tener destinatario:
 el operador era esta misma casa.
 
