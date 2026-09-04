@@ -142,7 +142,7 @@ El consumo se asienta en `POLICIES-ledger.md`, que nace con el primer gasto.
 ## Los gates
 
 Los tres, en local, antes de cualquier PR — `npm run typecheck`, `npm test`, `npm run build`. Están
-escritos con su detalle en `CONTRIBUTING.draft.md`; acá solo consta que **no son opcionales** y que su
+escritos con su detalle en `CONTRIBUTING.md`; acá solo consta que **no son opcionales** y que su
 salida real va en el cuerpo del PR.
 
 `node` es keg-only en esta máquina: `export PATH="/opt/homebrew/opt/node@22/bin:$PATH"`.

@@ -200,7 +200,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-103` | Publicación **universal** de data maestra a un consumidor (no un shortcut de Fabric) | proyección read-only publicada por la plataforma | ≤0.9 | [data-maestra-y-publicacion.md §3](data-maestra-y-publicacion.md) |
 | `CAP-104` | Los tres roles de una entidad maestra (origen · canónica · publicada) | modelo de la capacidad | ≤0.9 | [data-maestra-y-publicacion.md §2](data-maestra-y-publicacion.md) |
 | `CAP-105` | Convención de nombres de la proyección publicada (estándar de Producto) | sufijo `__replica` | ≤0.9 | [data-maestra-y-publicacion.md §4](data-maestra-y-publicacion.md) |
-| `CAP-106` | Store de data maestra versionado, con esquema declarado en la imagen | `MASTER_DATA_SCHEMA_VERSION`; label `vergis.schema.stores` | 0.22.0 | [CONTRIBUTING.draft.md](../CONTRIBUTING.draft.md) |
+| `CAP-106` | Store de data maestra versionado, con esquema declarado en la imagen | `MASTER_DATA_SCHEMA_VERSION`; label `vergis.schema.stores` | 0.22.0 | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | `CAP-107` | Catálogo de la instancia como fuente de opciones de un campo editable | `options_ref` (dropdown con validación server-side) | 0.14.0 (#109) | [gestion-de-dominio.md §4 · «`options_ref`»](gestion-de-dominio.md) |
 | `CAP-108` | Publicar la definición del job de un proceso en el motor, con el drift a la vista | plantillas de job de la instancia + read-back canónico | 0.15.0 (#107 f2) | [gestion-de-dominio.md §5](gestion-de-dominio.md) |
 | `CAP-109` | Gestión in-app de fuentes, procesos y salidas, con precedencia sobre la semilla YAML | `managed_at` + tombstones | 0.14.0 (#107 f1) | [gobierno-permisos.md §2 · «Precedencia runtime-sobre-semilla»](gobierno-permisos.md) |
@@ -262,7 +262,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-143` | Pre-flight y smoke de la promoción, contra el bloque `control` de `/contrato` | pre-flight + smoke por el borde con el predicado canónico | 0.21.0 | [CHANGELOG 0.21.0](../CHANGELOG.md) |
 | `CAP-144` | Sala de espera del borde durante el flip | página 503 con auto-refresh (`deploy/edge/espera.html`) | 0.21.0 | [CHANGELOG 0.21.0 · 0.22.0 (#256)](../CHANGELOG.md) |
 | `CAP-145` | Retención de anillos y presupuesto de la ventana de promoción | `RINGS_RETAIN` (3) · `RINGS_PROMOTE_TIMEOUT` / `--timeout` (10 s) | 0.21.0 · 0.22.0 | [CHANGELOG 0.22.0](../CHANGELOG.md) |
-| `CAP-146` | Esquema de los stores embebidos declarado en la imagen, y regla de migración compatible | labels `vergis.schema` y `vergis.schema.stores`; `SCHEMA_VERSION` por store | 0.22.0 | [CONTRIBUTING.draft.md · «Migraciones del store embebido»](../CONTRIBUTING.draft.md) |
+| `CAP-146` | Esquema de los stores embebidos declarado en la imagen, y regla de migración compatible | labels `vergis.schema` y `vergis.schema.stores`; `SCHEMA_VERSION` por store | 0.22.0 | [CONTRIBUTING.md · «Migraciones del store embebido»](../CONTRIBUTING.md) |
 | `CAP-147` | Rechazo al abrir un store cuyo esquema es más nuevo que el código | gate por `PRAGMA user_version` | 0.19.0 | [CHANGELOG 0.19.0](../CHANGELOG.md) |
 
 ## Contrato operativo

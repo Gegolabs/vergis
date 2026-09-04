@@ -1,19 +1,3 @@
-<!--
-  BORRADOR — NO PUBLICADO A PROPÓSITO.
-
-  Este archivo se llama `CONTRIBUTING.draft.md` y no `CONTRIBUTING.md` por una razón operativa,
-  no estética: GitHub muestra `CONTRIBUTING.md` a todo el que abre un issue o un PR, y en ese
-  momento la cláusula de licencia de contribución empieza a **obligar a terceros**. Renombrarlo
-  es el acto de publicación, y ese acto espera la revisión de César o de un abogado (TODO.md).
-
-  Trabajo autorizado: el diseño `work/004-…/11-113-open-core-v1.0.md` §D5 (aprobada por César el
-  2026-08-08) manda redactar este borrador con la cláusula marcada como sujeta a revisión legal.
-  Lo que ahí se selló es la EXISTENCIA del mecanismo, no su texto.
-
-  Urgencia real: la ventana se cierra sola. Hoy el copyright es 100 % de Gegolabs (236 commits,
-  un solo autor). El primer PR externo sin este mecanismo en su sitio no lo dispara — lo VENCE.
--->
-
 # Contribuir a Vergis
 
 Gracias por el interés. Vergis es software libre bajo **AGPL-3.0-or-later**, y las contribuciones
