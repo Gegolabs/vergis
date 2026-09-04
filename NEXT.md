@@ -15,7 +15,7 @@ el operador era esta misma casa.
 | Partida | ¿De quién? | Estado |
 |---|---|---|
 | **PRs de Renovate #261, #260, #251, #201, #175** | Nadie, todavía | `renovate/stability-days` sigue en `pending` para los cinco (cooldown de 14 días, ADR-001). #175 y #201 tienen más de 14 días y el status no se re-emitió: **conjetura no medida** — tildar `rebase-branch` en #169 debería refrescarlo. Se mergean cuando el check pase, con CI verde |
-| **Renombrar `CONTRIBUTING.draft.md` → `CONTRIBUTING.md`** (+ `CODE_OF_CONDUCT.md` y correos) | **César** | #267 mergeó el contenido **sin renombrar, a propósito**: el renombre es el acto de publicación que hace obligar la cláusula de licencia a terceros — revisión suya o de un abogado |
+| ~~Renombrar `CONTRIBUTING.draft.md` → `CONTRIBUTING.md`~~ **Publicado el 2026-09-03 por refrendo de César** («Confirmo … el renombre»). Quedan `CODE_OF_CONDUCT.md` y la confirmación del correo de seguridad | **César** | El acto de publicación ya ocurrió; el correo `security@gegolabs.com` sigue sin confirmar |
 | **#265 · medir contra un gateway real** | Instancia, cuando llegue Foundry (1-2 semanas desde 2026-09-02) | El cable existe (`MIRANDA_API_BASE_URL`); lo medido es que llega al transporte. El primer request real es la medición |
 | **`VERGIS_MASTER_DATA` fuera del hot-reload** (hallazgo vecino de #262) | Esta casa | Sin issue propio. Cambiar `entidades.yaml` exige reiniciar el nodo (corte). Abrir issue cuando alguien lo necesite en caliente |
 | **`Publisher.count()` contra un warehouse real** y la **réplica inexistente** en un destino nuevo | Instancia | La página de `empresas_relacionadas` en A.R.B.O.L. es el primer caso real: mirarla es la medición |

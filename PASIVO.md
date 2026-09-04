@@ -2,9 +2,9 @@
 vista: "pasivo-obra"
 alcance: "obra/vergis"
 nivel: "obra"
-compilada_de: "31cce7389aad"
-compilada_en: "2026-09-03T23:24:02Z"
-items: 17
+compilada_de: "4b3b16e2de10"
+compilada_en: "2026-09-04T02:11:51Z"
+items: 16
 ---
 # Pasivo — vergis
 
@@ -39,14 +39,6 @@ de autoría al pie y los commits llevan `Co-Authored-By`. Eso cumple el corolari
 principio —*la autoría siempre se declara*— pero **no cambia el autor que GitHub registra**,
 que es lo que la cuenta viene a arreglar.
 Levantado por el frente arbol; la decisión es de César porque es su nombre. | persona/cesar-obach | esperando | 2026-08-18 | — | persona/cesar-obach — crear la cuenta de bot en GitHub para los agentes; la decision es suya porque hoy todo lo que un agente escribe en GitHub queda registrado con su nombre (cuenta cobach) |
-| `d-20260830-f616c2c9-12` | **Revisión (suya o de abogado) del borrador de `CONTRIBUTING.md`** — la cláusula DCO +
-licencia de contribución (11/D5, aprobada) se redacta como borrador y NO se publica sin esta
-revisión. La ventana del dual licensing se cierra con el primer PR externo sin acuerdo.
-**Borrador REDACTADO 2026-08-10** en `CONTRIBUTING.draft.md` (D-18). El nombre no es cosmético:
-GitHub muestra `CONTRIBUTING.md` a todo el que abre un issue o PR, y ahí la cláusula empieza a
-obligar a terceros — **renombrarlo ES el acto de publicación**, y ése es tuyo. Dos cosas
-marcadas dentro del borrador esperan dato: la redacción legal de la cláusula y la dirección de
-contacto de seguridad (`security@gegolabs.com`, sin confirmar). | persona/cesar-obach | esperando | 2026-08-08 | — | persona/cesar-obach — revisar el borrador CONTRIBUTING.draft.md (el o un abogado) y decidir su publicacion; renombrarlo a CONTRIBUTING.md ES el acto de publicacion y es suyo |
 | `d-20260902-14af8921-05` | Validar en un navegador real el realce al hover del PR `vergis#269`: el realizador declaro explicitamente que valido la sintaxis del script y NO la conducta - que el realce se vea bien con un cursor humano encima no lo ha mirado nadie. | persona/cesar-obach | esperando | 2026-09-02 | — | persona/cesar-obach — abrir el PI en un navegador y mirar el realce al pasar el cursor |
-| `d-20260903-84e55866-07` | Reconciliar el `main` local de `vergis` con `origin/main`, que otro actor movio durante el cierre (PRs #285, #286, #288 → `7d2e8ce`). El commit local `bf8269c` (vistas recompiladas del cierre) esta detenido sin pushear. Comando exacto: `cd ~/wworkspace/productos/vergis && git fetch origin main && git rebase origin/main && git push` — revisar antes que el rebase solo mueva `PASIVO.md` y `RESOURCES.md`, que es todo lo que el commit toca. | persona/cesar-obach | esperando | 2026-09-03 | — | persona/cesar-obach — rebasar el commit local bf8269c de vergis sobre origin/main y pushear |
+| `d-20260903-8c1bc3e5-01` | Cerrar la familia de la publicación legal que CONTRIBUTING.md dejó abierta en Vergis: redactar el CODE_OF_CONDUCT.md y CONFIRMAR el correo de contacto de seguridad del proyecto (hoy figura security@gegolabs.com, sin confirmar). Ambos son parte del mismo acto de publicación que ya obliga a terceros desde el renombre del 2026-09-03 | persona/cesar-obach | esperando | 2026-09-03 | — | persona/cesar-obach — confirmar el correo de contacto de seguridad del proyecto y dar el visto al CODE_OF_CONDUCT.md |
 
