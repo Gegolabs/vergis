@@ -9,7 +9,7 @@
 #   · el veredicto se computa del archivo crudo, jamás de la consola;
 #   · todo recurso lleva prefijo `benchv14-`, y ningún comando destructivo de acá alcanza otra cosa.
 #
-# POSIX sh estricto (mismo criterio que `vergis-rollout`: la herramienta se corre con `sh`).
+# POSIX sh estricto (mismo criterio que `botler-rollout`: la herramienta se corre con `sh`).
 #
 # Uso:
 #   sh scripts/bench.sh preparar            levanta el mundo y deja dos anillos (activo + espera)
@@ -26,7 +26,7 @@ set -eu
 
 BENCH=$(cd "$(dirname "$0")/.." && pwd)
 REPO=$(cd "$BENCH/../../.." && pwd)
-TOOL="$REPO/deploy/rollout/vergis-rollout"
+TOOL="$REPO/deploy/rollout/botler-rollout"
 RUN="$BENCH/.run"
 DATOS="$RUN/datos"
 COMPOSE="docker compose -f $BENCH/compose.bench.yml"
@@ -192,7 +192,7 @@ cmd_cn2() {
   sleep 8
 
   ini=$(ahora_ms)
-  say "· ACTO: sh vergis-rollout promote $cand   (t0=$ini)"
+  say "· ACTO: sh botler-rollout promote $cand   (t0=$ini)"
   set +e
   sh "$TOOL" promote "$cand" --no-schema-gate >"$DATOS/cn2-tool.log" 2>&1
   rc=$?
@@ -257,7 +257,7 @@ medir_acto() {
 
   ini=$(ahora_ms)
   if [ "$accion" = rollback ]; then
-    say "· ACTO: sh vergis-rollout rollback $cand   (t0=$ini)"
+    say "· ACTO: sh botler-rollout rollback $cand   (t0=$ini)"
     set +e
     # CON gate de esquema. Antes iba `--no-schema-gate` porque la instancia del banco no tenia store
     # de gobierno: /contrato respondia 403 y el gate ABORTABA el pre-flight, y un aborto no mueve nada
@@ -267,7 +267,7 @@ medir_acto() {
     rc=$?
     set -e
   else
-    say "· ACTO: sh vergis-rollout promote $cand   (t0=$ini)"
+    say "· ACTO: sh botler-rollout promote $cand   (t0=$ini)"
     set +e
     sh "$TOOL" promote "$cand" >"$D/tool.log" 2>&1
     rc=$?

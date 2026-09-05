@@ -1,4 +1,4 @@
-# Semilla del banco: el primer anillo. La REESCRIBE `vergis-rollout` en cada promoción — este archivo
+# Semilla del banco: el primer anillo. La REESCRIBE `botler-rollout` en cada promoción — este archivo
 # es solo el valor de partida que `bench.sh preparar` copia a `.run/rings/active.caddy`.
 reverse_proxy vergis-9-9-1:8080 {
 	import anillo_activo

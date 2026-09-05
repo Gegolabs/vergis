@@ -1,4 +1,4 @@
-# PLANTILLA DE CONTENEDOR DE ANILLO — argumentos de `docker create` que `vergis-rollout install` usa
+# PLANTILLA DE CONTENEDOR DE ANILLO — argumentos de `docker create` que `botler-rollout install` usa
 # para crear cada anillo (issue #210 · I8). Se copia como `rings/ring.args` junto al compose.
 #
 # ¿Por qué un archivo de argumentos y no `docker compose`? Porque compose es dueño del ciclo de vida de

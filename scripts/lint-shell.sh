@@ -3,7 +3,7 @@
 # que en CI (la paridad se logra porque el CI invoca el script de npm, no un comando crudo).
 #
 # POR QUÉ DESCUBRE Y NO ENUMERA. Dos de los tres scripts de shell del repo son extensionless
-# (`bin/vergis`, `deploy/rollout/vergis-rollout`), así que un glob `**/*.sh` habría cubierto 259 de
+# (`bin/vergis`, `deploy/rollout/botler-rollout`), así que un glob `**/*.sh` habría cubierto 259 de
 # 1130 líneas — dejando fuera justo el archivo grande. Y una lista escrita a mano tiene un modo de
 # falla peor que no tener gate: el script nuevo que nadie agregó a la lista pasa en VERDE, y el verde
 # se lee como «linteado». Acá la fuente de verdad es `git ls-files` + el shebang: lo que el repo
@@ -15,7 +15,7 @@
 #
 # POR QUÉ NO SE PASA `-s`. shellcheck deriva el dialecto del shebang, y eso es justo lo que se quiere:
 # los scripts de este repo declaran `#!/bin/sh` porque la VM objetivo corre `sh` y está medido que un
-# bashismo muere con «Syntax error» a mitad de despliegue (ver la cabecera de `vergis-rollout` y el
+# bashismo muere con «Syntax error» a mitad de despliegue (ver la cabecera de `botler-rollout` y el
 # test «es POSIX sh sin bashismos»). Forzar `-s bash` volvería el gate ciego a su razón de ser: en
 # modo bash los bashismos son legales. Forzar `-s sh` a todos juzgaría mal el día que entre un script
 # que legítimamente declare bash. El shebang manda, y el shebang es lo que la VM lee.
@@ -26,7 +26,7 @@
 #
 # POR QUÉ DECLARA LA VERSIÓN. Un gate cuya severidad depende de qué versión trae el runner no es un
 # gate reproducible, y «verde en local» deja de significar algo. Medido: sobre `deploy/rollout/
-# vergis-rollout`, shellcheck 0.9.0 (la que traía la imagen `ubuntu-latest`) reportaba tres SC2015 que
+# botler-rollout`, shellcheck 0.9.0 (la que traía la imagen `ubuntu-latest`) reportaba tres SC2015 que
 # 0.11.0 no reporta. La versión autoritativa se declara acá y el CI la instala pinneada por checksum
 # (ver el job `shell` de `.github/workflows/build.yml`); este script solo la CONTRASTA.
 #
