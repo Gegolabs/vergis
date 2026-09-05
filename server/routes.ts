@@ -43,6 +43,15 @@ export interface RouteDeps {
    * superficie sin la env es idéntica a la de antes del issue.
    */
   renderPdf?: (report: Report, headers: GateHeaders, nav: ReturnType<typeof navFromUrl>) => Promise<{ pdf: Uint8Array; filename: string }>
+  /**
+   * PUERTA DE SALIDA GENÉRICA (H3 · #295 · D-72): despacha un request a un Let por su proto-Botlet.
+   * `rest` es la ruta RELATIVA al Let (`''` para `/<slug>`, `api/guides` para `/<slug>/api/guides`).
+   * Devuelve `true` si el Let respondió; `false` si la ruta no es suya (el router responde 404).
+   *
+   * AUSENTE ⇒ el router se comporta como antes de H3: `/<slug>` se sirve con `renderReport` y
+   * cualquier subruta responde 404. Es la superficie de siempre para un despliegue que no la inyecta.
+   */
+  invokeLet?: (report: Report, req: IncomingMessage, res: ServerResponse, rest: string) => Promise<boolean>
   /** PIs visibles para la identidad (ACL de artefacto si está encendida; si no, acceso a dato). */
   indexReports: (all: Report[], identity: IdentityContext) => Promise<Report[]>
   /** HTML de la página índice (título + avatar + gobierno por PI). */
@@ -94,6 +103,16 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     )
     return true
   }
+  /** `proto` del Let que responde a este slug, o `undefined` si el slug no existe. Las ramas
+   *  MIRA-ESPECÍFICAS del router (`/pdf`, `/config`, notas por PI) se guardan con esto: para un Let
+   *  de otra familia esas rutas NO se interceptan y caen a `invokeLet`, que es quien sabe si son
+   *  suyas. Con el catálogo vacío (arranque) devuelve `undefined` y nada se guarda — la superficie
+   *  de antes de H3. */
+  const protoDe = (slug: string): string | undefined => deps.discover().find((r) => r.slug === slug.toLowerCase())?.proto
+  const esDeOtraFamilia = (slug: string): boolean => {
+    const p = protoDe(slug)
+    return p !== undefined && p !== 'mira'
+  }
   return (req, res) => {
     const url = (req.url ?? '/').split('?')[0]
     if (url === '/healthz') {
@@ -141,7 +160,8 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     }
     // Configuración por-PI — gateada por rol de PI dentro del handler.
     const piConfig = deps.getPiConfig()
-    if (piConfig && /^\/[^/]+\/config(?:\/|$)/.test(url)) {
+    const configMatch = url.match(/^\/([^/]+)\/config(?:\/|$)/)
+    if (piConfig && configMatch && !esDeOtraFamilia(configMatch[1])) {
       if (mutacionSinControl(req, res)) return
       piConfig
         .tryHandle(req, res)
@@ -186,7 +206,8 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     const all = deps.discover()
     const blockedReason = (report: Report): string | null => deps.piBlocked?.(report) ?? null
     // Rutas de notas ATADAS A UN PI: necesitan el PI descubierto (por eso van tras el gate `ready`).
-    if (notas && /^\/[^/]+\/(imprimir|notas|comentarios)$/.test(url)) {
+    const notasPiMatch = url.match(/^\/([^/]+)\/(?:imprimir|notas|comentarios)$/)
+    if (notas && notasPiMatch && !esDeOtraFamilia(notasPiMatch[1])) {
       if (mutacionSinControl(req, res)) return
       notas
         .tryHandle(req, res)
@@ -207,6 +228,14 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
         .indexReports(all, identity)
         .then(async (visible) => {
           if (visible.length === 1) {
+            // Un solo visible: se sirve EN LA RAÍZ, como siempre… mientras sea Mira. Un Let de otra
+            // familia emite su propio HTML con enlaces relativos a `/<slug>` (imágenes, API, reportes):
+            // servirlo en `/` le rompería cada URL que emite. Por eso redirige en vez de renderizar.
+            if (visible[0].proto !== 'mira') {
+              res.writeHead(302, { location: `/${visible[0].slug}`, 'cache-control': 'no-store' })
+              res.end()
+              return
+            }
             return deps.renderReport(visible[0], req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
           }
           sendHtml(await deps.renderIndexPage(visible, identity))
@@ -219,9 +248,10 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // render. Sin `renderPdf` inyectado el match NO intercepta (la URL sigue al slug-lookup → 404).
     // Sin CSRF: es un GET de descarga, no muta estado.
     const pdfMatch = url.match(/^\/([^/]+)\/pdf$/)
-    if (pdfMatch && deps.renderPdf) {
+    const pdfReport = pdfMatch ? all.find((r) => r.slug === pdfMatch[1].toLowerCase()) : undefined
+    // Un Let de otra familia con una ruta `/pdf` propia NO se intercepta acá: cae a `invokeLet`.
+    if (pdfMatch && deps.renderPdf && (pdfReport === undefined || pdfReport.proto === 'mira')) {
       const renderPdf = deps.renderPdf
-      const pdfReport = all.find((r) => r.slug === pdfMatch[1].toLowerCase())
       if (!pdfReport) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
       const pdfBlocked = blockedReason(pdfReport)
       if (pdfBlocked) return fail(res, 503, `Producto de Información no disponible: ${pdfBlocked}`)
@@ -251,7 +281,13 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
         })
       return
     }
-    const slug = url.replace(/^\//, '').replace(/\/$/, '').toLowerCase()
+    // DESPACHO POR LET (H3 · #295). El primer segmento es el slug; el RESTO es del Let. El router
+    // aplica los mismos gates de siempre (existencia · `piBlocked` · `canOpenPi`) y recién entonces
+    // entrega la invocación: qué rutas existen, cuáles escriben y quién puede verlas es del dominio.
+    const sinBarra = url.replace(/^\//, '')
+    const corte = sinBarra.indexOf('/')
+    const slug = (corte === -1 ? sinBarra : sinBarra.slice(0, corte)).toLowerCase()
+    const rest = corte === -1 ? '' : sinBarra.slice(corte + 1).replace(/\/$/, '')
     const report = all.find((r) => r.slug === slug)
     if (!report) return fail(res, 404, `Producto de Información no encontrado. <a href="/">Ver disponibles</a>`)
     const blocked = blockedReason(report)
@@ -259,8 +295,15 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // Gate de ARTEFACTO (si ACL encendida). La RLS de datos aplica igual al render.
     deps
       .canOpenPi(report, identity)
-      .then((allowed) => {
+      .then(async (allowed) => {
         if (!allowed) return fail(res, 403, `No tienes acceso a este Producto de Información. <a href="/">Ver disponibles</a>`)
+        if (deps.invokeLet) {
+          const atendido = await deps.invokeLet(report, req, res, rest)
+          if (!atendido) fail(res, 404, `Ruta no encontrada`)
+          return
+        }
+        // Sin la dep: la superficie de antes de H3 — la raíz del Let se renderiza, el resto es 404.
+        if (rest !== '') return fail(res, 404, `Ruta no encontrada`)
         return deps.renderReport(report, req.headers as GateHeaders, navFromUrl(req.url ?? '/')).then(sendHtml)
       })
       .catch((e) => fail(res, 500, `Error al render por-consumidor: ${errMsg(e)}`))

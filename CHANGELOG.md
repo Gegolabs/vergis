@@ -68,6 +68,74 @@ que los health checks, los pollers y el conmutador de anillos leen. Léase la se
 versión» de la entrada siguiente **antes** de adoptarla: adoptarla sin actualizar la herramienta y el
 healthcheck deja el conteo sin medir.
 
+### Daftar entra al catálogo: un segundo proto-Botlet y la puerta de salida genérica del nodo (#295)
+
+**Para una instancia de Mira no cambia nada, y está medido:** el banco de anillos v8 sirvió los 9 PIs
+con `invariantesFaltantes: []`, idéntico a antes de este cambio, aunque el render de Mira ahora salga
+por la puerta nueva. No hay env nueva que agregar, ni ruta que cambie, ni campo que se mueva.
+
+**Qué trae.** El nodo hospeda una **segunda familia de Lets**, `daftar` (`packages/daftar`): un Let
+**evaluador** por instancia que sirve el catálogo de instrumentos del estudiante que entra, aplica el
+instrumento con el frontend de Daftar embebido en la imagen, guarda cada intento en el store
+`evaluaciones`, corrige, reporta e imprime. Es la prueba ejecutable de que el Botler no tiene subtipos
+por familia: Mira y Daftar entran por la MISMA interfaz.
+
+**La puerta de salida es `ProtoBotlet.invoke`** (D-72). El router dejó de saber que `/<slug>` es «la
+página de un PI»: parte la URL en slug + resto y le entrega el resto al proto del Let, con una
+`LetInvocation` que lleva método, ruta relativa, query, cabeceras, cuerpo, **la identidad que resolvió
+el nodo** y **si este nodo tiene el plano de control**. El Let decide qué rutas existen, cuáles
+escriben y quién puede verlas; el nodo no entiende una sola clave de dominio.
+
+**Cómo se monta la instancia** (nada de esto afecta a quien no lo declare):
+
+| Env | Qué es |
+|--|--|
+| `VERGIS_SPECS_DIR` | Donde vive `daftar.yaml` — clave raíz `daftar_version`, `identity.code` (de él sale el slug) y el padrón `estudiantes` |
+| `VERGIS_INSTRUMENTOS_DIR` | `<dir>/guides/*.json` · `<dir>/recursos/**` · `<dir>/reports/*.json`. **Publicar un instrumento es copiar el archivo**; el Let lo ve en el request siguiente, sin reiniciar |
+| `VERGIS_EVALUACIONES=1` | Abre el store de intentos. **Sin él el catálogo se sirve igual** y solo las rutas de progreso responden 503 con motivo |
+| `VERGIS_IDENTITY_MAP` | El claim `student` por email: `["matias"]` ve lo suyo, `["*"]` es admin de Daftar. **Sin claim, 403** — nunca se cae a un estudiante por defecto |
+
+**Tres cosas que un operador de Mira debería saber igual:**
+
+1. **`/healthz` en `clickhouse` puede traer `lets` ahora.** Antes lo omitía siempre en ese motor
+   (la servibilidad es global). Lo trae **solo si el nodo tiene Lets que no consumen datos
+   gobernados** — una instancia Mira no tiene ninguno y sigue viéndolo omitido, exactamente como
+   antes. La razón: el predicado del conmutador (`lets.serving == lets.total`) no puede contar un Let
+   que no ve.
+2. **Un nodo puede arrancar sin motor de datos.** Si NINGUNA de sus specs consume datos gobernados,
+   no exige `VERGIS_DATASETS` ni conexiones ni espera el bootstrap del esquema. El predicado es por
+   spec y **conservador**: un catálogo vacío por accidente sigue fallando como siempre. Se evalúa una
+   vez, al arrancar, y `/contrato` lo declara como caveat: agregar después una spec de Mira **exige
+   reiniciar**.
+3. **Un 404 cambió de texto.** Una subruta inexistente bajo un slug que sí existe
+   (`/<slug>/lo-que-sea`) responde «Ruta no encontrada» en vez de «Producto de Información no
+   encontrado» — el PI existe, la ruta no. Mismo status, mismo no-efecto.
+
+**Qué se midió.**
+
+- **Paridad del port de `report` y `print`** (Python → TypeScript): 38 comparaciones contra el HTML
+  que el `server.py` de Daftar produce sobre las **mismas fixtures sintéticas**, un caso por tipo de
+  ejercicio (los 8) más un mixto con totales, nota, peor `form`, cronómetro y resumen de confianza.
+  El esperado no lo escribió nadie: lo generó el Python (`tests/fixtures/daftar/generar-esperados.py`).
+  La primera corrida encontró una diferencia real —el redondeo bancario de `round()` y el `str(float)`
+  de Python— y se corrigió hasta 38/38.
+- **La superficie del Let, fila por fila y con su brazo negativo:** 403 de la guía ajena, 403 sin
+  claim, 403 sin identidad del gate, 409 en standby nombrando al activo, 400 por `guideId` que no
+  calza, 403 del progreso bloqueado, 503 sin store, traversal rechazado en los recursos.
+- **El 409 del standby, contra un segundo nodo real** (mismo `VERGIS_OUT`, lease en espera): el
+  `POST` de progreso responde 409 nombrando al activo y el `GET` sigue en 200.
+- **La publicación en caliente**, copiando una guía al directorio de un nodo vivo y pidiendo el
+  catálogo sin reiniciar.
+- **El banco de anillos v8** (9/9 con invariantes), que es lo que sostiene «para Mira no cambia nada».
+- **El control negativo** del 409: neutralizado el corte por control, el test de standby se pone rojo.
+
+**Qué NO se midió, con esas palabras.** La **promoción de dos anillos con un intento a medias** —que
+un estudiante escribiendo durante una promoción no pierda su trabajo— **no se midió**: el banco actual
+es de Mira y duplicarlo para Daftar dobla el hito sin cambiar el plano de control bajo prueba, que ya
+está medido con V-14 (D-74). Queda para H5, cuando exista la instancia con su compose. Tampoco se
+midió el **modo foco** de ultraGO: su código se conserva intacto y no hay forma de ejercitarlo sin
+ultraGO corriendo.
+
 ### El contrato del nodo cuenta Lets, no PIs: `pis` → `lets`, y `vergis-rollout` pasa a `botler-rollout` (#290)
 
 **Por qué.** «PI» es vocabulario de **Mira**, y el nodo dejó de ser el runtime de Mira: desde #289

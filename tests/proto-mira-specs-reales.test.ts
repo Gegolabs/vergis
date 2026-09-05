@@ -9,7 +9,10 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createProtoRegistry } from '../server/proto-registry'
-import { miraProtoBotlet } from '@vergis/mira'
+import { createMiraProto } from '@vergis/mira'
+
+/** Mira, construida con un render inerte: estos tests miden DESCUBRIMIENTO, no invocación. */
+const miraProtoBotlet = createMiraProto({ render: async () => '<html>PI</html>' })
 
 const RAIZ = join(import.meta.dirname, '..')
 const DIRS = ['deploy/rollout/bench/specs', 'examples']

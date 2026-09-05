@@ -27,6 +27,7 @@
     "fab:proof": "tsx scripts/fabric-lab-proof.ts",
     "fab:sql": "FAB_PROOF_PRINT_SQL=1 tsx scripts/fabric-lab-proof.ts",
     "corte:cotejo": "tsx scripts/corte-cotejo.ts",
+    "daftar:assets": "tsx scripts/daftar-assets.ts",
     "capacidades:cotejo": "tsx scripts/capacidades-cotejo.ts"
   },
   "license": "AGPL-3.0-or-later",

@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vergis.dev/schema/daftar-spec.schema.json",
+  "title": "Spec del Let Daftar (proto-Botlet `daftar`)",
+  "type": "object",
+  "required": ["daftar_version", "identity", "estudiantes"],
+  "additionalProperties": true,
+  "properties": {
+    "daftar_version": {
+      "description": "Discriminador de la familia. Su PRESENCIA es lo que el registro de proto-Botlets mira.",
+      "type": ["string", "number"]
+    },
+    "identity": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {
+          "description": "Código estable del Let; de él sale el slug (`/estudios`).",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "display_name": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "estudiantes": {
+      "description": "Padrón: clave del estudiante (la del claim `student`) → nombre y curso.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "grade": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

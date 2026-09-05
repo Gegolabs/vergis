@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daftar — ultraGO</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1 id="header-title">Daftar</h1>
+    <p class="subtitle" id="header-subtitle">Guías de estudio</p>
+  </header>
+
+  <main>
+    <div id="guide-selector">
+      <div id="guide-list-toolbar">
+        <h2>¿Qué quieres practicar?</h2>
+        <div id="grouping-toggle" class="grouping-toggle">
+          <button class="grouping-btn" data-mode="sprint">Por Sprint</button>
+          <button class="grouping-btn" data-mode="subject">Por Materia</button>
+        </div>
+      </div>
+      <div id="guide-list"></div>
+    </div>
+
+    <div id="guide-container" class="hidden">
+      <button id="btn-back" class="btn-secondary">&larr; Volver</button>
+
+      <!-- Progress bar -->
+      <div id="progress-bar-container" class="hidden">
+        <div id="progress-dots"></div>
+        <div id="progress-label"></div>
+      </div>
+
+      <div id="guide-header"></div>
+
+      <!-- Chronometer (exam mode) -->
+      <div id="timer" class="hidden"></div>
+
+      <!-- Single section view -->
+      <div id="active-section"></div>
+
+      <!-- Navigation -->
+      <div id="section-nav" class="hidden">
+        <button id="btn-prev" class="btn-secondary">&larr; Anterior</button>
+        <button id="btn-check-section" class="btn-primary">Revisar</button>
+        <button id="btn-next" class="btn-primary">Siguiente &rarr;</button>
+      </div>
+
+      <!-- Final score -->
+      <div id="score-summary" class="hidden"></div>
+    </div>
+  </main>
+
+  <footer>
+    <p>Daftar · Generado con <a href="https://wingworking.org" target="_blank">Wingworking</a></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

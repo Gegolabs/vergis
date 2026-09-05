@@ -63,12 +63,15 @@ function deps(over: Partial<RouteDeps> = {}): RouteDeps {
 const okPdf: RouteDeps['renderPdf'] = async () => ({ pdf: PDF_BYTES, filename: 'asistencia--2026-08-06.pdf' })
 
 describe('routes · /<slug>/pdf — fail-closed sin la env (D8)', () => {
-  it('sin renderPdf → 404 «Producto de Información no encontrado» (la superficie de hoy)', async () => {
+  // H3 (#295): sin `renderPdf` la ruta sigue sin existir y sigue respondiendo 404 — pero ahora cae al
+  // despacho por Let (`slug` + `rest='pdf'`), que la declara ajena. El cuerpo dice «Ruta no
+  // encontrada» en vez de «Producto de Información no encontrado»: el PI existe, la ruta no.
+  it('sin renderPdf → 404 (la ruta no existe; ahora lo dice el despacho por Let)', async () => {
     const { res, calls, done } = mkRes()
     createRequestHandler(deps())(mkReq('/qw-04/pdf'), res)
     await done
     expect(calls.status).toBe(404)
-    expect(calls.body).toContain('Producto de Información no encontrado')
+    expect(calls.body).toContain('Ruta no encontrada')
   })
 })
 

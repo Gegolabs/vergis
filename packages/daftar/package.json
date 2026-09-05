@@ -1,0 +1,15 @@
+{
+  "name": "@vergis/daftar",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vergis/botler": "*",
+    "@vergis/capabilities": "*",
+    "yaml": "^2.9.0"
+  }
+}
