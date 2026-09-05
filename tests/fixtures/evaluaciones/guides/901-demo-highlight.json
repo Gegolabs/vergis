@@ -1,0 +1,58 @@
+{
+  "title": "Demo highlight",
+  "code": "DEMO-901",
+  "subtitle": "fixture sintética",
+  "subject": "lengua",
+  "group": "demo",
+  "variant": "B",
+  "mode": "practice",
+  "institution": "Instituto Sintético",
+  "student": "pruebita",
+  "department": "Sintético",
+  "invalidated": true,
+  "invalidated_reason": "fixture: se reemplazó por la v2",
+  "focus": "adverbios",
+  "sections": [
+    {
+      "id": "h0",
+      "title": "Subraya",
+      "type": "highlight",
+      "instructions": "Clasifica cada palabra.",
+      "categories": [
+        "sustantivo",
+        "adverbio"
+      ],
+      "exercises": [
+        {
+          "sentence": "el perro corre rapido"
+        },
+        {
+          "sentence": "la luz brilla mucho"
+        }
+      ]
+    },
+    {
+      "id": "h1",
+      "title": "Verdadero o falso",
+      "type": "true_false",
+      "instructions": "Marca.",
+      "exercises": [
+        {
+          "q": "un adverbio modifica al verbo",
+          "answer": true
+        }
+      ]
+    },
+    {
+      "id": "h2",
+      "title": "Completa",
+      "type": "fill",
+      "instructions": "Rellena.",
+      "exercises": [
+        {
+          "q": "el ___ corre"
+        }
+      ]
+    }
+  ]
+}

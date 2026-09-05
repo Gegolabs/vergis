@@ -1,0 +1,54 @@
+{
+  "guideId": "901-demo-highlight",
+  "currentSection": 2,
+  "totalSections": 3,
+  "_startedAt": "2026-01-04T11:00:00.000Z",
+  "_finishedAt": null,
+  "last_updated": "2026-01-04T08:05:00.000001",
+  "locked": true,
+  "sections": {
+    "0": {
+      "answers": [
+        {
+          "el": "sustantivo",
+          "perro": "sustantivo",
+          "corre": "adverbio",
+          "rapido": "adverbio"
+        },
+        {
+          "la": "sustantivo",
+          "luz": "sustantivo",
+          "brilla": "adverbio",
+          "mucho": "adverbio"
+        }
+      ],
+      "attempts": 1,
+      "checked": true,
+      "score": {
+        "correct": 1,
+        "total": 2
+      },
+      "review": {
+        "reviews": [
+          {
+            "idx": 0,
+            "nota": "bien"
+          },
+          {
+            "idx": 1,
+            "nota": "regular"
+          }
+        ]
+      }
+    },
+    "1": {
+      "answers": [
+        "0"
+      ],
+      "checked": false
+    },
+    "2": {
+      "answers": []
+    }
+  }
+}

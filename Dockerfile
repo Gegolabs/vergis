@@ -69,7 +69,7 @@ COPY CHANGELOG.md ./CHANGELOG.md
 # los compara contra las constantes `*_SCHEMA_VERSION` del código y contra la lista de stores que el
 # server cablea. Si alguien sube una constante y no el label —o agrega un store—, la suite se pone roja.
 LABEL vergis.schema="1" \
-      vergis.schema.stores="gobierno=1,notas=1,data-maestra=1"
+      vergis.schema.stores="gobierno=1,notas=1,data-maestra=1,evaluaciones=1"
 
 USER node
 EXPOSE 8080
