@@ -144,6 +144,9 @@ export interface ContractSnapshot {
   control?: ControlContract | null
   /** Miranda (#266 · #265). `null`/ausente = el proceso no cableó el proveedor (tests, utilitarios). */
   miranda?: MirandaContract | null
+  /** Familias de Lets (proto-Botlets) que este nodo sabe hospedar (#289). DERIVADO del registro vivo.
+   *  `[]`/ausente = el proceso no cableó ninguna (tests, utilitarios). */
+  protos?: string[]
 }
 
 export interface ContractRegistry {
@@ -213,6 +216,9 @@ export function createContractRegistry(opts: {
    * montó. Ausente ⇒ `miranda: null`: un proceso que no la cableó lo dice, no lo finge.
    */
   miranda?: () => MirandaContract
+  /** Proveedor de las familias registradas (#289). CLOSURE sobre el registro vivo, igual que `control`:
+   *  lo que el contrato dice hospedar es lo que el proceso cableó, no una lista escrita a mano. */
+  protos?: () => string[]
 }): ContractRegistry {
   const envSource = opts.envSource ?? process.env
   const clock = opts.now ?? ((): Date => new Date())
@@ -336,6 +342,7 @@ export function createContractRegistry(opts: {
         caveats: [...caveats],
         control: control(),
         miranda: miranda(),
+        protos: opts.protos?.() ?? [],
       }
     },
   }

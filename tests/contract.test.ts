@@ -205,7 +205,7 @@ describe('config · configEnvKeys (derivado con Proxy, no declarado)', () => {
 })
 
 // ── El endpoint, por el router real ────────────────────────────────────────────────────────────────
-const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
+const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', proto: 'mira', tables: ['t'], databaseRefs: [] }
 
 function mkReq(url: string, method = 'GET', headers: Record<string, string> = {}): IncomingMessage {
   return { url, method, headers } as unknown as IncomingMessage
