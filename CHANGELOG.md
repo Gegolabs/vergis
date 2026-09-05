@@ -63,6 +63,12 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+*(nada todavía)*
+
+## 0.27.0 — 2026-09-05
+
+El nodo se vuelve el Botler genérico que el canon describe: hospeda **familias de Lets** por un registro de proto-Botlets, y **Daftar** —el evaluador de instrumentos de estudio— entra como la segunda familia al lado de Mira, con su store embebido `evaluaciones`. Para una instancia Mira **nada cambia en lo que sirve** (medido con el banco de anillos, 9/9 con contenido verificado), pero **esta versión ROMPE el contrato del nodo**: `pis` pasa a `lets` en `/healthz` y `/contrato`, y la herramienta de anillos se llama `botler-rollout`. Léase «Qué exige esta versión» (#290) antes de promoverla: herramienta, healthcheck y poller **en el mismo acto**. Issues #289, #290, #291, #295; diseño rector en `work/013-cluster-botler-generico/`.
+
 **⚠ Esta versión EXIGE algo nuevo de la instancia.** El contrato del nodo cambió de nombre a un campo
 que los health checks, los pollers y el conmutador de anillos leen. Léase la sección «Qué exige esta
 versión» de la entrada siguiente **antes** de adoptarla: adoptarla sin actualizar la herramienta y el
