@@ -9,6 +9,30 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-72 · 2026-09-05 — La puerta de salida genérica del Botler es `ProtoBotlet.invoke` con un binding server-side por proto, no la clase `Botler` de `packages/botler`
+
+- **Bifurcación**: (a) instanciar la clase `Botler` (register/invoke/capabilityCall) en el servidor y pasar Mira y Daftar por ella · (b) extender `ProtoBotlet` con `invoke(spec, specPath, LetInvocation) → LetResponse | null` y que cada proto reciba en su construcción lo que necesita del nodo (Mira: `render`; Daftar: store, directorio de instrumentos) · (c) rutas registradas por proto en el router.
+- **Decidido**: **(b)**. La clase `Botler` es el runtime de `runSpec` (CLI) y su `invoke` es por Botlet-instancia con capabilities; el servidor hoy no la usa y forzarla exigiría reescribir `runPi` y su clausura entera para un beneficio que no cambia la conducta. (b) deja UNA frontera (la `LetInvocation`) que el router no entiende y que sirve a las dos familias; (c) habría metido conocimiento de dominio en el router. La clase `Botler` queda para cuando el nodo hospede Lets con capabilities propias (el Agentlet), y se dice en el brief.
+- **Costo de revertir**: medio — la frontera `LetInvocation` sobreviviría a (a).
+
+## D-73 · 2026-09-05 — Un proto declara si consume datos gobernados (`consumesData`); si no, el descubrimiento no le exige capabilities ni tablas y su autorización es suya
+
+- **Bifurcación**: (a) exigir que Daftar declare una capability ficticia para pasar el filtro `caps.length === 0 → omitido` · (b) un flag en la interfaz que el descubrimiento respeta · (c) relajar el filtro para todos.
+- **Decidido**: **(b)**. (a) es mentirle al catálogo de serving; (c) abriría la puerta a una spec de Mira sin datos servida como PI vacío, que hoy está deliberadamente omitida. Consecuencias aceptadas: un Let sin datos es visible para toda identidad en el índice (no hay tabla que lo gobierne) y decide adentro quién entra; en fabric no entra a la verificación por PI y cuenta como `serving` en `lets`.
+- **Costo de revertir**: bajo.
+
+## D-74 · 2026-09-05 — El gate de H3 mide un nodo (más un standby por lease) y deja la promoción de dos anillos con intento a medias para H5
+
+- **Bifurcación**: el diseño rector pone en H3 «e2e local con dos anillos: promoción sin corte con un intento a medias». (a) construir un banco de anillos para Daftar (compose propio, poller, mutador que POSTea progreso) dentro de H3 · (b) medir en H3 lo que un nodo y un standby ya permiten (409 nombrando al activo, publicación en caliente) y medir la promoción en H5, cuando exista la instancia con su compose derivado de `compose.reference`.
+- **Decidido**: **(b)**. El banco actual es de Mira (ClickHouse sembrado, mutador de impresiones); duplicarlo para Daftar en H3 dobla el hito sin cambiar el mecanismo bajo prueba, que es el mismo plano de control ya medido con V-14. Lo que sí es nuevo —que un POST de progreso respete el 409— se mide con el standby real. La promoción con intento a medias se declara **sin medir** en el CHANGELOG hasta H5.
+- **Costo de revertir**: nulo — H5 puede reusar el banco con un mutador de progreso.
+
+## D-75 · 2026-09-05 — Instrumentos y reportes de Daftar son archivos releídos en caliente; el store `evaluaciones` guarda intentos y revisiones, y registra instrumentos solo como espejo idempotente
+
+- **Bifurcación**: (a) instrumentos en el store (publicar = INSERT por API) · (b) instrumentos como archivos en `VERGIS_INSTRUMENTOS_DIR`, como las specs de Mira en `VERGIS_SPECS_DIR`, con el store como espejo por sha · (c) los reportes también en el store.
+- **Decidido**: **(b)**, y los reportes como archivos. Es la regla B3 del diseño rector («publicar un instrumento es copiar un archivo») y la mecánica que la instancia ya sabe operar; la inmutabilidad se hace cumplir por aviso (sha distinto con el mismo id se loguea una vez) y no por rechazo, porque un rechazo dejaría a un estudiante sin la guía corregida a mano en el disco. (c) habría exigido una API de escritura para un artefacto que producimos fuera del nodo.
+- **Costo de revertir**: bajo — el store ya tiene las tablas.
+
 ## D-71 · 2026-09-05 — Con H0–H2 mergeados NO se corta versión todavía: 0.27.0 se corta cuando aterrice H3, que es lo que le da sentido al «rompe»
 
 - **Bifurcación**: (a) cortar 0.27.0 ahora con H0 (refactor sin conducta nueva), H1 («rompe»: `pis → lets`, `botler-rollout`) y H2 (store que nadie consume) · (b) esperar a H3 (`packages/daftar`, el segundo proto-Botlet) y cortar una versión cuya capacidad justifique adoptar la ruptura.
