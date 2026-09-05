@@ -1,0 +1,17 @@
+{
+  "guideId": "902-demo-minima",
+  "currentSection": 0,
+  "totalSections": 1,
+  "_startedAt": null,
+  "_finishedAt": null,
+  "last_updated": "2026-01-05T12:00:00.000000",
+  "sections": {
+    "0": {
+      "answers": [
+        "1",
+        "0"
+      ],
+      "attempts": 3
+    }
+  }
+}

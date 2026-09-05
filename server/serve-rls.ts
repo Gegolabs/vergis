@@ -115,6 +115,8 @@ import {
   controlHandoverFile,
   evaluarRelevo,
   openNotasStore,
+  openEvaluacionesStore,
+  SqliteEvaluacionesStore,
   llaveDeFila,
   canonicalKey,
   canOpen,
@@ -748,6 +750,9 @@ let governance: SqliteGovernanceStore | null = null
 /** Store de data maestra EMBEBIDO (camino local/clickhouse). En `engine=fabric` la data maestra vive en
  *  el DWH y este handle no existe — por eso es nullable y el relevo lo reabre solo si está. */
 let mdSqlite: SqliteMasterDataStore | null = null
+/** Store de EVALUACIONES embebido (doc 013 · H2). Null salvo que la instancia lo pida por env — y el
+ *  relevo lo reabre solo si está, igual que el de data maestra. */
+let evaluacionesSqlite: SqliteEvaluacionesStore | null = null
 // Gobierno de dominio con referencia VIVA (issue #50): el admin y el catálogo leen ESTOS arreglos a
 // request-time; el hot-reload los re-puebla in-place (splice) — un dominio o slot nuevo entra sin restart.
 const domainsCfg: DomainDecl[] = [] // dominios declarados (también gatea «Gestión» en el avatar del catálogo)
@@ -1143,6 +1148,22 @@ try {
   loops.register({ name: 'purga-retención', everyMs: PURGA_INTERVALO_MS, firstDelayMs: 5000, tick: purga })
 } catch (e) {
   console.error(`[vergis-rls] capa de notas deshabilitada: ${e instanceof Error ? e.message : String(e)}`)
+}
+
+// ── STORE `evaluaciones` (doc 013 · H2) — instrumentos, intentos, respuestas, revisiones, reportes ──
+// OPT-IN: solo abre con `VERGIS_EVALUACIONES=1` o con `VERGIS_EVALUACIONES_DB` apuntando a un archivo.
+// Una instancia sin evaluador NO crea el archivo ni declara el store en `/contrato` — un A.R.B.O.L.
+// que promueva esta imagen no ve nada nuevo. Apertura NO-FATAL, como el resto de los stores embebidos.
+// H2 NO sirve ninguna ruta con esto: el proto-Botlet que lo consume es H3.
+const EVALUACIONES_ON = contract.env('VERGIS_EVALUACIONES') === '1' || !!contract.env('VERGIS_EVALUACIONES_DB')
+if (EVALUACIONES_ON) {
+  try {
+    evaluacionesSqlite = await openEvaluacionesStore(contract.env('VERGIS_OUT') ?? tmpdir(), storeControl())
+    console.log('[vergis-rls] store de evaluaciones: listo (sin superficie HTTP en este hito)')
+  } catch (e) {
+    evaluacionesSqlite = null
+    console.error(`[vergis-rls] store de evaluaciones deshabilitado: ${e instanceof Error ? e.message : String(e)}`)
+  }
 }
 
 // ADMINISTRACIÓN (no-fatal): data maestra + usuarios y roles — única superficie de ESCRITURA
@@ -2320,6 +2341,7 @@ function embeddedStores(): { name: string; reopen: (c: SqliteControlOptions) => 
   if (governance) out.push({ name: 'gobierno', reopen: (c) => governance!.reopen(c), status: () => governance!.controlStatus() })
   if (notasSqlite) out.push({ name: 'notas', reopen: (c) => notasSqlite!.reopen(c), status: () => notasSqlite!.controlStatus() })
   if (mdSqlite) out.push({ name: 'data-maestra', reopen: (c) => mdSqlite!.reopen(c), status: () => mdSqlite!.controlStatus() })
+  if (evaluacionesSqlite) out.push({ name: 'evaluaciones', reopen: (c) => evaluacionesSqlite!.reopen(c), status: () => evaluacionesSqlite!.controlStatus() })
   return out
 }
 

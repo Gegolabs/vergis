@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { SCHEMA_VERSION, NOTAS_SCHEMA_VERSION, MASTER_DATA_SCHEMA_VERSION } from '@vergis/capabilities'
+import { SCHEMA_VERSION, NOTAS_SCHEMA_VERSION, MASTER_DATA_SCHEMA_VERSION, EVALUACIONES_SCHEMA_VERSION } from '@vergis/capabilities'
 
 /**
  * EL CONTRATO PÚBLICO DEL ANILLO EN LA IMAGEN (issue #210 · I9).
@@ -57,6 +57,7 @@ describe('los labels de esquema de la imagen (I9)', () => {
       gobierno: SCHEMA_VERSION,
       notas: NOTAS_SCHEMA_VERSION,
       'data-maestra': MASTER_DATA_SCHEMA_VERSION,
+      evaluaciones: EVALUACIONES_SCHEMA_VERSION,
     })
   })
 

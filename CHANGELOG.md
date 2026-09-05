@@ -88,6 +88,39 @@ que el problema.
 `/contrato` gana un campo `protos` con las familias que el proceso cableó — derivado del registro vivo,
 no declarado a mano.
 
+### El store embebido `evaluaciones` y el importador de Daftar (#291)
+
+**Para el operador, en una línea: la imagen declara un store más y no se abre.** El label
+`vergis.schema.stores` pasa de `gobierno=1,notas=1,data-maestra=1` a
+`gobierno=1,notas=1,data-maestra=1,evaluaciones=1`, y el store solo se abre si la instancia declara
+`VERGIS_EVALUACIONES=1` o `VERGIS_EVALUACIONES_DB`. Una instancia A.R.B.O.L. que promueva esta imagen
+**no ve archivo nuevo, ni bloque nuevo en `/contrato`, ni ruta nueva**: sin la variable, el store no
+existe y `control.store[]` sigue listando los tres de siempre. No hay migración y no hay que hacer nada.
+
+Qué trae: el primer store del **evaluador** (doc 013 del cluster «Botler genérico», H2) — instrumento
+publicado, intento, respuesta, resultado por sección, revisión y reporte, en SQLite embebido sobre el
+mismo guard de esquema/época/fencing que `notas` y `data-maestra`, con `reopen` en el relevo y
+`controlStatus` en el bloque `control` de `/contrato`. Dos reglas nacen con el modelo: un
+**instrumento es inmutable por id** (re-publicarlo con otro contenido es conflicto estructurado, no
+upsert, porque cambiarlo debajo vuelve incomparables los intentos ya rendidos) y el valor de cada
+respuesta se guarda **verbatim** — la confianza S·C·A se deriva a columna propia solo cuando el valor
+la trae, nunca se infiere.
+
+Y el importador de los JSON de Daftar (`scripts/evaluaciones-importar.ts`), con su inversa
+`exportarProgreso` como prueba de que no se pierde nada.
+
+**Qué se midió** (2026-09-05, contra la instancia Daftar real, fuera del repo): 60 instrumentos, 55
+progresos y 3 reportes leídos → **54 progresos importados con round-trip idéntico, 0 diferencias**, 1
+progreso **huérfano** reportado y no importado (su guía no está en el catálogo), 0 conflictos; la
+segunda corrida deja las 54 filas en `sin-cambios` y no escribe. El round-trip sabe reprobar: omitir
+`last_reviewed` y `locked` en la reconstrucción pone rojo el test nombrando el progreso.
+
+**Qué NO se midió**: nada consume todavía estas tablas — no hay ruta HTTP, ni HTML, ni Botlet que las
+sirva; eso es H3. El store **no se abrió nunca dentro de un nodo corriendo**: el cableado de
+`serve-rls.ts` está cubierto por typecheck, build y el guard de labels, no por un arranque real con
+`VERGIS_EVALUACIONES=1`. La forma de respuesta con confianza (`{choice, conf}`) está cubierta por
+fixtures sintéticas y por el modelo, pero **hoy no existe en los datos reales**: ninguna de las 60
+guías declara `confidence`, así que esa rama va sin evidencia de campo.
 
 ## 0.26.0 — 2026-09-03
 

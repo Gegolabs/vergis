@@ -1,0 +1,64 @@
+{
+  "title": "Demo con confianza",
+  "code": "DEMO-900",
+  "subtitle": "fixture sintética",
+  "subject": "matematica",
+  "group": "demo",
+  "variant": "A",
+  "mode": "exam",
+  "institution": "Instituto Sintético",
+  "student": "pruebita",
+  "department": "Sintético",
+  "confidence": true,
+  "new": true,
+  "sprint": "S1",
+  "sprintOrder": 1,
+  "sections": [
+    {
+      "id": "s0",
+      "title": "Sección 0",
+      "type": "multiple_choice",
+      "instructions": "Marca.",
+      "exercises": [
+        {
+          "q": "2+2",
+          "options": [
+            "3",
+            "4",
+            "5"
+          ],
+          "answer": 1
+        },
+        {
+          "q": "3+3",
+          "options": [
+            "5",
+            "6",
+            "7"
+          ],
+          "answer": 1
+        },
+        {
+          "q": "4+4",
+          "options": [
+            "7",
+            "8",
+            "9"
+          ],
+          "answer": 1
+        }
+      ]
+    },
+    {
+      "id": "s1",
+      "title": "Sección 1",
+      "type": "free_text",
+      "instructions": "Escribe.",
+      "exercises": [
+        {
+          "q": "Explica la suma"
+        }
+      ]
+    }
+  ]
+}
