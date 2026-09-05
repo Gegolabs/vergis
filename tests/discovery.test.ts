@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { createDiscovery, slugify, type DiscoveryDeps } from '../server/discovery'
 import { createProtoRegistry } from '../server/proto-registry'
-import { miraProtoBotlet } from '@vergis/mira'
+import { createMiraProto } from '@vergis/mira'
+
+/** Mira, construida con un render inerte: estos tests miden DESCUBRIMIENTO, no invocación. */
+const miraProtoBotlet = createMiraProto({ render: async () => '<html>PI</html>' })
 import type { ProtoBotlet } from '@vergis/botler'
 import type { ClaimSet, PolicyDecl } from '@vergis/policy'
 
@@ -212,10 +215,12 @@ describe('discovery · diagnóstico de la negación (#165 §3)', () => {
 const fakeDaftar: ProtoBotlet<Record<string, unknown>> = {
   type: 'daftar',
   discriminator: 'daftar_version',
+  consumesData: true,
   parse: (t) => ({ t }),
   capabilitiesOf: () => [],
   dataOf: () => [],
   identityOf: () => ({ code: 'x' }),
+  invoke: async () => null,
 }
 
 describe('discovery · registro de proto-Botlets (H0 · #289)', () => {
@@ -273,5 +278,59 @@ describe('discovery · registro de proto-Botlets (H0 · #289)', () => {
     const d = mk({ engine: 'clickhouse', specs: { '/a.yaml': '{ no cierra\n  ni: yaml' }, log: (m) => logs.push(m) })
     expect(d.discover()).toHaveLength(0)
     expect(logs).toEqual([])
+  })
+})
+
+// --- H3 (#295 · D-73) · un Let que NO consume datos gobernados ---------------------------------
+//
+// El filtro `caps.length === 0 → no servible` está ahí a propósito: una spec de MIRA sin datos es un
+// PI vacío y se omite. Un Let de Daftar tiene cero capabilities por naturaleza, así que ese mismo
+// filtro lo mataría. La salida no es relajar el filtro (abriría la puerta al PI vacío) sino que el
+// PROTO declare si su familia consume datos.
+describe('discovery · Lets sin datos gobernados (D-73)', () => {
+  const sinDatos: ProtoBotlet<Record<string, unknown>> = {
+    type: 'daftar',
+    discriminator: 'daftar_version',
+    consumesData: false,
+    parse: (t) => ({ t }),
+    capabilitiesOf: () => [],
+    dataOf: () => [],
+    identityOf: () => ({ code: 'estudios', displayName: 'Daftar · Estudios' }),
+    invoke: async () => null,
+  }
+  const SPEC = 'daftar_version: "1.0"\nidentity: { code: estudios }\n'
+
+  it('se descubre con `tables: []` y `proto: daftar`, pese a declarar CERO capabilities', () => {
+    const d = mk({ engine: 'clickhouse', specs: { '/d.yaml': SPEC }, protos: createProtoRegistry([miraProtoBotlet, sinDatos]) })
+    expect(d.discover()).toEqual([
+      { code: 'estudios', slug: 'estudios', name: 'Daftar · Estudios', specName: 'Daftar · Estudios', specPath: '/d.yaml', proto: 'daftar', tables: [], databaseRefs: [] },
+    ])
+  })
+
+  it('con `consumesData: true` la MISMA spec vacía se sigue omitiendo (el filtro no se relajó)', () => {
+    const logs: string[] = []
+    const conDatos = { ...sinDatos, consumesData: true }
+    const d = mk({ engine: 'clickhouse', specs: { '/d.yaml': SPEC }, protos: createProtoRegistry([miraProtoBotlet, conDatos]), log: (m) => logs.push(m) })
+    expect(d.discover()).toHaveLength(0)
+    expect(logs.some((l) => l.includes('capability fuera del catálogo'))).toBe(true)
+  })
+
+  it('es VISIBLE para una identidad sin claims: sin tablas no hay gobierno de dato que lo esconda', () => {
+    const d = mk({ engine: 'clickhouse', specs: { '/d.yaml': SPEC }, protos: createProtoRegistry([miraProtoBotlet, sinDatos]) })
+    expect(d.visibleFor(d.discover(), {} as ClaimSet).map((r) => r.slug)).toEqual(['estudios'])
+  })
+
+  it('en fabric tampoco se le exige esquema calificado ni política: no hay SQL que gobernar', () => {
+    const d = mk({ engine: 'fabric', specs: { '/d.yaml': SPEC }, protos: createProtoRegistry([miraProtoBotlet, sinDatos]) })
+    expect(d.discover().map((r) => r.slug)).toEqual(['estudios'])
+  })
+
+  it('convive con un PI de Mira en el mismo catálogo, cada uno con su regla', () => {
+    const d = mk({
+      engine: 'clickhouse',
+      specs: { '/d.yaml': SPEC, '/m.yaml': `mira_version: "1.0"\n${specYaml('QW-04', 'SELECT 1 FROM qw04.areas')}` },
+      protos: createProtoRegistry([miraProtoBotlet, sinDatos]),
+    })
+    expect(d.discover().map((r) => `${r.slug}:${r.proto}:${r.tables.length}`)).toEqual(['estudios:daftar:0', 'qw-04:mira:1'])
   })
 })

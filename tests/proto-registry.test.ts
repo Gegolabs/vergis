@@ -2,7 +2,10 @@
 // cuando dos la reconocen. La discriminación es por PRESENCIA de la clave raíz, sin validar el valor.
 import { describe, it, expect } from 'vitest'
 import { createProtoRegistry } from '../server/proto-registry'
-import { miraProtoBotlet } from '@vergis/mira'
+import { createMiraProto } from '@vergis/mira'
+
+/** Mira, construida con un render inerte: estos tests miden DESCUBRIMIENTO, no invocación. */
+const miraProtoBotlet = createMiraProto({ render: async () => '<html>PI</html>' })
 import type { ProtoBotlet } from '@vergis/botler'
 
 /** Proto FICTICIO, solo de test: H0 no crea `packages/daftar`. Sirve para medir los brazos de dos
@@ -10,10 +13,12 @@ import type { ProtoBotlet } from '@vergis/botler'
 const fakeDaftar: ProtoBotlet<Record<string, unknown>> = {
   type: 'daftar',
   discriminator: 'daftar_version',
+  consumesData: true,
   parse: (t) => ({ t }),
   capabilitiesOf: () => [],
   dataOf: () => [],
   identityOf: () => ({ code: 'x' }),
+  invoke: async () => null,
 }
 
 describe('proto-registry · discriminación', () => {

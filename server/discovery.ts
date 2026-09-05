@@ -144,11 +144,19 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
         log(`[vergis-rls] '${p}' no parsea como spec de ${proto.type}: ${e instanceof Error ? e.message : String(e)} — omitido`)
         continue
       }
-      const entradas = proto.dataOf(spec)
-      const caps = proto.capabilitiesOf(spec)
-      if (caps.length === 0 || !caps.every((c) => servingCaps.has(c))) {
-        log(`[vergis-rls] '${p}' no servible bajo engine=${engine} (capability fuera del catálogo: ${caps.join(',')}) — omitido`)
-        continue
+      // UN LET SIN DATOS GOBERNADOS (D-73). El proto declara `consumesData: false` cuando su familia
+      // no toca el DWH (Daftar): entonces NO hay capabilities que cotejar contra el catálogo de
+      // serving —cotejarlas mataría el Let, porque `caps.length === 0` es «no servible» para una spec
+      // de Mira— ni tablas que analizar ni gate de gobernanza que aplicar. Su autorización la decide
+      // él adentro de `invoke`. Con `consumesData: true` no cambia absolutamente nada.
+      const consumeDatos = proto.consumesData
+      const entradas = consumeDatos ? proto.dataOf(spec) : []
+      if (consumeDatos) {
+        const caps = proto.capabilitiesOf(spec)
+        if (caps.length === 0 || !caps.every((c) => servingCaps.has(c))) {
+          log(`[vergis-rls] '${p}' no servible bajo engine=${engine} (capability fuera del catálogo: ${caps.join(',')}) — omitido`)
+          continue
+        }
       }
       const analyses = entradas.map((d) => analyzeSqlTables(d.sql ?? ''))
       const tables = [...new Set(analyses.flatMap((a) => a.tables))]

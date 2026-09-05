@@ -567,6 +567,24 @@ export class SqliteEvaluacionesStore {
     })
   }
 
+  /**
+   * Borra el intento de un par (instrumento, estudiante) con sus secciones y respuestas. Es el
+   * `reset` de Daftar —«el estudiante empieza de cero»— y por eso SÍ borra en un store que por lo
+   * demás no borra nada: un intento reseteado no es historia que preservar, es trabajo que el propio
+   * dueño del catálogo declara nulo. El instrumento no se toca (sigue publicado). Devuelve `false` si
+   * no había intento (idempotente).
+   */
+  borrarIntento(instrumentoId: string, estudiante: string): boolean {
+    const previo = this.rows(`SELECT id FROM intento WHERE instrumento_id = ? AND estudiante = ?`, [instrumentoId, estudiante])[0]
+    if (!previo) return false
+    const id = String(previo['id'])
+    this.db.run(`DELETE FROM respuesta WHERE intento_id = ?`, [id])
+    this.db.run(`DELETE FROM intento_seccion WHERE intento_id = ?`, [id])
+    this.db.run(`DELETE FROM intento WHERE id = ?`, [id])
+    this.persist()
+    return true
+  }
+
   /** Cierra el intento a más escritura del estudiante (el `locked` de Daftar). */
   bloquear(intentoId: string, bloqueado = true): boolean {
     const hit = this.rows(`SELECT id FROM intento WHERE id = ?`, [intentoId])[0]

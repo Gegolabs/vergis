@@ -9,7 +9,10 @@
 import { describe, it, expect } from 'vitest'
 import { createDiscovery, slugify, type DiscoveryDeps } from '../server/discovery'
 import { createProtoRegistry } from '../server/proto-registry'
-import { miraProtoBotlet } from '@vergis/mira'
+import { createMiraProto } from '@vergis/mira'
+
+/** Mira, construida con un render inerte: estos tests miden DESCUBRIMIENTO, no invocación. */
+const miraProtoBotlet = createMiraProto({ render: async () => '<html>PI</html>' })
 import type { PolicyDecl } from '@vergis/policy'
 
 function specYaml(code: string, nombre: string): string {

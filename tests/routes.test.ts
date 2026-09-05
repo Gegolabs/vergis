@@ -160,10 +160,15 @@ describe('routes · admin / config / ready', () => {
 })
 
 describe('routes · índice y PI', () => {
+  // H3 (#295): el slug-lookup pasó a partir `slug` + `rest`, así que esta URL ya no es «un slug que
+  // no existe» sino «una subruta que el Let no reconoce». Sigue siendo 404 y sigue sin escribir nada;
+  // lo que cambió es el TEXTO del cuerpo y que el veredicto llega tras el gate de artefacto (async).
   it('el esquema viejo de anotaciones ya no existe: POST /<slug>/annotations → 404', async () => {
-    const { res, calls } = mkRes()
+    const { res, calls, done } = mkRes()
     createRequestHandler(deps())(mkReq('/qw-04/annotations', 'POST'), res)
+    await done
     expect(calls.status).toBe(404)
+    expect(calls.body).toContain('Ruta no encontrada')
   })
   it('/ con varios PIs → renderIndexPage', async () => {
     const r2 = { ...REPORT, slug: 'qw-05', code: 'QW-05' }
@@ -188,5 +193,161 @@ describe('routes · índice y PI', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps())(mkReq('/no-existe'), res)
     expect(calls.status).toBe(404)
+  })
+})
+
+// --- H3 (#295) · el despacho por Let -----------------------------------------------------------
+//
+// El router deja de saber que `/<slug>` es «la página de un PI»: parte la URL en slug + resto y le
+// entrega el resto al Let. Lo que estos tests fijan es la FRONTERA — qué llega al Let, qué se sigue
+// atendiendo antes, y qué pasa cuando el visible no es Mira.
+describe('routes · despacho por Let (H3)', () => {
+  const DAFTAR: Report = { ...REPORT, code: 'estudios', slug: 'estudios', name: 'Daftar', specName: 'Daftar', proto: 'daftar', tables: [] }
+
+  it('`/<slug>/api/guides/x` → invokeLet con rest="api/guides/x"', async () => {
+    const vistos: string[] = []
+    const { res, calls, done } = mkRes()
+    createRequestHandler(
+      deps({
+        discover: () => [DAFTAR],
+        invokeLet: async (r, _req, response, rest) => {
+          vistos.push(`${r.slug}|${rest}`)
+          response.writeHead(200)
+          response.end('OK')
+          return true
+        },
+      }),
+    )(mkReq('/estudios/api/guides/051-x?s=ana'), res)
+    await done
+    expect(vistos).toEqual(['estudios|api/guides/051-x'])
+    expect(calls.status).toBe(200)
+  })
+
+  it('la raíz del Let llega con rest="" (y la barra final no cambia nada)', async () => {
+    for (const url of ['/estudios', '/estudios/']) {
+      const vistos: string[] = []
+      const { res, done } = mkRes()
+      createRequestHandler(
+        deps({
+          discover: () => [DAFTAR],
+          invokeLet: async (_r, _q, response, rest) => {
+            vistos.push(rest)
+            response.writeHead(200)
+            response.end('OK')
+            return true
+          },
+        }),
+      )(mkReq(url), res)
+      await done
+      expect(vistos, url).toEqual([''])
+    }
+  })
+
+  it('el Let que devuelve false (ruta ajena) → 404 del nodo', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(deps({ discover: () => [DAFTAR], invokeLet: async () => false }))(mkReq('/estudios/nada'), res)
+    await done
+    expect(calls.status).toBe(404)
+    expect(calls.body).toContain('Ruta no encontrada')
+  })
+
+  it('`/<slug>/pdf` de un Let NO-Mira NO lo intercepta el endpoint de PDF: cae a invokeLet', async () => {
+    const vistos: string[] = []
+    const { res, done } = mkRes()
+    createRequestHandler(
+      deps({
+        discover: () => [DAFTAR],
+        renderPdf: async () => ({ pdf: new Uint8Array([1]), filename: 'x.pdf' }),
+        invokeLet: async (_r, _q, response, rest) => {
+          vistos.push(rest)
+          response.writeHead(200)
+          response.end('OK')
+          return true
+        },
+      }),
+    )(mkReq('/estudios/pdf'), res)
+    await done
+    expect(vistos).toEqual(['pdf'])
+  })
+
+  it('`/<slug>/pdf` de un PI de MIRA lo sigue sirviendo el endpoint de PDF (cero cambio)', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(
+      deps({
+        renderPdf: async () => ({ pdf: new Uint8Array([37, 80, 68, 70]), filename: 'a.pdf' }),
+        invokeLet: async () => {
+          throw new Error('no debía llegar al Let')
+        },
+      }),
+    )(mkReq('/qw-04/pdf'), res)
+    await done
+    expect(calls.status).toBe(200)
+  })
+
+  it('`/<slug>/config` de un Let NO-Mira NO lo intercepta la config por-PI: cae a invokeLet', async () => {
+    const vistos: string[] = []
+    const { res, done } = mkRes()
+    createRequestHandler(
+      deps({
+        discover: () => [DAFTAR],
+        getPiConfig: () => ({ tryHandle: async () => true }) as unknown as ReturnType<RouteDeps['getPiConfig']>,
+        invokeLet: async (_r, _q, response, rest) => {
+          vistos.push(rest)
+          response.writeHead(200)
+          response.end('OK')
+          return true
+        },
+      }),
+    )(mkReq('/estudios/config'), res)
+    await done
+    expect(vistos).toEqual(['config'])
+  })
+
+  it('`/` con UN visible que no es Mira → 302 a `/<slug>` (su HTML enlaza relativo a su prefijo)', async () => {
+    const { res, done } = mkRes()
+    let loc = ''
+    const r = {
+      ...res,
+      writeHead: (code: number, h?: Record<string, string>) => {
+        ;(res as unknown as { headersSent: boolean }).headersSent = false
+        loc = `${code} ${h?.['location'] ?? ''}`
+      },
+    } as unknown as typeof res
+    createRequestHandler(deps({ discover: () => [DAFTAR], indexReports: async (all) => all }))(mkReq('/'), r)
+    await done
+    expect(loc).toBe('302 /estudios')
+  })
+
+  it('`/` con UN visible que SÍ es Mira → se sigue renderizando en la raíz (cero cambio)', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(deps({ indexReports: async (all) => all }))(mkReq('/'), res)
+    await done
+    expect(calls.body).toBe('<html>PI</html>')
+  })
+
+  it('sin `invokeLet` inyectado la superficie es la de antes de H3: raíz renderizada, subruta 404', async () => {
+    const a = mkRes()
+    createRequestHandler(deps())(mkReq('/qw-04'), a.res)
+    await a.done
+    expect(a.calls.body).toBe('<html>PI</html>')
+    const b = mkRes()
+    createRequestHandler(deps())(mkReq('/qw-04/lo-que-sea'), b.res)
+    await b.done
+    expect(b.calls.status).toBe(404)
+  })
+
+  it('el gate de artefacto corre ANTES del Let: sin acceso, el Let ni se invoca', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(
+      deps({
+        discover: () => [DAFTAR],
+        canOpenPi: async () => false,
+        invokeLet: async () => {
+          throw new Error('no debía invocarse')
+        },
+      }),
+    )(mkReq('/estudios/api/guides'), res)
+    await done
+    expect(calls.status).toBe(403)
   })
 })
