@@ -49,7 +49,7 @@ export interface ReloadEvent {
   ok: boolean
   error?: string
   policies?: number
-  servablePis?: number
+  servableLets?: number
 }
 
 /**

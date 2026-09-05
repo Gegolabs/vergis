@@ -1,5 +1,5 @@
 #!/bin/sh
-# `docker` FALSO para probar `deploy/rollout/vergis-rollout` sin un demonio (issue #210 · I8).
+# `docker` FALSO para probar `deploy/rollout/botler-rollout` sin un demonio (issue #210 · I8).
 #
 # La herramienta habla con docker por UN solo punto (`docker_cli`, inyectable con `RINGS_DOCKER`), así
 # que este script es todo el mundo que necesita: un mundo de archivos bajo `$FAKE_WORLD`.
@@ -53,7 +53,7 @@ relevo() {
 }
 
 healthz_body() {
-  printf '{"ok":true,"engine":"fabric","phase":"%s","pis":{"total":2,"serving":2}}' "$1"
+  printf '{"ok":true,"engine":"fabric","phase":"%s","lets":{"total":2,"serving":2}}' "$1"
 }
 contrato_body() {
   _sup=$(cut -d' ' -f1 "$W/schema")

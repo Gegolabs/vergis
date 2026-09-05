@@ -35,18 +35,18 @@ services:
     # (standby) responde 200 con `ok:true` POR DISEÑO: está sano, sirve lecturas y NO tiene el plano de
     # control — sus mutaciones contestan 409. Un chequeo que mirara `r.ok` lo declararía `healthy` sin
     # que estuviera sirviendo escrituras. El predicado es el canónico, el mismo del borde
-    # (`deploy/Caddyfile.reference`) y del conmutador (`deploy/rollout/vergis-rollout`, `serving_ok`):
+    # (`deploy/Caddyfile.reference`) y del conmutador (`deploy/rollout/botler-rollout`, `serving_ok`):
     #
-    #   sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  (sin bloque `pis`  ∨  pis.serving == pis.total)
+    #   sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  (sin bloque `lets`  ∨  lets.serving == lets.total)
     #
-    # El bloque `pis` se exige SOLO SI VIENE: `/healthz` lo omite cuando el motor no tiene servibilidad
-    # por PI (`VERGIS_ENGINE` distinto de `fabric`), y exigirlo incondicionalmente dejaría a este compose
+    # El bloque `lets` se exige SOLO SI VIENE: `/healthz` lo omite cuando el motor no tiene servibilidad
+    # por Let (`VERGIS_ENGINE` distinto de `fabric`), y exigirlo incondicionalmente dejaría a este compose
     # —el modo Free mínimo, que es justo el que más lo sufriría— en `unhealthy` perpetuo. El cuerpo se
     # PARSEA, no se grepea: un grep de `"serving"` colisiona con `"phase":"serving"`. Y todo lo que no se
     # puede medir —cuerpo vacío, cuerpo no-JSON, conexión rechazada— cuenta como FALLO: «no pude medir»
     # nunca es verde.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r=>{const b=JSON.parse(await r.text());process.exit(r.status===200&&b.phase==='serving'&&(!b.pis||b.pis.total===b.pis.serving)?0:1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r=>{const b=JSON.parse(await r.text());process.exit(r.status===200&&b.phase==='serving'&&(!b.lets||b.lets.total===b.lets.serving)?0:1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

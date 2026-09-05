@@ -47,11 +47,11 @@ describe('contrato · registro derivado', () => {
     const p = join(dir, 'policies.yaml')
     writeFileSync(p, 'policies: {}\n')
     const c = registry()
-    c.record({ reason: 'boot', ok: true, policies: 3, servablePis: 2 }, [{ source: 'policies', path: p }])
+    c.record({ reason: 'boot', ok: true, policies: 3, servableLets: 2 }, [{ source: 'policies', path: p }])
     const snap = c.snapshot()
     expect(snap.artifacts).toHaveLength(1)
     expect(snap.artifacts[0]).toMatchObject({ source: 'policies', path: p, sha256: sha('policies: {}\n'), pending: false })
-    expect(snap.reloads.last).toMatchObject({ reason: 'boot', ok: true, policies: 3, servablePis: 2 })
+    expect(snap.reloads.last).toMatchObject({ reason: 'boot', ok: true, policies: 3, servableLets: 2 })
     expect(snap.reloads.recent).toHaveLength(1)
     rmSync(dir, { recursive: true, force: true })
   })
@@ -256,7 +256,7 @@ function contractDeps(over: { isAdmin?: ((email: string | undefined) => Promise<
   const unwatch = c.watch({ envs: ['VERGIS_POLICIES'], reloads: 'gobierno completo' }, [], () => {})
   c.signal({ signal: 'SIGHUP', action: 'fuerza la recarga completa de gobierno' })
   c.caveat('las inyecciones del canal de serving se fijan al arranque: un claim nuevo requiere restart')
-  c.record({ reason: 'boot', ok: true, policies: 1, servablePis: 1 }, [{ source: 'policies', path: pol }])
+  c.record({ reason: 'boot', ok: true, policies: 1, servableLets: 1 }, [{ source: 'policies', path: pol }])
   const journalDir = over.journalDir ?? dir
   const journal = createContractJournal({ dir: journalDir })
   const handler = createContractHandler({
@@ -280,7 +280,7 @@ describe('contrato · GET /contrato por el router real', () => {
     const body = JSON.parse(calls.body) as ContractSnapshot
     expect(body.watches[0]).toMatchObject({ envs: ['VERGIS_POLICIES'], reloads: 'gobierno completo' })
     expect(body.signals[0].signal).toBe('SIGHUP')
-    expect(body.reloads.last).toMatchObject({ reason: 'boot', ok: true, policies: 1, servablePis: 1 })
+    expect(body.reloads.last).toMatchObject({ reason: 'boot', ok: true, policies: 1, servableLets: 1 })
     expect(body.artifacts[0]).toMatchObject({ source: 'policies', path: k.pol, pending: false })
     expect(body.env.bootOnly).toEqual(['PORT', 'VERGIS_ENGINE'])
     expect(body.env.reloadableContent).toEqual(['VERGIS_POLICIES'])
@@ -354,7 +354,7 @@ describe('contrato · «¿el nodo tomó mi archivo?» (aceptación del issue #13
     writeFileSync(pol, 'policies:\n  ventas: { grant: all }\n')
     const c = createContractRegistry({ engine: 'fabric', hotReload: true, envSource: {} })
     // El watch dispara → el server recarga → registra DONDE OCURRE (acá se simula esa llamada).
-    c.record({ reason: 'watch:policies', ok: true, policies: 1, servablePis: 1 }, [{ source: 'policies', path: pol }])
+    c.record({ reason: 'watch:policies', ok: true, policies: 1, servableLets: 1 }, [{ source: 'policies', path: pol }])
     const handler = createContractHandler({
       registry: c,
       journal: createContractJournal({ dir }),
@@ -383,7 +383,7 @@ describe('contrato · «¿el nodo tomó mi archivo?» (aceptación del issue #13
     expect(despues.artifacts[0].diskSha256).not.toBe(antes.artifacts[0].sha256)
 
     // 3) Ocurre la recarga → vuelve a `pending:false` sin reiniciar nada.
-    c.record({ reason: 'SIGHUP', ok: true, policies: 1, servablePis: 1 }, [{ source: 'policies', path: pol }])
+    c.record({ reason: 'SIGHUP', ok: true, policies: 1, servableLets: 1 }, [{ source: 'policies', path: pol }])
     const recargado = await ask()
     expect(recargado.artifacts[0].pending).toBe(false)
     expect(recargado.reloads.last!.reason).toBe('SIGHUP')

@@ -60,17 +60,17 @@ describe('routes · /healthz', () => {
     expect(calls.body).not.toContain('qw-04')
   })
   // Issue #52: distinguir «arrancando» (503) de «N de M degradados» (el proceso sirve el resto → 200).
-  it('ready con PIs degradados → 200 {ok:false, phase:degraded, pis:{total,serving}} — solo conteos', () => {
+  it('ready con Lets degradados → 200 {ok:false, phase:degraded, lets:{total,serving}} — solo conteos', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps({ isReady: () => true, healthSummary: () => ({ total: 3, serving: 2 }) }))(mkReq('/healthz'), res)
     expect(calls.status).toBe(200)
-    expect(JSON.parse(calls.body)).toEqual({ ok: false, engine: 'clickhouse', phase: 'degraded', pis: { total: 3, serving: 2 } })
+    expect(JSON.parse(calls.body)).toEqual({ ok: false, engine: 'clickhouse', phase: 'degraded', lets: { total: 3, serving: 2 } })
     expect(calls.body).not.toContain('qw-04') // sin slugs ni motivos: healthz corre sin gate
   })
-  it('ready con todos los PIs sirviendo → 200 {ok:true, phase:serving, pis}', () => {
+  it('ready con todos los Lets sirviendo → 200 {ok:true, phase:serving, lets}', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps({ isReady: () => true, healthSummary: () => ({ total: 2, serving: 2 }) }))(mkReq('/healthz'), res)
-    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse', phase: 'serving', pis: { total: 2, serving: 2 } })
+    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse', phase: 'serving', lets: { total: 2, serving: 2 } })
   })
 })
 

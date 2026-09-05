@@ -102,16 +102,16 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
       // Solo CONTEOS: healthz corre sin gate y se mantiene reducido (sin slugs ni mensajes de error).
       //
       // `standby` es HTTP 200 y NO relaja `serving`: el predicado del conmutador y del poller de cortes
-      // es `HTTP 200 ∧ phase=serving ∧ pis.serving=N`, y un standby **no debe** satisfacerlo — rutear
+      // es `HTTP 200 ∧ phase=serving ∧ lets.serving=N`, y un standby **no debe** satisfacerlo — rutear
       // tráfico de escritura a un nodo que responde 409 sería peor que no rutear nada. Precedencia:
       // `starting` (nada evaluado) → `standby` (no controla) → `degraded` → `serving`. Un standby con
-      // PIs degradados sigue delatando su degradación en `ok:false` y en los conteos de `pis`.
+      // Lets degradados sigue delatando su degradación en `ok:false` y en los conteos de `lets`.
       const ready = deps.isReady()
-      const pis = deps.healthSummary?.() ?? null
-      const degraded = pis ? pis.total - pis.serving : 0
+      const lets = deps.healthSummary?.() ?? null
+      const degraded = lets ? lets.total - lets.serving : 0
       const phase = !ready ? 'starting' : !hasControl() ? 'standby' : degraded ? 'degraded' : 'serving'
       res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: ready && degraded === 0, engine: deps.engine, phase, ...(pis ? { pis } : {}) }))
+      res.end(JSON.stringify({ ok: ready && degraded === 0, engine: deps.engine, phase, ...(lets ? { lets } : {}) }))
       return
     }
     // A10 · gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).

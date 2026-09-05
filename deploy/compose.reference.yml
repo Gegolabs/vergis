@@ -28,7 +28,7 @@
 #
 #   · UN SOLO NODO (lo de siempre): el servicio `vergis` de abajo sirve, `rings/active.caddy` apunta a
 #     él (es su valor de fábrica) y desplegar sigue siendo un recreate —con su corte y su ventana—.
-#   · ANILLOS: los nodos NO los declara este compose. Los crea `vergis-rollout` como contenedores
+#   · ANILLOS: los nodos NO los declara este compose. Los crea `botler-rollout` como contenedores
 #     `vergis-<versión>` (`vergis-0-19-0`) desde `ghcr.io/gegolabs/vergis:<versión>`, con los MISMOS
 #     envs y montajes que el servicio de abajo — copiados una vez a `rollout/ring.args`. En este modo
 #     el servicio `vergis` se comenta (o se deja como último nodo pre-anillos hasta la primera
@@ -155,7 +155,7 @@ services:
     # `docker ps` diga la verdad sobre ESTE servicio. **Quien rutea es el conmutador del borde**, con su
     # propio health check activo en `Caddyfile.reference` — cambiar esto no cambia a dónde va el tráfico.
     #
-    # Aplica al modo UN SOLO NODO. En modo ANILLOS los nodos los crea `vergis-rollout` con
+    # Aplica al modo UN SOLO NODO. En modo ANILLOS los nodos los crea `botler-rollout` con
     # `rollout/ring.args`, que —a diferencia de los envs y los montajes— **no lleva healthcheck**: la
     # salud de un anillo la mide el borde, que es el único que puede actuar sobre ella. Así que este
     # bloque no viaja, y no hace falta que viaje.
@@ -163,16 +163,16 @@ services:
     # Juzga por la FASE, jamás por `r.ok` ni por el código HTTP: un nodo EN ESPERA (standby) responde 200
     # con `ok:true` por diseño —sirve lecturas, no tiene el plano de control, sus mutaciones dan 409—, y
     # marcarlo `healthy` sería la mentira más cara que este archivo podría contar en un incidente. El
-    # predicado es el canónico, idéntico al del borde y al de `rollout/vergis-rollout` (`serving_ok`):
+    # predicado es el canónico, idéntico al del borde y al de `rollout/botler-rollout` (`serving_ok`):
     #
-    #   sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  (sin bloque `pis`  ∨  pis.serving == pis.total)
+    #   sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  (sin bloque `lets`  ∨  lets.serving == lets.total)
     #
-    # `pis` se exige SOLO SI VIENE (`/healthz` lo omite cuando el motor no tiene servibilidad por PI; acá
+    # `lets` se exige SOLO SI VIENE (`/healthz` lo omite cuando el motor no tiene servibilidad por Let; acá
     # el motor es `fabric`, así que viene). El cuerpo se PARSEA, no se grepea: un grep de `"serving"`
     # colisiona con `"phase":"serving"`. Lo no medible —vacío, no-JSON, conexión rechazada— es FALLO.
     # node:22-slim no trae curl → el fetch de Node, el patrón de todo el repo.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r=>{const b=JSON.parse(await r.text());process.exit(r.status===200&&b.phase==='serving'&&(!b.pis||b.pis.total===b.pis.serving)?0:1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(async r=>{const b=JSON.parse(await r.text());process.exit(r.status===200&&b.phase==='serving'&&(!b.lets||b.lets.total===b.lets.serving)?0:1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -202,7 +202,7 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:latest@sha256:10a1165743a192e1940b4708fb9647027185ce11a681a1c5519b442ff7f1f561
     restart: unless-stopped
     # SIN `depends_on`: su upstream ya no es un servicio de este compose sino el CONMUTADOR del borde, y
-    # los anillos son contenedores que crea `vergis-rollout` fuera del ciclo de vida de compose. Un
+    # los anillos son contenedores que crea `botler-rollout` fuera del ciclo de vida de compose. Un
     # `depends_on: [caddy]` además cerraría un ciclo (caddy depende de este servicio).
     env_file: [oauth2.env]                  # OAUTH2_PROXY_CLIENT_SECRET + COOKIE_SECRET
     environment:
@@ -240,7 +240,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # El anillo activo: `rings/active.caddy` (una línea) + `rings/rings.json` (el registro). Montado
-      # `:ro` porque el borde solo LEE — quien escribe es `vergis-rollout` en el host, y después recarga
+      # `:ro` porque el borde solo LEE — quien escribe es `botler-rollout` en el host, y después recarga
       # Caddy en caliente. Copiar `deploy/rings/active.caddy.example` como `rings/active.caddy`.
       - ./rings:/etc/caddy/rings:ro
       # La sala de espera: HTML estático, sin red ni dependencias. Copiar `deploy/edge/espera.html`.
