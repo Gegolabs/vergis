@@ -15,6 +15,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **(c)**. El ítem 1 es el mecanismo que produjo el daño medido (nueve corridas sobre nada) y el único con demandante en la instancia. El 2 no se puede construir con honestidad desde el Producto: el historial de corridas de Fabric no expone filas producidas, y un conteo fabricado desde el destino sería otra promesa optimista. El 3 pierde su demandante con el 1: los slots manuales ya no reciben schedule, y las fuentes que el motor tira (SAP HANA) fijan su hora por su propio pipeline, no por el clic.
 - **Alternativa descartada**: (b) porque abrir issues sin demandante es pasivo que nadie va a cobrar; si un steward vuelve a pedirlo, el issue se abre con su caso.
 - **Costo de revertir**: nulo — se reabre #279 o se abre el issue con la cita.
+<!-- segundo-ojo · Incorrecta (ítem 3): cronBody fija startDateTime=now también para procesos del motor · 2026-09-05 · juez Fable 5.1 · sha12 ad48a34e4658 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-66 · 2026-09-03 — #285 y #286 se construyen como convención de plataforma decidida por el dato, sin vocabulario nuevo en el DSL, y la cascada de facetas es simétrica
 
@@ -22,6 +23,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **(a) + (d)**. (a) porque es el mismo patrón con que 0.24.0 y 0.25.0 eligen el popover (`vtIsNumericCol`, `vtIsDateCol`): lo decide el dato, aplica a todos los PIs sin ronda de spec, y no degrada las columnas de nombres (que (b) sí degradaría cuando la columna no es la primera llave de orden). (d) porque es el modelo mental del usuario que viene de Excel y no exige que el especificador declare jerarquías; la jerárquica sigue siendo el diseño de `narrows:` para los controles de la bandeja (TX-15 b), que no se toca.
 - **Lo que esto NO garantiza, dicho**: la detección de nombres de mes es una tabla es/en; un PI con meses en otro idioma cae al orden alfabético. Al especificador de PI-30 se le dejó visible la bifurcación simétrica/jerárquica (comentario `11364` de la instancia).
 - **Costo de revertir**: bajo — funciones puras con tests; (c) puede agregarse encima sin deshacer (a).
+<!-- segundo-ojo · Correcta con salvedad medible: anclas TX-15 b y comentario 11364 no resuelven · 2026-09-05 · juez Fable 5.1 · sha12 101e51152f6f · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-64 · 2026-09-02 — El catálogo `CAP-NN` (#264) vive en `docs/capacidades.md` con cotejo mecánico parcial, sin gate de CI sobre el CHANGELOG
 
@@ -30,6 +32,7 @@ el registro existe para que revertirla sea barato.
 - **Alternativa descartada**: (a) por lo que el issue ya argumenta (caché sin invalidación); (c) por frágil.
 - **Lo que esto NO garantiza, dicho**: el catálogo puede omitir capacidades que no están en el schema (rutas HTTP, gobierno, plano de control): esas se barrieron a mano y pueden faltar.
 - **Costo de revertir**: nulo — docs y un test.
+<!-- segundo-ojo · Correcta: catálogo, cotejo verde como test en CI; refutador (ID duplicado) cae · 2026-09-05 · juez Fable 5.1 · sha12 ad477b61ca7f · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-63 · 2026-09-02 — #262 se construye entero: las cuatro piezas, no solo el aviso en pantalla
 
@@ -38,6 +41,7 @@ el registro existe para que revertirla sea barato.
 - **Regla que se le impuso al realizador**: un conteo de réplica que no se pudo leer dice «no se pudo leer», **jamás** 0 ni un número inventado — es la misma disciplina de «sin medir ≠ negativo».
 - **Lo que queda fuera**: `VERGIS_MASTER_DATA` fuera del hot-reload (hallazgo vecino del issue) — no se toca en este hito; si merece issue, se abre aparte.
 - **Costo de revertir**: revertir el PR.
+<!-- segundo-ojo · Correcta con salvedad medible: Publisher.count() jamás corrió contra un motor · 2026-09-05 · juez Fable 5.1 · sha12 88ca4e6297eb · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-62 · 2026-09-02 — Fatal vs degradable se vuelve explícito en la config (#266), y #265 va en el mismo PR
 
@@ -46,12 +50,14 @@ el registro existe para que revertirla sea barato.
 - **#265 en el mismo PR** porque es la misma función (`mirandaConfig`) y la misma regla: un `MIRANDA_API_BASE_URL` inválido también **degrada**, no aborta.
 - **Lo que NO se mide antes de publicar**: el arranque de la imagen real con el flag encendido y sin key (lo corrobora el despliegue de la instancia, y así se declara en el CHANGELOG), y ningún gateway real (Foundry llega en 1-2 semanas).
 - **Costo de revertir**: revertir el PR.
+<!-- segundo-ojo · Correcta con salvedad medible: #275 solo config; arranque tumbó hasta 0.23.1 · 2026-09-05 · juez Fable 5.1 · sha12 90c178858198 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-61 · 2026-09-02 — #186 se cierra: sus dos criterios abiertos están cumplidos u obsoletos
 
 - **Bifurcación**: dejarlo abierto hasta «barrer `PENDINGS.md`» o cerrarlo.
 - **Decidido**: **cerrar.** La medición de #164 en Fabric se corrió el 2026-08-19 (P7/P8, #236). `PENDINGS.md` ya no existe (D-57, pase a finish-v2): el criterio protegía que ninguna medición quedara trabada por falta de terreno, y eso está cumplido — el terreno contestó las cinco preguntas que solo Fabric contesta.
 - **Costo de revertir**: reabrir.
+<!-- segundo-ojo · Correcta con salvedad medible: P7/P8 son del 08-18; #236 es P5 · 2026-09-05 · juez Fable 5.1 · sha12 56f33cbfdf7e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-60 · 2026-09-02 — #232 se cierra sin perseguir la propiedad completa (el intent NO entra en `acquire()`)
 
@@ -59,6 +65,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **no.** El intent es un archivo del volumen de gobierno que escribe una herramienta externa; darle autoridad sobre quién controla mueve la frontera de confianza fuera del plano de control. Lo entregado (#257, V-14: 0 fuera de predicado con control CN-2) cubre la promoción **orquestada**, que es la única forma en que hay un sucesor que nombrar.
 - **Condición de reapertura, escrita en el issue**: un caso medido en que un release no orquestado produzca un ganador equivocado con impacto observable.
 - **Costo de revertir**: reabrir; el código no cambia.
+<!-- segundo-ojo · Correcta — acquire/#attempt sin intent; condición de reapertura escrita · 2026-09-05 · juez Fable 5.1 · sha12 849963f7051e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-59 · 2026-09-02 — #250: salida (A), aviso en la nav conservando el 200
 
@@ -66,6 +73,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **(A).** No rompe marcadores tras renombrar vistas (caso real) y le dice a la persona lo único que hoy no sabe: que su enlace estaba roto. Cuesta un `<p>` y un campo; la pestaña activa ya se marca. (B) convierte un typo en pantalla de error; (C) deja el daño intacto.
 - **Elemento visible nuevo**: se verifica con captura antes del merge (Norma 8).
 - **Costo de revertir**: revertir el PR.
+<!-- segundo-ojo · Correcta con salvedad medible: la captura prometida no está en PR ni repo · 2026-09-05 · juez Fable 5.1 · sha12 5ca6f62d7900 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-58 · 2026-08-26 — Las facetas client-side de #209 NO se implementan: se MIDE y nace issue
 
@@ -74,6 +82,7 @@ el registro existe para que revertirla sea barato.
 - **Alternativa descartada**: implementar el tope+buscador acá mismo. Se descartó por lo anterior y porque **no se midió cuántos PIs vivos tienen una faceta de más de 12 opciones** — el dato que decide si esto vale hoy, y que es de instancia.
 - **Lo medido, con control positivo**: mismo catálogo de 47 opciones por el mismo `renderHtmlPiece`; la superficie client-side materializa las 47 sin tope ni buscador, la server-side trae los dos. Sin el control positivo la sonda no habría probado que sabe verlos.
 - **Costo de revertir**: nulo — es un issue.
+<!-- segundo-ojo · Correcta — #255 con control positivo; #269 contestó la pregunta después · 2026-09-05 · juez Fable 5.1 · sha12 412082d97efc · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-57 · 2026-08-26 — La cadencia del arnés de Fabric es EL CORTE DE VERSIÓN, y se declara en dos sitios
 
@@ -83,6 +92,7 @@ el registro existe para que revertirla sea barato.
 - **Dónde se declara, y por qué en dos**: en `scripts/README-fabric-lab.md` (donde vive el arnés) y en `CHANGELOG.md` §«Antes de cortar» (donde se lee **al cortar**). Una regla escrita solo en la casa del mecanismo no la lee quien ejecuta el evento.
 - **El precedente que la fija**: el centinela de #238 se midió **20 min después** de empujar `v0.21.0`. Salió bien, y eso es lo que lo vuelve mal precedente.
 - **Costo de revertir**: nulo — es documentación.
+<!-- segundo-ojo · Correcta con salvedad medible: ventana ~2 min tras el tag, no veinte · 2026-09-05 · juez Fable 5.1 · sha12 4af12f6341fe · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-56 · 2026-08-26 — El arnés T-SQL entra al CI como WORKFLOW PROPIO con filtro de `paths`, no como job de `build.yml`
 
@@ -91,6 +101,7 @@ el registro existe para que revertirla sea barato.
 - **Y se resolvió la incógnita que la ficha declaraba «no medida»** —si el runner aguanta la imagen de SQL Server dentro del presupuesto—: **sí, y sobra**. Job completo en **31 s**, pull de la imagen **14 s**, motor aceptando conexiones al primer sondeo, `lab:proof` sin fallos y 6 hallazgos. Medido en la corrida `32970287379`, disparada por el propio push que agregó el workflow.
 - **Decisión menor dentro de ésta**: el motor **no** lleva `--health-cmd` del servicio. La imagen 2022 dejó de traer `sqlcmd`, así que el health check idiomático mediría la ausencia de una herramienta y no la salud del motor. Se sondea el puerto, con cota de 180 s y salida **en rojo** que dice «NO SE PUDO MEDIR».
 - **Costo de revertir**: nulo — borrar el archivo.
+<!-- segundo-ojo · Correcta — 31 s, 14 s, sondeo al primer intento, 6 hallazgos re-medidos · 2026-09-05 · juez Fable 5.1 · sha12 dbe010aa16d1 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-55 · 2026-08-26 — `notas-smoke` se arregla con un handle de INSPECCIÓN, no cerrando el store antes
 
@@ -99,6 +110,7 @@ el registro existe para que revertirla sea barato.
 - **Alternativa descartada**: desarmar el fencing en el smoke (`fencing: false`). Habría apagado el único control que delató el problema.
 - **Verificado**: 37/37 con el arreglo; y el crash reproducido contra la versión de `main` **antes** de tocar nada, para no atribuirme un fallo ajeno.
 - **Costo de revertir**: nulo.
+<!-- segundo-ojo · Correcta — crash reproducido antes del arreglo; 37/37 después · 2026-09-05 · juez Fable 5.1 · sha12 25ed7c8bb8e8 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-54 · 2026-08-26 — `scripts/` entra al `include` del `tsconfig`, aunque destape errores
 
@@ -107,6 +119,7 @@ el registro existe para que revertirla sea barato.
 - **Lo que destapó, y justifica la decisión sola**: además de los cuatro errores de tipo, `scripts/notas-smoke.ts` **moría al correr** (ver D-55) y `admin-smoke.ts` reportaba la falta de su env con un stack crudo de `node:fs`. El gate ciego no decía «no medí»: decía «verde».
 - **Control negativo corrido**: el mismo error deliberado en un script es **rojo** con `scripts/**/*` en el include y **verde** sin él. Lo que cambió no es que los scripts estén correctos — es que ahora se miran.
 - **Costo de revertir**: nulo — quitar una línea del `include`.
+<!-- segundo-ojo · Correcta — 4 errores en un archivo y control negativo re-medidos · 2026-09-05 · juez Fable 5.1 · sha12 21a7ebb855b8 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-53 · 2026-08-19 — Se emprende #235 (`defaultField`) en modo autónomo, con #246 como prerrequisito
 
@@ -115,6 +128,7 @@ el registro existe para que revertirla sea barato.
 - **Lo que sí decidí yo, y va en el documento de diseño** (`work/011-235-default-del-dato/01-diseno-defaultfield-v1.0.md`), porque el issue no lo contempla: el **criterio de verdad** del booleano es una **lista cerrada** y no truthiness de JS (`String(false)` es `'false'`, que es truthy — la trampa concreta); «exactamente una» se cuenta sobre **opciones deduplicadas**, no sobre filas; el valor del dato entra por el **mismo camino que el literal de #92** para heredar gratis la precedencia de la URL; y la ausencia de resolución **emite evento**, porque un fail-safe sin observabilidad es un silencio.
 - **#246 es prerrequisito, no vecino**: el `enum` del JSON Schema que dejó muerto al literal de #92 bloquearía igual cualquier `default` nuevo, y el hueco de validación que permite claves desconocidas en silencio haría que un typo en `defaultField` no dijera nada. Los dos tocan la misma línea.
 - **Costo de revertir**: medio. Es código con tests y un campo de contrato público; revertirlo después de que un spec de instancia lo use rompería ese spec. Antes de eso, es un revert limpio.
+<!-- segundo-ojo · Correcta — diseño e implementación verificados; enum abierto deja typo silencioso · 2026-09-05 · juez Fable 5.1 · sha12 2687c4fde36a · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-52 · 2026-08-19 — El healthcheck por fase también va al compose de REFERENCIA
 
@@ -122,6 +136,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **también en el de referencia.** El argumento en contra es serio y se evaluó: ese archivo describe una instancia **con anillos**, donde el borde ya juzga la salud por el predicado correcto y los anillos viven fuera del ciclo de vida de compose, así que un healthcheck ahí podría leerse como «compose es el mecanismo de ruteo». Ganó el otro: **el archivo documenta explícitamente el modo de un solo nodo**, y en ese modo el servicio `vergis` *es* el que sirve — un `docker ps` diciendo `healthy` sobre un standby es la mentira más cara que esa plantilla puede contar, justo cuando el operador la mira porque algo anda mal.
 - **La mala lectura se desarma por escrito en el propio archivo**, no en el commit: que es diagnóstico y **no** ruteo, y que los anillos no lo heredan porque `ring.args` no lleva healthcheck y su salud la mide el borde, el único que puede *actuar* sobre ella.
 - **Costo de revertir**: nulo — borrar el bloque.
+<!-- segundo-ojo · Correcta — predicado idéntico en ambos compose; refutador standby FALLO · 2026-09-05 · juez Fable 5.1 · sha12 0856325f0a58 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-51 · 2026-08-19 — Los dos PRs de Renovate NO se mergean: el cooldown de supply chain está corriendo
 
@@ -130,6 +145,7 @@ el registro existe para que revertirla sea barato.
 - **Y no son «casi trámite»**: el job `image` está **SKIPPED en pull requests** (verificado), así que el digest nuevo del sidecar de PDF **no se construye en el PR**. Un digest roto se descubriría en `main`. Con el cooldown corriendo, no hay ninguna razón para adelantarlo.
 - **Qué los destraba**: que el check pase por sí solo al cumplirse los 14 días. Ahí sí son trámite y se aterrizan con gates.
 - **Costo de revertir**: nulo — es una no-acción.
+<!-- segundo-ojo · Correcta con salvedad medible: el check no pasó solo; siguen pending · 2026-09-05 · juez Fable 5.1 · sha12 58cb3ce64a4a · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-50 · 2026-08-19 — La entrada I7+I8 de anillos se MUEVE a la sección 0.21.0 del CHANGELOG (#242)
 
@@ -138,6 +154,7 @@ el registro existe para que revertirla sea barato.
 - **Por qué NO (b)**: el criterio «no se declara hasta que sea operable» no consta en ninguna parte —ni `DECISIONS.md` ni la bitácora lo registran— y **la convención vigente lo contradice**: I4+I5+I6 se declaró bajo 0.20.0 y #220/#222 bajo 0.19.0, ambas sin runbook. Inventarle el criterio a posteriori para justificar el estado sería fabricar la justificación que la Norma 6 prohíbe.
 - **Lo que NO se corrige, y va escrito en la propia entrada**: la imagen `0.21.0` ya horneó el CHANGELOG sin esta entrada. No se re-taggea una versión publicada, así que para ese tramo la fuente es el repo. Queda dicho en el CHANGELOG, no solo acá.
 - **Costo de revertir**: bajo — es un movimiento de bloque en un archivo de texto, sin código. Revertirlo devuelve el defecto.
+<!-- segundo-ojo · Correcta — ancestría re-medida; entrada hoy bajo 0.21.0 con nota · 2026-09-05 · juez Fable 5.1 · sha12 bb6300ee60e1 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-46 · 2026-08-19 — El centinela de #238 NO se retira en el `teardownSQL`
 
@@ -145,6 +162,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **no**. El centinela es **compartido por schema**, no propiedad de una tabla: retirarlo al desinstalar la política de UNA tabla dejaría ciegas a todas las demás del mismo schema — el instrumento moriría por un acto que no lo nombra. Se expone `dropSQL` para el retiro explícito.
 - **Corolario que va en la misma línea**: su instalación es **crear-si-falta**, no tira-y-recrea. La forma habitual abriría una ventana en la que un sondeo concurrente lee una tabla ausente, y el gate lo traduciría a «no pude medir» — correcto pero ruidoso, y provocado por nosotros.
 - **Costo de revertir**: bajo (mover tres sentencias), pero reintroduce las dos ventanas.
+<!-- segundo-ojo · Correcta — teardown sin centinela, dropSQL expuesto, crear-si-falta medido · 2026-09-05 · juez Fable 5.1 · sha12 ecc12062ae6e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-47 · 2026-08-19 — «Centinela no instalado» es indeterminación, no veredicto
 
@@ -152,12 +170,14 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **indeterminación**, con su remediación nombrada («regenera y re-aplica la DDL»). Un PI que YA servía conserva su veredicto sano; en frío queda no-servible. Apagar un PI sano por una migración pendiente sería castigar con un corte de servicio algo que no es una falla de gobierno sino una **ausencia de medición** — y la doctrina del gate ya separa esas dos cosas desde #52.
 - **Lo que NO se aflojó**: capacidad **medida ausente** (`incapable`) es veredicto **definitivo** y gana sobre un veredicto sano previo. Ningún camino afloja el fail-closed.
 - **Costo de revertir**: bajo (una condición), pero apagaría PIs sanos en toda instancia que no haya re-aplicado.
+<!-- segundo-ojo · Correcta — uninstrumented indeterminado, incapable definitivo, medido en el gate · 2026-09-05 · juez Fable 5.1 · sha12 40ca990f4ea7 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-48 · 2026-08-19 — Los schemas del sondeo los pone el llamador, no se descubren en el motor
 
 - **Bifurcación**: el motor podía descubrir solo dónde vive el centinela con una consulta previa, o recibir los schemas del llamador (que ya tiene el policy store).
 - **Decidido**: **los pone el llamador**. Descubrirlos exigía una consulta previa, y eso convertía el arranque en frío en **dos olas** de round-trips en vez de una — justo el costo que #138·3 acotó. Y no es teoría: la primera versión de la implementación lo hizo así, ningún test funcional lo notó, y lo atrapó el test de tiempo. Quedó un test de regresión propio (E4).
 - **Costo de revertir**: bajo, y se paga en latencia de arranque en frío proporcional al número de conexiones.
+<!-- segundo-ojo · Correcta — una ola; E4 corrido en clon, 6/6 verdes · 2026-09-05 · juez Fable 5.1 · sha12 fbd240397cd0 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-49 · 2026-08-19 — La distinción de literales (`•••` vs `xxxx`) NO se escribe en el SQL emitido
 
@@ -165,6 +185,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: se documenta en el **tipo, la doc del contrato y el CHANGELOG**, y **no** en el SQL. `CREATE VIEW` tiene que encabezar su batch en T-SQL; anteponerle un comentario es aceptado por SQL Server pero **no está medido en Fabric**, y el emisor ya se quemó una vez publicando DDL que el motor acepta y después falla al consultar (#197). El valor de un comentario que nadie lee en runtime no justifica arriesgar la emisión.
 - **Es una desviación del diseño ratificado, y consta como tal.** Si se quiere el comentario, primero se mide en el SKU.
 - **Costo de revertir**: bajo — una línea en el emisor y una corrida de `fab:proof` que la mida.
+<!-- segundo-ojo · Correcta — SQL sin comentario; distinción en tipo, doc y CHANGELOG · 2026-09-05 · juez Fable 5.1 · sha12 4dd81d270144 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-42 · 2026-08-18 — Se corta 0.20.0, primera versión bajo custodia declarada
 
@@ -173,6 +194,7 @@ el registro existe para que revertirla sea barato.
 - **Costo de revertir**: bajo — la versión anterior sigue publicada y es un pin válido; el `latest` se movería con un corte nuevo.
 - **Lo que este corte estrena**: es la **primera versión bajo la custodia** (`CLAUDE.md` §«La custodia»). El ciclo completo se ejerció el mismo día en que la norma nació — arbol avisó antes de abrir, no tocó el merge y declaró sus «sin medir»; este frente corrió los gates **por su mano** antes y después del merge, verificó la afirmación de «cero `bindColumn`» en vez de aceptarla, y agregó al CHANGELOG una advertencia que **no venía en el PR** (el healthcheck que da por sano a un `standby`).
 - **Y lo que el corte produjo**: el smoke de la imagen publicada encontró el **issue #228** — un arranque que falla después de adquirir el lease lo deja huérfano y sin marca de release. Es un camino de fallo que ninguna verificación previa ejercía, y apareció **porque** el custodio corre la imagen, no solo la suite.
+<!-- segundo-ojo · Correcta — primera versión bajo custodia; advertencia no venía en #225 · 2026-09-05 · juez Fable 5.1 · sha12 ac93fedcec7e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-41 · 2026-08-18 — Se corta 0.19.0 SIN el frente que cablea los planos de anillos
 
@@ -180,12 +202,14 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **espera**. César autorizó el corte **sin saber que ese frente existía**, y no es cosmético: cambia lo que un operador ve al desplegar. Meterlo ampliaría el alcance de lo autorizado, y esa decisión es suya. Con la espera, además, la línea del CHANGELOG —«los planos están puestos y nada los invoca todavía»— queda **exacta** en vez de nacer falsa. Sale en su propia versión si él lo quiere.
 - **Costo de revertir**: nulo — la rama del otro frente espera intacta; si César lo quiere publicado, sale 0.20.0 detrás.
 - **Coordinación acordada con arbol/lab, en los dos sentidos**: se avisa **antes** de abrir PR, no después de mergear. Nace de que hoy los dos frentes escribieron `gegolabs/vergis` sin saberlo (W-01, ocurrencias 24 y 25) — y de que el aviso tardío de #223 casi le cuesta un CI rojo a él.
+<!-- segundo-ojo · Correcta — cronología y CHANGELOG del tag verificados · 2026-09-05 · juez Fable 5.1 · sha12 3255f6be7681 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-40 · 2026-08-18 — `bindColumn` se RETIRA del contrato en vez de aceptarse e ignorarse (#164)
 
 - **Bifurcación**: con el allow-all ya sin ancla, ¿qué pasa con `FabricTarget.bindColumn`? Tres caminos: ignorarlo en silencio (retrocompatible), conservarlo como escape hatch que emite la forma vieja, o retirarlo del contrato (rompe a quien lo pase).
 - **Decidido**: **retirarlo**, con guarda de transición que rompe con remediación. César delegó la decisión pidiendo criterio de excelencia, y la Regla 1 la contesta: si nada estuviera implementado, un allow-all no declararía columna alguna — el campo es andamiaje de una limitación que ya no existe, y el proyecto sigue pre-launch (un beta tester es piloto controlado). El escape hatch se descartó por no tener necesidad medida: la forma sin columna pasó en **los dos motores** que el back-end sirve, no en uno. Y no se ignora en silencio porque el silencio le dejaría creer al aplicador que su ancla sigue en pie.
 - **Costo de revertir**: bajo — reponer el campo y la rama de codegen vieja; nada desplegado depende del retiro.
+<!-- segundo-ojo · Correcta — guarda fabric.ts L682-693; control negativo falla test L485 · 2026-09-05 · juez Fable 5.1 · sha12 2f359d7b8489 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-39 · 2026-08-18 — El CHANGELOG de #164 INDICA los pasos de migración, no los sugiere
 
@@ -193,48 +217,56 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **indicarlo**, con sus pasos y su verificación, dejando el *cuándo* al control de cambio del operador. Es de César: él observó que el criterio de excelencia no decide la interacción con terceros, y que ahí lo correcto es indicar —más que sugerir— las acciones que aseguran que el valor entregado no corra riesgo. Lo que lo vuelve obligatorio en este caso: el cambio **apaga un aviso**. El compilador declara lo que emite, no lo instalado, así que hasta re-aplicar, un `grant: all` reporta cero dependencias mientras su columna sigue atada en el motor — el gate de regresión de terreno del operador quedaba ciego sobre un bloqueo real, sin que nadie se lo dijera.
 - **Costo de revertir**: nulo — es texto del CHANGELOG, aún sin versión cortada.
 - **Consecuencia fuera del proyecto**: la observación se elevó a enmienda de la Regla 1 de `ww:wingcoding` (repo `protocolos`, PR #1). **No se mergea desde acá**: el Reglamento lo escribe César.
+<!-- segundo-ojo · Correcta — CHANGELOG L1205-1221 indica pasos; protocolos PR #1 sigue abierto · 2026-09-05 · juez Fable 5.1 · sha12 1dee1540e065 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-38 · 2026-08-18 — La ventana de capacidad se aprovecha entera: P7 (#164) se agrega ANTES de encender
 
 - **Bifurcación**: César autorizó correr el experimento. ¿Encender y correr solo P6, o agregar primero la medición de #164 —que estaba anotada como pendiente— y contestar dos preguntas en una ventana?
 - **Decidido**: agregar P7 antes de encender. El costo de la ventana es por sesión, no por experimento: encender dos veces para dos preguntas que caben en una es gasto puro. Lo confirmó el propio pedido de César («todos»).
 - **Costo de revertir**: nulo — el arnés crece, no cambia comportamiento del Producto.
+<!-- segundo-ojo · Correcta — P7 en c21ac7e; ventana 07:10-07:20 con P6 y P7 medidos · 2026-09-05 · juez Fable 5.1 · sha12 7b6ab081346d · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-37 · 2026-08-17 — Los PRs de bot en cooldown NO se aterrizan, aunque sus otros checks estén verdes
 
 - **Bifurcación**: #175 y #201 tenían `test` y `review` en verde y solo `renovate/stability-days` en `PENDING`. ¿Aterrizarlos igual, o esperar?
 - **Decidido**: esperar. `minimumReleaseAge: "14 days"` es política de supply chain del proyecto, no preferencia, y su objeto son exactamente las dependencias de terceros como un digest de Docker. Se comentó en cada PR que no hay nada que corregir: solo falta tiempo. La única excepción declarada (`osvVulnerabilityAlerts`) no aplica — son bumps de rutina sin alerta asociada.
 - **Costo de revertir**: nulo — se mergean cuando el check pase a verde.
+<!-- segundo-ojo · Correcta con salvedad medible — #175/#201 siguen pending 23 dias despues · 2026-09-05 · juez Fable 5.1 · sha12 93c6216db3b7 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-36 · 2026-08-17 — El compilador de Fabric NO se toca por #197: se entrega el experimento
 
 - **Bifurcación**: #197 dejó el defecto aislado y la forma alternativa es deducible (materializar el claim antes del `CASE`). ¿Implementar el rediseño, o construir solo el experimento?
 - **Decidido**: solo el experimento (P6 en `fab:proof`, PR #217). La forma que funciona en SQL Server **no garantiza Fabric** —es la asimetría que este mismo issue documentó—, y emitir una forma nueva sin verla pasar en el SKU es literalmente lo que produjo el defecto. Correr P6 exige encender la capacidad F2, y eso es **gasto**: no lo decide el agente.
 - **Costo de revertir**: nulo — no se cambió comportamiento. El experimento está en el árbol esperando ventana.
+<!-- segundo-ojo · Correcta — #217 solo scripts; compilador intacto hasta #221; gasto del principal · 2026-09-05 · juez Fable 5.1 · sha12 74b9f0d6e47f · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-35 · 2026-08-17 — `colorscale` del spec no se elimina: cambia de significado a «acota candidatas»
 
 - **Bifurcación**: #210 pide que el color de magnitud deje de ser decisión del spec. Tres caminos: quitar la clave (rompe specs), dejarla como no-op silencioso, o darle un rol nuevo.
 - **Decidido**: rol nuevo — `colorscale: true` **acota** las columnas candidatas al color; el poder de **encender** pasa al lector. Racional: quitarla rompería specs de instancias por una razón de presentación, y un no-op silencioso dejaría el spec diciendo algo que ya no ocurre — la peor de las tres, porque no falla.
 - **Costo de revertir**: bajo — es una condición en `magnitudeColumns` con su suite.
+<!-- segundo-ojo · Correcta — magnitudeColumns acota; control negativo hace fallar 2 tests · 2026-09-05 · juez Fable 5.1 · sha12 38c01ed725a3 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-34 · 2026-08-17 — El override del nombre visible gana sobre el spec, y se declara como override
 
 - **Bifurcación**: #207 §1, «¿dónde queda la verdad?» cuando el YAML y el gobierno traen nombres distintos.
 - **Decidido**: gana el gobierno, **pero** el nombre del spec se conserva (`Report.specName`) y la consola dice que está sobrescrito, contra qué y por quién. Restaurar **borra** la fila en vez de guardar el nombre del spec — guardarlo congelaría el de hoy y una edición posterior del YAML no se vería nunca más.
 - **Costo de revertir**: medio — hay tabla nueva (`pi_display_name`), pero borrarla vuelve todo al nombre del spec sin pérdida.
+<!-- segundo-ojo · Correcta — pi_display_name, restaurar DELETE, test L121, specName servido · 2026-09-05 · juez Fable 5.1 · sha12 cc4c2ff7ef7c · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-33 · 2026-08-17 — El pliegue largo→ancho de #203 vive en `compose`, no en un segundo renderer
 
 - **Bifurcación**: para `series: <campo>` (formato largo), ¿un camino de render propio o plegar a la forma que el render agrupado ya consume?
 - **Decidido**: plegar en `compose`. Un segundo renderer tendría que replicar apilado, rótulos anti-colisión, cota top-N y el vocabulario de `sort`, y las dos copias divergirían en la primera corrección. Así los dos modos se comportan idéntico **por construcción**.
 - **Costo de revertir**: bajo — es una rama en `composePiece` con su función pura testeada.
+<!-- segundo-ojo · Correcta — foldSeriesColumn pura en compose.ts, suite verde en clon · 2026-09-05 · juez Fable 5.1 · sha12 ede54b1bf819 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-32 · 2026-08-17 — Se corta y publica 0.18.0 (CHANGELOG + version + tag + imagen)
 
 - **Bifurcación**: dejar los cuatro frentes en `main` sin versión, o cortar 0.18.0.
 - **Decidido**: cortar y publicar. Sin versión, lo único que un operador puede consumir es el último commit de `main` — y entonces mergear *es* desplegar, que es lo que la frontera de `CLAUDE.md` existe para impedir (D-28). El CHANGELOG declara explícitamente que **#197 sigue vivo y esta versión no lo arregla**.
 - **Costo de revertir**: bajo — el tag se puede re-cortar; **nada desplegado**: qué versión corre cada instancia y cuándo entra lo decide quien la opera.
+<!-- segundo-ojo · Correcta — tag v0.18.0 e79c2cd; CHANGELOG L1269 declara #197 vivo · 2026-09-05 · juez Fable 5.1 · sha12 a3fb860890bf · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-31 · 2026-08-16 — El merge de lo confirmado deja de subir a César
 
@@ -242,6 +274,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido: el agente mergea lo confirmado**, y *confirmado* queda definido para que no se estire: gates verdes, CI verde y **evidencia medida** de que el problema quedó resuelto. Sin la medición no hay merge — mergear sin ella sería afirmar más de lo medido, que es lo que la Norma 7 persigue.
 - **Por qué la línea queda ahí y no más allá**: lo que sube a César es lo que **es** decisión suya —gasto, comunicación saliente a un tercero, una bifurcación de diseño todavía viva, un PR ajeno—, no lo que solo es un clic. Es la misma economía que ya regía para el cierre de issues desde el 2026-08-14: el pasivo no se acumula por un trámite, y si al verlo considera que no correspondía, revierte.
 - **Costo de revertir**: bajo. La norma vive en un párrafo de `CLAUDE.md`; volver atrás es restaurarlo. Los merges hechos bajo ella conservan su PR y su historia, y `git revert` sigue disponible.
+<!-- segundo-ojo · Correcta — norma en CLAUDE.md L56-73, PR #198 dos minutos tras #196 · 2026-09-05 · juez Fable 5.1 · sha12 72bedcefba1e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-30 · 2026-08-14 — El plano de columna se corrige y se DIAGNOSTICA; la vista-contrato ajena no se toca
 
@@ -255,6 +288,7 @@ el registro existe para que revertirla sea barato.
 - **El error del preflight es RAISERROR severidad 16 —falla ruidosa— y no un aviso**: el plano de FILA ya quedó instalado (va antes en `setupSQL`), así que lo que corta es exactamente el plano de columna. Un install parcial y silencioso es lo que produjo este defecto en primer lugar.
 - **Lo que el propio arreglo casi reintroduce, y quedó como test de regresión**: la primera versión del preflight miraba también la dependencia de **objeto**, y como la security policy de fila que el mismo setup instala es `SCHEMABINDING`, se disparaba contra ella — habría roto toda instalación con reglas de columna. Lo destapó el arnés en su primera corrida, no una relectura.
 - **Costo de revertir**: bajo y acotado a `packages/policy/src/fabric.ts` — dos funciones y una línea del ensamblado de `setupSQL`, con sus tests de SQL exacto. Nada desplegado: no hay versión publicada que lo lleve.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 1fcbd9d9163e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-29 · 2026-08-14 — El esquema del Producto admite Z: la corrección se publica sin capacidades nuevas
 
@@ -263,6 +297,7 @@ el registro existe para que revertirla sea barato.
 - **Por qué, y el caso que lo prueba**: el fix de #139 corrige un contrato que **inducía a operar mal** (declaraba `bootOnly` una clave recargable, o sea «reiniciá» cuando no hacía falta). Es exactamente el cambio que un operador querría adoptar **aislado**; sin Z, la única forma de dárselo era obligarlo a tomar una Y completa con capacidades que todavía no evaluó.
 - **Se deja escrito lo que se iba a confundir**: la Z del Producto **no** es la Z de la Norma 3 de la Ley (que rige documentos y significa «solo cambió la forma»). Acá un cambio cosmético de código no se publica solo; lo que merece número propio es la corrección adoptable aislada.
 - **Costo de revertir**: bajo — es el preámbulo del changelog más una línea de la lista de tags del CI. Lo que no se revierte gratis son las versiones ya publicadas con ese número.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 6ad60a211680 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-28 · 2026-08-14 — Acá se es el Producto: se publica la versión, no se despliega la instancia
 
@@ -273,6 +308,7 @@ el registro existe para que revertirla sea barato.
 - **La política de tags se validó contra práctica de industria**, a pedido de César y no por criterio propio: `latest` reservado a releases estables con los builds de desarrollo en tag aparte, y el consumidor pinneando versión exacta o digest (ACR · Docker tagging best practices · Container Registry · Mend). De ahí salió el tag en cascada `0.16`, que la propuesta original no traía. Se dejó fuera `:0`: pre-1.0 el eje de ruptura es la Y del esquema X.Y, así que prometería compatibilidad que nadie sostuvo.
 - **Lo que NO se revirtió**: la decisión de `9beeda8` (plantilla con tag móvil, sin digest) sigue en pie — es otra palanca, y con esta política el `:latest` de la plantilla por fin significa lo que ese commit quería que dijera.
 - **Costo de revertir**: bajo en lo técnico (la lista de tags de `build.yml` es cinco líneas) y **nulo** en lo normativo: la frontera es una declaración de autoridad; se cambia diciéndolo.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 62d524c220b3 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-27 · 2026-08-13 — La vista de máscara y el DDM conviven, y la composición falla hacia el lado seguro
 
@@ -281,6 +317,7 @@ el registro existe para que revertirla sea barato.
 - **El costo asumido, dicho**: si el SP no tiene `UNMASK`, la capacidad queda degradada a «esta columna no se sirve a nadie» — que es la herramienta gruesa de la que el issue se queja, pero **es segura**. Retirar el DDM para evitarlo cambiaría una degradación segura por una fuga posible, y esa no es una permuta que se haga sin medir.
 - **La medición que lo destraba, y va antes de desplegar**: ¿el Service Principal de serving tiene `UNMASK`? Se mide en `vm-vergis-qa`, **en la misma sesión** que una consulta a la tabla sin vista como control positivo. Está en `PENDINGS.md` junto al gate de `MASKED WITH` × vistas-contrato.
 - **Costo de revertir**: bajo — no emitir DDM sobre columnas cubiertas por la vista es una condición en el emisor.
+<!-- segundo-ojo · Correcta con salvedad medible: la medición prometida en vm-vergis-qa no consta · 2026-09-05 · juez Fable 5.1 · sha12 83bd835616ac · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-26 · 2026-08-13 — La apertura de fila sube a la ENTIDAD, para que el caso del issue se pueda decir
 
@@ -288,6 +325,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: `entities[].grant: all` — **la apertura sube a la entidad** y convive con `columns`. Un solo sitio de autoría, la misma gramática, y `grant: all` conserva intacta su semántica de fila (apertura explícita y gobernada, con artefacto propio). La regla inline se descartó porque duplicar el sitio de autoría garantiza que las dos copias divierjan.
 - **Evidencia**: la entidad ya era el sitio único del gobierno (`governed_by` ↔ `dimensions`) y ya sabía llevar reglas de columna sobre atributos canónicos; poner ahí la apertura reusa esa maquinaria entera. Y el default sigue siendo romper: una entidad sin gobierno **y** sin apertura sigue dando `entity-ungoverned`.
 - **Costo de revertir**: medio — hay specs que podrían adoptar la forma. Mientras nadie la use, es una rama de parseo que se retira.
+<!-- segundo-ojo · Correcta con salvedad de ficha: evidencia sin etiquetar, medida en código · 2026-09-05 · juez Fable 5.1 · sha12 b535319010c8 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-25 · 2026-08-13 — Una regla de columna sobre ClickHouse tumba el arranque, y se le da SITIO
 
@@ -295,6 +333,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **tumba el arranque**, sin doctrina nueva. Medido el precedente: en `computeBound`, la línea de al lado ya tumba el arranque cuando un dataset **no tiene política**. El fallo duro es la conducta establecida de ese motor y es fail-closed; la doctrina por-PI de #52 es de la verificación de servibilidad de **Fabric**, no del bootstrap de ClickHouse. Cambiarla acá habría sido inventar una excepción para el caso nuevo.
 - **Lo que sí faltaba**: el **sitio**. El error del compilador llegaba sin nombrar el dataset, y el sitio es la mitad del diagnóstico. Se envuelve agregando el nombre y **conservando la causa original entera** (`cause`), con un control que fija que el envoltorio no se traga los errores que ya existían.
 - **Costo de revertir**: nulo — es un `try/catch` que agrega contexto.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 da2cb26ecc5e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-24 · 2026-08-13 — ClickHouse declara la máscara NO SOPORTADA en vez de fingirla
 
@@ -303,12 +342,14 @@ el registro existe para que revertirla sea barato.
 - **La consecuencia se acepta**: un PI con columna sensible sobre ClickHouse **no se sirve**. Es estrictamente mejor que la alternativa —servirlo en claro— y la remediación del error lo dice de frente para que nadie «arregle» el problema retirando la regla.
 - **Lo que NO está medido, y va dicho**: que ClickHouse carezca de un equivalente de `MASKED WITH` no se corroboró contra un motor vivo. Lo medido, que es lo que sostiene la decisión, es que **este back-end no controla la proyección** — y eso es del código de este repo.
 - **Costo de revertir**: bajo — es un gate en el compilador.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 39d5138ec7dd · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-23 · 2026-08-13 — El valor de máscara es del BACK-END; el oráculo conserva un centinela
 
 - **Bifurcación**: el hito 1 fijó `MASK_VALUE = '•••'`, pero Fabric `MASKED WITH` devuelve el default **del tipo** (`0` en `INT`, `XXXX` en texto). El differential test chocaría. Las dos salidas obvias son malas: un valor de máscara por tipo convierte la constante en función y contamina el IR con tipos SQL; castear la columna a texto **cambia el esquema**, que §4.1 prohíbe.
 - **Decidido**: **el valor de máscara pertenece al back-end; el IR conserva `•••` como centinela canónico, y cada emulador normaliza a centinela** lo que su motor produce antes de comparar. Así hay un solo oráculo, cada motor enmascara nativamente, y el esquema no se toca. El differential test afirma la **posición** de la máscara, jamás su contenido.
 - **Costo de revertir**: bajo — la normalización vive en los emuladores, no en el SQL emitido.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 9a0e92f4744d · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-22 · 2026-08-13 — Los specs del canon NO se migran: se citan
 
@@ -319,6 +360,7 @@ el registro existe para que revertirla sea barato.
   2. **Un spec con dos casas driftea**, y la copia siempre pierde porque es la que nadie relee. Este proyecto ya pagó esa factura: la línea del port a Go en `TODO.md` era un duplicado de una decisión del ADR-001 y envejeció peor que su fuente.
 - **Hecho en su lugar**: `docs/canon.md` — dónde vive el canon, qué edición se cita, por qué no se copia, qué queda en `docs/` (lo verdadero de ESTA implementación), y la regla ante desacuerdo: el canon manda sobre *qué es* un Botler/Mira/DSL, el repo manda sobre *qué hace* esta implementación. Más el camino si algún día hace falta un fragmento in-tree: relicenciamiento explícito del autor (César tiene el copyright de ambas obras) registrado en un ADR — un acto, no un copy-paste.
 - **Costo de revertir**: nulo — migrar sigue siendo posible el día que exista el acto de licencia; lo que se retiró fue una promesa que el README hacía sin poder cumplir.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 819397c7f59e · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-21 · 2026-08-13 — El aislamiento del render Vega: se cierra la E/S, NO se construye el subproceso
 
@@ -329,6 +371,7 @@ el registro existe para que revertirla sea barato.
 - **Por qué DOS capas y no solo el loader — medido, no supuesto**: con un servidor HTTP local contando hits, el loader por defecto **hace el fetch** (`hits=1`); el loader que niega lo evita (`hits=0`) **pero Vega se traga el error y rinde un gráfico vacío**, sin excepción. Protección silenciosa = PI degradado en silencio, que esta plataforma trata como defecto en todas las demás capas.
 - **Lo que queda sin cubrir, dicho**: un exploit de Vega que haga E/S **sin pasar por su loader** (p. ej. por una dependencia transitiva) no lo detiene ninguna de las dos capas. Esa es la parte que un subproceso sí cubriría, y el día que exista un driver, la fs se cierra con el permission model y **la red hay que cerrarla en la red del contenedor**, no en Node. Queda escrito en el roadmap.
 - **Costo de revertir**: bajo — dos piezas locales en `render-chart.ts`; quitarlas restaura el comportamiento anterior. El subproceso sigue disponible como camino, ahora con su medición hecha.
+<!-- segundo-ojo · Correcta con salvedad medible: Node 26 --permission sí niega la red · 2026-09-05 · juez Fable 5.1 · sha12 70cab2bcfed8 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-20 · 2026-08-13 — El diagnóstico de #165 NO esconde el PI: lo explica
 
@@ -337,6 +380,7 @@ el registro existe para que revertirla sea barato.
 - **Dónde vive, y por qué importa**: en `packages/policy/src/diagnose.ts`, junto al evaluador de referencia, **no** en el server. La explicación de una negación es semántica del IR: en el canal de serving cada back-end tendría su propia versión de «por qué no ves nada» y divergirían en la primera corrección. Además es función de `(policy, claims)` sin tocar filas — así vale igual en push-down, donde las filas no pasan por este proceso.
 - **Lo que lo hace afirmable**: `deniesAllRows` se prueba como **teorema** contra el oráculo (2000 casos: si dice que niega todo, `applyPolicy` devuelve `[]`), con un **control de que las dos ramas se ejercitaron** (≥100 de cada lado) — sin él, una función que devolviera siempre `false` habría «pasado» el teorema sin ser puesta en riesgo jamás.
 - **Costo de revertir**: bajo y aislado — el módulo es aditivo y nadie depende de él para decidir; quitar la llamada en `indexReports` apaga la línea del log sin tocar enforcement.
+<!-- segundo-ojo · Correcta con salvedad medible: la llamada vive en discovery.ts, no en indexReports · 2026-09-05 · juez Fable 5.1 · sha12 48a2aba630d0 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-19 · 2026-08-10 — La marca queda sin tocar (gasto), y se dice qué falta
 
@@ -348,6 +392,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **no se ejecuta nada**, y no por criterio sino por autoridad — registrar una marca **gasta plata** y compromete a Gegolabs frente a un registro público. Es de la familia que el mandato explícitamente no cubre. Tampoco se levanta el memo de disponibilidad: su valor entero está en consultar INAPI (y equivalentes) con datos reales, y una búsqueda no autoritativa presentada como memo sería justo el tipo de artefacto que la Norma 6 prohíbe — una conjetura con cara de dato que decide por quien la lea.
 - **Lo que sí queda dicho**: el riesgo es asimétrico y no cambió. El registro temprano es barato; la ausencia es **irreversible** si otro registra primero. Sigue en `TODO.md` como decisión suya.
 - **Costo de revertir**: nulo — no se hizo nada.
+<!-- segundo-ojo · Superada por decisión de César (2026-08-13), sin D-NN · 2026-09-05 · juez Fable 5.1 · sha12 49ed1362180f · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-18 · 2026-08-10 — El borrador de `CONTRIBUTING.md` se redacta, pero se deja INACTIVO
 
@@ -355,24 +400,28 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: se escribe como **`CONTRIBUTING.draft.md`**. Un comentario HTML no detiene nada: GitHub muestra `CONTRIBUTING.md` a todo el que abre un issue o un PR, y en ese instante la cláusula empieza a **obligar a terceros** — que es exactamente lo que la revisión pendiente debe autorizar. Con el nombre en `.draft.md` el trabajo queda hecho y el acto de publicar se reduce a un `git mv`, que es de César.
 - **Contenido**: DCO 1.1 por `Signed-off-by`, cláusula de licencia de contribución con **su porqué dicho de frente** (por qué un DCO a secas no basta para el dual licensing, y que no se pide cesión de copyright), gates del CI, presupuesto de dependencias cero en `botler`/`policy`, y canal privado de seguridad. Dos huecos marcados en el texto: la redacción legal exacta y la dirección de contacto (sin confirmar).
 - **Costo de revertir**: nulo — borrar un archivo que no está activo.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 3514b4b14874 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-17 · 2026-08-10 — #111 (rúbrica de convenciones) NO se cabla: espera su disparador
 
 - **Bifurcación**: el H1 (sembrar el catálogo en `rubric/`) ya está mergeado (#147). ¿Se cabla el H2 —montar `convenciones.md` en el prompt de Miranda— ahora que hay mandato, o se respeta el disparador «≥2 casos aplicados» que el propio diseño declaró?
 - **Decidido**: **se respeta el disparador**. Cablear ahora sería construir contra un catálogo de 4 convenciones sin uso medido — exactamente el «folclore» que el diseño combatió al volver el disparador medible (`grep -c` sobre las líneas `- caso …` del ledger). El mandato delega el juicio operativo; no convierte en atendible lo que está diferido por su propia condición.
 - **Costo de revertir**: nulo — cablear sigue siendo el camino previsto el día que el ledger llegue a 2 casos.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 c42db6b5c726 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-16 · 2026-08-10 — #138 se cierra con mandato de César
 
 - **Bifurcación**: las tres piezas de #138 están atendidas (la 1 subsumida por #139·N1, la 3 medida y corregida en #140, la 2 implementada en #151). El issue quedaba «pagado, esperando finiquito». ¿Cerrarlo o dejarlo a César?
 - **Decidido**: **cerrarlo**, con mandato explícito de César en esta sesión. La regla dura «el issue jamás se cierra solo» protege al **tercero** que lo abrió; acá el autor es el principal y él delegó la firma. Se cierra con comentario que deja el rastro de por qué cada pieza está saldada y qué queda diferido con disparador (fases 2-3 de config recargable).
 - **Costo de revertir**: nulo — reabrir un issue es un clic.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 55696d740b03 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-15 · 2026-08-10 — Se corta 0.15.0 (CHANGELOG + version + tag)
 
 - **Bifurcación**: 21 PRs (#140-#160) sin entrada ni tag desde el deploy 0.14.0. El corte de versión venía marcado como decisión de César (precedente D-05). Con mandato: ¿0.15.0, o 1.0.0 dado el peso del tren?
 - **Decidido**: **0.15.0**. La convención declarada en el propio CHANGELOG es explícita — «Y sube con cada conjunto de capacidades nuevas del DSL/runtime; **X se reserva para el primer release estable**». Nada en este tren declara estabilidad de contrato; el fix de #142 apunta en contra (la superficie de Miranda todavía estaba encontrando huecos de autorización).
 - **Costo de revertir**: bajo — el tag se re-corta; nada desplegado hasta el paso siguiente.
+<!-- segundo-ojo · Correcta con salvedad medible: son 20 PRs mergeados, #159 no es PR · 2026-09-05 · juez Fable 5.1 · sha12 1fc1a25f6586 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-14 · 2026-08-10 — La baja del port a Go de `TODO.md` (y el delta que la funda)
 
@@ -381,12 +430,14 @@ el registro existe para que revertirla sea barato.
 - **Colateral**: la cifra «2.100 iteraciones de property testing» del ADR-001 **no se reproduce** — lo medido es 800+800 = 1.600 (2.400 aserciones). Corregida con nota visible. La conclusión del ADR no se cae; la cifra era carga y estaba mal.
 - **Informe**: `work/007-informe-port-go-2026-08-10/01-informe-baja-port-go-v1.0.md` (+ PDF en `export/`).
 - **Costo de revertir**: nulo — reponer una línea en `TODO.md`. El port sigue disponible con sus disparadores sellados.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 502335b8dc20 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-13 · 2026-08-10 — Se bendice el import directo a módulos-hoja de `@vergis/capabilities`
 
 - **Bifurcación**: pendiente abierto desde el 07 (`VERGIS_VERSION` importado por ruta relativa en `server/contract.ts`): ¿re-exportar en el índice del package, o bendecir el import directo a módulos-hoja?
 - **Decidido**: **bendecir el import directo**, con dos requisitos — el módulo-hoja no tiene imports propios, y el import lleva su porqué escrito al lado. Lo que inclinó la balanza: este mismo lote produjo un segundo caso con la razón idéntica (`server/pdf.ts` → `table-runtime`), y la razón es dura, no de gusto: entrar por el índice arrastra vega/mssql a tests de módulos que son puros por contrato. Dos casos con la misma causa dejan de ser excepción.
 - **Costo de revertir**: bajo — añadir los re-exports al índice y cambiar 2 líneas de import.
+<!-- segundo-ojo · Correcta con salvedad medible: contract.ts importa la hoja sin el porqué al lado · 2026-09-05 · juez Fable 5.1 · sha12 412157674c46 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-12 · 2026-08-10 — Versiones de GitHub Actions elegidas aplicando el cooldown del propio proyecto
 
@@ -394,6 +445,7 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: **aplicar el `minimumReleaseAge` de 14 días del propio `renovate.json`** como criterio de selección. `checkout@v7` (publicada 07-20) y `setup-node@v7` (07-14) lo cumplen; para el action de Renovate se eligió **v46.1.21** (07-27) descartando v46.2.2/v46.2.1/v46.2.0 por tener 1/8/13 días. El arnés que hace cumplir el cooldown no se salta el cooldown.
 - **No tocadas a mano**: las `docker/*` del build — las propondrá Renovate con su changelog, que es exactamente para lo que se encendió.
 - **Costo de revertir**: bajo — son líneas de `uses:`; el CI valida el cambio en el mismo push.
+<!-- segundo-ojo · Correcta con salvedad medible: edades de releases corridas un día; conclusión intacta · 2026-09-05 · juez Fable 5.1 · sha12 5dd746eab3fc · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-11 · 2026-08-10 — Renovate corre SELF-HOSTED en el CI, no como GitHub App
 
@@ -403,12 +455,14 @@ el registro existe para que revertirla sea barato.
 - **También**: `RENOVATE_REQUIRE_CONFIG=required` — sin config en el repo, aborta; los defaults de Renovate **no** traen el cooldown, que es su razón de ser acá.
 - **Hand-off**: crear el PAT y guardarlo como secret. Es lo único que queda, y es de César.
 - **Costo de revertir**: nulo — borrar un archivo de workflow.
+<!-- segundo-ojo · Correcta · 2026-09-05 · juez Fable 5.1 · sha12 cec082f81abb · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-10 · 2026-08-08 — Deltas de arquitectura del plan 006 sobre el diseño de la fase 2 de #107
 
 - **Bifurcación**: el hallazgo del hito cero (el motor normaliza el payload: `""→null`, re-serialización) obliga a canonicalizar antes de comparar (refinamiento de D7, sellado en #107). ¿Dónde vive la canonicalización y cómo se reparte sin romper el paralelismo de la Ola 1 (H1∥H2∥H3)?
 - **Decidido** (Δ1-Δ5 del plan `work/006-cluster-107-f2-publicacion/00-plan-v1.0.md`): (Δ1) módulo `definition-canonical.ts` en territorio H2; el sha del render, del ledger y del read-back es UNO, el canónico; lo no medido (payloads no-JSON) NO se normaliza — queda byte-a-byte con conjetura etiquetada. (Δ2) `derivePublishPlan` puro sobre shas — quien canonicaliza es el flujo admin (H4); evita dependencias H3→H1/H2 dentro de la ola. (Δ3) tipos por tipado estructural, sin imports cruzados en la Ola 1. (Δ4) `index.ts` único cruce declarado; lo resuelve el orquestador. (Δ5) `VERGIS_JOB_TEMPLATES` nace solo-arranque, FUERA de `RELOADABLE_SLICES` — la recargabilidad es de las fases 2-3 de #138·2, que esperan a César.
 - **Costo de revertir**: bajo — Δ1/Δ2/Δ3 son cortes de módulo (mover una función es un refactor local); Δ5 es agregar una entrada a la tabla de slices cuando César apruebe las fases siguientes.
+<!-- segundo-ojo · Correcta: definition-canonical.ts, derivePublishPlan puro, VERGIS_JOB_TEMPLATES fuera de RELOADABLE_SLICES · 2026-09-05 · juez Fable 5.1 · sha12 06f8d48dff5d · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-09 · 2026-08-08 — Correr la sonda del hito cero de #107 contra el tenant real (plantación)
 
@@ -416,18 +470,21 @@ el registro existe para que revertirla sea barato.
 - **Decidido** (César, go operativo en sesión): workspace **real** de plantación (`1d331022…`, D12), credencial del SP del intake (D9 default), corrida DENTRO del contenedor de la VM para no extraer el secreto a local (Norma 5). Ejecutada dos veces (reproducible), cero residuo.
 - **Resultado**: **el SP puede autorar** (crear 201, agendar 201, borrar 200; controles A/A2 verdes). El exit 6 fue normalización del motor (`""→null` + pretty-print), no falta de persistencia — caracterizado. Refinamiento revelado para D7 (comparar canonicalizado, no por bytes). Sellado en #107.
 - **Costo de revertir**: nulo — fue una medición idempotente (crea+borra); no dejó estado en el tenant.
+<!-- segundo-ojo · Correcta con salvedad medible: escribe tenant (SÍ, go de César); residuo no re-medible · 2026-09-05 · juez Fable 5.1 · sha12 5d5dbcc57e84 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-08 · 2026-08-08 — Semántica del guard de pertenencia de Miranda (frente F1 del cluster 005)
 
 - **Bifurcación**: al diseñar el fix de las 5 rutas sin check de dueño: (a) ¿403 honesto o 404 que oculta la existencia?; (b) ¿qué pasa con sesiones legadas sin `created_by`?; (c) ¿el gate de publish va en el handler o dentro de `publishSpec`?
 - **Decidido**: (a) **403** — los ids son UUIDv4, la enumeración es impracticable y el error honesto es el patrón del producto; (b) **solo-admin (fail-closed)** — una sesión sin dueño demostrable no se abre al scope, la rescata un admin; (c) **en el handler** — la identidad vive en la frontera HTTP y `publishSpec` conserva su contrato puro de gates de estado. Además se sella intocable el invariante de 004/02: la autorización de tools sigue atada al requester, no al dueño. Diseño completo: `work/005-…/01-diseno-pertenencia-sesiones-miranda-v1.0.md`.
 - **Costo de revertir**: bajo — (a) cambiar el código de respuesta es una línea; (b) relajar el caso NULL es quitar una condición; (c) mover el gate al paquete es aditivo.
+<!-- segundo-ojo · Correcta: miranda.ts:343-353 (404/403, NULL owner → solo admin); PR #142 · 2026-09-05 · juez Fable 5.1 · sha12 04975670703d · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-07 · 2026-08-07 — `/contrato` solo para admins, y la pieza 2 de #138 no se implementa sin revisión
 
 - **Bifurcación**: (a) ¿quién puede leer el contrato operativo de #139 — cualquier identidad autenticada tras el proxy, o solo admins?; (b) ¿se implementa de una vez la pieza 2 de #138 (env → archivo recargable) o se somete el diseño primero?
 - **Decidido**: (a) solo admins (gate de token + `isAdmin` del store de gobierno; sin governance → 403): el payload expone rutas del contenedor y nombres de env — superficie de operación, no de consumo. (b) La pieza 2 queda en diseño (`work/003-…/03-…`) esperando a César: cambia el contrato de despliegue de las instancias (qué viaja en env vs en archivo) y arrastra semánticas de re-siembra vs gestión in-app.
 - **Costo de revertir**: (a) bajo — relajar el gate es quitar una condición; (b) nulo — implementar después es el camino previsto.
+<!-- segundo-ojo · Correcta: (a) contract.ts:370/381 medido; (b) absorbida por D-16 · 2026-09-05 · juez Fable 5.1 · sha12 d515b54ec67a · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-01 · 2026-08-06 — Orden y paralelización del backlog en 4 olas por territorio
 
@@ -435,33 +492,39 @@ el registro existe para que revertirla sea barato.
 - **Decidido**: 4 olas (A: #99/#61/#117/#66 · B: #101/#114/#62/#108 · C: #105/#63/#109/#65 · D: #100/#102/#107), paralelizando frentes de territorio disjunto e integrando secuencialmente con gates. Dependencias: #101←#99, #63←#62, #102←{#99,#101,#100}.
 - **Racional**: minimiza colisiones de archivos entre frentes y respeta las dependencias declaradas en los propios issues; los de demanda dura de usuario (#61, #99) van primero.
 - **Costo de revertir**: nulo — es orden de trabajo, no forma del producto.
+<!-- segundo-ojo · Correcta con salvedad medible: dependencias respetadas; el orden no siguió las olas; 16 frentes, no 15 · 2026-09-05 · juez Fable 5.1 · sha12 1fb5d09832d8 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-02 · 2026-08-06 — #106 (docs) queda al final, condicional al tren
 
 - **Bifurcación**: ¿incluir #106 (documentación multi-reporte + gobierno) en el alcance «todo lo accionable»?
 - **Decidido**: se atiende solo si las olas A–D cierran; los issues de código tienen demanda de usuario y el doc no bloquea a nadie hoy.
 - **Costo de revertir**: nulo.
+<!-- segundo-ojo · Correcta: #106 mergeado el mismo día tras cerrar las olas (e7372ce) · 2026-09-05 · juez Fable 5.1 · sha12 d92d76ebe62f · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-06 · 2026-08-06 — Encender vm-vergis-qa para el ensayo del deploy 0.14.0
 
 - **Bifurcación**: la VM de QA estaba deallocated; ¿ensayar (encenderla) o saltar el ensayo?
 - **Decidido**: encenderla — el ensayo en QA antes de PROD es el camino documentado (BITACORA 2026-07-13) y César autorizó «avanzar con el deploy», que lo incluye. Se deja apagada (deallocated) al terminar, como estaba.
 - **Costo de revertir**: `az vm deallocate` (minutos de cómputo del ensayo).
+<!-- segundo-ojo · Correcta: gasto SÍ con go de César; VM hoy deallocated (az) · 2026-09-05 · juez Fable 5.1 · sha12 a860cc4c15cf · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-05 · 2026-08-06 — Se corta el release 0.14.0 en el repo (CHANGELOG + version + tag), sin deploy
 
 - **Bifurcación**: dejar los 15 merges sin versión, o cortar 0.14.0 repo-side siguiendo la convención del CHANGELOG (Y sube con cada conjunto de capacidades).
 - **Decidido**: version bump + entrada de CHANGELOG + tag `v0.14.0`. El DEPLOY a la VM queda como hand-off (producción gated; además #117 exige verificar los YAML de instancia antes de subir).
 - **Costo de revertir**: bajo — el tag se puede re-cortar; nada desplegado.
+<!-- segundo-ojo · Correcta: tag v0.14.0 = 1f963dc; deploy separado y autorizado (b438c21) · 2026-09-05 · juez Fable 5.1 · sha12 f3596c0e583b · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-04 · 2026-08-06 — notify.yaml sin clave raíz LANZA (override del contrato sellado de #100)
 
 - **Bifurcación**: el diseño de #100 selló `parseNotifyConfig({}) ⇒ cero destinos en silencio`; #117 (mergeado después de ese diseño) estableció que la clave raíz ausente en un YAML declarado es archivo roto y tumba el arranque. El implementador reportó la tensión sin resolverla.
 - **Decidido**: consistencia con #117 — `requireRootKey('destinations')`; el cero legítimo es `destinations: []`. Racional: un notify.yaml decapitado desactivaría en silencio el sistema que avisa fallos — exactamente la evaporación que #117 cierra, en el peor lugar posible.
 - **Costo de revertir**: una línea + un test (commit del ajuste en PR #129).
+<!-- segundo-ojo · Correcta: notify.ts:129 requireRootKey + test 28-30 en 609c4f1 (PR #129) · 2026-09-05 · juez Fable 5.1 · sha12 cb33731ac012 · soveria-ai/audits/veredictos-20260905/ -->
 
 ## D-03 · 2026-08-06 — Emails de avance: cuenta claude → cesar.obach@ultrabase.net
 
 - **Bifurcación**: César pidió informes por email al cierre de tickets/olas; ¿a qué dirección?
 - **Decidido**: desde la cuenta claude (claude.amodei@gmail.com) hacia `cesar.obach@ultrabase.net`, per skill `ww:wingworking-email-sending` (tema ultraBASE/producto; «si hay duda, ultrabase.net»).
 - **Costo de revertir**: nulo — se redirige el siguiente envío.
+<!-- segundo-ojo · Correcta: skill L89/L96; envíos registrados; regla de cuenta evolucionó después · 2026-09-05 · juez Fable 5.1 · sha12 34430a44e0af · soveria-ai/audits/veredictos-20260905/ -->
