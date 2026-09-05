@@ -8,6 +8,8 @@
 // mide: (1) dónde queda la verdad cuando hay dos fuentes, y (2) que la RUTA no se mueva.
 import { describe, it, expect } from 'vitest'
 import { createDiscovery, slugify, type DiscoveryDeps } from '../server/discovery'
+import { createProtoRegistry } from '../server/proto-registry'
+import { miraProtoBotlet } from '@vergis/mira'
 import type { PolicyDecl } from '@vergis/policy'
 
 function specYaml(code: string, nombre: string): string {
@@ -27,6 +29,7 @@ function mk(over: Partial<DiscoveryDeps> = {}) {
     engine: 'clickhouse',
     store: new Map<string, PolicyDecl>([['qw04.areas', { public: true }]]),
     servingCaps: new Set(['execute-sql-ch']),
+    protos: createProtoRegistry([miraProtoBotlet]),
     specPaths: () => Object.keys(SPECS),
     readSpec: (p) => SPECS[p as keyof typeof SPECS],
     log: () => {},

@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createPiConfig, type PiConfigHandler } from '../server/pi-config'
 import { createDiscovery, type Discovery } from '../server/discovery'
+import { createProtoRegistry } from '../server/proto-registry'
+import { miraProtoBotlet } from '@vergis/mira'
 import { SqliteGovernanceStore, type PiRole } from '@vergis/capabilities'
 import type { PolicyDecl } from '@vergis/policy'
 
@@ -86,6 +88,7 @@ describe('#207 · renombrar en la consola llega al catálogo servido', () => {
       engine: 'clickhouse',
       store: new Map<string, PolicyDecl>([['qw04.areas', { public: true }]]),
       servingCaps: new Set(['execute-sql-ch']),
+      protos: createProtoRegistry([miraProtoBotlet]),
       specPaths: () => ['/pi01.yaml'],
       readSpec: () => SPEC,
       displayNameOverride: cableado ? (code) => overrides.get(code) : undefined,

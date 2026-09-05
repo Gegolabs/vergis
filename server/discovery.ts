@@ -12,8 +12,8 @@
  * readSpec) → testeable sin server ni disco. La LÓGICA DEL GATE es idéntica a la del monolito.
  */
 import { readFileSync } from 'node:fs'
-import { parseSpec } from '@vergis/mira'
 import { claimValues, diagnoseClaims, isPublic, type ClaimDenial, type ClaimSet, type PolicyDecl } from '@vergis/policy'
+import type { ProtoRegistry } from './proto-registry'
 import { analyzeSqlTables } from './sql-tables'
 import { createCachedScanner } from './hot-reload'
 import type { Engine } from './config'
@@ -27,6 +27,8 @@ export interface Report {
    *  está sobrescrito, el del spec es X» — sin eso, el override es un misterio para quien lea el YAML. */
   specName: string
   specPath: string
+  /** `type` del proto-Botlet que reconoció la spec (H0: siempre `mira`, el único registrado). */
+  proto: string
   tables: string[]
   /** Conexiones (`database_ref`) que las data-entries del PI referencian — la verificación de
    * servibilidad por PI (engine=fabric) consulta SOLO estas, no todas las declaradas (issue #52). */
@@ -39,6 +41,11 @@ export interface DiscoveryDeps {
   engine: Engine
   /** Capabilities enforcing del motor activo (hardening del catálogo de serving). */
   servingCaps: Set<string>
+  /**
+   * Registro de proto-Botlets (H0). El descubrimiento NO conoce el dominio de ninguna familia: le
+   * pregunta al registro de quién es cada spec y al proto cómo leerla.
+   */
+  protos: ProtoRegistry
   /** Rutas de las specs a escanear (inyectable → testeable sin disco). */
   specPaths: () => string[]
   /** Lee el contenido de una spec (default: FS). */
@@ -88,24 +95,62 @@ export function slugify(s: string): string {
 export function createDiscovery(deps: DiscoveryDeps): Discovery {
   const readSpec = deps.readSpec ?? ((p: string) => readFileSync(p, 'utf8'))
   const log = deps.log ?? ((m: string) => console.warn(m))
-  const { store, engine, servingCaps } = deps
+  const { store, engine, servingCaps, protos } = deps
+  /** Rutas por las que ya se avisó el «se asume» de §3.3 — el aviso es UNA vez por ruta y por proceso,
+   *  no una por escaneo: `rebuild()` no lo repite (si lo repitiera, un hot-reload de gobierno cada N
+   *  minutos convertiría el aviso en ruido de log). */
+  const avisadaSinDiscriminador = new Set<string>()
 
   function discoverRaw(): Report[] {
     const out: Report[] = []
     for (const p of deps.specPaths()) {
-      let spec: { identity?: { code?: string; id?: string; display_name?: string }; data?: Record<string, { capability?: string; params?: { sql?: string; database_ref?: string } }> }
+      let text: string
       try {
-        spec = parseSpec(readSpec(p)) as typeof spec
+        text = readSpec(p)
       } catch {
         continue
       }
-      const data = spec.data ?? {}
-      const caps = Object.values(data).map((d) => d.capability ?? '')
+      // ¿De qué familia es esta spec? El nodo no lo sabe: lo decide el registro por la presencia de
+      // la clave discriminadora en la raíz del YAML.
+      const veredicto = protos.discriminate(text)
+      let proto
+      if (veredicto.kind === 'no-spec') {
+        continue // no parsea o no es un objeto: como siempre, se omite en silencio
+      } else if (veredicto.kind === 'ambigua') {
+        log(`[vergis-rls] '${p}' declara más de un discriminador de proto-Botlet (${veredicto.protos.map((x) => x.discriminator).join(', ')}) — omitido. Una spec pertenece a UNA familia.`)
+        continue
+      } else if (veredicto.kind === 'sin-discriminador') {
+        // COMPATIBILIDAD (§3.3 del brief H0). Antes de H0 el nodo servía cualquier YAML de Mira
+        // aunque no trajera `mira_version`, y hay instancias en producción con specs así. Mientras
+        // haya UN solo proto registrado la atribución es inequívoca: se le da a él y se avisa. Con
+        // dos o más familias, atribuir sería adivinar → se omite.
+        const todos = protos.list()
+        if (todos.length !== 1) {
+          log(`[vergis-rls] '${p}' no declara la clave de ninguna familia registrada (${todos.map((x) => x.discriminator).join(', ') || 'ninguna'}) — omitido. Declararla.`)
+          continue
+        }
+        proto = todos[0]!
+        if (!avisadaSinDiscriminador.has(p)) {
+          avisadaSinDiscriminador.add(p)
+          log(`[vergis-rls] '${p}' no declara \`${proto.discriminator}\`: se asume ${proto.type[0]!.toUpperCase()}${proto.type.slice(1)} por ser el único proto-Botlet registrado. Declararlo — con dos familias registradas esta spec quedaría omitida.`)
+        }
+      } else {
+        proto = veredicto.proto
+      }
+      let spec: unknown
+      try {
+        spec = proto.parse(text)
+      } catch (e) {
+        log(`[vergis-rls] '${p}' no parsea como spec de ${proto.type}: ${e instanceof Error ? e.message : String(e)} — omitido`)
+        continue
+      }
+      const entradas = proto.dataOf(spec)
+      const caps = proto.capabilitiesOf(spec)
       if (caps.length === 0 || !caps.every((c) => servingCaps.has(c))) {
         log(`[vergis-rls] '${p}' no servible bajo engine=${engine} (capability fuera del catálogo: ${caps.join(',')}) — omitido`)
         continue
       }
-      const analyses = Object.values(data).map((d) => analyzeSqlTables(d.params?.sql ?? ''))
+      const analyses = entradas.map((d) => analyzeSqlTables(d.sql ?? ''))
       const tables = [...new Set(analyses.flatMap((a) => a.tables))]
       const unqualified = [...new Set(analyses.flatMap((a) => a.unqualified))]
       // GATE DE GOBERNANZA (fail-closed) — crítico en push-down: en fabric una tabla SIN política
@@ -122,16 +167,17 @@ export function createDiscovery(deps: DiscoveryDeps): Discovery {
         // lo da la verificación por-PI del bootstrap (engines/fabric): sin política NI herencia
         // derivable, el PI queda bloqueado con motivo (503) — el fail-closed no se mueve, se muda.
       }
-      const code = spec.identity?.code ?? spec.identity?.id ?? 'pi'
+      const identity = proto.identityOf(spec)
+      const code = identity.code
       const slug = slugify(code)
       if (out.some((r) => r.slug === slug)) {
         // Dos specs con el mismo slug: la 2ª es inalcanzable (el router hace `all.find` → la 1ª gana).
         // Antes pasaba en silencio; ahora se avisa. Usar un identity.code distinto.
         log(`[vergis-rls] '${p}' colisiona en slug '${slug}' con un PI ya descubierto — el segundo queda inalcanzable. Diferenciar identity.code.`)
       }
-      const databaseRefs = [...new Set(Object.values(data).map((d) => d.params?.database_ref ?? '').filter(Boolean))]
-      const specName = spec.identity?.display_name ?? code
-      out.push({ code, slug, name: specName, specName, specPath: p, tables, databaseRefs })
+      const databaseRefs = [...new Set(entradas.map((d) => d.databaseRef ?? '').filter(Boolean))]
+      const specName = identity.displayName ?? code
+      out.push({ code, slug, name: specName, specName, specPath: p, proto: proto.type, tables, databaseRefs })
     }
     return out
   }

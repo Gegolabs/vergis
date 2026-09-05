@@ -70,7 +70,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
 import { AppendOnlyLog, withResultCache, DEFAULT_GATE_MAPPING, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
-import { applyCtx, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
+import { applyCtx, miraProtoBotlet, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
 import {
   createMiranda,
   createMirandaUnavailable,
@@ -170,6 +170,7 @@ import { fail } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
+import { createProtoRegistry } from './proto-registry'
 import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
 import { createContractRegistry, createContractHandler, type ControlContract } from './contract'
@@ -225,6 +226,9 @@ const contract = createContractRegistry({
   // Bloque `miranda` (#266 · #265): una superficie opcional ahora puede quedar APAGADA sin tumbar el
   // nodo — si el contrato no lo dijera, la degradación sería silenciosa. Closure sobre la config viva.
   miranda: () => mirandaContractView(config.miranda, mirandaBootFailure),
+  // Familias de Lets que este nodo sabe hospedar (#289). DERIVADO del registro vivo, no declarado:
+  // el contrato no puede mentir sobre lo que el proceso realmente cableó.
+  protos: () => protos.list().map((x) => x.type),
 })
 contract.envKeys(configEnvKeys())
 // Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
@@ -387,11 +391,16 @@ const displayNameOverrides = new Map<string, string>()
  *  y el catálogo sirve los nombres del spec — nunca falla el serving por un renombre. */
 let refreshDisplayNames: () => Promise<void> = async () => {}
 
+// REGISTRO DE PROTO-BOTLETS (H0 · #289). El nodo ya no sabe que sus specs son de Mira: sabe que hay
+// familias de Lets registradas, y Mira es la primera. Con una sola registrada la conducta es idéntica
+// a la de antes (ver la regla de compatibilidad en `discovery.ts`).
+const protos = createProtoRegistry([miraProtoBotlet])
 const discovery = createDiscovery({
   store,
   engine: ENGINE as 'clickhouse' | 'fabric',
   servingCaps: SERVING_CAPS,
   specPaths,
+  protos,
   resolveBases: (t) => viewLineage.get(t),
   displayNameOverride: (code) => displayNameOverrides.get(code),
 })
