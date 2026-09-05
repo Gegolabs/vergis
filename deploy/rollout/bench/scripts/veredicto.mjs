@@ -1,6 +1,6 @@
 // veredicto.mjs — computa el resultado del banco V-14 DESDE LOS DATOS CRUDOS, nunca desde la consola.
 //
-// Por qué existe como paso aparte: «el comando miente». La duración de `vergis-rollout promote` no
+// Por qué existe como paso aparte: «el comando miente». La duración de `botler-rollout promote` no
 // mide nada (precedentes del proyecto: `docker restart` devuelve rc=0 en 375 ms con cortes de
 // segundos), y los logs de la herramienta cuentan lo que ella cree, no lo que un cliente recibió.
 // Lo único que cuenta son las respuestas del poller, y la ventana del acto se marca con dos sellos

@@ -182,7 +182,7 @@ Nada de lo anterior depende de que alguien se acuerde en el momento del rollback
 - **Al abrir el archivo.** Un store cuyo `PRAGMA user_version` es **mayor** que la versión que el
   código soporta **se rechaza al abrir**, ruidoso, nombrando ambos números, sin tocar el archivo. La
   versión vieja no «intenta y ve qué pasa».
-- **En el pre-flight de la promoción.** `vergis-rollout promote` lee el bloque `control` de
+- **En el pre-flight de la promoción.** `botler-rollout promote` lee el bloque `control` de
   `/contrato` del candidato y compara, store por store, el esquema que soporta contra el del archivo.
   Un candidato más viejo que el archivo **no se promueve**, y si el pre-flight no logra medir, **se
   niega** en vez de suponer.

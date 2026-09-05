@@ -4,7 +4,7 @@
 # Qué mundo levanta, y en qué se diferencia del de `bench.sh`: acá NO hay dos anillos. Hay
 #   · un NODO COMPOSE (`benchv14-vergis-1`) — misma imagen, mismos montajes, **sin `VERGIS_RING`**,
 #     con alias de red `vergis`, que es exactamente lo que es `mira-vergis-1` en la instancia GH;
-#   · un ANILLO instalado por `vergis-rollout install` (`vergis-9-9-1`), que llega a standby;
+#   · un ANILLO instalado por `botler-rollout install` (`vergis-9-9-1`), que llega a standby;
 #   · el mismo borde, el mismo poller y el mismo mutador del banco V-14, sin relajar el predicado.
 #
 # NO TOCA `bench.sh` NI SUS CORRIDAS: es un archivo aparte, comparte el `compose.bench.yml`, el
@@ -28,7 +28,7 @@ set -eu
 
 BENCH=$(cd "$(dirname "$0")/.." && pwd)
 REPO=$(cd "$BENCH/../../.." && pwd)
-TOOL="$REPO/deploy/rollout/vergis-rollout"
+TOOL="$REPO/deploy/rollout/botler-rollout"
 RUN="$BENCH/.run"
 DATOS="$RUN/datos/v16"
 CRUDOS="$BENCH/experimentos/v16"

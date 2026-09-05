@@ -3,7 +3,7 @@
  *
  * Dos familias de aserción, y las dos existen por una razón medida:
  *
- * 1 · INVARIANTES DEL BORDE. El predicado de ruteo es `200 ∧ phase=serving ∧ pis.serving=pis.total`, y
+ * 1 · INVARIANTES DEL BORDE. El predicado de ruteo es `200 ∧ phase=serving ∧ lets.serving=lets.total`, y
  *     NUNCA el código HTTP: un nodo en espera responde 200 con `ok:true` POR DISEÑO. Un health check que
  *     juzgue por `r.ok` declararía sano a un nodo al que no se debe rutear tráfico. Estas pruebas fallan
  *     si alguien relaja el predicado o publica el listener interno al host.
@@ -24,7 +24,8 @@ import { join, resolve } from 'node:path'
 vi.setConfig({ testTimeout: 90_000 })
 
 const RAIZ = resolve(__dirname, '..')
-const TOOL = join(RAIZ, 'deploy/rollout/vergis-rollout')
+const TOOL = join(RAIZ, 'deploy/rollout/botler-rollout')
+const TOOL_ALIAS = join(RAIZ, 'deploy/rollout/vergis-rollout')
 const FAKE = join(RAIZ, 'tests/fixtures/anillos/fake-docker.sh')
 const CADDYFILE = readFileSync(join(RAIZ, 'deploy/Caddyfile.reference'), 'utf8')
 const COMPOSE = readFileSync(join(RAIZ, 'deploy/compose.reference.yml'), 'utf8')
@@ -35,6 +36,9 @@ interface Mundo {
   dir: string
   rings: string
   world: string
+  /** El entorno exacto con que se invoca la herramienta (docker falso + RINGS_*), para los casos
+   *  que necesitan invocarla por otra ruta —el alias retirado— con el mismo mundo. */
+  env: NodeJS.ProcessEnv
   /** Corre la herramienta con `sh`. Devuelve código, stdout y stderr SIN lanzar: los rechazos del
    *  pre-flight son el objeto de estudio, no un accidente. */
   run: (...args: string[]) => { code: number; out: string; err: string }
@@ -74,6 +78,7 @@ function nuevoMundo(): Mundo {
     dir,
     rings,
     world,
+    env,
     run: (...args) => {
       // `spawnSync` y no `execFileSync`: hay que capturar stderr TAMBIÉN cuando el comando termina bien
       // (las advertencias que se gritan sin abortar son parte de lo que se afirma acá).
@@ -176,7 +181,7 @@ describe('el borde que conmuta (I7)', () => {
 
 // ─── 2 · La herramienta ─────────────────────────────────────────────────────────────────────────────
 
-describe('vergis-rollout (I8)', () => {
+describe('botler-rollout (I8)', () => {
   let m: Mundo
   beforeEach(() => {
     m = nuevoMundo()
@@ -484,5 +489,23 @@ describe('vergis-rollout (I8)', () => {
     expect(m.intent()).toBe('')
     // El registro no cambió: sigue mandando el 0.18.0.
     expect(m.registro().active).toBe('0.18.0')
+  })
+
+  /**
+   * EL ALIAS DEL NOMBRE RETIRADO (#290). `vergis-rollout` dejó de ser la herramienta y pasó a ser un
+   * reenvío que AVISA. Se afirman las dos mitades, porque un alias que solo avisa —o que solo reenvía—
+   * es peor que no tenerlo: el operador que lo invoca a mitad de un despliegue necesita el mismo
+   * resultado Y enterarse de que el nombre cambió. El aviso va por STDERR: stdout es lo que un
+   * `--json` entrega a quien lo parsea.
+   */
+  it('ALIAS RETIRADO: `vergis-rollout` avisa por stderr y reenvía a `botler-rollout`', () => {
+    instalar(m, '0.19.0', 'sha256:v19')
+    m.run('promote', '0.19.0')
+    const canonico = m.run('status', '--json')
+    const alias = spawnSync('sh', [TOOL_ALIAS, 'status', '--json'], { env: m.env, encoding: 'utf8' })
+    expect(alias.status, alias.stderr).toBe(0)
+    expect(alias.stderr).toContain('vergis-rollout: nombre retirado; usa botler-rollout')
+    expect(alias.stdout).toBe(canonico.out)
+    expect(JSON.parse(alias.stdout).active).toBe('0.19.0')
   })
 })

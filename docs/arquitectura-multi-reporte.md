@@ -155,7 +155,7 @@ secreto CSRF de las superficies de gestión (`VERGIS_CSRF_SECRET`).
    Miranda (solo con `MIRANDA_ENABLED`).
 5. **El server escucha de inmediato**; el bootstrap del motor corre en segundo plano con **retry
    indefinido y backoff**. `/healthz` responde 503 solo hasta superar el frío; después distingue
-   `serving` de `degraded` con conteos por-PI (`{ pis: { total, serving } }`).
+   `serving` de `degraded` con conteos por Let (`{ lets: { total, serving } }`).
 
 ## 6 · ¿Qué entra en caliente y qué exige restart?
 

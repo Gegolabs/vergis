@@ -5,7 +5,7 @@
 
   EL LITERAL `phase` + `serving` NO SE ESCRIBE JUNTO EN ESTE ARCHIVO, ni siquiera en un comentario, y
   la razón es concreta: esta página ES el cuerpo del 503 del borde. Cualquier lector que extraiga la
-  fase del cuerpo por expresión regular —`phase_of()` de `deploy/rollout/vergis-rollout` lo hace con
+  fase del cuerpo por expresión regular —`phase_of()` de `deploy/rollout/botler-rollout` lo hace con
   un `sed`— leería `serving` de la página que significa exactamente lo contrario.
   Hoy el veredicto NO se corrompe, porque `serving_ok` exige `200` antes de mirar la fase y esta
   página se sirve con 503. Lo que sí se corrompía era el DIAGNÓSTICO: el `warn` del smoke llama a

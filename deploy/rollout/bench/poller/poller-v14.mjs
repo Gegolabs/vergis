@@ -5,7 +5,7 @@
 //
 //   1. El poller vive en un contenedor que el acto NO recrea (acá: `benchv14-poller`, hermano del
 //      borde). Uno efímero muere durante el acto y solo acota el corte POR ABAJO, sin decirlo.
-//   2. El predicado es `200 ∧ phase=serving ∧ pis.serving == pis.total`, JAMÁS «responde» ni `r.ok`:
+//   2. El predicado es `200 ∧ phase=serving ∧ lets.serving == lets.total`, JAMÁS «responde» ni `r.ok`:
 //      un nodo en `standby` responde 200 con `ok:true` POR DISEÑO, y un instrumento que juzgue por
 //      código HTTP declara sano a un nodo que no sirve.
 //   3. `SINMEDIR` se distingue de `MAL`. Confundir «medí y salió negativo» con «no pude medir»
@@ -72,13 +72,13 @@ function juzgar(status, body) {
     return { ok: false, phase: null, total: null, serving: null, noJson: true }
   }
   const phase = typeof j?.phase === 'string' ? j.phase : null
-  const pis = j && typeof j.pis === 'object' && j.pis ? j.pis : null
-  const total = pis && typeof pis.total === 'number' ? pis.total : null
-  const serving = pis && typeof pis.serving === 'number' ? pis.serving : null
-  // `pis` se exige SOLO SI VIENE — igual que el canónico, que el healthcheck del compose de
-  // referencia y que `serving_ok` de `vergis-rollout`. `/healthz` omite el bloque cuando el motor no
+  const lets = j && typeof j.lets === 'object' && j.lets ? j.lets : null
+  const total = lets && typeof lets.total === 'number' ? lets.total : null
+  const serving = lets && typeof lets.serving === 'number' ? lets.serving : null
+  // `lets` se exige SOLO SI VIENE — igual que el canónico, que el healthcheck del compose de
+  // referencia y que `serving_ok` de `botler-rollout`. `/healthz` omite el bloque cuando el motor no
   // tiene servibilidad por PI. Ausencia NO es permiso: es que ese conjunto está vacío.
-  const ok = status === 200 && phase === 'serving' && (pis === null || (total !== null && total === serving))
+  const ok = status === 200 && phase === 'serving' && (lets === null || (total !== null && total === serving))
   return { ok, phase, total, serving, noJson: false }
 }
 
@@ -101,7 +101,7 @@ function despachar() {
       const body = await r.text()
       const t1 = Date.now()
       const { ok, phase, total, serving, noJson } = juzgar(r.status, body)
-      const reg = { seq: n, t0, t1, ms: t1 - t0, veredicto: ok ? 'OK' : 'MAL', status: r.status, phase, pisTotal: total, pisServing: serving }
+      const reg = { seq: n, t0, t1, ms: t1 - t0, veredicto: ok ? 'OK' : 'MAL', status: r.status, phase, letsTotal: total, letsServing: serving }
       if (noJson) reg.noJson = true
       if (!ok) reg.cuerpo = body.replace(/\s+/g, ' ').slice(0, 200)
       anotar(reg)

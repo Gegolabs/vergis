@@ -10,7 +10,7 @@ caliente. El serving no se interrumpe; lo que se congela por unos segundos es la
 
 | Pieza | Qué es |
 |--|--|
-| `vergis-rollout` | La herramienta de ciclo de vida (POSIX `sh`; solo `docker` y `sed`) |
+| `botler-rollout` | La herramienta de ciclo de vida (POSIX `sh`; solo `docker` y `sed`) |
 | `rings/rings.json` | El registro: qué anillos existen, con qué digest, cuál es el activo y cuál el previo |
 | `rings/active.caddy` | El upstream del anillo activo — **una línea**, la reescribe la herramienta |
 | `rings/ring.args` | Los envs y montajes con que se crea cada anillo (espejo del servicio `vergis` del compose) |
@@ -26,7 +26,7 @@ verificación de cada paso, su vuelta atrás y **cómo se mide el corte sin enga
 ## ¿Qué predicado decide que un anillo está sano?
 
 ```
-200  ∧  "phase":"serving"  ∧  pis.serving == pis.total
+200  ∧  "phase":"serving"  ∧  lets.serving == lets.total
 ```
 
 **Nunca «responde» y nunca «2xx a secas».** Un nodo en espera responde **200 con `ok:true` por
@@ -44,7 +44,7 @@ mkdir -p rings edge
 cp <repo>/deploy/rings/active.caddy.example ./rings/active.caddy
 cp <repo>/deploy/edge/espera.html           ./edge/espera.html
 cp <repo>/deploy/rollout/ring.args.example  ./rings/ring.args    # y ajusta rutas/red/envs
-cp <repo>/deploy/rollout/vergis-rollout     /usr/local/bin/vergis-rollout && chmod +x $_
+cp <repo>/deploy/rollout/botler-rollout     /usr/local/bin/botler-rollout && chmod +x $_
 
 docker compose up -d           # el borde queda con :8079 y la sala de espera
 ```
@@ -69,14 +69,14 @@ Variables (todas opcionales salvo las dos del pre-flight):
 ## El ciclo
 
 ```sh
-vergis-rollout install 0.20.0        # pull + create + start → queda EN ESPERA, verificado
-vergis-rollout status                # el registro + la fase VIVA de cada anillo + a quién apunta el borde
-vergis-rollout promote 0.20.0        # pre-flight → intent + flip → handover → smoke → registro
-vergis-rollout rollback              # vuelve al previo (flip puro, en caliente)
-vergis-rollout rollback 0.18.0       # a un retenido: arranca primero (la sala de espera cubre el boot)
-vergis-rollout prune --dry-run       # qué retiraría la retención vigente
-vergis-rollout prune                 # lo retira
-vergis-rollout retire 0.17.0 --rmi   # retira un anillo puntual (y su imagen)
+botler-rollout install 0.20.0        # pull + create + start → queda EN ESPERA, verificado
+botler-rollout status                # el registro + la fase VIVA de cada anillo + a quién apunta el borde
+botler-rollout promote 0.20.0        # pre-flight → intent + flip → handover → smoke → registro
+botler-rollout rollback              # vuelve al previo (flip puro, en caliente)
+botler-rollout rollback 0.18.0       # a un retenido: arranca primero (la sala de espera cubre el boot)
+botler-rollout prune --dry-run       # qué retiraría la retención vigente
+botler-rollout prune                 # lo retira
+botler-rollout retire 0.17.0 --rmi   # retira un anillo puntual (y su imagen)
 ```
 
 ### `install <versión> [--redigest] [--no-pull] [--no-start]`
@@ -137,7 +137,7 @@ toca, `--retain 1` no los toca. Es la línea que este comando no cruza.
   contenedor de Caddy — y ese corte sí es corte).
 - El smoke por el borde verifica el predicado de salud y el índice. **No** recorre las rutas de cada PI:
   `/healthz` publica **conteos**, no slugs, y adivinar los slugs o forjar una identidad para listarlos
-  sería peor que no medirlo. El invariante que sí se exige es `pis.serving == pis.total`.
+  sería peor que no medirlo. El invariante que sí se exige es `lets.serving == lets.total`.
 - `ring.args` es un espejo manual del servicio `vergis` del compose. Nada verifica que estén
   sincronizados.
 - **El handover es DIRIGIDO, y su alcance es parcial.** Antes del flip, la herramienta escribe
