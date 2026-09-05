@@ -1,5 +1,11 @@
 # NEXT — Vergis
 
+## Frente nuevo (2026-09-05): el Botler genérico y Daftar como segundo proto-Botlet — diseño refrendado, nada construido
+
+**César refrendó íntegro el doc 013** (`work/013-cluster-botler-generico/01-diseno-rector-botler-generico-daftar-v1.0.md`): ocho bifurcaciones por el criterio de excelencia y siete hitos H0–H7 con gate. Hechos medidos que lo fundan: la clase `Botler` de `packages/botler` **no se instancia en el servidor** (importa solo tipos, `AppendOnlyLog`, `withResultCache`, `identityFromHeaders`); `discovery.ts` parsea solo Mira; el predicado de salud de `/healthz`, el `Caddyfile.reference`, `vergis-rollout` y el poller del RUNBOOK dicen `pis`. **Próximo paso: Fable escribe los briefs ejecutables de H0 (registro de proto-Botlets, cero cambio de conducta), H1 (`pis → lets` + `botler-rollout`, CHANGELOG «rompe») y H2 (store `evaluaciones`)**; los ejecutan realizadores Opus en worktrees, gates serializados, por rama + PR. El resto de este archivo describe el estado previo y sigue vigente.
+
+---
+
 **0.26.0 es la versión publicada** (tag `v0.26.0`, 2026-09-03, commit `d8f9a80`), verificada contra el registry (2 plataformas): facetas con orden natural y acotadas (#285, #286) y «Aplicar cadencia» que vigila los slots manuales (#279), sobre 0.25.1 (#282) y 0.25.0 (#280). Anteriormente 0.24.0 (`fad4b4c`) trajo Trae los **filtros de número** en columnas numéricas (#277/#278, decisión de César tras el caso de PI-01) sobre 0.23.1 (segunda mitad de #266). **Issue abierto hoy: #279** — «Aplicar cadencia» programa corridas también en slots de carga manual.
 
 **La instancia A.R.B.O.L. corre 0.26.0 desde el 2026-09-03 (23:10Z)**, promovida por anillos sin corte (segunda promoción; previo 0.25.1). Antes: 0.23.0 desde el 2026-09-02 (noche) — desplegada por el frente arbol
