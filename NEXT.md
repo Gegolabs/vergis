@@ -1,8 +1,14 @@
 # NEXT — Vergis
 
-## Frente nuevo (2026-09-05): el Botler genérico y Daftar como segundo proto-Botlet — diseño refrendado, nada construido
+## Frente Botler genérico (2026-09-05): H0, H1 y H2 MERGEADOS; sigue H3
 
-**César refrendó íntegro el doc 013** (`work/013-cluster-botler-generico/01-diseno-rector-botler-generico-daftar-v1.0.md`): ocho bifurcaciones por el criterio de excelencia y siete hitos H0–H7 con gate. Hechos medidos que lo fundan: la clase `Botler` de `packages/botler` **no se instancia en el servidor** (importa solo tipos, `AppendOnlyLog`, `withResultCache`, `identityFromHeaders`); `discovery.ts` parsea solo Mira; el predicado de salud de `/healthz`, el `Caddyfile.reference`, `vergis-rollout` y el poller del RUNBOOK dicen `pis`. **Próximo paso: Fable escribe los briefs ejecutables de H0 (registro de proto-Botlets, cero cambio de conducta), H1 (`pis → lets` + `botler-rollout`, CHANGELOG «rompe») y H2 (store `evaluaciones`)**; los ejecutan realizadores Opus en worktrees, gates serializados, por rama + PR. El resto de este archivo describe el estado previo y sigue vigente.
+**En `main` (`042ecd2`, 2590 tests):** H0 registro de proto-Botlets (#289/PR #292: `packages/botler/src/proto-botlet.ts`, `server/proto-registry.ts`, `miraProtoBotlet`, `Report.proto`, `/contrato.protos`, regla de compatibilidad para specs sin `mira_version`) · H2 store `evaluaciones` (#291/PR #293: `packages/capabilities/src/evaluaciones-{store,import}.ts`, `scripts/evaluaciones-importar.ts`, opt-in por `VERGIS_EVALUACIONES=1`, label `evaluaciones=1`; round-trip 54/54 contra los progresos reales de Daftar) · H1 `pis → lets` y `botler-rollout` (#290/PR #294: «rompe» declarado bajo «Sin publicar»; `vergis-rollout` es alias que avisa; `serving_ok()` exige el bloque `lets`). Briefs en `work/013-cluster-botler-generico/02-04`; decisiones D-67…D-71.
+
+**Próximo paso: brief de H3 (Fable) — `packages/daftar`, el proto-Botlet evaluador** (doc 013 §5 fila H3): spec `daftar.yaml` con discriminador `daftar_version`; catálogo por estudiante; render del instrumento con el frontend actual de Daftar embebido (`estudios/daftar/app/static/{app.js,style.css}`, 2.163 líneas que asumen `?s=` y `/api/*`); API JSON de progreso sobre el store `evaluaciones` con POST gated por el plano de control (409 en standby); corrección, reportes, impresión, modo foco; estudiante desde claims. Gate: e2e con dos anillos, publicar instrumento en caliente medido, promoción sin corte con intento a medias. **Diseña antes `invoke` en `ProtoBotlet`** (D-68 lo dejó fuera de H0 a propósito). Luego H4 (migración de las 60 guías, instancia estudios), H5 (instancia en soveria-host detrás de nginx), H6 (`botler-ops`), H7 (canon).
+
+**Corte de versión:** no se cortó (D-71). Cuando aterrice H3, cortar 0.27.0 con los cotejos al pie («Antes de cortar») y `fab:proof` antes del tag. «Sin publicar» ya lleva tres entradas completas, incluido el aviso «⚠ EXIGE».
+
+**Residuo del árbol:** `undefined/` sin trackear en la raíz (pi02-render, 3-sep) — nadie lo reclamó; no se tocó.
 
 ---
 

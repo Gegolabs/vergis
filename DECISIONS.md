@@ -9,6 +9,36 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-71 · 2026-09-05 — Con H0–H2 mergeados NO se corta versión todavía: 0.27.0 se corta cuando aterrice H3, que es lo que le da sentido al «rompe»
+
+- **Bifurcación**: (a) cortar 0.27.0 ahora con H0 (refactor sin conducta nueva), H1 («rompe»: `pis → lets`, `botler-rollout`) y H2 (store que nadie consume) · (b) esperar a H3 (`packages/daftar`, el segundo proto-Botlet) y cortar una versión cuya capacidad justifique adoptar la ruptura.
+- **Decidido**: **(b)**. Para la única instancia real (A.R.B.O.L.) 0.27.0 hoy sería una versión que solo exige trabajo (actualizar herramienta, healthcheck y poller) sin darle nada a cambio; el CHANGELOG ya declara el «rompe» bajo «Sin publicar» y la instancia no tiene demandante para adoptarlo. Además el corte exige la ventana de Fabric (`fab:proof`, POL-01) y su cadencia declarada es «antes del tag»: gastarla dos veces en una semana por dos cortes seguidos es peor que una. **Riesgo dicho:** «Sin publicar» acumula tres entradas; si otro frente necesita cortar antes de H3, corta con lo que hay — las entradas están completas.
+- **Costo de revertir**: nulo — el corte es un acto de minutos con los cotejos al pie.
+
+## D-70 · 2026-09-05 — H2 arranca en paralelo con H0 desde `main`, aunque el plan lo pone «después de H0»
+
+- **Bifurcación**: (a) esperar el merge de H0 (gate con banco de anillos, decenas de minutos) antes de lanzar H2 · (b) lanzar H2 ya, desde `main`, con rebase obligatorio antes del PR.
+- **Decidido**: **(b)**. La dependencia de H2 sobre H0 en el plan es conceptual (el store sirve a un proto que aún no existe), no de archivos: H0 toca `discovery.ts`, `packages/botler` y la construcción de `createDiscovery` en `serve-rls.ts`; H2 toca `packages/capabilities`, el `Dockerfile` y dos regiones distintas de `serve-rls.ts` (apertura de stores y `embeddedStores()`). El riesgo es un conflicto de rebase trivial; el beneficio es una hora de reloj. H1 sí espera a H0: comparte el healthz y el contrato con lo que H0 re-cablea.
+- **Costo de revertir**: nulo.
+
+## D-67 · 2026-09-05 — Los hitos H0–H2 del Botler genérico se anclan en issues propios (#289, #290, #291) abiertos desde la cuenta `cobach`, que además cumplen el aviso previo al frente arbol
+
+- **Bifurcación**: (a) PRs sin issue, citando solo el doc 013 · (b) un issue por hito, que sirve de ancla `Closes #N`, de aviso previo al otro frente (CLAUDE.md §La custodia) y de registro público del alcance · (c) un solo issue paraguas para los siete hitos.
+- **Decidido**: **(b)**. El aviso previo es norma del repo y el canal pactado ha sido el comentario/issue en GitHub (precedente: #232, 2026-08-26); un issue por hito deja el gate de cada uno verificable por separado, que es lo que la custodia necesita para mergear en orden. Se abrieron con la cuenta `cobach` porque es la única que `gh` tiene en esta máquina — la cuenta de bot sigue pendiente de César (PASIVO) y la autoría del agente va declarada al pie de cada issue.
+- **Costo de revertir**: nulo — cerrar los issues con nota; los PRs sobreviven.
+
+## D-68 · 2026-09-05 — H0 vuelve genérico el DESCUBRIMIENTO, no la invocación: `ProtoBotlet` nace sin `invoke`
+
+- **Bifurcación**: el diseño rector nombra `invoke → output; routes?` en la interfaz de H0. (a) implementarlos ya, con Mira como único caso · (b) dejarlos para H3, cuando exista un segundo proto que invocar.
+- **Decidido**: **(b)**. Con un solo caso, `invoke` sería `runPi` con otro nombre y su forma quedaría dictada por Mira — justo lo que un Botler genérico no debe hacer. El router ya es genérico por inyección (`renderReport`), así que no hay conducta que H0 pierda por esperar. H3 lo diseña con Daftar delante.
+- **Costo de revertir**: bajo — es agregar métodos a una interfaz que ya existe.
+
+## D-69 · 2026-09-05 — Una spec sin clave discriminadora se atribuye al único proto registrado, con aviso en el log; con dos o más protos se omite
+
+- **Bifurcación**: hoy `discovery.ts` sirve cualquier YAML que parsee aunque no traiga `mira_version`. (a) exigir el discriminador desde H0 (rompería specs de instancia que no se pueden medir desde acá) · (b) atribuir al único proto y avisar · (c) atribuir siempre a Mira como default permanente.
+- **Decidido**: **(b)**. Es la única regla que garantiza «cero cambio de conducta» para A.R.B.O.L. y a la vez escribe el camino de salida: el día que se registre Daftar, la spec sin discriminador deja de servirse y el log ya lo venía diciendo. (c) congelaría a Mira como privilegiada dentro del Botler.
+- **Costo de revertir**: una función y dos tests.
+
 ## D-65 · 2026-09-03 — #279 se cierra con su ítem 1 construido; los ítems 2 y 3 quedan declarados fuera de alcance, sin issue nuevo
 
 - **Bifurcación**: (a) construir los tres ítems del issue · (b) construir el 1 y abrir issues para el 2 (filas producidas por corrida) y el 3 (hora local del schedule) · (c) construir el 1 y declarar 2 y 3 fuera de alcance en el cierre.
