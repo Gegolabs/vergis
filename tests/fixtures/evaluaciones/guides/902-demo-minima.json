@@ -1,0 +1,38 @@
+{
+  "title": "Demo mínima",
+  "code": "DEMO-902",
+  "subtitle": "fixture sintética",
+  "subject": "ingles",
+  "group": "demo",
+  "variant": "A",
+  "mode": "practice",
+  "institution": "Instituto Sintético",
+  "student": "otrito",
+  "department": "Sintético",
+  "sections": [
+    {
+      "id": "m0",
+      "title": "Única",
+      "type": "multiple_choice",
+      "instructions": "Marca.",
+      "exercises": [
+        {
+          "q": "one",
+          "options": [
+            "1",
+            "2"
+          ],
+          "answer": 0
+        },
+        {
+          "q": "two",
+          "options": [
+            "1",
+            "2"
+          ],
+          "answer": 1
+        }
+      ]
+    }
+  ]
+}

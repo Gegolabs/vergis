@@ -1,0 +1,17 @@
+{
+  "id": "rep-900",
+  "title": "Devolución sintética",
+  "subtitle": "fixture",
+  "summary": "Todo inventado.",
+  "student": "pruebita",
+  "sprint": "S1",
+  "sprintOrder": 1,
+  "subject": "matematica",
+  "group": "demo",
+  "related_guides": [
+    "900-demo-confianza",
+    "901-demo-highlight"
+  ],
+  "generated_at": "2026-01-07T00:00:00.000Z",
+  "content_html": "<p>Fixture.</p>"
+}
