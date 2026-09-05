@@ -24,6 +24,8 @@ export type Discriminacion =
 export interface ProtoRegistry {
   /** Los protos registrados, en orden de registro. */
   list(): ProtoBotlet[]
+  /** El proto de esta familia, o `undefined`. Lo usa el despacho: `Report.proto` → quién lo atiende. */
+  byType(type: string): ProtoBotlet | undefined
   /** Decide a qué familia pertenece un texto de spec. */
   discriminate(text: string): Discriminacion
 }
@@ -41,8 +43,11 @@ export function createProtoRegistry(protos: ProtoBotlet[]): ProtoRegistry {
   }
   const registrados = [...protos]
 
+  const porTipo = new Map(registrados.map((p) => [p.type, p]))
+
   return {
     list: () => [...registrados],
+    byType: (type: string) => porTipo.get(type),
     discriminate(text: string): Discriminacion {
       let doc: unknown
       try {
@@ -58,4 +63,18 @@ export function createProtoRegistry(protos: ProtoBotlet[]): ProtoRegistry {
       return { kind: 'sin-discriminador' }
     },
   }
+}
+
+/**
+ * ¿Este catálogo puede servirse SIN motor de datos? (H3 · §3.2). Un nodo cuyas specs son todas de
+ * familias que no consumen datos gobernados —la instancia «estudios», que hospeda un Let de Daftar y
+ * nada más— no tiene DWH: ni datasets que sembrar, ni conexiones que verificar, ni bootstrap de
+ * esquema que esperar.
+ *
+ * CONSERVADOR a propósito: exige al menos una spec Y que ninguna consuma datos. Un catálogo VACÍO
+ * —el volumen no montado, la ruta mal escrita— NO cuenta: un nodo de Mira con su directorio vacío por
+ * accidente tiene que seguir fallando como siempre, no arrancar mudo sirviendo nada.
+ */
+export function catalogoSinDatosGobernados(reports: { proto: string }[], protos: ProtoRegistry): boolean {
+  return reports.length > 0 && reports.every((r) => protos.byType(r.proto)?.consumesData === false)
 }

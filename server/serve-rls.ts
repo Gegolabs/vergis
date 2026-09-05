@@ -55,22 +55,22 @@
  *                          AUTORÍA (opcional). Sin él, se usa el mismo SP del intake. Declarado y
  *                          no resoluble ⇒ el arranque LANZA (config rota, no default silencioso).
  */
-import { createServer } from 'node:http'
-import { readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { readFileSync, readdirSync, statSync, writeFileSync, unlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 // `watchPaths` ya no se llama directo: TODO watch pasa por `contract.watch` (instala + registra en una
 // sola llamada — ver server/contract.ts), que es quien lo invoca.
 import { swapRecordInPlace, reloadLiveList } from './hot-reload'
 import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES } from './instance-config'
 import { masterDataPublishing } from './master-data-publishing'
-import { type NavQuery } from './nav'
+import { navFromUrl, type NavQuery } from './nav'
 import { hostname, tmpdir } from 'node:os'
 import { resolve, join, dirname } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { parse as parseYaml } from 'yaml'
 import { runSpec } from '@vergis/cli'
-import { AppendOnlyLog, withResultCache, DEFAULT_GATE_MAPPING, type Capability, type GateHeaders, type IdentityContext, type LogEventInput } from '@vergis/botler'
-import { applyCtx, miraProtoBotlet, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
+import { AppendOnlyLog, withResultCache, DEFAULT_GATE_MAPPING, type Capability, type GateHeaders, type IdentityContext, type LetInvocation, type LogEventInput, type ProtoBotlet } from '@vergis/botler'
+import { applyCtx, createMiraProto, parseSpec as parseMiraSpec, validateSpec as validateMiraSpec, type MiraSpec, type ResolverComentarios } from '@vergis/mira'
 import {
   createMiranda,
   createMirandaUnavailable,
@@ -168,11 +168,12 @@ import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, unmaskProbeSchemas, type PiVerdict } from './engines/fabric'
-import { fail } from './http-util'
+import { fail, readBody } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
-import { createProtoRegistry } from './proto-registry'
+import { catalogoSinDatosGobernados, createProtoRegistry } from './proto-registry'
+import { createDaftarProto, crearInstrumentos, type Instrumentos } from '@vergis/daftar'
 import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
 import { createContractRegistry, createContractHandler, type ControlContract } from './contract'
@@ -393,10 +394,32 @@ const displayNameOverrides = new Map<string, string>()
  *  y el catálogo sirve los nombres del spec — nunca falla el serving por un renombre. */
 let refreshDisplayNames: () => Promise<void> = async () => {}
 
-// REGISTRO DE PROTO-BOTLETS (H0 · #289). El nodo ya no sabe que sus specs son de Mira: sabe que hay
-// familias de Lets registradas, y Mira es la primera. Con una sola registrada la conducta es idéntica
-// a la de antes (ver la regla de compatibilidad en `discovery.ts`).
-const protos = createProtoRegistry([miraProtoBotlet])
+// INSTRUMENTOS DE DAFTAR (H3 · #295 · D-75) — el catálogo del evaluador vive en ARCHIVOS, como las
+// specs de Mira: `<dir>/guides/*.json`, `<dir>/recursos/**`, `<dir>/reports/*.json`. Publicar es
+// copiar; el Let lo ve en el request siguiente. Sin la env, el Let sirve un catálogo vacío (y lo
+// dice el log), que es preferible a no arrancar: la spec puede estar bien y el volumen no montado.
+const INSTRUMENTOS_DIR = contract.env('VERGIS_INSTRUMENTOS_DIR')
+const instrumentos: Instrumentos = crearInstrumentos({
+  dir: INSTRUMENTOS_DIR ? resolve(INSTRUMENTOS_DIR) : resolve(process.cwd(), 'instrumentos-ausentes'),
+  log: (m) => console.warn(m),
+})
+if (!INSTRUMENTOS_DIR) console.warn('[vergis-rls] VERGIS_INSTRUMENTOS_DIR no está definida: un Let de Daftar serviría un catálogo vacío.')
+
+// REGISTRO DE PROTO-BOTLETS (H0 · #289; segunda familia en H3 · #295). El nodo no sabe que sus specs
+// son de Mira: sabe que hay familias de Lets registradas. Cada proto recibe en su CONSTRUCCIÓN lo que
+// el nodo le presta (D-72): a Mira el render por-consumidor; a Daftar el catálogo de instrumentos y
+// el store de evaluaciones. El router no conoce ni una clave de dominio de ninguno de los dos.
+const protos = createProtoRegistry([
+  createMiraProto({
+    render: (specPath, inv) => renderReport(reportPorSpecPath(specPath), inv.headers as GateHeaders, navFromUrl(inv.rawUrl)),
+  }),
+  createDaftarProto({
+    instrumentos,
+    // Getter, no valor: el store abre DESPUÉS (async) y el relevo lo reabre. Capturarlo daría null
+    // para siempre.
+    store: () => evaluacionesSqlite,
+  }),
+])
 const discovery = createDiscovery({
   store,
   engine: ENGINE as 'clickhouse' | 'fabric',
@@ -505,7 +528,45 @@ const piState = new Map<string, PiVerdict>()
 let servingCap: Capability // la Capability de query enforcing (el conector)
 let bootstrapAll: () => Promise<void>
 
-if (ENGINE === 'clickhouse') {
+/**
+ * ¿ESTE NODO NECESITA MOTOR DE DATOS? (H3 · §3.2). Un nodo cuyas specs son TODAS de familias que no
+ * consumen datos gobernados —la instancia «estudios», que hospeda un Let de Daftar y nada más— no
+ * tiene DWH, ni datasets, ni conexiones, ni ClickHouse que sembrar. Exigirle esos tres lo dejaba sin
+ * arrancar (`falta VERGIS_DATASETS`) o esperando 120 s a un ClickHouse que no existe.
+ *
+ * El predicado es POR SPEC, no por env, y es CONSERVADOR: exige que haya al menos una spec y que
+ * NINGUNA consuma datos. Un catálogo vacío (volumen no montado, error de ruta) NO cuenta como «no
+ * necesita motor» — un nodo Mira con su directorio vacío por accidente debe seguir fallando como
+ * siempre, no arrancar mudo.
+ *
+ * Se evalúa UNA VEZ, al arranque: agregar una spec de Mira en caliente a un nodo que arrancó sin
+ * motor no le da un motor. Eso es un restart, y el log lo dice.
+ */
+const NODO_SIN_MOTOR_DE_DATOS = catalogoSinDatosGobernados(discover(), protos)
+
+if (NODO_SIN_MOTOR_DE_DATOS) {
+  console.log(
+    `[vergis-rls] ningún Let descubierto consume datos gobernados (${discover().map((r) => `${r.slug}:${r.proto}`).join(', ')}): ` +
+      `el nodo arranca SIN motor de datos — sin datasets, sin conexiones y sin bootstrap del esquema. ` +
+      `Agregar una spec que sí consuma datos exige reiniciar.`,
+  )
+  contract.caveat(
+    'este nodo arrancó sin motor de datos porque ninguna de sus specs consume datos gobernados: una spec de Mira ' +
+      'agregada en caliente NO quedará servible hasta reiniciar (el conector de serving se fija al arranque).',
+  )
+  // Capability de serving INEXISTENTE, no vacía: si algo la ejecutara sería un Let de datos servido
+  // por un nodo sin motor, y eso tiene que gritar, no devolver cero filas.
+  servingCap = {
+    name: 'execute-sql',
+    execute: async () => {
+      throw new Error('este nodo arrancó sin motor de datos: ninguna de sus specs consume datos gobernados')
+    },
+  }
+  bootstrapAll = async () => {
+    ready = true
+    lastErr = null
+  }
+} else if (ENGINE === 'clickhouse') {
   // --- Motor B: replica gobernada en ClickHouse (bootstrap + ingesta + ROW POLICY) ---
   const CH_URL = contract.env('VERGIS_CH_URL') ?? 'http://clickhouse:8123'
   const ADMIN = { url: CH_URL, user: contract.env('VERGIS_CH_ADMIN_USER') ?? 'default', password: contract.env('VERGIS_CH_ADMIN_PASS') }
@@ -837,6 +898,64 @@ async function renderReport(report: Report, headers: GateHeaders, nav: NavQuery 
   return out.html ?? ''
 }
 
+/** El `Report` de una spec por su ruta. Lo necesita el `invoke` de Mira, que recibe `specPath` (la
+ *  frontera es del Let, no del catálogo del nodo) y tiene que volver al report para renderizar. */
+function reportPorSpecPath(specPath: string): Report {
+  const r = discover().find((x) => x.specPath === specPath)
+  if (!r) throw new Error(`spec no descubierta: ${specPath}`)
+  return r
+}
+
+/**
+ * PUERTA DE SALIDA GENÉRICA (H3 · #295 · D-72): el nodo arma la `LetInvocation` y se la entrega al
+ * proto-Botlet del Let. Lo que el nodo aporta —y el Let jamás deriva por su cuenta— es la IDENTIDAD y
+ * el ESTADO DEL PLANO DE CONTROL; lo que el Let aporta es todo el dominio.
+ *
+ * La spec se parsea con caché por (ruta, mtime), como el descubrimiento: `invoke` corre por request.
+ */
+const specCache = new Map<string, { mtime: number; spec: unknown }>()
+function specDe(proto: ProtoBotlet, specPath: string): unknown {
+  const mtime = statSync(specPath).mtimeMs
+  const hit = specCache.get(specPath)
+  if (hit && hit.mtime === mtime) return hit.spec
+  const spec = proto.parse(readFileSync(specPath, 'utf8'))
+  specCache.set(specPath, { mtime, spec })
+  return spec
+}
+
+/** Tope del cuerpo que un Let puede recibir. Lo fija el NODO, no el dominio. */
+const LET_BODY_LIMIT = 4 * 1024 * 1024
+
+async function invokeLet(report: Report, req: IncomingMessage, res: ServerResponse, rest: string): Promise<boolean> {
+  const proto = protos.byType(report.proto)
+  if (!proto) {
+    console.error(`[vergis-rls] '${report.slug}': no hay proto-Botlet registrado para la familia '${report.proto}'`)
+    return false
+  }
+  const method = (req.method ?? 'GET').toUpperCase()
+  const rawUrl = req.url ?? '/'
+  const query: Record<string, string> = {}
+  for (const [k, v] of new URLSearchParams(rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '')) query[k] = v
+  const conCuerpo = method === 'POST' || method === 'PUT' || method === 'PATCH'
+  const inv: LetInvocation = {
+    method,
+    path: rest,
+    query,
+    rawUrl,
+    headers: req.headers,
+    ...(conCuerpo ? { body: await readBody(req, LET_BODY_LIMIT) } : {}),
+    identity: identityFor(req.headers as GateHeaders),
+    hasControl: plane.hasControl(),
+    activeHolder: activeHolderLabel(),
+    base: `/${report.slug}`,
+  }
+  const out = await proto.invoke(specDe(proto, report.specPath), report.specPath, inv)
+  if (!out) return false
+  res.writeHead(out.status, out.headers ?? { 'content-type': 'text/plain; charset=utf-8' })
+  res.end(typeof out.body === 'string' ? out.body : Buffer.from(out.body))
+  return true
+}
+
 /**
  * «Descargar PDF» server-side (#65) — o `undefined` cuando la instancia no monta el sidecar. Ese
  * `undefined` ES el fail-closed: sin él el router no intercepta `/<slug>/pdf` y la URL responde el 404
@@ -1022,6 +1141,7 @@ const server = createServer(
     discover,
     identityFor,
     renderReport,
+    invokeLet,
     renderPdf,
     indexReports,
     renderIndexPage,
@@ -1030,13 +1150,29 @@ const server = createServer(
     // pero aún no verificado (spec recién añadida en caliente) queda fail-closed hasta la próxima
     // pasada de verificación. En clickhouse el estado sigue siendo global (gate `ready`).
     piBlocked: (report: Report): string | null => {
+      // UN LET SIN DATOS GOBERNADOS NO SE VERIFICA (D-73): no tiene RLS nativa que comprobar, así que
+      // no entra a `piState` — y si entrara nunca saldría, porque nadie lo verifica: quedaría
+      // «pendiente de verificación» para siempre. Sirve, y su autorización la decide él.
+      if (protos.byType(report.proto)?.consumesData === false) return null
       if (ENGINE !== 'fabric') return null
       const v = piState.get(report.slug)
       if (!v) return 'pendiente de verificación de su RLS nativa (reintenta en unos segundos).'
       return v.ok ? null : v.reason
     },
-    healthSummary: () =>
-      ENGINE === 'fabric' ? { total: piState.size, serving: [...piState.values()].filter((v) => v.ok).length } : null,
+    healthSummary: (): { total: number; serving: number } | null => {
+      const all = discover()
+      const sinDatos = all.filter((r) => protos.byType(r.proto)?.consumesData === false).length
+      if (ENGINE !== 'fabric') {
+        // clickhouse: la servibilidad es GLOBAL (gate `ready`), así que no había conteo por Let y el
+        // healthz no traía `lets`. Sigue sin traerlo… salvo que existan Lets SIN datos: para ellos
+        // «servible» sí es una propiedad propia, y el predicado del conmutador y del poller de cortes
+        // (`lets.serving == lets.total`) necesita verlos o el Let no cuenta como Let. Una instancia
+        // Mira en clickhouse no tiene Lets sin datos ⇒ `null` ⇒ nada cambia para ella.
+        return sinDatos === 0 ? null : { total: all.length, serving: all.length }
+      }
+      // fabric: los verificados con veredicto OK, MÁS los que no se verifican porque no consumen datos.
+      return { total: all.length, serving: [...piState.values()].filter((v) => v.ok).length + sinDatos }
+    },
     // PLANO DE CONTROL (#210 · I5): sin control, `healthz` declara `standby` (200, pero NO `serving`) y
     // toda mutación de las superficies de gestión responde 409 nombrando al activo.
     control: { hasControl: () => plane.hasControl(), activeHolder: () => activeHolderLabel() },
@@ -2858,6 +2994,22 @@ if (HOT_RELOAD) {
       }
     },
   )
+  // INSTRUMENTOS de Daftar (H3 · D-75): el caché es por mtime, así que un cambio ya se vería en el
+  // request siguiente; el watch solo ADELANTA la invalidación y deja el evento en `/contrato`, que es
+  // donde el operador va a mirar cuando publique una guía y quiera saber si el nodo la vio.
+  if (INSTRUMENTOS_DIR) {
+    const dirInstr = resolve(INSTRUMENTOS_DIR)
+    contract.watch(
+      { envs: ['VERGIS_INSTRUMENTOS_DIR'], reloads: 'instrumentos: invalida el caché del catálogo de Daftar (guías y reportes)' },
+      [join(dirInstr, 'guides'), join(dirInstr, 'reports')],
+      () => {
+        instrumentos.invalidar()
+        const n = instrumentos.listar().length
+        console.log(`[hot-reload] instrumentos recargados: ${n} guía(s) en el catálogo`)
+        contract.record({ reason: 'watch:instrumentos', ok: true, servableLets: discover().length })
+      },
+    )
+  }
   if (POLICY_PATHS.length) {
     contract.watch(
       { envs: ['VERGIS_POLICIES'], reloads: 'gobierno completo: políticas (validate-before-swap) + rebuild specs + re-verificación' },

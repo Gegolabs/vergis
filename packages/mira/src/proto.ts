@@ -7,7 +7,7 @@
  * `identity.code ?? identity.id ?? 'pi'`, `identity.display_name`). El nodo deja de conocer estas
  * claves; las conoce Mira.
  */
-import type { ProtoBotlet } from '@vergis/botler'
+import type { LetInvocation, LetResponse, ProtoBotlet } from '@vergis/botler'
 import { parseSpec } from './dsl/parse'
 
 /** La forma MÍNIMA de una spec que el descubrimiento necesita — no es el DSL completo (`MiraSpec`):
@@ -17,9 +17,37 @@ export interface MiraSpecLike {
   data?: Record<string, { capability?: string; params?: { sql?: string; database_ref?: string } }>
 }
 
-export const miraProtoBotlet: ProtoBotlet<MiraSpecLike> = {
+/** Lo que el NODO le presta a Mira para que pueda atender su ruta. Hoy es uno solo: el render
+ *  por-consumidor de un PI (`renderReport` de `serve-rls.ts`), que cierra sobre capabilities, notas,
+ *  as-of y config. El proto no lo conoce ni lo construye: lo recibe. */
+export interface MiraProtoDeps {
+  /** Render por-consumidor del PI cuya spec vive en `specPath`, bajo la invocación dada. */
+  render(specPath: string, inv: LetInvocation): Promise<string>
+}
+
+/**
+ * Mira como proto-Botlet. `createMiraProto` en vez de una constante porque `invoke` necesita el render
+ * del nodo (D-72): el dominio no puede fabricarlo. Su `invoke` atiende EXACTAMENTE la ruta que el
+ * router ya atendía —`GET /<slug>`— y devuelve `null` para cualquier otra, así que la conducta
+ * observable de una instancia Mira no cambia: las rutas Mira-específicas (`/pdf`, `/config`, notas)
+ * las sigue sirviendo el router antes de llegar acá.
+ */
+export function createMiraProto(deps: MiraProtoDeps): ProtoBotlet<MiraSpecLike> {
+  return { ...miraProtoBase, invoke: miraInvoke(deps) }
+}
+
+const miraInvoke =
+  (deps: MiraProtoDeps) =>
+  async (_spec: MiraSpecLike, specPath: string, inv: LetInvocation): Promise<LetResponse | null> => {
+    if (inv.path !== '' || inv.method !== 'GET') return null
+    return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: await deps.render(specPath, inv) }
+  }
+
+/** Todo lo de H0 (descubrimiento), sin `invoke`: lo comparte `createMiraProto`. */
+const miraProtoBase = {
   type: 'mira',
   discriminator: 'mira_version',
+  consumesData: true,
   parse(text: string): MiraSpecLike {
     const spec = parseSpec(text)
     if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) {
@@ -36,4 +64,4 @@ export const miraProtoBotlet: ProtoBotlet<MiraSpecLike> = {
   identityOf(spec: MiraSpecLike): { code: string; displayName?: string } {
     return { code: spec.identity?.code ?? spec.identity?.id ?? 'pi', displayName: spec.identity?.display_name }
   },
-}
+} satisfies Omit<ProtoBotlet<MiraSpecLike>, 'invoke'>

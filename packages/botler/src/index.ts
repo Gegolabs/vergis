@@ -1,5 +1,5 @@
 export * from './types'
-export type { ProtoBotlet } from './proto-botlet'
+export type { ProtoBotlet, LetInvocation, LetResponse } from './proto-botlet'
 export { AppendOnlyLog, canonical } from './log'
 export type { AppendOnlyLogOptions } from './log'
 export { withResultCache } from './result-cache'
