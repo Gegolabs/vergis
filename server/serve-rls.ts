@@ -2762,7 +2762,7 @@ function reloadGovernance(reason: string): void {
   // El contrato registra la recarga DONDE OCURRE, con los artefactos que acaban de entrar: sus hashes
   // son los EFECTIVAMENTE cargados, y el GET los compara contra el disco («¿tomaste mi archivo?»).
   contract.record(
-    { reason, ok: true, ...(r.ok ? {} : { error: `rebuild de specs falló: ${r.error}` }), policies: store.size, servablePis: discover().length },
+    { reason, ok: true, ...(r.ok ? {} : { error: `rebuild de specs falló: ${r.error}` }), policies: store.size, servableLets: discover().length },
     [...policyArtifacts(), ...domainArtifacts(), ...(r.ok ? specArtifacts() : [])],
   )
   // Fail-closed en el reload, con radio de daño POR MOTOR (issue #52):
@@ -2785,7 +2785,7 @@ function reloadGovernance(reason: string): void {
 // BOOT — el contrato registra el arranque con TODOS los artefactos que el proceso acaba de cargar
 // (políticas, specs, gobierno de dominio). Desde acá, `/contrato` ya responde «¿tomaste mi archivo?»
 // aunque nunca haya ocurrido una recarga.
-contract.record({ reason: 'boot', ok: true, policies: store.size, servablePis: discover().length }, [
+contract.record({ reason: 'boot', ok: true, policies: store.size, servableLets: discover().length }, [
   ...policyArtifacts(),
   ...specArtifacts(),
   ...domainArtifacts(),
@@ -2848,7 +2848,7 @@ if (HOT_RELOAD) {
       const r = discovery.rebuild()
       console.log(r.ok ? `[hot-reload] specs recargadas: ${discover().length} PI servible(s)` : `[hot-reload] rebuild de specs falló (se conserva el previo): ${r.error}`)
       contract.record(
-        { reason: 'watch:specs', ok: r.ok, ...(r.ok ? {} : { error: r.error }), policies: store.size, servablePis: discover().length },
+        { reason: 'watch:specs', ok: r.ok, ...(r.ok ? {} : { error: r.error }), policies: store.size, servableLets: discover().length },
         r.ok ? specArtifacts() : undefined,
       )
       // fabric: un PI recién descubierto nace fail-closed («pendiente de verificación») — re-verificar

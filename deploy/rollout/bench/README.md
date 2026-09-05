@@ -49,12 +49,12 @@ Los datos crudos quedan en `.run/datos/` (gitignored): `*-poller.jsonl` (una lí
 
 | Pieza | Qué es | Dónde |
 |--|--|--|
-| **El instrumento** | Poller que **despacha** cada ~28 ms sin esperar la respuesta anterior, timeout 20 s por request, predicado `200 ∧ phase=serving ∧ pis.serving=pis.total`, `SINMEDIR ≠ MAL` | `poller/poller-v14.mjs` |
+| **El instrumento** | Poller que **despacha** cada ~28 ms sin esperar la respuesta anterior, timeout 20 s por request, predicado `200 ∧ phase=serving ∧ lets.serving=lets.total`, `SINMEDIR ≠ MAL` | `poller/poller-v14.mjs` |
 | **El loop de mutaciones** | 1/s contra el conmutador. `POST /<pi>/imprimir`: inocua, verificable por id, y pasa por el mismo gate de control que toda escritura gobernada | `poller/mutador.mjs` |
 | **El cero-pérdidas** | Re-pregunta por cada id ya cerrado el acto: un 200 no prueba que el efecto sobreviviera al handover | `poller/verificar-impresiones.mjs` |
 | **El veredicto** | Se computa del JSONL, nunca de la consola. Separa las familias de lo fuera-de-predicado en vez de fundirlas en un número | `scripts/veredicto.mjs` |
 | **El mundo** | ClickHouse (la fuente), el borde derivado del `Caddyfile.reference`, y el poller y el mutador como **hermanos** que el acto no recrea | `compose.bench.yml`, `Caddyfile.bench` |
-| **Los anillos** | NO los declara el compose: los crea `vergis-rollout install` como `vergis-9-9-1` y `vergis-9-9-2` — que es la propiedad que permite promover sin recrear nada | `rings/ring.args.tmpl` |
+| **Los anillos** | NO los declara el compose: los crea `botler-rollout install` como `vergis-9-9-1` y `vergis-9-9-2` — que es la propiedad que permite promover sin recrear nada | `rings/ring.args.tmpl` |
 
 **Bloque de gobierno.** Los anillos llevan `VERGIS_ADMIN_SEED` (`rings/ring.args.tmpl`). Sin él la
 instancia no abre `governance.sqlite`, `/contrato` responde **403** y el **gate de esquema del

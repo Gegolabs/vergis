@@ -1,6 +1,6 @@
 # Banco V-14 — el mundo local donde se mide una promoción de anillos.
 #
-# LO QUE ESTE ARCHIVO NO DECLARA, Y ES DELIBERADO: los anillos. Los crea `vergis-rollout install` como
+# LO QUE ESTE ARCHIVO NO DECLARA, Y ES DELIBERADO: los anillos. Los crea `botler-rollout install` como
 # contenedores `vergis-<versión>` fuera del ciclo de vida de compose — que es exactamente la propiedad
 # que permite tener dos versiones vivas a la vez y promover sin recrear nada.
 #

@@ -63,6 +63,76 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+**⚠ Esta versión EXIGE algo nuevo de la instancia.** El contrato del nodo cambió de nombre a un campo
+que los health checks, los pollers y el conmutador de anillos leen. Léase la sección «Qué exige esta
+versión» de la entrada siguiente **antes** de adoptarla: adoptarla sin actualizar la herramienta y el
+healthcheck deja el conteo sin medir.
+
+### El contrato del nodo cuenta Lets, no PIs: `pis` → `lets`, y `vergis-rollout` pasa a `botler-rollout` (#290)
+
+**Por qué.** «PI» es vocabulario de **Mira**, y el nodo dejó de ser el runtime de Mira: desde #289
+hospeda **familias de Lets** (proto-Botlets), de las que Mira es la primera. El contrato público del
+nodo —lo que un borde, un poller o un conmutador leen para decidir si le rutean tráfico— hablaba el
+idioma de una de sus familias. Ahora habla el del canon.
+
+**Qué rompe, exactamente.**
+
+- El bloque `pis` de `GET /healthz` se llama **`lets`**: `{ ok, engine, phase, lets: { total, serving } }`.
+- El campo `servablePis` de los eventos de recarga de `GET /contrato` se llama **`servableLets`**.
+- La herramienta de anillos se llama **`botler-rollout`** (`deploy/rollout/botler-rollout`). El nombre
+  viejo queda como **alias que avisa**: `deploy/rollout/vergis-rollout` imprime por stderr
+  `vergis-rollout: nombre retirado; usa botler-rollout (mismo comando, mismos argumentos)` y reenvía
+  con los mismos argumentos y el mismo código de salida.
+
+**El daño concreto si no se actualiza:** un poller, healthcheck o predicado de borde que lea `pis`
+**deja de ver el conteo**, y según cómo esté escrito el desenlace es uno de dos, los dos malos —
+declara **sano a un nodo degradado** (si trata el bloque ausente como «sin servibilidad por Let», que
+es la convención de este repo) o **nunca declara sano a uno sano** (si exige el bloque). Ninguno
+falla ruidosamente: por eso esto va con aviso y no como nota al pie.
+
+### Qué exige esta versión
+
+Las tres cosas **en el mismo acto**, antes de promover la imagen nueva:
+
+1. **La herramienta de anillos de esta versión.** `git pull` del repo en la VM (o copiar
+   `deploy/rollout/botler-rollout` y `deploy/rollout/vergis-rollout`). Su `serving_ok()` ahora lee
+   `total`/`serving` **del bloque `lets`** y **rechaza** un cuerpo que traiga los conteos fuera de ese
+   bloque: una herramienta vieja contra un nodo nuevo —o al revés— se nota, en vez de pasar en verde.
+2. **El healthcheck del compose de la instancia**, si copió el de referencia:
+   `(!b.pis||b.pis.total===b.pis.serving)` pasa a `(!b.lets||b.lets.total===b.lets.serving)`. Ya
+   actualizados en `docker-compose.yml` y `deploy/compose.reference.yml`.
+3. **Cualquier poller propio** que lea el bloque de conteos (el inline del RUNBOOK y
+   `deploy/rollout/bench/poller/poller-v14.mjs` ya están actualizados; sus registros pasan de
+   `pisTotal`/`pisServing` a `letsTotal`/`letsServing`).
+
+**El `health_body` del `deploy/Caddyfile.reference` NO cambia**: juzga por `"phase":"serving"` y nunca
+nombró el bloque de conteos.
+
+**Cómo se adopta sin corte.** La promoción por anillos **es** el acto que trae la herramienta nueva.
+El orden es: primero la herramienta (`git pull` o copia del script), después `botler-rollout install
+<versión>` y `botler-rollout promote <versión>`. No hay ventana de mantención ni paso manual extra.
+
+**Qué se midió.**
+
+- **La suite de anillos con docker falso** (`tests/deploy-anillos.test.ts`, 23 pruebas) contra la
+  herramienta real corrida con `sh`, incluida una prueba nueva del alias retirado (avisa por stderr y
+  entrega el mismo stdout que el nombre canónico).
+- **El control negativo del renombre**, que es lo que justifica el endurecimiento de `serving_ok()`:
+  con la fixture emitiendo el cuerpo **viejo** (`"pis"`), el predicado **anterior** —que buscaba
+  `total`/`serving` por expresión regular en cualquier parte del JSON— dejaba pasar las 23 pruebas en
+  verde: estaba degenerado a «solo fase» respecto del nombre del bloque. Con el predicado nuevo esa
+  misma fixture pone **8 pruebas en rojo**. Es la corrida que habría refutado el mecanismo si fuera
+  falso.
+- **El banco de anillos e2e local** (Docker, `deploy/rollout/bench`): CN-1 **rojo** como debe
+  (649/649 muestras fuera de predicado contra un nodo en espera — el instrumento mide) y una promoción
+  9.9.1 → 9.9.2 bajo medición con el predicado nuevo: **0 muestras fuera de predicado**, 68 OK y 1
+  SINMEDIR de 69 en la ventana del acto.
+
+**Qué NO se midió, con esas palabras: ninguna instancia real ha promovido esta versión todavía.** El
+banco corre con motor `clickhouse`, cuyo `/healthz` **omite** el bloque de conteos, así que el camino
+`lets` con conteos lo ejerce la suite de anillos, no el banco.
+
+
 ### El nodo descubre sus specs por un registro de familias, y Mira es la primera (#289)
 
 **Para una instancia no cambia nada.** Mismas rutas, mismo HTML, mismo `/healthz`, mismo catálogo, los

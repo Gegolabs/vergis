@@ -10,7 +10,7 @@ import type { Report } from '../server/discovery'
  *
  * La invariante que estos tests protegen: `serving` sigue significando exactamente lo que significaba.
  * El predicado del conmutador de anillos y del poller de cortes es `HTTP 200 ∧ phase=serving ∧
- * pis.serving=N`, y un nodo en espera **no debe** satisfacerlo — rutearle tráfico sería mandar
+ * lets.serving=N`, y un nodo en espera **no debe** satisfacerlo — rutearle tráfico sería mandar
  * escrituras a un nodo que responde 409. `standby` es un estado NUEVO, no un aflojamiento del viejo.
  *
  * ⚠️ **Qué mide hoy el control negativo de este frente, y por qué NO mide lo que medía ayer.** La
@@ -81,7 +81,7 @@ describe('healthz · la fase standby no relaja serving (#210 · I5)', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps({ control: enEspera, healthSummary: () => ({ total: 2, serving: 2 }) }))(mkReq('/healthz'), res)
     expect(calls.status).toBe(200)
-    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'fabric', phase: 'standby', pis: { total: 2, serving: 2 } })
+    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'fabric', phase: 'standby', lets: { total: 2, serving: 2 } })
   })
 
   it('el mismo nodo CON control vuelve a phase:serving', () => {
@@ -106,7 +106,7 @@ describe('healthz · la fase standby no relaja serving (#210 · I5)', () => {
   it('un standby con PIs degradados sigue delatando la degradación en ok y en los conteos', () => {
     const { res, calls } = mkRes()
     createRequestHandler(deps({ control: enEspera, healthSummary: () => ({ total: 3, serving: 1 }) }))(mkReq('/healthz'), res)
-    expect(JSON.parse(calls.body)).toEqual({ ok: false, engine: 'fabric', phase: 'standby', pis: { total: 3, serving: 1 } })
+    expect(JSON.parse(calls.body)).toEqual({ ok: false, engine: 'fabric', phase: 'standby', lets: { total: 3, serving: 1 } })
   })
 })
 

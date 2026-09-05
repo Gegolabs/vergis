@@ -28,7 +28,7 @@ corte: lo que se mide es el intervalo en que el predicado de salud **no** se sat
 ### 0.2 · El predicado es la fase, jamás «responde»
 
 ```
-sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  pis.serving == pis.total
+sano  ⇔  HTTP 200  ∧  "phase":"serving"  ∧  lets.serving == lets.total
 ```
 
 **Nunca `r.ok`. Nunca «2xx a secas». Nunca «el curl volvió».** Un nodo **en espera** responde `200`
@@ -95,10 +95,10 @@ docker exec "$EDGE" sh -c '
     tt=$(printf "%s" "$b" | sed -n "s/.*\"total\":\([0-9]*\).*/\1/p")
     # El predicado COMPLETO. Cuerpo vacío = no se pudo medir, y eso cuenta como fallo, no se omite.
     if [ -n "$b" ] && [ "$ph" = serving ] && [ -n "$sv" ] && [ "$sv" = "$tt" ]; then
-      printf "%s ok  fase=%s pis=%s/%s\n" "$(date -u +%H:%M:%S)" "$ph" "$sv" "$tt"
+      printf "%s ok  fase=%s lets=%s/%s\n" "$(date -u +%H:%M:%S)" "$ph" "$sv" "$tt"
     else
       fallos=$((fallos+1))
-      printf "%s NO-SERVIDA fase=%s pis=%s/%s (fallos=%s de %s)\n" \
+      printf "%s NO-SERVIDA fase=%s lets=%s/%s (fallos=%s de %s)\n" \
         "$(date -u +%H:%M:%S)" "${ph:-sin-respuesta}" "${sv:-?}" "${tt:-?}" "$fallos" "$total"
     fi
     sleep 0.25
@@ -106,7 +106,7 @@ docker exec "$EDGE" sh -c '
 ```
 
 - Resolución **0,25 s**: el corte que se busca acotar es de segundos.
-- `pis.serving == pis.total` importa tanto como la fase: un nodo que sirve la mitad de los PIs
+- `lets.serving == lets.total` importa tanto como la fase: un nodo que sirve la mitad de los Lets
   responde `200` y `phase:degraded` — y eso **es** una respuesta no servida para la mitad de la gente.
 - **Un cuerpo vacío es un fallo, no un dato ausente.** «No pude medir» nunca se cuenta como verde.
 - Ajusta `sed`/`wget` a las herramientas de tu imagen del borde; lo que **no** se ajusta es el
@@ -133,10 +133,10 @@ Se corre **una vez por instalación**, y de nuevo cada vez que cambie el poller 
 
 | # | Comando | Qué tiene que salir |
 |--|--|--|
-| 1.1 | `vergis-rollout status` | El activo y el previo declarados, con sus digests, y el borde apuntando al activo |
-| 1.2 | `docker exec $EDGE wget -q -O- http://127.0.0.1:8079/healthz` | `phase:"serving"` y `pis.serving == pis.total` — **el punto de partida está sano**. Si ya está degradado, esto no es una promoción: es un incidente |
+| 1.1 | `botler-rollout status` | El activo y el previo declarados, con sus digests, y el borde apuntando al activo |
+| 1.2 | `docker exec $EDGE wget -q -O- http://127.0.0.1:8079/healthz` | `phase:"serving"` y `lets.serving == lets.total` — **el punto de partida está sano**. Si ya está degradado, esto no es una promoción: es un incidente |
 | 1.3 | `docker inspect --format '{{index .Config.Labels "vergis.schema.stores"}}' ghcr.io/gegolabs/vergis:<candidata>` | El esquema que la candidata soporta, store por store. Descarta un rollback incompatible **sin arrancar nada** (necesario, no suficiente: el gate autoritativo es el pre-flight del paso 3) |
-| 1.4 | `vergis-rollout prune --dry-run` | Qué retiraría la retención vigente. Que no te sorprenda **después** |
+| 1.4 | `botler-rollout prune --dry-run` | Qué retiraría la retención vigente. Que no te sorprenda **después** |
 | 1.5 | El `CHANGELOG.md` de la versión candidata | ¿Trae una acción de migración? ¿Dice **«rompe rollback a < X.Y»**? Esa frase acorta tu ventana de reversión y hay que saberlo **antes** |
 | 1.6 | Anota el estado del que vas a dejar atrás | Versión + digest del activo actual. Es el destino de tu rollback, y se escribe **antes**, no durante la emergencia |
 
@@ -146,14 +146,14 @@ se pueda saber qué rompió qué.
 ## 2 · Instalar el anillo (no toca el tráfico)
 
 ```sh
-vergis-rollout install <versión>          # pull + digest + create + start; queda EN ESPERA
+botler-rollout install <versión>          # pull + digest + create + start; queda EN ESPERA
 ```
 
-**Verificación:** `vergis-rollout status` muestra el anillo nuevo **en espera**, con el digest que
+**Verificación:** `botler-rollout status` muestra el anillo nuevo **en espera**, con el digest que
 resolvió el `pull`. Un anillo que no llega a responder **no queda marcado como promovible** — y eso
 es un resultado, no un error de la herramienta.
 
-**Rollback de este paso:** `vergis-rollout retire <versión> --rmi`. Nada del tráfico se movió.
+**Rollback de este paso:** `botler-rollout retire <versión> --rmi`. Nada del tráfico se movió.
 
 **Si el guard de digest se niega** (la versión ya está registrada con otro digest): **no lo fuerces
 por inercia**. Dos imágenes distintas con el mismo número de versión es un hecho medido en este
@@ -170,7 +170,7 @@ Arranca el poller (§0) y **déjalo corriendo**. Dos requisitos que se cumplen a
 ## 4 · Promover
 
 ```sh
-vergis-rollout promote <versión>
+botler-rollout promote <versión>
 ```
 
 La herramienta hace, en orden: **pre-flight** (incluido el del borde) → **intent de handover** →
@@ -186,7 +186,7 @@ sala de espera. Qué verificar en cada paso:
 | **Flip** | `active.caddy` apunta al anillo nuevo; la config **se validó** antes de recargar | Una config inválida restaura la línea anterior y **no** recarga. El borde sigue con lo que tenía |
 | **Handover** | El candidato declara `serving` **y el borde lo entrega** (predicado completo por el conmutador); el anterior queda en espera y sigue sirviendo lecturas | **Vuelta atrás, y lo primero que vuelve es el tráfico**: flip al anterior, intent nombrándolo a él, y recién entonces SIGUSR2 al candidato. Lo capturado en la ventana estuvo **retenido**, no respondido con error. Si el mensaje dice que hay **cero** controladores, eso sí es un incidente: ve a §6 |
 | **Smoke** | Por el borde, con el predicado completo | La herramienta **vuelve atrás** por el mismo camino. Confírmalo con `status` y con el poller, no con el mensaje en pantalla |
-| **Registro** | `vergis-rollout status`: el nuevo activo, el anterior como **previo** (caliente) | Si el registro y la realidad no coinciden, **para y reporta lo observado** — no «corrijas» sobre una lectura no confirmada |
+| **Registro** | `botler-rollout status`: el nuevo activo, el anterior como **previo** (caliente) | Si el registro y la realidad no coinciden, **para y reporta lo observado** — no «corrijas» sobre una lectura no confirmada |
 
 **El costo honesto, y hay que decirlo antes de que alguien lo note:** entre el handover y el `serving`
 del candidato (segundos) las **escrituras** responden **409 explícitos**; las **lecturas se sirven
@@ -218,7 +218,7 @@ del flip-back **no está medido**: se declara, no se supone.
 ### Al previo (caliente) — el caso normal
 
 ```sh
-vergis-rollout rollback          # flip puro: el previo ya está caliente
+botler-rollout rollback          # flip puro: el previo ya está caliente
 ```
 
 Mismo pre-flight, mismo smoke, mismo poller corriendo. **Sube el poller también para el rollback:**
@@ -227,7 +227,7 @@ la maniobra de emergencia es exactamente donde más cara sale una medición que 
 ### A un anillo retenido (frío)
 
 ```sh
-vergis-rollout rollback <versión>   # lo arranca primero
+botler-rollout rollback <versión>   # lo arranca primero
 ```
 
 El arranque cuesta **segundos** (3,8–11,6 s medidos para un arranque de nodo, con dispersión no
@@ -241,7 +241,7 @@ a < X.Y», **ese es el piso** y el pre-flight se va a negar.
 Es la dirección segura del diseño —falla hacia cero, nunca hacia dos— pero es un incidente: nadie
 observa, nadie reconcilia, nadie consume cargas. Las lecturas siguen sirviéndose.
 
-1. `vergis-rollout status` y el bloque `control` de `/contrato` de cada anillo caliente: quién cree
+1. `botler-rollout status` y el bloque `control` de `/contrato` de cada anillo caliente: quién cree
    ser el titular, con qué época.
 2. **No borres el archivo de lease a mano** para «desatascar». El relevo por staleness converge solo;
    borrarlo es abrir la puerta a dos controladores, que es la única falla que este diseño trata como
@@ -268,7 +268,7 @@ pierde.
 - La **sala de espera no cubre la muerte del propio borde** (residual: `restart: unless-stopped` del
   contenedor de Caddy — y ese corte sí es corte).
 - El **smoke no recorre las rutas de cada PI**: `/healthz` publica conteos, no slugs. El invariante
-  que sí se exige es `pis.serving == pis.total`, y lo funcional lo verifica un humano (§5.2).
+  que sí se exige es `lets.serving == lets.total`, y lo funcional lo verifica un humano (§5.2).
 - **`ring.args` es un espejo manual** del servicio `vergis` del compose. Nada verifica que estén
   sincronizados: si cambias un env o un montaje en uno, cámbialo en el otro.
 - **El handover es dirigido, con alcance parcial declarado**: la herramienta escribe un intent
