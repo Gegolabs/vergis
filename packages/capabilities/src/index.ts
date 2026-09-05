@@ -139,6 +139,41 @@ export {
   MASTER_DATA_SCHEMA_VERSION,
 } from './master-data-store'
 export type { MasterDataStore, MasterDataRow } from './master-data-store'
+export {
+  SqliteEvaluacionesStore,
+  openEvaluacionesStore,
+  instrumentoInmutable,
+  confianzaDe,
+  extraJson,
+  parseExtra,
+  ausente,
+  EVALUACIONES_SCHEMA_VERSION,
+} from './evaluaciones-store'
+export type {
+  Instrumento,
+  PublicarInstrumentoInput,
+  Intento,
+  IntentoIn,
+  Seccion,
+  SeccionIn,
+  Respuesta,
+  RespuestaIn,
+  Reporte,
+  ReporteIn,
+  Confianza,
+  Extra,
+} from './evaluaciones-store'
+export {
+  importarDaftar,
+  exportarProgreso,
+  progresoAIntento,
+  verificarRoundTrip,
+  estudiantesDe,
+  sha256De,
+  totalItemsDe,
+  totalSeccionesDe,
+} from './evaluaciones-import'
+export type { InformeImportacion, FilaInforme, EstadoImportacion, ImportarDaftarInput } from './evaluaciones-import'
 export { createDwhPublisher, replicaTable, replicaStagingTable, masterDataPublishPlan } from './master-data-publish'
 export type { Publisher, PublisherTarget, PublishTargetResult, ReplicaCountResult } from './master-data-publish'
 export { parseDomainsConfig, canManageDomain, manageableDomains, stewardGroupId, STEWARD_GROUP_PREFIX } from './domain'
