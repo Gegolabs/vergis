@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { createDiscovery, slugify, type DiscoveryDeps } from '../server/discovery'
+import { createProtoRegistry } from '../server/proto-registry'
+import { miraProtoBotlet } from '@vergis/mira'
+import type { ProtoBotlet } from '@vergis/botler'
 import type { ClaimSet, PolicyDecl } from '@vergis/policy'
 
 function specYaml(code: string, sql: string, cap = 'execute-sql-ch'): string {
@@ -24,6 +27,7 @@ function mk(over: Partial<DiscoveryDeps> & { specs: Record<string, string>; engi
   return createDiscovery({
     store: new Map<string, PolicyDecl>([['qw04.areas', PUBLIC], ['dbo.saldos', GOVERNED]]),
     servingCaps: new Set(['execute-sql-ch']),
+    protos: createProtoRegistry([miraProtoBotlet]),
     specPaths: () => Object.keys(specs),
     readSpec: (p) => specs[p],
     log: () => {},
@@ -106,8 +110,8 @@ describe('discovery · canAccess / visibleFor', () => {
 
   it('visibleFor: PI sin datos gobernados es visible; con datos, filtra por acceso', () => {
     const reports = [
-      { code: 'A', slug: 'a', name: 'A', specName: 'A', specPath: '/a', tables: [], databaseRefs: [] },
-      { code: 'B', slug: 'b', name: 'B', specName: 'B', specPath: '/b', tables: ['dbo.saldos'], databaseRefs: [] },
+      { code: 'A', slug: 'a', name: 'A', specName: 'A', specPath: '/a', proto: 'mira', tables: [], databaseRefs: [] },
+      { code: 'B', slug: 'b', name: 'B', specName: 'B', specPath: '/b', proto: 'mira', tables: ['dbo.saldos'], databaseRefs: [] },
     ]
     expect(d.visibleFor(reports, {}).map((r) => r.code)).toEqual(['A'])
     expect(d.visibleFor(reports, { groups: ['ventas'] }).map((r) => r.code)).toEqual(['A', 'B'])
@@ -147,6 +151,7 @@ describe('discovery · diagnóstico de la negación (#165 §3)', () => {
       store: new Map<string, PolicyDecl>([['qw04.areas', PUBLIC], ['dbo.saldos', EQ]]),
       engine: 'clickhouse',
       servingCaps: new Set(['execute-sql-ch']),
+      protos: createProtoRegistry([miraProtoBotlet]),
       specPaths: () => ['/a.yaml', '/b.yaml'],
       readSpec: (p: string) =>
         p === '/a.yaml' ? specYaml('QW-04', 'SELECT * FROM qw04.areas') : specYaml('QW-09', 'SELECT * FROM dbo.saldos'),
@@ -187,10 +192,86 @@ describe('discovery · diagnóstico de la negación (#165 §3)', () => {
       store: new Map<string, PolicyDecl>(),
       engine: 'clickhouse',
       servingCaps: new Set(['execute-sql-ch']),
+      protos: createProtoRegistry([miraProtoBotlet]),
       specPaths: () => ['/a.yaml'],
       readSpec: () => specYaml('QW-04', 'SELECT * FROM qw04.areas'),
       log: () => {},
     })
     expect(d.diagnoseFor(d.discover(), {})).toEqual([])
+  })
+})
+
+// --- H0 (#289) · el descubrimiento pasa por el registro de proto-Botlets ---------------------
+//
+// Lo que estos tests miden NO es el registro (eso es proto-registry.test.ts): es la REGLA DE
+// COMPATIBILIDAD de §3.3 del brief, la que garantiza que H0 no cambie la conducta de ninguna
+// instancia viva. Antes de H0 el nodo servía cualquier YAML de Mira aunque no trajera
+// `mira_version`, y una instancia real puede tener specs así en `/opt/mira/specs`.
+
+/** Proto FICTICIO de test (H0 no crea `packages/daftar`): con él se mide el brazo de DOS familias. */
+const fakeDaftar: ProtoBotlet<Record<string, unknown>> = {
+  type: 'daftar',
+  discriminator: 'daftar_version',
+  parse: (t) => ({ t }),
+  capabilitiesOf: () => [],
+  dataOf: () => [],
+  identityOf: () => ({ code: 'x' }),
+}
+
+describe('discovery · registro de proto-Botlets (H0 · #289)', () => {
+  const SPEC_SIN = specYaml('QW-04', 'SELECT * FROM qw04.areas') // el `specYaml` de arriba NO trae `mira_version`
+  const SPEC_CON = `mira_version: "1.0"\n${SPEC_SIN}`
+
+  it('`Report.proto` dice qué familia reconoció la spec', () => {
+    const logs: string[] = []
+    const d = mk({ engine: 'clickhouse', specs: { '/a.yaml': SPEC_CON }, log: (m) => logs.push(m) })
+    expect(d.discover().map((r) => r.proto)).toEqual(['mira'])
+    expect(logs.filter((l) => l.includes('se asume Mira'))).toHaveLength(0) // con la clave, no hay aviso
+  })
+
+  it('con UN proto, una spec sin `mira_version` se descubre igual y se avisa UNA vez por ruta', () => {
+    const logs: string[] = []
+    const d = mk({ engine: 'clickhouse', specs: { '/a.yaml': SPEC_SIN }, log: (m) => logs.push(m) })
+    expect(d.discover().map((r) => r.slug)).toEqual(['qw-04'])
+    d.discover() // memoizado: no re-escanea
+    // ... y tampoco tras un rebuild(), que SÍ re-escanea: el aviso es una vez por ruta y por proceso,
+    // no una por escaneo (si no, un hot-reload periódico lo volvería ruido de log).
+    d.rebuild()
+    d.discover()
+    expect(logs.filter((l) => l.includes('se asume Mira'))).toHaveLength(1)
+    expect(logs[0]).toContain('/a.yaml')
+    expect(logs[0]).toContain('mira_version')
+  })
+
+  it('con DOS protos registrados, la MISMA spec sin discriminador se OMITE y el log lo dice', () => {
+    const logs: string[] = []
+    const d = mk({
+      engine: 'clickhouse',
+      specs: { '/a.yaml': SPEC_SIN },
+      protos: createProtoRegistry([miraProtoBotlet, fakeDaftar]),
+      log: (m) => logs.push(m),
+    })
+    expect(d.discover()).toHaveLength(0)
+    expect(logs.some((l) => l.includes('no declara la clave de ninguna familia registrada'))).toBe(true)
+    expect(logs.some((l) => l.includes('se asume'))).toBe(false)
+  })
+
+  it('una spec AMBIGUA (dos discriminadores) se omite con log y no se lista', () => {
+    const logs: string[] = []
+    const d = mk({
+      engine: 'clickhouse',
+      specs: { '/a.yaml': `daftar_version: "1.0"\n${SPEC_CON}` },
+      protos: createProtoRegistry([miraProtoBotlet, fakeDaftar]),
+      log: (m) => logs.push(m),
+    })
+    expect(d.discover()).toHaveLength(0)
+    expect(logs.some((l) => l.includes('más de un discriminador'))).toBe(true)
+  })
+
+  it('un texto que no es YAML se omite EN SILENCIO, como siempre', () => {
+    const logs: string[] = []
+    const d = mk({ engine: 'clickhouse', specs: { '/a.yaml': '{ no cierra\n  ni: yaml' }, log: (m) => logs.push(m) })
+    expect(d.discover()).toHaveLength(0)
+    expect(logs).toEqual([])
   })
 })

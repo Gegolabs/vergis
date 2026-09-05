@@ -63,7 +63,31 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### El nodo descubre sus specs por un registro de familias, y Mira es la primera (#289)
+
+**Para una instancia no cambia nada.** Mismas rutas, mismo HTML, mismo `/healthz`, mismo catálogo, los
+mismos PIs servidos: es refactor del núcleo, no capacidad nueva ni para el operador ni para el
+especificador. El descubrimiento dejó de tener el DSL de Mira escrito adentro — ahora pregunta a un
+**registro de proto-Botlets** de quién es cada spec, y Mira está registrada como la única familia.
+
+**El único síntoma nuevo posible es una línea de log**, y solo si la instancia tiene specs que no
+declaran `mira_version`:
+
+```
+[vergis-rls] '<ruta>' no declara `mira_version`: se asume Mira por ser el único proto-Botlet
+registrado. Declararlo — con dos familias registradas esta spec quedaría omitida.
+```
+
+**Qué hacer con ella.** El PI se sigue sirviendo igual: la línea no reporta una falla, avisa de una
+deuda. Se emite **una vez por spec y por proceso** (no se repite en cada hot-reload de gobierno), y se
+apaga agregando `mira_version: "1.0"` como clave raíz de esa spec. Mientras Mira sea la única familia
+registrada, una spec sin la clave se le atribuye igual; el día que el nodo hospede una segunda familia,
+esa misma spec quedaría **omitida** por no poder atribuirse sin adivinar. Por eso el aviso llega antes
+que el problema.
+
+`/contrato` gana un campo `protos` con las familias que el proceso cableó — derivado del registro vivo,
+no declarado a mano.
+
 
 ## 0.26.0 — 2026-09-03
 
