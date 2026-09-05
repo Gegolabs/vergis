@@ -1,0 +1,614 @@
+{
+  "multiple_choice": {
+    "guide": {
+      "title": "Guía sintética — multiple_choice",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "a",
+          "title": "Selección múltiple",
+          "type": "multiple_choice",
+          "instructions": "Marca la correcta.",
+          "exercises": [
+            {
+              "text": "¿2 + 2?",
+              "options": [
+                "3",
+                "4",
+                "5"
+              ],
+              "answer": 1
+            },
+            {
+              "text": "¿Cuál es <i>mayor</i>?",
+              "options": [
+                "1/2",
+                "1/3"
+              ],
+              "answer": 0
+            },
+            {
+              "text": "Sin responder",
+              "options": [
+                "a",
+                "b"
+              ],
+              "answer": 0
+            }
+          ]
+        }
+      ],
+      "confidence": true
+    },
+    "progress": {
+      "guideId": "syn-mc",
+      "currentSection": 0,
+      "totalSections": 1,
+      "_startedAt": "2026-08-01T10:00:00",
+      "_finishedAt": "2026-08-01T10:03:25",
+      "sections": {
+        "0": {
+          "answers": [
+            {
+              "choice": 1,
+              "conf": "S"
+            },
+            {
+              "choice": 1,
+              "conf": "S"
+            },
+            {
+              "choice": null,
+              "conf": "A"
+            }
+          ],
+          "checked": true,
+          "score": {
+            "correct": 1,
+            "total": 3
+          }
+        }
+      }
+    }
+  },
+  "fill": {
+    "guide": {
+      "title": "Guía sintética — fill",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "b",
+          "title": "Completar",
+          "type": "fill",
+          "instructions": "Completa con <b>el número</b>.",
+          "exercises": [
+            {
+              "text": "El resultado es ___",
+              "answer": [
+                "1.000"
+              ]
+            },
+            {
+              "text": "La temperatura es ___",
+              "answer": [
+                "-5"
+              ]
+            },
+            {
+              "text": "Nada aquí ___",
+              "answer": [
+                "x"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-fill",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [
+            "1000",
+            "–5",
+            null
+          ],
+          "checked": true,
+          "score": {
+            "correct": 2,
+            "total": 3
+          }
+        }
+      }
+    }
+  },
+  "true_false": {
+    "guide": {
+      "title": "Guía sintética — true_false",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "c",
+          "title": "Verdadero o falso",
+          "type": "true_false",
+          "exercises": [
+            {
+              "text": "El agua hierve a 100 °C",
+              "answer": true
+            },
+            {
+              "text": "2 > 3",
+              "answer": false
+            },
+            {
+              "text": "Sin marcar",
+              "answer": true
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-tf",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [
+            "V",
+            "V",
+            null
+          ],
+          "checked": true,
+          "score": {
+            "correct": 1,
+            "total": 3
+          }
+        }
+      }
+    }
+  },
+  "classify": {
+    "guide": {
+      "title": "Guía sintética — classify",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "d",
+          "title": "Clasificar",
+          "type": "classify",
+          "categories": [
+            "Ácido",
+            "Base"
+          ],
+          "exercises": [
+            {
+              "text": "Vinagre",
+              "answer": "Ácido"
+            },
+            {
+              "text": "Soda cáustica",
+              "answer": "Base"
+            },
+            {
+              "text": "Sin clasificar",
+              "answer": "Base"
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-cl",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [
+            "Ácido",
+            "Ácido",
+            null
+          ],
+          "checked": true,
+          "score": {
+            "correct": 1,
+            "total": 3
+          }
+        }
+      }
+    }
+  },
+  "compare": {
+    "guide": {
+      "title": "Guía sintética — compare",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "e",
+          "title": "Comparar",
+          "type": "compare",
+          "exercises": [
+            {
+              "left": "3/4",
+              "right": "2/3",
+              "answer": ">"
+            },
+            {
+              "left": "1/2",
+              "right": "0,5",
+              "answer": "="
+            },
+            {
+              "left": "a",
+              "right": "b",
+              "answer": "<"
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-cmp",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [
+            ">",
+            ">",
+            null
+          ],
+          "checked": true,
+          "score": {
+            "correct": 1,
+            "total": 3
+          }
+        }
+      }
+    }
+  },
+  "highlight": {
+    "guide": {
+      "title": "Guía sintética — highlight",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "f",
+          "title": "Subrayar",
+          "type": "highlight",
+          "categories": [
+            "Sustantivo",
+            "Verbo"
+          ],
+          "exercises": [
+            {
+              "text": "El perro corre rápido.",
+              "answers": {
+                "perro": "Sustantivo",
+                "corre": "Verbo"
+              }
+            },
+            {
+              "text": "La niña canta.",
+              "answers": {
+                "niña": "Sustantivo"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-hl",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [
+            {
+              "perro": 0,
+              "corre": 1
+            },
+            {
+              "niña": 1,
+              "la": 0
+            }
+          ],
+          "checked": true,
+          "score": {
+            "correct": 1,
+            "total": 2
+          }
+        }
+      }
+    }
+  },
+  "free_text": {
+    "guide": {
+      "title": "Guía sintética — free_text",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "g",
+          "title": "Desarrollo",
+          "type": "free_text",
+          "instructions": "Responde en tres líneas.",
+          "exercises": [
+            {
+              "text": "¿Qué es la fotosíntesis?"
+            },
+            {
+              "text": "Explica con tus palabras."
+            },
+            {
+              "text": "Sin responder."
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-ft",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [
+            "Es cuando la planta come luz & agua.",
+            "Otra respuesta con <b>etiqueta</b>.",
+            ""
+          ],
+          "checked": true,
+          "review": {
+            "score": "7/10",
+            "form": "C",
+            "comments": [
+              {
+                "fondo": "B",
+                "forma": "C",
+                "comment": "Falta nombrar el CO₂."
+              },
+              "Comentario en texto plano.",
+              null
+            ]
+          }
+        }
+      }
+    }
+  },
+  "reading": {
+    "guide": {
+      "title": "Guía sintética — reading",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "ana",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "h",
+          "title": "Lectura",
+          "type": "reading",
+          "instructions": "Lee el texto.",
+          "exercises": [
+            {
+              "text": "Un párrafo con & y <b>marcas</b>."
+            },
+            {
+              "text": "Otro párrafo."
+            }
+          ]
+        }
+      ]
+    },
+    "progress": {
+      "guideId": "syn-rd",
+      "currentSection": 0,
+      "totalSections": 1,
+      "sections": {
+        "0": {
+          "answers": [],
+          "checked": true
+        }
+      }
+    }
+  },
+  "mixto": {
+    "guide": {
+      "title": "Guía sintética — mixto",
+      "subtitle": "Subtítulo con <b>marca</b> y \"comillas\"",
+      "institution": "Instituto Sintético",
+      "department": "Departamento & Cía.",
+      "student": "beto",
+      "subject": "Materia X",
+      "group": "G1",
+      "sprint": "S1",
+      "sprintOrder": 1,
+      "variant": "Guía",
+      "mode": "practice",
+      "code": "SYN-01",
+      "sections": [
+        {
+          "id": "a",
+          "title": "Selección múltiple",
+          "type": "multiple_choice",
+          "instructions": "Marca la correcta.",
+          "exercises": [
+            {
+              "text": "¿2 + 2?",
+              "options": [
+                "3",
+                "4",
+                "5"
+              ],
+              "answer": 1
+            },
+            {
+              "text": "¿Cuál es <i>mayor</i>?",
+              "options": [
+                "1/2",
+                "1/3"
+              ],
+              "answer": 0
+            },
+            {
+              "text": "Sin responder",
+              "options": [
+                "a",
+                "b"
+              ],
+              "answer": 0
+            }
+          ]
+        },
+        {
+          "id": "g",
+          "title": "Desarrollo",
+          "type": "free_text",
+          "instructions": "Responde en tres líneas.",
+          "exercises": [
+            {
+              "text": "¿Qué es la fotosíntesis?"
+            },
+            {
+              "text": "Explica con tus palabras."
+            },
+            {
+              "text": "Sin responder."
+            }
+          ]
+        }
+      ],
+      "confidence": true
+    },
+    "progress": {
+      "guideId": "syn-mix",
+      "currentSection": 1,
+      "totalSections": 2,
+      "_startedAt": "2026-08-01T09:00:00",
+      "_finishedAt": "2026-08-01T09:12:07",
+      "sections": {
+        "0": {
+          "answers": [
+            {
+              "choice": 1,
+              "conf": "S"
+            },
+            {
+              "choice": 1,
+              "conf": "S"
+            },
+            {
+              "choice": null,
+              "conf": "A"
+            }
+          ],
+          "checked": true,
+          "score": {
+            "correct": 1,
+            "total": 3
+          }
+        },
+        "1": {
+          "answers": [
+            "Es cuando la planta come luz & agua.",
+            "Otra respuesta con <b>etiqueta</b>.",
+            ""
+          ],
+          "checked": true,
+          "review": {
+            "score": "7/10",
+            "form": "C",
+            "comments": [
+              {
+                "fondo": "B",
+                "forma": "C",
+                "comment": "Falta nombrar el CO₂."
+              },
+              "Comentario en texto plano.",
+              null
+            ]
+          }
+        }
+      }
+    }
+  }
+}

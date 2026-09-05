@@ -7,7 +7,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createPiConfig, type PiConfigHandler } from '../server/pi-config'
 import { createDiscovery, type Discovery } from '../server/discovery'
 import { createProtoRegistry } from '../server/proto-registry'
-import { miraProtoBotlet } from '@vergis/mira'
+import { createMiraProto } from '@vergis/mira'
+
+/** Mira, construida con un render inerte: estos tests miden DESCUBRIMIENTO, no invocación. */
+const miraProtoBotlet = createMiraProto({ render: async () => '<html>PI</html>' })
 import { SqliteGovernanceStore, type PiRole } from '@vergis/capabilities'
 import type { PolicyDecl } from '@vergis/policy'
 

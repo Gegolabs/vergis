@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guía sintética — classify — Reporte</title>
+<style>
+  @page { margin: 1.5cm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 11pt; line-height: 1.6; color: #2d3436;
+    background: #f8f9fa;
+  }
+  .rpt-wrap { max-width: 800px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+
+  /* Header card */
+  .rpt-header {
+    background: #fff; border-radius: 10px; padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 1.25rem; text-align: center;
+  }
+  .rpt-header h1 { font-size: 1.3rem; color: #2c6fbb; }
+  .rpt-header h2 { font-size: 1rem; font-weight: 400; color: #636e72; margin-top: 0.1rem; }
+  .rpt-student { font-size: 0.85rem; color: #636e72; margin-top: 0.4rem; }
+  .rpt-score-row {
+    display: flex; justify-content: center; align-items: center;
+    gap: 1rem; margin-top: 1rem; flex-wrap: wrap;
+  }
+  .rpt-score-card {
+    padding: 0.6rem 1.2rem; border-radius: 8px; text-align: center;
+  }
+  .rpt-score-card.main { font-size: 1.8rem; font-weight: 800; }
+  .rpt-score-card.great { background: #d4edda; color: #1e7e34; }
+  .rpt-score-card.ok { background: #fff3cd; color: #856404; }
+  .rpt-score-card.bad { background: #fadbd8; color: #c0392b; }
+  .rpt-score-card .label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
+  .rpt-score-card .value { font-size: 1.1rem; font-weight: 700; }
+  .rpt-score-card.sub { background: #f0f0f0; color: #555; }
+  .rpt-time { font-size: 0.8rem; color: #636e72; margin-top: 0.5rem; }
+  .rpt-actions {
+    display: flex; justify-content: center; gap: 0.75rem;
+    margin-top: 1rem; flex-wrap: wrap;
+  }
+  .rpt-btn {
+    border: none; border-radius: 6px; padding: 0.5rem 1.25rem;
+    font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    text-decoration: none; display: inline-block;
+  }
+  .rpt-btn.primary { background: #2c6fbb; color: #fff; }
+  .rpt-btn.primary:hover { background: #245a9e; }
+  .rpt-btn.secondary { background: #fff; color: #2c6fbb; border: 1px solid #dee2e6; }
+  .rpt-btn.secondary:hover { background: #dfe9f5; }
+  @media print {
+    .rpt-actions { display: none !important; }
+    body { background: #fff !important; font-size: 9pt; line-height: 1.3; }
+    .rpt-wrap { padding: 0; max-width: 100%; }
+    .rpt-header {
+      box-shadow: none; border-radius: 0; padding: 0.75rem 0;
+      margin-bottom: 0.5rem; border-bottom: 2px solid #000;
+    }
+    .rpt-header h1 { color: #000; font-size: 12pt; }
+    .rpt-header h2 { color: #444; font-size: 10pt; }
+    .rpt-score-card {
+      background: #fff !important; color: #000 !important;
+      border: 1.5px solid #000;
+    }
+    .rpt-score-card.main { font-size: 1.3rem; }
+    .rpt-score-card .label, .rpt-score-card .value { color: #000 !important; }
+    .rpt-section {
+      box-shadow: none; border-radius: 0; padding: 0.4rem 0;
+      margin-bottom: 0.4rem; border-bottom: 1px solid #bbb;
+    }
+    .rpt-section-title { color: #000; font-size: 9.5pt; }
+    .rpt-section-badge {
+      background: #fff !important; color: #000 !important;
+      border: 1px solid #000;
+    }
+    .rpt-instructions { font-size: 7.5pt; }
+    .rpt-ex {
+      font-size: 8.5pt; padding: 0.2rem 0.4rem; margin-bottom: 0.2rem;
+      background: #fff !important; border-radius: 0;
+      border-left: 3px solid #bbb;
+    }
+    .rpt-ex.correct { border-left-color: #aaa; }
+    .rpt-ex.incorrect { border-left-color: #aaa; border-left-style: dashed; }
+    .rpt-ex.neutral { border-left-color: #ccc; }
+    .rpt-answer { color: #000 !important; font-weight: 600; }
+    .rpt-answer.wrong { text-decoration: line-through; }
+    .rpt-answer.right::after { content: " ✓"; color: green; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .rpt-answer.wrong::after { content: " ✗"; color: red; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .rpt-expected { font-size: 7.5pt; color: #555; }
+    .rpt-review {
+      background: #fff !important; border-left: 2px solid #000;
+      border-radius: 0; font-size: 7.5pt; color: #333;
+      padding: 0.15rem 0.4rem; margin-top: 0.15rem;
+    }
+    .rpt-mc-opt { color: #000 !important; font-weight: normal !important; }
+    .rpt-mc-right { font-weight: 700 !important; color: #000 !important; }
+    .rpt-mc-wrong { font-weight: 700 !important; color: #000 !important; text-decoration: line-through; }
+    .rpt-mc-expected { color: #555 !important; }
+    .rpt-student-text {
+      background: #fff !important; border: 1px solid #bbb;
+      border-radius: 0; font-size: 8pt; padding: 0.15rem 0.4rem;
+    }
+    .rpt-footer { font-size: 7pt; }
+  }
+
+  /* Section card */
+  .rpt-section {
+    background: #fff; border-radius: 10px; padding: 1.25rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 1rem;
+  }
+  .rpt-section-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;
+  }
+  .rpt-section-title { font-size: 1rem; font-weight: 700; color: #2c6fbb; }
+  .rpt-section-badge {
+    font-size: 0.75rem; font-weight: 700; padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+  }
+  .rpt-section-badge.perfect { background: #d4edda; color: #1e7e34; }
+  .rpt-section-badge.good { background: #fff3cd; color: #856404; }
+  .rpt-section-badge.low { background: #fadbd8; color: #c0392b; }
+  .rpt-section-badge.reviewed { background: #e8d5f5; color: #6c3483; }
+  .rpt-section-badge.pending { background: #f0f0f0; color: #888; }
+  .rpt-instructions { font-size: 0.8rem; color: #888; font-style: italic; margin-bottom: 0.5rem; }
+
+  /* Exercise items */
+  .rpt-ex {
+    margin-bottom: 0.5rem; padding: 0.6rem 0.75rem; border-radius: 6px;
+    border-left: 4px solid #dee2e6; font-size: 0.9rem;
+  }
+  .rpt-ex.correct { border-left-color: #27ae60; background: #f0faf4; }
+  .rpt-ex.incorrect { border-left-color: #e74c3c; background: #fdf2f1; }
+  .rpt-ex.neutral { border-left-color: #3498db; background: #f0f6fc; }
+  .rpt-ex-num { font-weight: 700; color: #aaa; margin-right: 0.3rem; }
+  .rpt-question { color: #555; }
+  .rpt-answer { font-weight: 600; }
+  .rpt-answer.right { color: #27ae60; }
+  .rpt-answer.wrong { color: #e74c3c; }
+  .rpt-expected { font-size: 0.8rem; color: #999; margin-top: 0.15rem; }
+  .rpt-review {
+    margin-top: 0.4rem; padding: 0.5rem 0.7rem;
+    background: #f3e8fc; border-radius: 6px; border-left: 3px solid #8e44ad;
+    font-size: 0.8rem; color: #6c3483;
+  }
+  .rpt-mc-opt { margin-left: 1.5em; }
+  .rpt-conf {
+    display: inline-block; font-size: 0.72rem; font-weight: 700;
+    background: #eef1f4; color: #555; border-radius: 4px;
+    padding: 0.05rem 0.4rem; margin-left: 0.4rem;
+  }
+  .rpt-conf.danger { background: #fadbd8; color: #c0392b; }
+  .rpt-conf-summary {
+    margin-top: 0.6rem; padding: 0.4rem 0.6rem; border-radius: 6px;
+    background: #eef1f4; color: #555; font-size: 0.8rem;
+  }
+  .rpt-conf-summary.danger { background: #fadbd8; color: #c0392b; font-weight: 600; }
+  .rpt-mc-right { font-weight: 700; color: #27ae60; }
+  .rpt-mc-wrong { font-weight: 700; color: #e74c3c; }
+  .rpt-mc-expected { color: #27ae60; }
+  .rpt-student-text {
+    font-style: italic; color: #444; margin: 0.3rem 0;
+    padding: 0.5rem 0.7rem; background: #f8f9fa; border-radius: 6px;
+    font-size: 0.85rem; white-space: pre-wrap; border: 1px solid #eee;
+  }
+
+  /* Footer */
+  .rpt-footer {
+    text-align: center; padding: 1.5rem; font-size: 0.75rem; color: #aaa;
+  }
+
+  @media (max-width: 480px) {
+    .rpt-wrap { padding: 1rem 0.5rem; }
+    .rpt-section { padding: 1rem; }
+    .rpt-score-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="rpt-wrap">
+  <div class="rpt-header">
+    <h1>Guía sintética — classify</h1>
+    <h2>Subtítulo con &lt;b&gt;marca&lt;/b&gt; y &quot;comillas&quot;</h2>
+    <div class="rpt-student">Instituto Sintético — Ana Sintética — 1° Medio</div>
+    <div class="rpt-score-row">
+      <div class="rpt-score-card main bad">33%<br><span style="font-size:0.6em;opacity:0.7">nota 2.3</span></div>
+      <div>
+        <div class="rpt-score-card sub"><div class="label">Automática</div><div class="value">1/3 (33%)</div></div>
+        <div class="rpt-score-card sub" style="margin-top:0.4rem"><div class="label">Redacción</div><div class="value">pendiente</div></div>
+      </div>
+    </div>
+    
+    <div class="rpt-actions">
+      <button class="rpt-btn primary" onclick="setTimeout(function(){window.print()},100)">Imprimir reporte</button>
+      <a class="rpt-btn secondary" href="/">← Volver a Daftar</a>
+    </div>
+  </div>
+
+  <div class="rpt-section">
+  <div class="rpt-section-head">
+    <span class="rpt-section-title">D. Clasificar</span>
+    <span class="rpt-section-badge low">1/3</span>
+  </div>
+  
+  <div class="rpt-ex correct"><span class="rpt-ex-num">1.</span> Vinagre → <span class="rpt-answer right">Ácido</span></div><div class="rpt-ex incorrect"><span class="rpt-ex-num">2.</span> Soda cáustica → <span class="rpt-answer wrong">Ácido</span><div class="rpt-expected">Respuesta correcta: Base</div></div><div class="rpt-ex neutral"><span class="rpt-ex-num">3.</span> Sin clasificar → <span class="rpt-answer wrong">—</span></div>
+  
+</div>
+
+  <div class="rpt-footer">Daftar · Generado con Wingworking</div>
+</div>
+</body>
+</html>
