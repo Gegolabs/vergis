@@ -31,7 +31,7 @@ import type { Report } from '../server/discovery'
  * daría un falso verde y nadie sabría por qué.
  */
 
-const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', tables: ['t'], databaseRefs: [] }
+const REPORT: Report = { code: 'QW-04', slug: 'qw-04', name: 'Asistencia', specName: 'Asistencia', specPath: '/a.yaml', proto: 'mira', tables: ['t'], databaseRefs: [] }
 
 function mkReq(url: string, method = 'GET'): IncomingMessage {
   return { url, method, headers: {} } as unknown as IncomingMessage

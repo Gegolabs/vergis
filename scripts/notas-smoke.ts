@@ -62,7 +62,7 @@ const arbolDe = (user: string): ResolvedNode => ({
   ancla: { dataset: 'empleados', entity: 'dbo.dim_empleado', key: ['rut'], comentarios: {} },
 })
 
-const REPORT = { code: 'PI-16', slug: 'pi-16', name: 'Folios', specName: 'Folios', specPath: '/dev/null', tables: [], databaseRefs: [] }
+const REPORT = { code: 'PI-16', slug: 'pi-16', name: 'Folios', specName: 'Folios', specPath: '/dev/null', proto: 'mira', tables: [], databaseRefs: [] }
 const userDe = (h: Record<string, unknown>): string => String(h['x-test-user'] ?? '')
 
 const store = await SqliteNotasStore.open(DB)
