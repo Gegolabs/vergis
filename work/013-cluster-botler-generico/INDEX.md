@@ -8,6 +8,9 @@
 | 04 | Brief H2 — store `evaluaciones` e importador de Daftar (v1.0) | Brief ejecutable | Issue #291 · **mergeado** (PR #293, 2026-09-05; rebaseado sobre H0 por el orquestador, CHANGELOG fusionado) |
 
 | 05 | Brief H3 — `packages/daftar`, el evaluador como Let; `invoke` en el Botler (v1.0) | Brief ejecutable | Issue #295 · **mergeado** (PR #296, `eafa39c`, 2026-09-05; e2e un nodo + standby, paridad 11/15 medida + 4 sin navegador) |
+| — | H4 contenido + H5 instancia «estudios» (soveria-host) | Ejecutados por el orquestador, sin brief (fuente: `estudios/daftar/instancia/`) | **Hechos** 2026-09-05: `/estudios` sirve el anillo 0.27.0 en paralelo al Python; flip pendiente de la paridad de César (DECISIONS de estudios D-03…D-06) |
+| — | H6 `botler-ops` | Skill en protocolos (`ce00b19`); `mira-ops` 1.2 la importa | **Hecho** 2026-09-05 |
+| — | H7 canon (B8) | Decisión de César | Pendiente |
 Decisiones tomadas en nombre de César durante la ejecución: `DECISIONS.md` D-67 a D-75.
 
 • *Generado con Wingworking*
