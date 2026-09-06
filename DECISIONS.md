@@ -9,6 +9,18 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-77 · 2026-09-06 — Los cinco PRs de Renovate (#261, #260, #251, #201, #175) NO se mergean hoy: `renovate/stability-days` sigue `PENDING` en los cinco
+
+- **Bifurcación**: (a) mergearlos con CI verde (`test`, `shell`, `review` en SUCCESS) · (b) respetar la regla del NEXT («los que tengan `stability-days` en `pass`») y no mergear ninguno.
+- **Decidido**: **(b)**. El check `renovate/stability-days` está `PENDING` en los cinco (medido con `gh pr view --json statusCheckRollup`, 2026-09-06 02:10Z; el más viejo, #175, lleva semanas así). Un `PENDING` que no cambia en semanas huele a status que Renovate dejó de refrescar más que a una edad mínima real, pero **no está medido**: la config de `minimumReleaseAge` y el último run de Renovate no se revisaron. Mergear por encima del check es decidir en nombre de la política de dependencias, y esa la fijó César al configurar Renovate.
+- **Costo de revertir**: nulo — mergear después es un clic; queda como hand-off: revisar la config de Renovate (`renovate.json`) y por qué el status no avanza.
+
+## D-76 · 2026-09-06 — El directorio `undefined/` sin trackear en la raíz se borra; su causa queda como conjetura
+
+- **Bifurcación**: (a) conservarlo hasta identificar el script que lo escribió · (b) borrarlo, dejando la causa declarada como conjetura.
+- **Decidido**: **(b)**. Contenido: `undefined/pi02-render/` (5 HTML de PI-02: pnl-consolidado, pnl-empresa, detalle-*) y `undefined/pi02-render.log.jsonl` (`botler-start`, `agencyDomain: vergis-lab`), todo del **2026-09-03 17:48Z**, la hora exacta de la realización de PI-02 sobre la v11 en el lab. Es un render local de QA ya consumido (PI-02 pasó a QA ese día con sus artefactos en el lab). **Causa conjeturada, no verificada:** un template literal `${dir}/pi02-render` con `dir` indefinido en el arnés que invocó el CLI —`undefined/` es firma de JavaScript, no de shell (una variable de shell vacía habría dado `/pi02-render`)—; el CLI mismo no lo produce (`packages/cli/src/main.ts:23` cae a `process.cwd()` sin `--out`). No se encontró el invocador en `lab/scripts`. Refutador: volver a correr el render de PI-02 con el arnés del 3-sep y ver si reaparece.
+- **Costo de revertir**: nulo — eran artefactos regenerables.
+
 ## D-72 · 2026-09-05 — La puerta de salida genérica del Botler es `ProtoBotlet.invoke` con un binding server-side por proto, no la clase `Botler` de `packages/botler`
 
 - **Bifurcación**: (a) instanciar la clase `Botler` (register/invoke/capabilityCall) en el servidor y pasar Mira y Daftar por ella · (b) extender `ProtoBotlet` con `invoke(spec, specPath, LetInvocation) → LetResponse | null` y que cada proto reciba en su construcción lo que necesita del nodo (Mira: `render`; Daftar: store, directorio de instrumentos) · (c) rutas registradas por proto en el router.
