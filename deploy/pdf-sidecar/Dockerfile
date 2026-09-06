@@ -1,7 +1,7 @@
 # Sidecar HTML→PDF de Vergis (WeasyPrint) — issue #65. Autocontenido: se construye desde este
 # directorio, sin heredar imágenes de otras instancias. Multi-arch (amd64/arm64 vía base oficial).
 # Sin red saliente en runtime: el HTML llega autocontenido y el url_fetcher bloquea todo salvo data:.
-FROM python:3.12-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+FROM python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254
 
 # Librerías nativas de WeasyPrint (pango/harfbuzz) + fuentes offline: DejaVu (cobertura) y
 # Liberation (sans métricamente compatible con Arial — el stack del theme termina en sans-serif).
