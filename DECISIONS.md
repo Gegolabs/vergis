@@ -9,6 +9,12 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-78 · 2026-09-06 — H1 del plan de escala se mergea con CI verde (#298) y sus números ordenan H2–H7: el techo de Daftar lo pone el store en disco y el catálogo, no el runtime
+
+- **Bifurcación**: (a) dejar #298 abierto para que César lo mire · (b) mergear con sombrero de custodio (mandato vigente desde D-59), CI verde y controles negativos en rojo antes de las series.
+- **Decidido**: **(b)**. CN-B 28.000 `SINMEDIR:rechazo` / 0 OK / 0 MAL; CN-A 8.058 escrituras 100 % `409-standby`. Series sin MAL ni SINMEDIR y cero pérdidas: Daftar S₀ techo **50 VU** (POST p95 134,8 ms, `r_post` ≈ 248/s) · S₀′ con 5.200 guías **25 VU** · S₁ con 5.000 intentos (3,92 MB) **10 VU** · Mira contra ClickHouse **≥ 200 VU sin techo** (p95 241 ms, ~1.000 rps, `t_render/t_motor` ≤ 2,2 por resta con `system.query_log`). **Lo que cambia del plan 06:** (1) el costo del `POST` crece con el tamaño del store en dirección corroborada (×2, techo ÷2,5) — lineal sigue siendo conjetura; (2) el consumidor de CPU dominante en lectura es `listar()` del catálogo (3,3 → 23,3 ms de 200 a 5.200 guías), que no estaba en ningún hito; (3) con `VERGIS_OUT` en bind-mount de macOS el guard de escritura se dispara por cambio de inodo y degrada el nodo de forma terminal con `/healthz` en `serving` → **issue #299**. No medido: Mira contra stub, la forma de `r_post(S)`, Mira con N identidades.
+- **Costo de revertir**: `git revert` del merge; el arnés no toca el runtime.
+
 ## D-77 · 2026-09-06 — Los cinco PRs de Renovate (#261, #260, #251, #201, #175) NO se mergean hoy: `renovate/stability-days` sigue `PENDING` en los cinco
 
 - **Bifurcación**: (a) mergearlos con CI verde (`test`, `shell`, `review` en SUCCESS) · (b) respetar la regla del NEXT («los que tengan `stability-days` en `pass`») y no mergear ninguno.
