@@ -1,5 +1,14 @@
 # NEXT — Vergis
 
+## MANDATO VIGENTE (César, 2026-09-05 21:40): ejecución autónoma en orden — 1. Vergis · 2. canon · 3. parapreu
+
+El paquete completo vive en el `NEXT.md` de **estudios** (`/Users/cesar/wworkspace/estudios/NEXT.md`); acá lo de Vergis:
+
+- **1.1 · Promover A.R.B.O.L. a 0.27.0 — LUZ VERDE, ventana de 36 h hasta el 7-sep ~09:40.** Sombrero de operador (`mira-ops` + `botler-ops`, desde el repo del lab de A.R.B.O.L., sesión `az` en el tenant GH). 0.27.0 **rompe**: herramienta `botler-rollout`, healthcheck del compose (`b.lets`) y poller del lab **en el mismo acto, antes** de `install` + `promote`; CN-1 obligatorio; fila en `cortes-de-servicio.md`; `paridad-vm.sh` exit 0; `/contrato` con `protos: ["mira","daftar"]` y sin store `evaluaciones`. Rollback: `rollback` al 0.26.0 caliente.
+- **1.2 · Plan de escala a millones** (diseño Fable, doc 06 del cluster 013, para refrendo). Tesis acordada: orquestación con réplicas, Botler descartable (stores a Postgres, lease fuera del disco), predicado de salud como readiness; primer hito una prueba de carga contra un nodo; el cuello externo no importa mientras no sea el Botler ni los Lets.
+- **1.3 · Residuos:** `undefined/` (investigar y borrar con DECISIONS), PRs de Renovate en `pass`, y lo que es de César (CODE_OF_CONDUCT, correo de seguridad) no se toca.
+- **Canon (2):** «Captura» refrendada como cuarta familia; Daftar es Captura; v1.2 directa. Detalle en el NEXT de estudios §2.
+
 ## Frente Botler genérico (2026-09-05): H0–H3 MERGEADOS y **0.27.0 PUBLICADA**; sigue H4/H5
 
 **0.27.0** (tag `v0.27.0`, `7adfd3c`) trae los cuatro hitos: registro de proto-Botlets (#289), `pis → lets` + `botler-rollout` (#290, **rompe**), store `evaluaciones` (#291) y **Daftar como segundo proto-Botlet** con `invoke` genérico (#295). Suite 2715 tests. Briefs en `work/013-cluster-botler-generico/02-05`; decisiones D-67…D-75. **La instancia A.R.B.O.L. sigue en 0.26.0**: adoptar 0.27.0 exige herramienta + healthcheck + poller en el mismo acto («Qué exige esta versión» de #290) y es acto del operador (esta misma casa, con ventana).
