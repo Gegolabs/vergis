@@ -11,7 +11,7 @@
     "@vergis/botler": "*",
     "@vergis/policy": "*",
     "mssql": "^12.5.4",
-    "sql.js": "^1.14.1",
+    "sql.js": "^1.14.2",
     "tedious": "^19.2.2",
     "vega": "^6.2.0",
     "vega-lite": "^6.4.3"
