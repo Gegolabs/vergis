@@ -150,3 +150,7 @@ salida real va en el cuerpo del PR.
 ---
 
 • *Generado con Wingworking*
+
+## Worktrees
+
+Los worktrees de este repo viven **bajo `../vergis-wt/<nombre>/`** (un directorio contenedor, hermano de `vergis/`), nunca sueltos en `productos/`: `git worktree add ../vergis-wt/<nombre> -b <rama>`. Decidido por César el 2026-09-07 (soveria-ai doc 040); los 12 existentes se movieron ese día con `git worktree move`.
