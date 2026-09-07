@@ -76,6 +76,7 @@ import {
 } from '@vergis/capabilities'
 import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
+import type { MenuSection } from './menu-config'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
 import { cargasBody, revertPlanBody, cargasHref, destinoAviso, type CargasOps, type SlotCargas } from './admin-cargas'
@@ -349,6 +350,8 @@ export interface AdminDeps {
   /** Destino del «Cerrar sesión» (rd del sign_out). La instancia lo apunta al logout del IdP para un
    * logout completo. Default: `/admin` (logout solo de oauth2-proxy). */
   signoutRd?: string
+  /** Secciones que la instancia agrega al menú de identidad (`VERGIS_MENU`). Sin ellas, el menú de siempre. */
+  menuSections?: MenuSection[]
 }
 
 export interface AdminHandler {
@@ -1035,7 +1038,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
 /** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir.
  * Usa el componente compartido (`avatarMenu`) — el mismo marco del catálogo. */
 function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
-  return avatarMenu({ email, isAdmin, hasDomains, signoutRd: deps.signoutRd ?? '/admin' })
+  return avatarMenu({ email, isAdmin, hasDomains, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>

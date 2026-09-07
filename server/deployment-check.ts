@@ -39,6 +39,7 @@ const PATH_ENVS: { env: string; list?: boolean }[] = [
   { env: 'VERGIS_SOURCES' },
   { env: 'VERGIS_PI_OWNERS' },
   { env: 'VERGIS_DATASETS' },
+  { env: 'VERGIS_MENU' },
 ]
 
 /** Presencia de cualquiera de estos ⇒ la instancia QUIERE la app de Administración / gobierno. */

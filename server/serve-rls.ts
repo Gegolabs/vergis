@@ -1105,7 +1105,7 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
   }
   // Entrada «Miranda» en el menú: solo si el flag está ON y la identidad tiene el scope (admin o grupo).
   const hasMiranda = config.miranda.enabled && governance ? isAdmin || (await governance.isMember(config.miranda.scopeGroup, emailLc)) : false
-  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, signoutRd: SIGNOUT_RD || '/' })
+  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
   const govByCode: GovByCode = new Map()
   if (governance) {
     const groups = await governance.listGroups()
@@ -1260,7 +1260,7 @@ try {
     },
     avatarFor: async (email) => {
       const isAdmin = governance ? await governance.isAdmin(email) : false
-      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, signoutRd: SIGNOUT_RD || '/' })
+      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
     },
     audit: (e) => console.log(`[vergis-notas] ${JSON.stringify(e)}`),
     secret: CSRF_SECRET,
@@ -1347,6 +1347,9 @@ const GOVERNANCE_DB = process.env['VERGIS_GOVERNANCE_DB'] ?? `${OUT}/governance.
 // abajo moriría como «administración deshabilitada» — un archivo roto degradando en silencio.
 const INSTANCE_CFG = loadInstanceConfig(contractEnv)
 if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTANCE_CFG.summary}`)
+// Lo descartado de VERGIS_MENU se nombra una línea por omisión: se omite, pero no en silencio — un
+// enlace que no aparece en el menú sin dejar rastro es indistinguible de un menú que no se actualizó.
+for (const w of INSTANCE_CFG.menuWarnings) console.log(`[vergis-rls] VERGIS_MENU: ${w}`)
 
 // Sinks por flujo (issues #100/#102): la creación resuelve passEnv/caFile de los destinos email —
 // config rota tumba el BOOT con nombre (patrón #117), no muere como «administración deshabilitada».
@@ -1965,6 +1968,10 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // Acceso al log de una corrida (issue #99): la página `/corrida` y sus enlaces «Ver log».
       runLogs: fabricWiring.runLogs,
       signoutRd: SIGNOUT_RD || undefined,
+      // Las secciones declaradas son del MARCO, no de la administración: van acá para que el avatar
+      // de /admin tenga las mismas que el catálogo (un marco sin ellas sería un menú que cambia
+      // según la pantalla).
+      menuSections: INSTANCE_CFG.menuSections,
       piCount: discover().length,
       // Tile «Cargas» del dashboard (#161·§6.1): resumen del vigilante desde la PROYECCIÓN — el
       // request path no lista OneLake. Sin vigilante cableado no se ofrece: un tile que diga «0 en

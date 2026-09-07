@@ -63,7 +63,43 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-*(nada todavía)*
+### El menú del avatar admite secciones declaradas por la instancia (`VERGIS_MENU`)
+
+Los artefactos que acompañan a una plataforma —un catálogo del esquema de datos, una guía, un manual—
+**no son del Producto**: los publica y los hospeda quien opera la instancia, en su dominio y detrás de
+su gate. Hasta ahora no había dónde ponerlos: el menú de identidad era una lista cerrada, y el único
+camino era cablear el href de una instancia dentro del motor genérico.
+
+Ahora la instancia declara **secciones** en un YAML y el menú las renderiza sin saber qué son:
+
+```yaml
+menu:
+  - title: Ayuda
+    links:
+      - label: Catálogo del esquema (datadoc)
+        href: /datadoc/
+        description: Las entidades y columnas que sirven los PIs.
+        newTab: true
+```
+
+- **La instancia agrega, no reemplaza.** Los ítems del Producto (Catálogo de PIs, Perfil, Mis
+  impresiones, Miranda, Gestión, Configuración, tema, salir) no son configurables y no se mueven: lo
+  declarado se renderiza entre los ítems de identidad y el separador del tema, en el orden del archivo.
+- **Todos los marcos, o ninguno.** Las tres superficies que arman el avatar —catálogo, `/admin` y la
+  vista de impresiones— reciben las mismas secciones: un menú que cambia según la pantalla sería peor
+  que no tenerlo.
+- **Sin el env, nada cambia.** Cero secciones ⇒ el HTML del menú es idéntico al de antes, y hay un test
+  de regresión que lo compara byte a byte.
+- **Fail-closed por entrada, sin tumbar el nodo.** La clave raíz ausente sigue siendo fatal como toda
+  la config de instancia; una sección sin `title`, un enlace sin `label`/`href`, o un `href` que no sea
+  ruta `/…` ni URL `https://` —`javascript:` y `data:` incluidos— se **omiten con aviso nombrado** en
+  el log de arranque (`[vergis-rls] VERGIS_MENU: sección 'Ayuda', entrada 'X' omitida: …`). Un ítem de
+  menú mal escrito no vale el costo de dejar la plataforma sin servir; una sección que se queda sin
+  enlaces válidos no se renderiza, porque un rótulo suelto es peor que su ausencia.
+- El conteo entra en la línea de config del arranque: `menu N sección(es) · M enlace(s)`, y
+  `VERGIS_MENU` entra al auto-chequeo de despliegue (path declarado pero no montado ⇒ error ruidoso).
+
+Capacidad: `CAP-190`.
 
 ## 0.27.0 — 2026-09-05
 
