@@ -20,8 +20,8 @@ Idénticas a las del brief H0 (`02-brief-h0-registro-proto-botlets-v1.0.md` §0)
 
 ```sh
 cd /Users/cesar/wworkspace/productos/vergis
-git worktree add ../vergis-wt-h2 -b feat/botler-h2-store-evaluaciones main
-cd ../vergis-wt-h2
+git worktree add ../vergis-wt/h2 -b feat/botler-h2-store-evaluaciones main
+cd ../vergis-wt/h2
 export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 npm ci --ignore-scripts
 ```

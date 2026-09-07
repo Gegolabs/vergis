@@ -19,8 +19,8 @@ gate: typecheck + suite + build + lint:shell verdes · banco de anillos v8 con 9
 2. **Worktree propio**, fuera del árbol principal:
    ```sh
    cd /Users/cesar/wworkspace/productos/vergis
-   git worktree add ../vergis-wt-h0 -b feat/botler-h0-registro-proto-botlets main
-   cd ../vergis-wt-h0
+   git worktree add ../vergis-wt/h0 -b feat/botler-h0-registro-proto-botlets main
+   cd ../vergis-wt/h0
    export PATH="/opt/homebrew/opt/node@22/bin:$PATH"   # node es keg-only en esta máquina
    npm ci --ignore-scripts
    ```

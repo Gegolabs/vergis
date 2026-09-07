@@ -22,8 +22,8 @@ Las de §0 del brief H0 (`02-brief-h0-registro-proto-botlets-v1.0.md`). Concreta
 ```sh
 cd /Users/cesar/wworkspace/productos/vergis
 git fetch origin && git log --oneline -1 origin/main        # debe ser 042ecd2 o posterior (H1 mergeado)
-git worktree add ../vergis-wt-h3 -b feat/botler-h3-proto-daftar origin/main
-cd ../vergis-wt-h3
+git worktree add ../vergis-wt/h3 -b feat/botler-h3-proto-daftar origin/main
+cd ../vergis-wt/h3
 export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
 npm ci --ignore-scripts
 ```
