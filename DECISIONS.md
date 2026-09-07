@@ -89,6 +89,7 @@ el registro existe para que revertirla sea barato.
 - **Costo de revertir**: nulo — se reabre #279 o se abre el issue con la cita.
 <!-- segundo-ojo · Incorrecta (ítem 3): cronBody fija startDateTime=now también para procesos del motor · 2026-09-05 · juez Fable 5.1 · sha12 ad48a34e4658 · soveria-ai/audits/veredictos-20260905/ -->
 <!-- margen · 2026-09-06 · soveria-ai D-136: la justificación del ítem 3 la refuta el código (`fabric-engine.ts:76-90`, `cronBody` fija `startDateTime = now()` en todo `setScheduleSeconds`); el ítem 3 vuelve como issue con la cita, deuda del agente -->
+<!-- margen · 2026-09-07 · consecuencia dictada por César (soveria-ai doc 039 partida 4): la justificación del ítem 3 queda enmendada al margen, sin revertir; el issue con la cita sigue siendo deuda del agente -->
 
 ## D-66 · 2026-09-03 — #285 y #286 se construyen como convención de plataforma decidida por el dato, sin vocabulario nuevo en el DSL, y la cascada de facetas es simétrica
 
