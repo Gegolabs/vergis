@@ -116,6 +116,7 @@ services:
       VERGIS_DEFAULT_STEWARD_GROUPS: <grupo>      # steward por default de todos los dominios (opcional)
       VERGIS_DEFAULT_COLLABORATOR_GROUPS: <grupo> # colaborador por default de todos los PIs (opcional)
       VERGIS_SIGNOUT_RD: <url-logout-idp>         # logout completo del IdP (opcional; vacío = interno)
+      VERGIS_MENU: /menu.yaml                     # secciones que la instancia agrega al menú del avatar (opcional)
       # VERGIS_PI_ACL: "1"                        # activa la ACL de artefacto de PIs (default off)
       # VERGIS_CONFIG_CHECK: strict               # strict (default) | warn | off
 

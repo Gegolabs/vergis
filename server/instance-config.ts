@@ -35,6 +35,7 @@ import {
   type SourcesConfig,
 } from '@vergis/capabilities'
 import { parseNotifyConfig, type NotifyConfig } from './notify'
+import { countMenuLinks, parseMenuConfig, type MenuSection } from './menu-config'
 
 /**
  * Una plantilla de job declarada por la instancia, con el contenido CRUDO de sus partes ya leído del
@@ -63,6 +64,14 @@ export interface InstanceConfig {
   piOwners: Record<string, string>
   /** Destinos de aviso saliente (issue #100). Sin `VERGIS_NOTIFY`, cero destinos = avisos apagados. */
   notify: NotifyConfig
+  /**
+   * Secciones que la instancia agrega al menú de identidad (`VERGIS_MENU`). Sin el env: cero secciones
+   * ⇒ el menú queda idéntico. Una sección o un enlace inválidos se OMITEN (queda su aviso en
+   * `menuWarnings`) en vez de tumbar el arranque: ver la cabecera de `menu-config.ts`.
+   */
+  menuSections: MenuSection[]
+  /** Avisos de lo que se omitió de `VERGIS_MENU`. El arranque los imprime uno por línea. */
+  menuWarnings: string[]
   /** URL pública de la instancia, normalizada sin slash final. Exigida si hay destinos de aviso. */
   publicUrl: string
   /** Línea de conteos para el log de arranque; SOLO las configs con env definido. */
@@ -181,6 +190,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const sourceReg = loadSlice(env, RELOADABLE_SLICES.sources, readFile)
   const piOwners = loadSlice(env, RELOADABLE_SLICES.piOwners, readFile)
   const notify = loadSlice(env, RELOADABLE_SLICES.notify, readFile)
+  const menu = loadOne(env, 'VERGIS_MENU', parseMenuConfig, readFile)
 
   // Los avisos llevan enlaces ABSOLUTOS a la vista de detalle (issue #100): sin URL pública, un
   // destino declarado produciría avisos sin dónde mirar. Se rompe el arranque —donde el operador está
@@ -203,6 +213,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   if (entities) partes.push(`master-data ${entities.length}`)
   if (notify) partes.push(`notify ${notify.destinations.length}`)
   if (jobTemplates) partes.push(`jobs-templates ${jobTemplates.length}`)
+  if (menu) partes.push(`menu ${menu.sections.length} sección(es) · ${countMenuLinks(menu.sections)} enlace(s)`)
 
   return {
     entities: entities ?? [],
@@ -213,6 +224,8 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
     jobTemplates: jobTemplates ?? [],
     piOwners: piOwners ?? {},
     notify: notify ?? { destinations: [] },
+    menuSections: menu?.sections ?? [],
+    menuWarnings: menu?.warnings ?? [],
     publicUrl,
     summary: partes.join(' · '),
   }

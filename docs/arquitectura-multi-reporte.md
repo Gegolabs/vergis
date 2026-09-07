@@ -122,9 +122,13 @@ registro de fuentes, registro de cargas y proyección de ingestión — el detal
 
 **La config declarativa de instancia** (`loadInstanceConfig`, `server/instance-config.ts`):
 `VERGIS_MASTER_DATA` · `VERGIS_GROUPS` · `VERGIS_DOMAINS` · `VERGIS_INTAKE` · `VERGIS_SOURCES` ·
-`VERGIS_PI_OWNERS` · `VERGIS_NOTIFY` (+ `VERGIS_PUBLIC_URL`). Fail-closed y **fatal** (issue #117):
-un YAML declarado que no parsea o perdió su clave raíz tumba el arranque nombrando ENV + ruta +
-clave, en vez de degradar en silencio.
+`VERGIS_PI_OWNERS` · `VERGIS_NOTIFY` (+ `VERGIS_PUBLIC_URL`) · `VERGIS_MENU`. Fail-closed y **fatal**
+(issue #117): un YAML declarado que no parsea o perdió su clave raíz tumba el arranque nombrando ENV +
+ruta + clave, en vez de degradar en silencio.
+
+`VERGIS_MENU` gradúa esa dureza en su segundo nivel, y a propósito: la clave raíz ausente sigue siendo
+fatal, pero una **sección o un enlace** inválidos se omiten con aviso nombrado y el nodo levanta. Un
+ítem de menú mal escrito no vale el costo de dejar la plataforma sin servir.
 
 **Servicios transversales**: el audit log append-only (`$VERGIS_OUT/admin-audit.log`), la capa de
 notas (store propio `VERGIS_NOTES_DB`, no-fatal), el branding del catálogo (`VERGIS_INDEX_TITLE` /

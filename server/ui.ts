@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHmac } from 'node:crypto'
 import { escapeHtml } from '@vergis/capabilities'
 import { constantTimeEqual } from './http-util'
+import type { MenuSection } from './menu-config'
 
 /** CSS del avatar de identidad (menú arriba-derecha). Compartido por las superficies de admin y el
  * catálogo, para que ambas usen el mismo marco. Referencia las mismas CSS vars (--card/--accent/…). */
@@ -19,7 +20,8 @@ export const AVATAR_CSS = `
 .avmenu a:hover,.avmenu button:hover{background:var(--bg);text-decoration:none}
 .avhead{font-size:11px;color:var(--muted);padding:6px 11px 8px;border-bottom:1px solid var(--border);margin-bottom:4px;word-break:break-all}
 .avhead .avrole{display:block;margin-top:4px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);opacity:.9;word-break:normal}
-.avmenu .sep{border-top:1px solid var(--border);margin:4px 0}`
+.avmenu .sep{border-top:1px solid var(--border);margin:4px 0}
+.avmenu .avlbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 11px 2px}`
 
 export const PAGE_CSS = `
 :root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374;--err:#fb4934}
@@ -101,13 +103,20 @@ export const THEME_TOGGLE_JS = "(function(){var t=document.documentElement.getAt
 /** Avatar de identidad (menú arriba-derecha) — COMPARTIDO por admin y el catálogo. `<details>` puro,
  * sin JS. El menú gradúa según el rol: Perfil y Mis impresiones siempre · Gestión si gestiona
  * dominios · Configuración si admin. `signoutRd` = a dónde volver tras cerrar sesión. Requiere
- * AVATAR_CSS en la página. */
+ * AVATAR_CSS en la página.
+ *
+ * `sections` son las secciones que declaró la INSTANCIA (`VERGIS_MENU`): se renderizan en el orden
+ * declarado, cada una con su rótulo, entre los ítems de identidad y el separador del tema. Con cero
+ * secciones el menú es byte a byte el de antes. La instancia AGREGA: los ítems del Producto no se
+ * mueven ni se reemplazan, y el Producto no sabe qué son los enlaces declarados. */
 export function avatarMenu(opts: {
   email: string
   isAdmin: boolean
   hasDomains: boolean
   /** ¿Mostrar la entrada «Miranda» (el agente que autora specs)? Solo con scope (cluster 077). */
   hasMiranda?: boolean
+  /** Secciones declaradas por la instancia (`VERGIS_MENU`). Vacío o ausente ⇒ el menú de siempre. */
+  sections?: MenuSection[]
   signoutRd?: string
 }): string {
   const { email, isAdmin, hasDomains } = opts
@@ -125,6 +134,18 @@ export function avatarMenu(opts: {
   if (opts.hasMiranda) m += it('/miranda', 'Miranda')
   if (hasDomains) m += it('/admin', 'Gestión')
   if (isAdmin) m += it('/admin/plataforma', 'Configuración')
+  // Secciones de la instancia. Cero secciones ⇒ ni separador ni rótulo: el menú de una instancia que
+  // no declara nada tiene que quedar idéntico al de siempre.
+  for (const sec of opts.sections ?? []) {
+    if (!sec.links.length) continue
+    m += `<div class="sep"></div><div class="avlbl">${escapeHtml(sec.title)}</div>`
+    for (const h of sec.links) {
+      const attrs = [`href="${escapeHtml(h.href)}"`]
+      if (h.description) attrs.push(`title="${escapeHtml(h.description)}"`)
+      if (h.newTab) attrs.push('target="_blank"', 'rel="noopener"')
+      m += `<a ${attrs.join(' ')}>${escapeHtml(h.label)}</a>`
+    }
+  }
   m += `<div class="sep"></div>`
   m += `<button type="button" onclick="${THEME_TOGGLE_JS}">◐ Cambiar tema</button>`
   m += `<a href="/oauth2/sign_out?rd=${rd}">Cerrar sesión</a>`
