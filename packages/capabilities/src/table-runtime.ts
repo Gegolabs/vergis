@@ -106,6 +106,27 @@ export function vtIsDateCol(rows: Record<string, unknown>[], field: string): boo
   return seen
 }
 
+/**
+ * CLASE DE EMBUDO de una columna — la decisión única que antes vivía repartida en `buildPop`.
+ *
+ * Manda la COLUMNA cuando declara su clase (`filter: 'vals' | 'num' | 'date'`, CAP-191): un
+ * identificador numérico —«Id Persona», un folio, un número de documento— no quiere «Positivos /
+ * Negativos / En cero», quiere su lista de valores, y el dato solo no puede saberlo. Si no la
+ * declara, la decide el DATO, en este orden: numérica → `num`, de fecha → `date`, si no → `vals`.
+ *
+ * PURA y autocontenida: viaja al browser vía `.toString()` como el resto de PURE_FNS.
+ */
+export function vtPopKind(
+  rows: Record<string, unknown>[],
+  field: string,
+  declared?: boolean | string,
+): 'num' | 'date' | 'vals' {
+  if (declared === 'num' || declared === 'date' || declared === 'vals') return declared
+  if (vtIsNumericCol(rows, field)) return 'num'
+  if (vtIsDateCol(rows, field)) return 'date'
+  return 'vals'
+}
+
 /** Valores distintos de una columna (como strings), preservando orden de aparición. */
 export function vtDistinct(rows: Record<string, unknown>[], field: string): string[] {
   const seen: Record<string, boolean> = {}
@@ -206,11 +227,16 @@ export function vtSortValues(vals: string[]): string[] {
 /**
  * ¿Columna categórica? (apta para faceta de filtro y para agrupar). Heurística: no numérica
  * y de baja cardinalidad. `override` (true/false) gana sobre la heurística.
+ *
+ * El `filter` de una columna puede llegar como STRING (la clase de embudo declarada, CAP-191).
+ * Ese string NO gobierna acá: declara de qué clase es el embudo, no que la columna sea agrupable
+ * —`filter: vals` sobre «Id Persona» no vuelve útil «agrupar por Id Persona»—. Para la agrupación
+ * manda `groupBy` explícito o la heurística, como siempre.
  */
 export function vtIsCategorical(
   rows: Record<string, unknown>[],
   field: string,
-  override?: boolean,
+  override?: boolean | string,
 ): boolean {
   if (override === true) return true
   if (override === false) return false
@@ -460,10 +486,11 @@ export function vtDateFilterLabel(filter: VtDateFilter): string {
 }
 
 /**
- * HTML del popover de una columna. LA convención de plataforma, decidida por el DATO y no por el
- * spec (`vtIsNumericCol` / `vtIsDateCol`): `kind='num'` → **Filtros de número** (atajos + operador),
- * `kind='date'` → **Rango de fechas** (Desde/Hasta + atajos), `kind='vals'` → la lista de valores
- * distintos de siempre. Ver el comentario junto a `buildPop`.
+ * HTML del popover de una columna. LA convención de plataforma: `kind='num'` → **Filtros de número**
+ * (atajos + operador), `kind='date'` → **Rango de fechas** (Desde/Hasta + atajos), `kind='vals'` → la
+ * lista de valores distintos de siempre. **Lo decide el DATO** (`vtIsNumericCol` / `vtIsDateCol`),
+ * **salvo que la columna declare `filter: vals | num | date`**, que prevalece (CAP-191). Quien
+ * resuelve el `kind` es `vtPopKind`; ver también el comentario junto a `buildPop`.
  *
  * PURA y autocontenida (el escapador es local) para poder verificar el HTML emitido sin navegador;
  * viaja al browser vía `.toString()` como el resto de PURE_FNS.
@@ -770,6 +797,7 @@ const PURE_FNS = [
   vtNorm,
   vtIsNumericCol,
   vtIsDateCol,
+  vtPopKind,
   vtDistinct,
   vtSortValues,
   vtIsCategorical,
@@ -1005,9 +1033,14 @@ function vtBootstrap(root){
   //      por valor —cada monto es único y marcar valores no expresa «los negativos»—: ofrece
   //      FILTROS DE NÚMERO (atajos + operador, como Excel). Una columna de TEXTO ofrece la lista de
   //      valores distintos, y una columna de FECHA ofrece un RANGO (Desde/Hasta): acotar «del 1 al
-  //      31 de julio» son dos campos, no treinta clics. Lo decide el DATO (vtIsNumericCol), no el spec.
+  //      31 de julio» son dos campos, no treinta clics. Lo decide el DATO (vtIsNumericCol), SALVO que
+  //      la columna declare filter: vals|num|date (CAP-191), que prevalece: un identificador
+  //      numérico —«Id Persona», un folio— recibe filtros de número que no le dicen nada al lector, y
+  //      el dato solo no puede distinguirlo de un monto. Quien resuelve la clase es vtPopKind.
   function closeAllPops(except){ Array.prototype.forEach.call(root.querySelectorAll('.vt-col-pop'), function(p){ if(p!==except) p.hidden=true; }); }
   function colFormat(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?c.format:undefined; }
+  // Clase de embudo DECLARADA por la columna (string) o undefined si la decide el dato (CAP-191).
+  function colFilterKind(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return (c && typeof c.filter==='string') ? c.filter : undefined; }
   function sameNumFilter(a,b){
     if(!a||!b) return false;
     return a.min===b.min && a.max===b.max && !!a.minIncl===!!b.minIncl && !!a.maxIncl===!!b.maxIncl;
@@ -1088,8 +1121,9 @@ function vtBootstrap(root){
     return JSON.stringify([f, state.numFilters, state.dateFilters, state.globalSearch, state.colSearch]);
   }
   function buildPop(pop, field){
-    if(vtIsNumericCol(rows, field)){ buildNumPop(pop, field); return; }
-    if(vtIsDateCol(rows, field)){ buildDatePop(pop, field); return; }
+    var kind = vtPopKind(rows, field, colFilterKind(field));
+    if(kind==='num'){ buildNumPop(pop, field); return; }
+    if(kind==='date'){ buildDatePop(pop, field); return; }
     // Lista y conteos acotados por los demás filtros (#286), en orden natural (#285).
     var vals=vtFacetOptions(rows, state, field);
     var sel=state.facets[field]||[];

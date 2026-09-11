@@ -177,7 +177,7 @@ describe('el runtime servido trae los filtros de número', () => {
     expect(TABLE_RUNTIME_SOURCE).toContain('function vtNumFilterLabel(')
     expect(TABLE_RUNTIME_SOURCE).toContain('function vtPopHtml(')
     expect(TABLE_RUNTIME_SOURCE).toContain('buildNumPop')
-    expect(TABLE_RUNTIME_SOURCE).toContain('vtIsNumericCol(rows, field)') // la bifurcación de buildPop
+    expect(TABLE_RUNTIME_SOURCE).toContain('vtIsNumericCol(rows, field)') // la heurística de vtPopKind
     expect(TABLE_RUNTIME_SOURCE).toContain('numFilters:{}') // estado inicial
     expect(TABLE_RUNTIME_SOURCE).toContain('data-numfield') // chip removible
   })
@@ -194,7 +194,7 @@ describe('el runtime servido trae los filtros de número', () => {
 
   it('la convención queda declarada en el código, junto al popover', () => {
     expect(TABLE_RUNTIME_SOURCE).toContain('CONVENCIÓN DE PLATAFORMA')
-    expect(TABLE_RUNTIME_SOURCE).toContain('Lo decide el DATO (vtIsNumericCol), no el spec.')
+    expect(TABLE_RUNTIME_SOURCE).toContain('Lo decide el DATO (vtIsNumericCol), SALVO que')
   })
 
   it('el bundle sigue siendo JS válido', () => {
