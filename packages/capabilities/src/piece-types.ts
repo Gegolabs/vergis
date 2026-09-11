@@ -105,8 +105,21 @@ export interface TableColumn {
   sortable?: boolean
   /** Override del auto-on: búsqueda por esta columna (default: true). */
   searchable?: boolean
-  /** Override de la heurística: faceta de filtro (default: auto por cardinalidad). */
-  filter?: boolean
+  /**
+   * Embudo de la columna. Dos cosas distintas según el tipo del valor:
+   *
+   * - **Booleano** — override del auto-on de la faceta: `true` fuerza embudo (y agrupable),
+   *   `false` lo quita; sin declarar, la heurística de cardinalidad decide (`vtIsCategorical`).
+   * - **String** — fija la CLASE de embudo de la columna y **prevalece sobre la heurística del
+   *   dato** (`vtIsNumericCol` / `vtIsDateCol`): `'vals'` lista de valores distintos, `'num'`
+   *   filtros de número (atajos + operador), `'date'` rango de fechas. Un string implica además
+   *   que la columna SÍ tiene embudo. Es la salida para los identificadores numéricos —un
+   *   «Id Persona», un folio, un número de documento— a los que «Positivos / Negativos / En cero»
+   *   no les dice nada: `filter: vals` les devuelve la lista de valores.
+   *
+   * Cualquier otro string es error de DSL.
+   */
+  filter?: boolean | 'vals' | 'num' | 'date'
   /** Override de la heurística: disponible para agrupar (default: igual que filter). */
   groupBy?: boolean
   /**

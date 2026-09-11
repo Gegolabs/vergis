@@ -63,7 +63,41 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-_(nada todavía)_
+### Una columna puede declarar su clase de embudo: `filter: vals | num | date` (#309)
+
+**Cambia lo que ve la persona que lee un PI, en las columnas que lo declaren.** Desde 0.24.0 la clase
+de embudo de una columna la decide el **dato**: numérica → filtros de número, fecha ISO → rango de
+fechas, resto → lista de valores. Hay un caso que el dato no puede resolver: un **identificador
+numérico**. El caso reportado por un beta tester es la columna «Id Persona», que recibe «Positivos /
+Negativos / En cero» — atajos que sobre un identificador no significan nada; lo mismo pasará con un
+folio o un número de documento. Mirando los valores, un identificador es indistinguible de un monto:
+quien lo sabe es el spec, y hasta ahora no tenía cómo decirlo.
+
+Ahora la columna puede **fijar** su clase de embudo, y esa declaración **prevalece sobre la
+heurística**:
+
+```yaml
+columns:
+  - { field: id_persona, label: "Id Persona", filter: vals }
+```
+
+- **`vals`** lista de valores distintos · **`num`** filtros de número · **`date`** rango de fechas.
+- **El booleano conserva exactamente lo que hacía**: `filter: true` / `filter: false` siguen siendo el
+  override del auto-on de la faceta, y **no** fijan clase. Un string implica además que la columna sí
+  tiene embudo.
+- **Gobierna el embudo, y solo el embudo.** El **orden** de la columna lo sigue decidiendo el dato —un
+  «Id Persona» se ordena numéricamente aunque su embudo sea de valores, porque ordenarlo como texto
+  pondría el 10 antes que el 2—, y la **agrupación** sigue siendo `groupBy`. El filtro aplicado es
+  coherente de punta a punta: con `filter: vals` sobre ids, marcar valores filtra por **igualdad**
+  (faceta), y el chip es el chip de faceta de siempre.
+- **Sin declaración, nada cambia**: la heurística del dato sigue mandando en todas las columnas que no
+  la declaren, y ningún spec vigente se toca.
+
+**Lo que NO se midió, dicho así:** el DSL **no valida** `columns[].filter` —no lo valida hoy para
+ningún override de columna (`sortable`, `searchable`, `groupBy` tampoco)—, así que un string fuera del
+vocabulario no es error: **degrada a la heurística del dato**, como si no se hubiera declarado. Hay un
+test que fija esa degradación. Tampoco se verificó en un navegador real: la evidencia es sobre las
+funciones puras del runtime (las mismas que viajan al cliente vía `toString`) y sobre el HTML emitido.
 
 ## 0.28.0 — 2026-09-21
 
