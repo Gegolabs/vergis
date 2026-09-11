@@ -80,7 +80,8 @@ export interface TableColumn {
   colorscale?: boolean
   sortable?: boolean
   searchable?: boolean
-  filter?: boolean
+  /** Booleano = override del auto-on; string = clase de embudo declarada (ESPEJO de piece-types). */
+  filter?: boolean | 'vals' | 'num' | 'date'
   groupBy?: boolean
 }
 
