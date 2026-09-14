@@ -230,7 +230,7 @@ services:
   # validar y recargar la config (`RINGS_EDGE`, default `caddy`). Si tu compose le pone otro nombre
   # (prefijo del proyecto), pásalo por env a la herramienta.
   caddy:
-    image: caddy:2@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
+    image: caddy:2@sha256:13ba145cba2f3e28fa801994876e4c086d1b95d5aa2a520a734765ffb6b12017
     restart: unless-stopped
     depends_on: [oauth2-proxy]
     # `:8079` NO se publica — `expose`, jamás `ports:`. Mismo supuesto de red D2 que protege a
