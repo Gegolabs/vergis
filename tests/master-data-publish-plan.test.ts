@@ -1,7 +1,8 @@
 // Publicación ATÓMICA de data maestra (NEXT · Ola 2·1): el plan construye y puebla una `__replica_new`
 // y solo cuando está lista hace el swap (drop de la vieja + sp_rename). Antes se hacía DROP TABLE de la
 // réplica VIVA y luego el INSERT fila-a-fila → un fallo a mitad la destruía para todos los consumidores.
-// El plan es PURO (sin motor): se verifica la secuencia y los tipos NVARCHAR. La ejecución contra Fabric
+// El plan es PURO (sin motor): se verifica la secuencia y los tipos VARCHAR (Fabric Warehouse no soporta
+// nvarchar; su collation UTF-8 preserva los acentos igual). La ejecución contra Fabric
 // (sp_rename, SECURITY POLICY) se verifica en vivo.
 import { describe, it, expect } from 'vitest'
 import { masterDataPublishPlan, replicaTable, replicaStagingTable, parseMasterDataConfig } from '@vergis/capabilities'
@@ -28,12 +29,12 @@ describe('masterDataPublishPlan · staging + swap', () => {
     expect(replicaStagingTable(entity)).toBe('dbo.md_empresas__replica_new')
   })
 
-  it('buildStaging construye la staging con NVARCHAR (no VARCHAR) para preservar acentos', () => {
+  it('buildStaging construye la staging con VARCHAR (jamás NVARCHAR: Fabric Warehouse lo rechaza)', () => {
     const plan = masterDataPublishPlan(entity)
     expect(plan.buildStaging[0]).toBe('DROP TABLE IF EXISTS dbo.md_empresas__replica_new;')
     expect(plan.buildStaging[1]).toContain('CREATE TABLE dbo.md_empresas__replica_new')
-    expect(plan.buildStaging[1]).toContain('rut NVARCHAR(400)')
-    expect(plan.buildStaging[1]).not.toMatch(/[^N]VARCHAR\(400\)/) // Unicode: NVARCHAR, nunca VARCHAR pelado
+    expect(plan.buildStaging[1]).toContain('rut VARCHAR(400)')
+    expect(plan.buildStaging[1]).not.toMatch(/NVARCHAR/i) // «nvarchar … is not supported in this edition of SQL Server»
     expect(plan.buildStaging[1]).toContain('activo BIT')
   })
 
@@ -43,7 +44,8 @@ describe('masterDataPublishPlan · staging + swap', () => {
     expect(plan.swap[1]).toBe('DROP FUNCTION IF EXISTS [dbo].[fn_pol_md_empresas__replica];')
     expect(plan.swap[2]).toBe('DROP TABLE IF EXISTS dbo.md_empresas__replica;')
     expect(plan.swap[3]).toBe("EXEC sp_rename 'dbo.md_empresas__replica_new', 'md_empresas__replica';")
-    expect(plan.swap[4]).toContain('CREATE FUNCTION [dbo].[fn_pol_md_empresas__replica](@c NVARCHAR(400))')
+    expect(plan.swap[4]).toContain('CREATE FUNCTION [dbo].[fn_pol_md_empresas__replica](@c VARCHAR(400))')
+    expect(plan.swap.join('\n')).not.toMatch(/NVARCHAR/i)
     expect(plan.swap[5]).toContain('CREATE SECURITY POLICY [dbo].[secpol_md_empresas__replica]')
     expect(plan.swap[5]).toContain('(rut) ON dbo.md_empresas__replica') // predicado sobre la PK, tabla viva
     expect(plan.swap[6]).toBe('GRANT SELECT ON dbo.md_empresas__replica TO [sp_consumer];')
