@@ -63,6 +63,21 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### La publicación de data maestra vuelve a llegar a un warehouse de Fabric (VARCHAR, no NVARCHAR)
+
+**Corrección, sin capacidad nueva.** Desde el 2026-07-08 el plan de publicación creaba la tabla
+`__replica_new` con columnas `NVARCHAR(400)`, y **Fabric Warehouse no soporta `nvarchar`**: el
+`CREATE TABLE` fallaba con *«The data type 'nvarchar(400)' in column 'codigo_socio' is not supported in
+this edition of SQL Server»*, la publicación abortaba antes de tocar la réplica viva y la fila quedaba
+guardada solo en la autoría. En la instancia GH ninguna publicación llegó a `wh_finanzas` desde esa
+fecha: primero lo tapó un `database_ref` mal nombrado (#262 lo volvió visible el 2026-09-02) y el
+2026-09-15 la primera publicación con el destino bien configurado mostró este error al editor.
+
+Las columnas de texto pasan a **`VARCHAR(400)`** en la staging, en el parámetro de la función del
+predicado y en el bind del INSERT. Los acentos no se pierden: la collation de Fabric Warehouse es
+UTF-8 (`Latin1_General_100_BIN2_UTF8`), así que `VARCHAR` guarda Unicode completo — la razón que había
+detrás de `NVARCHAR` no aplica al consumidor para el que existe esta publicación.
+
 ### El menú del avatar admite secciones declaradas por la instancia (`VERGIS_MENU`)
 
 Los artefactos que acompañan a una plataforma —un catálogo del esquema de datos, una guía, un manual—

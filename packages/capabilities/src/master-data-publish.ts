@@ -21,9 +21,14 @@ export const replicaTable = (entity: MasterDataEntity): string => `dbo.md_${enti
 /** Tabla STAGING de la publicación (`__replica_new`): se construye y puebla acá, luego swap a la viva. */
 export const replicaStagingTable = (entity: MasterDataEntity): string => `dbo.md_${entity.id}__replica_new`
 
-// NVARCHAR (no VARCHAR): la data maestra puede traer acentos/no-Latin (nombres de socios, etc.). VARCHAR
-// bajo una collation Latin los mutila; NVARCHAR (Unicode) los preserva. Igual en el bind y en el fn.
-const ddlType = (c: MasterDataColumn): string => (c.type === 'string' ? 'NVARCHAR(400)' : c.type === 'int' ? 'BIGINT' : 'BIT')
+// VARCHAR, no NVARCHAR: el consumidor canónico es un warehouse de Fabric, y Fabric Warehouse NO soporta
+// nvarchar — el CREATE TABLE de la staging revienta con «The data type 'nvarchar(400)' in column '…' is
+// not supported in this edition of SQL Server» (medido en producción el 2026-09-15, instancia GH:
+// toda publicación fallaba desde que este archivo pasó a NVARCHAR el 2026-07-08; las cuatro publicaciones
+// que sí llegaron —2026-06-24— eran del código anterior, con VARCHAR). Los acentos no se pierden: la
+// collation de Fabric Warehouse es UTF-8 (Latin1_General_100_BIN2_UTF8), así que VARCHAR guarda Unicode
+// completo. Igual en el bind y en el parámetro de la función del predicado.
+const ddlType = (c: MasterDataColumn): string => (c.type === 'string' ? 'VARCHAR(400)' : c.type === 'int' ? 'BIGINT' : 'BIT')
 
 /**
  * Plan de publicación ATÓMICO (staging + swap) — puro y testeable, sin motor. El `publish()` clásico hacía
@@ -52,7 +57,7 @@ export function masterDataPublishPlan(
     `DROP FUNCTION IF EXISTS [dbo].[fn_pol_${bare}];`,
     `DROP TABLE IF EXISTS ${live};`,
     `EXEC sp_rename '${staging}', '${bare}';`, // 2º arg = nuevo nombre del objeto SIN schema
-    `CREATE FUNCTION [dbo].[fn_pol_${bare}](@c NVARCHAR(400)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`,
+    `CREATE FUNCTION [dbo].[fn_pol_${bare}](@c VARCHAR(400)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS vergis_allowed;`,
     `CREATE SECURITY POLICY [dbo].[secpol_${bare}] ADD FILTER PREDICATE [dbo].[fn_pol_${bare}](${pk.name}) ON ${live} WITH (STATE = ON);`,
     ...consumerPrincipals.map((p) => `GRANT SELECT ON ${live} TO [${p.replace(/]/g, ']]')}];`),
   ]
@@ -146,10 +151,10 @@ export function createDwhPublisher(profiles: Record<string, SqlConnectionProfile
         const rq = pool.request()
         entity.columns.forEach((c, i) => {
           const v = r[c.name]
-          if (v == null) rq.input(`p${i}`, c.type === 'string' ? sql.NVarChar : c.type === 'int' ? sql.BigInt : sql.Bit, null)
+          if (v == null) rq.input(`p${i}`, c.type === 'string' ? sql.VarChar : c.type === 'int' ? sql.BigInt : sql.Bit, null)
           else if (c.type === 'bool') rq.input(`p${i}`, sql.Bit, v ? 1 : 0)
           else if (c.type === 'int') rq.input(`p${i}`, sql.BigInt, Number(v))
-          else rq.input(`p${i}`, sql.NVarChar, String(v))
+          else rq.input(`p${i}`, sql.VarChar, String(v))
         })
         await rq.query(`INSERT INTO ${plan.staging} (${names.join(',')}) VALUES (${names.map((_, i) => '@p' + i).join(',')})`)
       }
