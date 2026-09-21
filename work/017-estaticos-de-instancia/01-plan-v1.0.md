@@ -4,6 +4,7 @@
 |--|--|
 | Objetivo | Una instancia declara **colecciones de archivos estáticos** y el **nodo las sirve** bajo su propia autorización. Con eso desaparecen el contenedor file-server aparte, los bloques por colección en el borde y el `forward_auth` duplicado: publicar contenido deja de tocar el borde. |
 | Origen | **Criterio de excelencia** aplicado por pedido de César (2026-09-21) sobre el incidente del portal de ayuda. Antecedente en el propio Producto: [#304](https://github.com/Gegolabs/vergis/issues/304) — *«La salida (sitio estático + contenedor `caddy` con `forward_auth`) existe solo porque el nodo no lo sirve»*, y la decisión de César del 2026-09-07 de que es capacidad genérica. |
+| Issue | [#319](https://github.com/Gegolabs/vergis/issues/319) — abierto 2026-09-21 con este contrato |
 | Estado | **Diseño listo para ejecutar.** Fase 1 (Producto) es un PR; Fase 2 (instancia A.R.B.O.L.) retira el andamio y exige **una ventana del borde**. |
 | Versión | Fase 1 entra en «Sin publicar» → corte **0.31.0** (capacidad ⇒ sube la Y). Catálogo: **`CAP-195`**. |
 
