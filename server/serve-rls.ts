@@ -174,7 +174,7 @@ import { fail, readBody } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
-import { catalogoSinDatosGobernados, createProtoRegistry } from './proto-registry'
+import { avisoEnvDeFamilia, catalogoSinDatosGobernados, createProtoRegistry } from './proto-registry'
 import { createDaftarProto, crearInstrumentos, type Instrumentos } from '@vergis/daftar'
 import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
@@ -413,7 +413,9 @@ const instrumentos: Instrumentos = crearInstrumentos({
   dir: INSTRUMENTOS_DIR ? resolve(INSTRUMENTOS_DIR) : resolve(process.cwd(), 'instrumentos-ausentes'),
   log: (m) => console.warn(m),
 })
-if (!INSTRUMENTOS_DIR) console.warn('[vergis-rls] VERGIS_INSTRUMENTOS_DIR no está definida: un Let de Daftar serviría un catálogo vacío.')
+// El AVISO por la env ausente NO se emite acá: acá todavía no se sabe si alguna spec declara un Let
+// de Daftar, y avisar sin saberlo es la falla del issue #297 (ruido en toda instancia de Mira pura).
+// Se emite abajo, cuando el padrón ya está descubierto — ver `avisoEnvDeFamilia`.
 
 // REGISTRO DE PROTO-BOTLETS (H0 · #289; segunda familia en H3 · #295). El nodo no sabe que sus specs
 // son de Mira: sabe que hay familias de Lets registradas. Cada proto recibe en su CONSTRUCCIÓN lo que
@@ -553,6 +555,20 @@ let bootstrapAll: () => Promise<void>
  * motor no le da un motor. Eso es un restart, y el log lo dice.
  */
 const NODO_SIN_MOTOR_DE_DATOS = catalogoSinDatosGobernados(discover(), protos)
+
+// #297 · La env de instrumentos solo le importa a Daftar: el aviso se emite si —y solo si— el padrón
+// descubierto tiene al menos un Let de esa familia. Una instancia de Mira pura no lee una línea
+// sobre una familia que no hospeda; una que SÍ la hospeda sin volumen montado la lee entera.
+{
+  const aviso = avisoEnvDeFamilia(
+    'VERGIS_INSTRUMENTOS_DIR',
+    Boolean(INSTRUMENTOS_DIR),
+    'daftar',
+    discover(),
+    'servirán un catálogo VACÍO (cero guías, cero devoluciones) hasta que se monte el volumen y se declare la env.',
+  )
+  if (aviso) console.warn(aviso)
+}
 
 if (NODO_SIN_MOTOR_DE_DATOS) {
   console.log(

@@ -61,6 +61,30 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### El aviso por `VERGIS_INSTRUMENTOS_DIR` solo se emite si el nodo hospeda un Let de Daftar
+
+**Qué trae:** la línea `VERGIS_INSTRUMENTOS_DIR no está definida…` se emitía en **todo** arranque sin
+esa env, incluidas las instancias de Mira pura, que no hospedan ni un Let de Daftar y no tienen nada
+que hacer al respecto. Ahora el aviso se decide **después** del descubrimiento y contra el padrón: se
+emite si —y solo si— falta la env **y** al menos una spec descubierta es de la familia `daftar`, y
+entonces nombra la familia, cuántos Lets quedan sin catálogo y con qué slug. El predicado
+(`avisoEnvDeFamilia`) es una función pura en `server/proto-registry.ts`, del mismo corte que
+`catalogoSinDatosGobernados`. Cierra el issue #297.
+
+**Por qué:** observado en la promoción de A.R.B.O.L. a 0.27.0 (2026-09-06). Un aviso de arranque
+existe para que el operador **actúe**; el que se emite cuando no hay nada que hacer entrena a ignorar
+la franja de avisos, y el día que aparezca uno real pasará desapercibido. Silenciarlo siempre habría
+sido igual de malo con el daño diferido: un nodo de Daftar sin volumen montado sirve un catálogo
+vacío y merece la línea entera.
+
+**Qué exige:** nada. Ningún cambio de conducta, de env ni de contrato — solo cambia qué se lee en el
+log de arranque. Para una instancia de Mira, una línea menos; para una de Daftar sin la env, la misma
+advertencia, mejor nombrada. **Límite declarado:** el padrón se evalúa **al arrancar**, igual que el
+predicado de nodo-sin-motor-de-datos, así que una spec de Daftar agregada en caliente a un nodo que
+arrancó sin la env no vuelve a disparar el aviso hasta el próximo arranque.
+
 ## 0.31.0 — 2026-09-21
 
 ### El nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`)
