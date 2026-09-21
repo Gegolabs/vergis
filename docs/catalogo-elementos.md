@@ -249,6 +249,38 @@ cuyo embudo listaba los días uno a uno.
 Antecedente: en PI-01 la columna «Deuda Total» ofrecía sus montos como valores marcables. Quien
 quiso los negativos marcó decenas a mano y terminó con una pared de chips de un monto cada uno.
 
+## 4·quáter · Total al pie de la tabla — opt-in por columna
+
+A diferencia del color de magnitud y del filtro de columna (§4·bis y §4·ter, que los decide el dato),
+**el total al pie lo declara el spec**: un total sobre un porcentaje, sobre un promedio o sobre un
+stock medido a fechas distintas es una cifra sin significado, y al pie de una tabla nadie la
+cuestiona. Por eso no hay auto-detección de columnas numéricas: la columna lo pide.
+
+```yaml
+- table:
+    data: data.cosecha
+    columns:
+      - { field: especie, label: "Especie" }
+      - { field: cantidad, label: "Cantidad", format: int_0, align: right, total: sum }
+      - { field: rendimiento, label: "Rendimiento", format: int_0, align: right, total: avg }
+```
+
+- **`total`**: `sum` · `avg` · `count`. `true` es alias de `sum`. Cualquier otro valor **rechaza la
+  spec** (`table-column-total-invalid`) — no se degrada a suma en silencio.
+- **Qué celdas entran**: las que coaccionan a número finito (un `number`, o un `string` no vacío
+  numérico — los drivers SQL entregan los enteros de 64 bits como string). Los `null`, los vacíos y
+  los textos se **saltan**: no anulan el total. `avg` divide por los considerados, y con cero
+  considerados vale `—`. `count` cuenta los considerados.
+- **El pie sigue a los filtros.** En una tabla interactiva el total se recalcula sobre las filas
+  visibles tras las facetas, la búsqueda y los filtros de número y de fecha. Con agrupación activa
+  sigue siendo el total de todas las filas filtradas: **no hay subtotales por grupo**.
+- **Los tres modos lo traen.** En papel el cuerpo se trunca al techo de filas pero el pie totaliza el
+  conjunto; en el primer paint de una tabla grande el pie servido ya es el total del dataset, no el
+  de las 500 filas del recorte SSR.
+- **Cada celda usa el `format` de su columna**, y el rótulo `Total` va en la primera columna que no
+  totaliza (si todas totalizan, no hay rótulo).
+- **El CSV no lleva la fila de total**: exporta el dato, no la lectura.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de

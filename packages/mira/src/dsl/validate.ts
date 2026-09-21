@@ -905,6 +905,38 @@ function validatePieceNode(node: unknown, path: string): void {
       remediation: `Cada nodo es un layout (layout + elements) o exactamente uno de: ${[...ELEMENT_TYPES].join(', ')}.`,
     })
   }
+  if (typeKeys[0] === 'table') validateTableColumns(obj['table'], `${path}.table`)
+}
+
+/** Vocabulario CERRADO del agregado al pie de una columna de tabla (#314). `true` es alias de `sum`
+ *  (compose lo normaliza); todo lo demás se rechaza acá. */
+const TABLE_TOTAL_OPS = new Set(['sum', 'avg', 'count'])
+
+/**
+ * `table.columns[].total` (#314): opt-in con vocabulario cerrado.
+ *
+ * Un valor desconocido (`total: promedio`, `total: total`) NO puede pasar en silencio: el pie se
+ * calcularía como suma o no se dibujaría, y un total equivocado al pie de una tabla es de los
+ * errores que nadie cuestiona porque llegan con la autoridad del sistema.
+ */
+function validateTableColumns(table: unknown, path: string): void {
+  if (table == null || typeof table !== 'object') return
+  const columns = (table as Record<string, unknown>)['columns']
+  if (!Array.isArray(columns)) return
+  for (const [i, col] of columns.entries()) {
+    if (col == null || typeof col !== 'object') continue
+    const total = (col as Record<string, unknown>)['total']
+    if (total == null) continue
+    if (total === true || (typeof total === 'string' && TABLE_TOTAL_OPS.has(total))) continue
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'table-column-total-invalid',
+      path: `${path}.columns[${i}].total`,
+      value: total as never,
+      message: `La columna '${String((col as Record<string, unknown>)['field'] ?? i)}' declara total: '${String(total)}', que no es una operación de pie de tabla conocida.`,
+      remediation: `Usar una de: sum, avg, count (o true, alias de sum). Omitir 'total' si la columna no lleva pie.`,
+    })
+  }
 }
 
 /** `data.<dataset>.<field>` → `<dataset>.<field>` (quita el prefijo data.). */
