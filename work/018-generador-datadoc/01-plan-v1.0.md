@@ -6,7 +6,7 @@
 | **Origen** | Issue [#304](https://github.com/Gegolabs/vergis/issues/304) con su comentario de curaduría (2026-09-21): el alcance vivo es **la generación**; servir ya está resuelto por `CAP-195` / `VERGIS_STATIC` (0.31.0, #319). Referencia de lo que hoy existe: `lab/scripts/gen-datadoc.mjs` (1.158 líneas, script de instancia A.R.B.O.L.) |
 | **Ejecutor** | Subagente Opus en worktree propio sobre `gegolabs/vergis` (`main` en 0.32.0). Rama → PR → CI verde → merge. Este plan es el contrato: se ejecuta **en frío**, sin la conversación que lo originó |
 | **Resultado** | Capacidad `CAP-197` en 0.33.0: `VERGIS_DATADOC=1` · `VERGIS_WRITERS` · `VERGIS_SEMANTICA` · `domains[].connections` · `/datadoc/` · `/admin/datadoc` · lazo `datadoc` |
-| **Versión de este plan** | 1.0 · 2026-09-21 |
+| **Versión de este plan** | 1.1 · 2026-09-21 — cierra la segunda mirada: la clasificación de gobierno era por substring y marcaba toda tabla filtrada como abierta; los esquemas pasan a lista blanca; el build rancio no publica conteos |
 
 ## ¿Cuál es la tesis, en cinco líneas?
 
@@ -230,13 +230,31 @@ datadoc/
 
 1. Para cada tabla base se determina su gobierno con `sys.security_policies` + `sys.security_predicates` + la definición de la función de predicado en `sys.sql_modules` (consultas literales del generador; el motor ya corre una variante en `SYS_SECURITY_POLICIES_SQL`):
    - **sin política** ⇒ `no gobernada`;
-   - **con política cuya función contiene el literal** `SELECT 1 AS vergis_allowed` (`packages/policy/src/fabric.ts:699,742`) ⇒ `abierta` (allow-all explícito);
-   - **con política y función con filtro** ⇒ `filtrada`;
+   - **con política cuya definición, pelada de comentarios y espacios, ES EXACTAMENTE** `SELECT 1 AS vergis_allowed` **y no trae `WHERE`** ⇒ `abierta` (allow-all explícito);
+   - **cualquier otra definición localizada** ⇒ `filtrada`;
+
+   ⚠️ **El literal NO discrimina, y creer que sí es el defecto que esta versión corrige.** Medido el
+   2026-09-21 contra el compilador: `packages/policy/src/fabric.ts` emite `SELECT 1 AS vergis_allowed`
+   en **las dos** ramas — la allow-all sin `WHERE` (línea 700) y la **filtrada** con `WHERE <predicado>`
+   (línea 744, fijada por `tests/policy.test.ts:235`). El regex que el generador del lab usa hoy
+   (`/select\s+1\s+as\s+vergis_allowed/i`, `gen-datadoc.mjs:305`) matchea ambas, así que **portarlo
+   clasificaría toda tabla con RLS real como `abierta` y le publicaría el `COUNT`**. No ha explotado
+   allá porque las 31 funciones de esa instancia son hoy allow-all y ninguna tiene filtro: el primer PI
+   con RLS real lo destapa. La clasificación es por **forma completa de la definición**, jamás por
+   substring, y su test obligatorio usa el fixture de `tests/policy.test.ts:235` y **falla** si sale
+   `abierta`.
    - **con política y función no localizada** ⇒ `indeterminada`.
 2. **Se pide `COUNT_BIG(*)` solo a `no gobernada` y `abierta`.** A `filtrada` e `indeterminada` **no se les emite la consulta**: la página dice «filas: no medidas (tabla gobernada por RLS con filtro)». La protección **no depende** de que la RLS aplique al Service Principal del nodo (si un dueño del warehouse está exento del predicado es algo **no verificado** en Fabric) — por eso la decisión es no preguntar, no confiar en que la respuesta venga filtrada.
 3. Con `datadoc_conteos = off` no se emite ningún `COUNT`: para instancias que no quieran exponer cardinalidades ni de tablas abiertas.
 4. La identidad con que corre el generador es `{ agent: 'datadoc' }` **sin `claims`** por el conector enforcing (`createExecuteSqlDwh` con `injections`): si por error se colara un `COUNT` sobre una tabla filtrada, el prelude inyecta `''` y la policy niega (`execute-sql-dwh.ts:48-56`). Es defensa en profundidad, no la regla.
 5. Vistas: «= base» cuando la base tiene conteo; si no, lo mismo que la base.
+6. **La clasificación se recalcula en cada generación, y eso NO alcanza solo.** El Producto **no
+   aplica** las policies —las aplica la instancia con sus `scripts/apply-*-rls.mjs`—, así que el nodo
+   no se entera cuando una tabla pasa de abierta a gobernada, y el build cacheado sigue publicando su
+   conteo hasta la próxima regeneración. **Condición de diseño:** `reloadGovernance('watch:policies')`
+   (`serve-rls.ts`) marca el build como **rancio** y la página lo declara; con `datadoc_conteos =
+   abiertas` sin schedule, un build rancio **no publica conteos**. Sin este eslabón, el default
+   `abiertas` es una ventana que se abre sola.
 
 ### D7 — Read-only: guard del generador, consultas literales, identificadores validados
 
@@ -246,7 +264,7 @@ Consultas (todas contra una conexión, en paralelo, con `Promise.allSettled` por
 
 | Nombre | Fuente | Para qué |
 |--|--|--|
-| `Q_TABLAS` | `INFORMATION_SCHEMA.TABLES` donde `TABLE_SCHEMA NOT IN ('sys','INFORMATION_SCHEMA')` | Objetos y tipo (BASE TABLE / VIEW). Todos los esquemas, no solo `dbo` (el lab filtraba `dbo`; el Producto no asume un esquema) |
+| `Q_TABLAS` | `INFORMATION_SCHEMA.TABLES` con **lista blanca de esquemas**: `dbo` por defecto, ampliable por la instancia | Objetos y tipo (BASE TABLE / VIEW). **Lista blanca y no lista negra**, medido el 2026-09-21: `wh_finanzas` trae un esquema `queryinsights` con 6 vistas —el historial de consultas de Fabric, con el texto SQL de todos los usuarios— que un `NOT IN ('sys','INFORMATION_SCHEMA')` deja pasar y el catálogo publicaría como entidades «publicado» con sus columnas. No es fuga de datos, es un contrato falso en la página; y el conjunto de esquemas de plataforma que puede aparecer no se conoce de antemano (un lakehouse puede traer otros), así que enumerar lo que entra es lo único que cierra |
 | `Q_COLUMNAS` | `INFORMATION_SCHEMA.COLUMNS`, mismo filtro | Nombre, posición, tipo, largo/precisión/escala, nulabilidad |
 | `Q_MODULOS` | `sys.sql_modules ⋈ sys.objects` | Definición de vistas (para mostrar) y de funciones de predicado (para clasificar allow-all) |
 | `Q_SECPOL` | `sys.security_policies ⋈ sys.security_predicates ⋈ sys.objects` | Política, habilitada, objetivo, definición del predicado |
@@ -425,11 +443,23 @@ Solo el operador de la instancia, en QA (`lab/deploy/mira-vm-qa`), con la imagen
 
 ## ¿Qué queda pendiente de decisión humana?
 
-1. **Conteos por defecto: `abiertas`** (este plan) o `off`. El plan elige exponer cardinalidades de tablas abiertas y no gobernadas porque una tabla `grant: all` ya muestra todas sus filas a cualquier autenticado; César puede preferir `off` por defecto para no exponer volúmenes de tablas sin política (las de deuda). Cambia un default, no el diseño.
-2. **Prefijo reservado `datadoc` vs configurable.** Fijo en este plan; si otra instancia quisiera `/catalogo`, sería una perilla nueva.
-3. **`domains[].connections` en `domains.yaml`** (este plan) o dentro de `writers.yaml` como en el lab hoy. Argumentado en D1; es una decisión de modelo que César puede querer refrendar antes de que el ejecutor toque `domain.ts`.
-4. **Alcance de esquemas**: todos salvo `sys`/`INFORMATION_SCHEMA` (este plan) o solo `dbo` como el lab. Todos es lo honesto («qué existe»); si algún warehouse trae esquemas de plataforma ruidosos, un filtro por instancia sería una perilla más.
-5. **Activación en la instancia GH**: exige ventana (cambio de env) y coordina con `work/017` fase 2 (retiro del contenedor `mira-datadoc-1` y del bloque del Caddyfile). No es de este plan; se deja anotado para que nadie lo ejecute como «solo un env más».
+Las cuatro bifurcaciones de criterio que la v1.0 dejaba abiertas **se cerraron con una segunda mirada**
+(juez independiente, 2026-09-21) y ya no esperan a nadie:
+
+1. ~~**Conteos por defecto**~~ → **`abiertas`, con las dos correcciones de arriba**: la clasificación
+   por forma completa (no por substring) y el build rancio que no publica conteos. El juez **objetó**
+   el default tal como estaba escrito, no por el default sino porque su discriminante estaba roto.
+2. ~~**Prefijo `datadoc`**~~ → **fijo**. Reversible, lo reserva la env; nadie tiene hoy una razón para moverlo.
+3. ~~**`domains[].connections`**~~ → **en `domains.yaml`**, como propone D1: es un hecho del dominio.
+4. ~~**Alcance de esquemas**~~ → **lista blanca `dbo`, ampliable por la instancia** (ver `Q_TABLAS`).
+
+5. **Activación en la instancia GH — AUTORIZADA por César el 2026-09-21** («podemos activar en GH»).
+   Lo que esa autorización cubre y lo que no: cubre **que se active**, y no exime de la **ventana de
+   mantenimiento** (regla dura 17 bis del lab), porque `VERGIS_DATADOC` es cambio de env y recrea el
+   contenedor. Tampoco adelanta nada por sí sola: **el generador no está construido** — este documento
+   es el diseño. El orden es construir (PR, CI verde, imagen), coordinar con `work/017` fase 2 (retiro
+   del contenedor `mira-datadoc-1` y del bloque del Caddyfile) y recién ahí pedir la ventana. Se deja
+   dicho para que nadie lea «autorizado» como «se puede ejecutar hoy».
 
 ---
 
