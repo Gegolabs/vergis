@@ -621,12 +621,14 @@ export function vtGroup(
   return vtSortValues(order).map((key) => ({ key, rows: buckets[key] }))
 }
 
-/** Nodo del árbol de agrupación multinivel. Hoja = filas; interno = grupos por `field`. */
+/** Nodo del árbol de agrupación multinivel. Hoja = filas; interno = grupos por `field`.
+ *  Cada grupo lleva las filas de su SUBÁRBOL COMPLETO (`rows`, por referencia — no se copian):
+ *  es lo que permite el subtotal por grupo (#316) sin recorrer el árbol una segunda vez. */
 export interface VtTreeNode {
   leaf: boolean
   rows?: Record<string, unknown>[]
   field?: string
-  groups?: { key: string; count: number; child: VtTreeNode }[]
+  groups?: { key: string; count: number; rows: Record<string, unknown>[]; child: VtTreeNode }[]
 }
 
 /** Agrupación JERÁRQUICA por varios campos en orden (Área › Empresa › Estado…). Recursivo:
@@ -637,7 +639,12 @@ export function vtGroupTree(rows: Record<string, unknown>[], fields: string[]): 
   return {
     leaf: false,
     field: fields[0],
-    groups: groups.map((g) => ({ key: g.key, count: g.rows.length, child: vtGroupTree(g.rows, fields.slice(1)) })),
+    groups: groups.map((g) => ({
+      key: g.key,
+      count: g.rows.length,
+      rows: g.rows,
+      child: vtGroupTree(g.rows, fields.slice(1)),
+    })),
   }
 }
 
@@ -689,6 +696,72 @@ export function vtTotals(
     }
     out[col.field] = op === 'count' ? n : op === 'avg' ? (n ? suma / n : null) : suma
   }
+  return out
+}
+
+/**
+ * Celdas de la fila de CABECERA de un grupo cuando la tabla está agrupada (#316).
+ *
+ * OPT-IN DOBLE, nada automático: la columna declara `total` (#314) **y** el usuario agrupa por la
+ * bandeja. Si ninguna columna declara `total`, devuelve exactamente el `<td colspan>` de siempre —
+ * byte a byte —: una tabla que no lo pidió no cambia en nada.
+ *
+ * Con columnas que totalizan, emite UNA celda por columna renderizada (más `nactions` celdas de
+ * acciones si hay drills, para que el número de `<td>` cuadre con el de `<th>`):
+ * - la PRIMERA columna sin `total` lleva el rótulo (`labelHtml`: caret + `Campo: valor (n)`) con la
+ *   sangría por profundidad, igual que hoy;
+ * - cada columna con `total` lleva `<td class="align-… vt-gtotal" data-total-field="…">` con el
+ *   valor formateado por `vtFormat` (y `—` si es `null`);
+ * - el resto, celdas vacías.
+ *
+ * CASO LÍMITE: si TODAS las columnas declaran `total`, el rótulo va en la PRIMERA y su subtotal no
+ * se muestra — se prefiere perder un número (que igual está en el pie) antes que inventar una fila
+ * extra o dejar el grupo sin nombre.
+ *
+ * El subtotal es sobre `rows` = las filas del SUBÁRBOL COMPLETO del grupo, no solo sus hojas
+ * directas, y se calcula con `vtTotals` — el mismo y único cálculo del pie, para que Σ de los
+ * subtotales de un nivel no pueda divergir del total de la tabla.
+ *
+ * Ninguna celda lleva `--mag` ni clase de magnitud, por la misma razón que el pie: el color de
+ * magnitud rampea valores comparables entre sí, y un subtotal no es comparable con sus sumandos.
+ *
+ * AUTOCONTENIDA salvo `vtTotals` y `vtFormat` (ambas en `PURE_FNS`, resolubles por nombre en el
+ * browser): esta función viaja al navegador vía `.toString()`.
+ */
+export function vtGroupHeadCells(
+  cols: { field: string; label?: string; align?: string; format?: string; total?: 'sum' | 'avg' | 'count' | true }[],
+  rows: Record<string, unknown>[],
+  nactions: number,
+  labelHtml: string,
+  padPx: number,
+): string {
+  let hasTotal = false
+  for (let i = 0; i < cols.length; i++) if (cols[i] && cols[i].total) hasTotal = true
+  if (!hasTotal) return '<td colspan="' + (cols.length + nactions) + '" style="padding-left:' + padPx + 'px">' + labelHtml + '</td>'
+  const tot = vtTotals(cols, rows)
+  let labelIdx = -1
+  for (let i = 0; i < cols.length; i++)
+    if (cols[i] && !cols[i].total) {
+      labelIdx = i
+      break
+    }
+  if (labelIdx < 0) labelIdx = 0
+  let out = ''
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i]
+    if (i === labelIdx) {
+      out += '<td style="padding-left:' + padPx + 'px">' + labelHtml + '</td>'
+      continue
+    }
+    if (c && c.total) {
+      const v = tot[c.field]
+      const field = String(c.field).replace(/"/g, '&quot;')
+      out += '<td class="align-' + (c.align || 'left') + ' vt-gtotal" data-total-field="' + field + '">' + (v == null ? '—' : vtFormat(v, c.format)) + '</td>'
+    } else {
+      out += '<td></td>'
+    }
+  }
+  for (let a = 0; a < nactions; a++) out += '<td class="vt-actions"></td>'
   return out
 }
 
@@ -810,6 +883,7 @@ const PURE_FNS = [
   vtGroup,
   vtGroupTree,
   vtTotals,
+  vtGroupHeadCells,
   vtCsvCell,
   vtCsv,
   vtCsvName,
@@ -1215,14 +1289,18 @@ function vtBootstrap(root){
 
   // Walk del árbol multinivel → filas <tr>. Cada grupo: encabezado con caret (▾/▸), nivel
   // (data-depth, indentado) y conteo; si está colapsado, no se renderizan sus descendientes.
-  function renderNodeTree(rc, ncols, node, depth, prefix){
+  function renderNodeTree(rc, node, depth, prefix){
     if(node.leaf) return vtBodyRows(rc, node.rows, drills, carry, ancla, fltQ);
     return node.groups.map(function(g){
       var path=prefix+node.field+SEP+g.key;
       var collapsed=!!state.collapsed[path];
       var caret=collapsed?'▸':'▾';
-      var head='<tr class="vt-group-head" data-depth="'+depth+'" data-path="'+vtEsc(path)+'"><td colspan="'+ncols+'" style="padding-left:'+(depth*18+12)+'px"><span class="vt-gcaret">'+caret+'</span> '+vtEsc(colLabel(node.field))+': '+vtEsc(g.key||'(vacío)')+' <span class="vt-gcount">('+g.count+')</span></td></tr>';
-      return head + (collapsed ? '' : renderNodeTree(rc, ncols, g.child, depth+1, path+SEP));
+      /* #316 · subtotal por grupo: las celdas de la cabecera las arma vtGroupHeadCells sobre las
+         filas del SUBARBOL (g.rows). Sin columnas que declaren total devuelve el mismo td colspan de
+         siempre, asi que una tabla que no lo pidio no cambia. */
+      var labelHtml='<span class="vt-gcaret">'+caret+'</span> '+vtEsc(colLabel(node.field))+': '+vtEsc(g.key||'(vacío)')+' <span class="vt-gcount">('+g.count+')</span>';
+      var head='<tr class="vt-group-head" data-depth="'+depth+'" data-path="'+vtEsc(path)+'">'+vtGroupHeadCells(rc, g.rows, nactions, labelHtml, depth*18+12)+'</tr>';
+      return head + (collapsed ? '' : renderNodeTree(rc, g.child, depth+1, path+SEP));
     }).join('');
   }
   function render(){
@@ -1230,7 +1308,7 @@ function vtBootstrap(root){
     var rc = renderCols(), ncols = rc.length + nactions;
     var view = vtApply(rows, state);
     if(state.groupLevels.length){
-      tbody.innerHTML = renderNodeTree(rc, ncols, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
+      tbody.innerHTML = renderNodeTree(rc, vtGroupTree(view, state.groupLevels), 0, '') || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     } else {
       tbody.innerHTML = vtBodyRows(rc, view, drills, carry, ancla, fltQ) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }

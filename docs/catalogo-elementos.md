@@ -289,13 +289,32 @@ cuestiona. Por eso no hay auto-detección de columnas numéricas: la columna lo 
   considerados vale `—`. `count` cuenta los considerados.
 - **El pie sigue a los filtros.** En una tabla interactiva el total se recalcula sobre las filas
   visibles tras las facetas, la búsqueda y los filtros de número y de fecha. Con agrupación activa
-  sigue siendo el total de todas las filas filtradas: **no hay subtotales por grupo**.
+  el pie sigue siendo el total de **todas** las filas filtradas; el agregado de cada grupo vive en
+  su propia fila de cabecera (§4·quinquies).
 - **Los tres modos lo traen.** En papel el cuerpo se trunca al techo de filas pero el pie totaliza el
   conjunto; en el primer paint de una tabla grande el pie servido ya es el total del dataset, no el
   de las 500 filas del recorte SSR.
 - **Cada celda usa el `format` de su columna**, y el rótulo `Total` va en la primera columna que no
   totaliza (si todas totalizan, no hay rótulo).
 - **El CSV no lleva la fila de total**: exporta el dato, no la lectura.
+
+## 4·quinquies · Subtotal por grupo, en la cabecera de cada nivel
+
+Cuando el usuario agrupa la tabla desde la bandeja («agrupar por…», niveles anidables), la fila de
+cabecera de cada grupo muestra, **en las columnas que declaran `total`**, el agregado de las filas de
+ese grupo — su subárbol completo, no solo sus hojas directas. Es el mismo cálculo del pie, así que la
+Σ de los subtotales de un nivel es exactamente el total de la tabla.
+
+El **opt-in es doble y nada es automático**: la columna declara `total` **y** el usuario agrupa. Sin
+agrupación no hay subtotales; con agrupación pero sin columnas que totalicen, la cabecera de grupo
+queda exactamente como está, con su rótulo `Campo: valor (n)` a todo el ancho.
+
+- El rótulo del grupo ocupa la **primera columna que no totaliza**, con la sangría de su nivel; si
+  todas las columnas totalizan, ocupa la primera y su subtotal no se muestra.
+- Cada subtotal usa el `format` de su columna; sin celdas consideradas vale `—`.
+- **Sigue a los filtros**: el árbol de grupos se construye sobre las filas filtradas.
+- Es de la tabla **interactiva**: la agrupación vive en el navegador, así que la tabla estática y el
+  papel no la tienen. El CSV exporta el dato, sin subtotales.
 
 ## 5 · El resto del catálogo: diseñado, no construido
 

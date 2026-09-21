@@ -49,6 +49,7 @@ export {
   vtGroup,
   vtGroupTree,
   vtTotals,
+  vtGroupHeadCells,
   vtCsvCell,
   vtCsv,
   vtCsvName,
