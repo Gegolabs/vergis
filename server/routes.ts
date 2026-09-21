@@ -28,6 +28,11 @@ export interface RouteDeps {
   /** CONTRATO OPERATIVO (`/contrato`, issue #139) — handler o null. Ausente ⇒ la ruta ni se intercepta
    *  (cae al slug-lookup → 404 de siempre): la superficie sin la dep es idéntica a la de antes. */
   getContract?: () => ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null
+  /**
+   * NOVEDADES (`/novedades`, issue #308) — handler o null. Ausente ⇒ la ruta ni se intercepta (cae al
+   * slug-lookup → 404 de siempre): la superficie sin la dep es idéntica a la de antes de la capacidad.
+   */
+  getNovedades?: () => ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null
   getPiConfig: () => PiConfigHandler | null
   /** Handler de Miranda (cluster 077) o null si el flag `MIRANDA_ENABLED` está apagado (default).
    * null ⇒ `/miranda*` cae al 404 normal: con el flag apagado la superficie es idéntica a hoy. */
@@ -160,6 +165,16 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     const contract = deps.getContract?.() ?? null
     if (contract && url === '/contrato') {
       contract(req, res).catch((e) => fail(res, 500, `Error en el contrato operativo: ${errMsg(e)}`))
+      return
+    }
+    // NOVEDADES (`/novedades`, issue #308) — el CHANGELOG embarcado en la imagen, como página. Va
+    // junto al contrato y ANTES del gate `ready`: no sirve dato gobernado, y «¿qué versión es ésta y
+    // qué trae?» es justo la pregunta que se le hace a un nodo que todavía no terminó de arrancar.
+    // Su autorización es la del resto del nodo (el token del gate, ya verificado arriba): no hay rol
+    // nuevo — el changelog de la imagen que uno usa no es superficie de administración.
+    const novedades = deps.getNovedades?.() ?? null
+    if (novedades && url === '/novedades') {
+      novedades(req, res).catch((e) => fail(res, 500, `Error en las novedades: ${errMsg(e)}`))
       return
     }
     // ADMINISTRACIÓN — gateada por rol DENTRO del handler. Va antes del gate `ready` (no sirve dato gobernado).
