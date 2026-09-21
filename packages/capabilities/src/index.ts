@@ -36,6 +36,7 @@ export {
   vtNorm,
   vtIsNumericCol,
   vtIsDateCol,
+  vtPopKind,
   vtDistinct,
   vtSortValues,
   vtIsCategorical,

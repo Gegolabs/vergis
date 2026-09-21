@@ -212,10 +212,11 @@ Antecedente: la rampa anterior era `hsl(8, 75%, L%)` —hue 8 es rojo— oscurec
 valor, o sea *la cifra más grande era la más roja*. El cliente lo leyó como negatividad y pidió
 retirarlo; la instancia sacó los 44 `colorscale` de sus 7 specs.
 
-## 4·ter · Filtro de columna en tablas — lo decide el dato, no el spec
+## 4·ter · Filtro de columna en tablas — lo decide el dato, salvo que la columna lo declare
 
-El ícono embudo del encabezado abre un popover, y **qué ofrece ese popover depende del dato de la
-columna**, no de lo que el spec declare. Es la misma familia que §4·bis: afordancia del lector.
+El ícono embudo del encabezado abre un popover, y **qué ofrece ese popover lo decide el dato de la
+columna**, salvo que la columna declare su clase de embudo (`filter: vals | num | date`, más abajo).
+Es la misma familia que §4·bis: afordancia del lector.
 
 - **Columna de texto → la lista de valores distintos** (checklist con buscador y conteos). Es lo que
   sirve cuando los valores se repiten: «Área: Logística».
@@ -226,10 +227,25 @@ columna**, no de lo que el spec declare. Es la misma familia que §4·bis: aford
 - **Columna de fecha → «Rango de fechas»**: dos campos `Desde` / `Hasta` (inclusivos), tres atajos
   (`Este mes`, `Mes anterior`, `Últimos 30 días`) y `Aplicar` / `Limpiar`. **Sin** checklist: acotar
   «del 1 al 31 de julio» son dos campos, no treinta clics.
-- **Lo deciden `vtIsNumericCol` y `vtIsDateCol`**, en ese orden, o sea el dato materializado, no una
-  declaración del spec. Una columna es de fecha solo si **todos** sus valores no vacíos son ISO
-  `YYYY-MM-DD` (hora opcional): un folio de ocho dígitos es número, un `2026-7-3` es texto. Un autor
-  de spec no puede prenderlo ni apagarlo: es convención de plataforma; si quiere el rango, entrega ISO.
+- **Lo deciden `vtIsNumericCol` y `vtIsDateCol`**, en ese orden, o sea el dato materializado. Una
+  columna es de fecha solo si **todos** sus valores no vacíos son ISO `YYYY-MM-DD` (hora opcional):
+  un folio de ocho dígitos es número, un `2026-7-3` es texto.
+- **Override por columna (CAP-192)** — la columna puede FIJAR su clase de embudo con
+  `filter: vals | num | date`, y esa declaración **prevalece sobre la heurística del dato**:
+
+  ```yaml
+  columns:
+    - { field: id, label: "ID", filter: vals }
+  ```
+
+  Existe por lo que el dato no puede saber: un **identificador numérico** —«Id Persona», un folio, un
+  número de documento— es indistinguible de un monto mirando los valores, y recibe «Positivos /
+  Negativos / En cero», que sobre un identificador no significan nada. `filter: vals` le devuelve su
+  lista de valores. El **booleano** conserva su significado de siempre (`true`/`false` = override del
+  auto-on de la faceta) y **no** fija clase; un string implica que la columna sí tiene embudo, y
+  gobierna el embudo únicamente: el **orden** de la columna lo sigue decidiendo el dato (un «Id
+  Persona» se ordena numéricamente aunque su embudo sea de valores) y la **agrupación** sigue siendo
+  `groupBy`.
 
 **Semántica, escrita entera** (vive en `VtNumFilter`): los atajos son estrictos —`> 0` deja fuera el
 cero—, `entre a y b` es inclusivo en ambos bordes, y una **celda vacía o no numérica queda fuera**
