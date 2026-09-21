@@ -13,6 +13,12 @@ COPY packages/cli/package.json packages/cli/package.json
 COPY packages/mira/package.json packages/mira/package.json
 COPY packages/miranda/package.json packages/miranda/package.json
 COPY packages/policy/package.json packages/policy/package.json
+# EL npm VA PINNEADO también acá, y no es duplicación: el lockfile tiene TRES consumidores
+# (`build.yml`, `tsql-lab.yml` y esta imagen), y `node:22-slim` trae npm 10.9.8 — menor que el
+# `engines.npm` que el repo declara, e incapaz de instalar un lock escrito por npm 11. Pinear solo
+# los workflows deja el gate verde y la imagen roja, que es exactamente lo que pasó el 2026-09-21.
+# `--ignore-scripts` por ADR-001, como el resto de las instalaciones de esta imagen.
+RUN npm i -g npm@11.19.0 --ignore-scripts
 RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build
@@ -32,6 +38,12 @@ COPY packages/cli/package.json packages/cli/package.json
 COPY packages/mira/package.json packages/mira/package.json
 COPY packages/miranda/package.json packages/miranda/package.json
 COPY packages/policy/package.json packages/policy/package.json
+# EL npm VA PINNEADO también acá, y no es duplicación: el lockfile tiene TRES consumidores
+# (`build.yml`, `tsql-lab.yml` y esta imagen), y `node:22-slim` trae npm 10.9.8 — menor que el
+# `engines.npm` que el repo declara, e incapaz de instalar un lock escrito por npm 11. Pinear solo
+# los workflows deja el gate verde y la imagen roja, que es exactamente lo que pasó el 2026-09-21.
+# `--ignore-scripts` por ADR-001, como el resto de las instalaciones de esta imagen.
+RUN npm i -g npm@11.19.0 --ignore-scripts
 RUN npm ci --omit=dev --ignore-scripts
 
 COPY --from=build /app/dist ./dist
