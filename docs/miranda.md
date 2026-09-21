@@ -121,6 +121,38 @@ las rutas y sin entrada en el menú.
 | `run_self_check` | — | `{veredicto, brechas[]}` | Llamada separada al modelo (juez ≠ autor); mueve `validado`→`autochequeado` si no hay B/M. |
 | `create_data_request` | `{descripcion, tablas_faltantes[]}` | `{ok}` | Handoff a César+Claude: Miranda especifica, **no construye** datos en esta fase. |
 
+## ¿Cómo se admite una herramienta?
+
+El cinturón es un **registro cerrado**: hoy son **once** tools —`catalog_tables`, `describe_table`,
+`profile_column`, `run_probe`, `list_pis`, `read_spec`, `save_draft`, `update_intent_summary`,
+`render_preview`, `run_self_check`, `create_data_request`— y la lista vive en
+`packages/miranda/src/tools/registry.ts` (`ENTRIES`), que es la fuente: el conteo de esta sección se
+lee de ahí, no de esta tabla.
+
+Lo durable no es la lista: es el criterio que hace admisible una herramienta. **Una tool nueva se
+admite si y solo si pasa las seis pruebas, y su clase de efecto determina el gate.**
+
+| # | Prueba | Qué exige |
+|---|---|---|
+| 1 | **Clase de efecto** | **R1 lectura** de superficie ya gobernada o expuesta (catálogo, specs, contrato, estado) ⇒ admisible con allowlist. **R2 efecto** (escritura, egreso, gasto) ⇒ además: gate de instancia propio (default off), tope en código y artefacto de sesión. **R3 gobierno** (policies, grupos, scopes, gates de publish) ⇒ **inadmisible**: Miranda no decide gobierno. |
+| 2 | **Fail-closed por construcción** | Sin su configuración, la tool NO aparece en el registro (superficie cero, patrón `PdfConfig`/`MIRANDA_ENABLED`) — nunca «aparece pero falla». |
+| 3 | **Guardia en código** | Todo input pasa por un guard determinista, con errores devueltos al modelo y accionables. El prompt jamás es la defensa. |
+| 4 | **Gasto acotado** | Lo que gasta (modelo, motor, red) tiene tope en código imputado a la sesión (patrón `tokenBudget`, `TOP 500` forzado). |
+| 5 | **Auditable** | El input relevante y el motivo quedan en el registro (patrón `why` de `run_probe`); los efectos R2, además, como artefacto de sesión. |
+| 6 | **RLS intacta** | Si toca dato, corre por el conector enforcing con la identidad del autor; si no pasa por RLS (egreso), no transporta dato. |
+
+**La clase R3 es una puerta cerrada, no un trámite más caro.** Lo que decide gobierno —policies,
+grupos, scopes, los gates de publicación— no entra al cinturón por ninguna vía: es la misma doctrina
+de «¿Qué NO hace Miranda?» dicha del lado de las herramientas. Cualquier candidata que escriba
+terreno, corra DDL o toque policies es R3 y queda fuera.
+
+**La cola de candidatas no se congela: se evalúa con la rúbrica cuando aparece.** Y cada tool que
+entra **declara su clase en el PR que la introduce** — es la forma en que la norma se aplica en vez de
+quedar escrita. Un ejemplo de la costura fina que la rúbrica sí admite: una R1 cuya superficie es más
+estrecha que el scope de la sesión (un endpoint solo-admins) se registra igual —el cinturón es fijo,
+porque variarlo por usuario rompería el prefijo cacheable del prompt— y resuelve la autorización
+**por invocación**, con el mismo juez del endpoint y los mismos textos de denegación.
+
 ## ¿Guardia SQL de las probes?
 
 Una probe es una lectura **exploratoria**: un único `SELECT`, sin efectos, con `TOP 500` **forzado**
