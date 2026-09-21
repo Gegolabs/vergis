@@ -63,6 +63,12 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+_(nada todavía)_
+
+## 0.28.0 — 2026-09-21
+
+**Qué exige:** nada nuevo — sin env obligatorio, sin migración, sin cambio de contrato. `VERGIS_MENU` es opcional (sin él, el menú es idéntico al de 0.27.0). Publicada desde `main@6e0f80c`.
+
 ### Total al pie de la tabla por columna (`columns[].total`)
 
 Una tabla podía mostrar su totalizador solo como una fila más del dato, con el riesgo de que se
@@ -110,6 +116,8 @@ predicado y en el bind del INSERT. Los acentos no se pierden: la collation de Fa
 UTF-8 (`Latin1_General_100_BIN2_UTF8`), así que `VARCHAR` guarda Unicode completo — la razón que había
 detrás de `NVARCHAR` no aplica al consumidor para el que existe esta publicación.
 
+Referencias: #313.
+
 ### El menú del avatar admite secciones declaradas por la instancia (`VERGIS_MENU`)
 
 Los artefactos que acompañan a una plataforma —un catálogo del esquema de datos, una guía, un manual—
@@ -146,7 +154,7 @@ menu:
 - El conteo entra en la línea de config del arranque: `menu N sección(es) · M enlace(s)`, y
   `VERGIS_MENU` entra al auto-chequeo de despliegue (path declarado pero no montado ⇒ error ruidoso).
 
-Capacidad: `CAP-190`.
+Capacidad: `CAP-190`. Referencias: #305.
 
 ## 0.27.0 — 2026-09-05
 
