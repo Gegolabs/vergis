@@ -99,6 +99,8 @@ vocabulario no es error: **degrada a la heurística del dato**, como si no se hu
 test que fija esa degradación. Tampoco se verificó en un navegador real: la evidencia es sobre las
 funciones puras del runtime (las mismas que viajan al cliente vía `toString`) y sobre el HTML emitido.
 
+Catálogo: `CAP-192`. Referencias: #309, #310.
+
 ## 0.28.0 — 2026-09-21
 
 **Qué exige:** nada nuevo — sin env obligatorio, sin migración, sin cambio de contrato. `VERGIS_MENU` es opcional (sin él, el menú es idéntico al de 0.27.0). Publicada desde `main@6e0f80c`.
