@@ -72,6 +72,28 @@ describe('routes · /healthz', () => {
     createRequestHandler(deps({ isReady: () => true, healthSummary: () => ({ total: 2, serving: 2 }) }))(mkReq('/healthz'), res)
     expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse', phase: 'serving', lets: { total: 2, serving: 2 } })
   })
+  // Issue #299: un store embebido degradado es TERMINAL —el nodo no vuelve a escribir— y antes no
+  // salía acá: `phase:serving`, `ok:true`, y el conmutador de anillos dejaba el nodo en rotación
+  // devolviendo 500 en cada escritura. Los Lets siguen sirviendo, así que `lets` NO lo delata.
+  it('#299 · ready con un store degradado → 200 {ok:false, phase:degraded, stores:{degraded}}', () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(
+      deps({ isReady: () => true, healthSummary: () => ({ total: 2, serving: 2 }), degradedStores: () => 1 }),
+    )(mkReq('/healthz'), res)
+    expect(calls.status).toBe(200)
+    expect(JSON.parse(calls.body)).toEqual({
+      ok: false,
+      engine: 'clickhouse',
+      phase: 'degraded',
+      lets: { total: 2, serving: 2 },
+      stores: { degraded: 1 },
+    })
+  })
+  it('#299 · sin stores degradados el JSON es exactamente el de antes (sin bloque `stores`)', () => {
+    const { res, calls } = mkRes()
+    createRequestHandler(deps({ isReady: () => true, degradedStores: () => 0 }))(mkReq('/healthz'), res)
+    expect(JSON.parse(calls.body)).toEqual({ ok: true, engine: 'clickhouse', phase: 'serving' })
+  })
 })
 
 describe('routes · servibilidad por PI (issue #52)', () => {
