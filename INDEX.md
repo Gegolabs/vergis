@@ -18,8 +18,9 @@
 | 012 | `work/012-facetas-naturales-y-cadencia-manual/` — directorio · plan de los realizadores A (#285 orden natural + #286 opciones acotadas en facetas de `table`) y B (#279 «Aplicar cadencia» vigila y no programa slots manuales); integración y corte 0.26.0 por la custodia | 2026-09-03 | 012 | issues #285, #286, #279 · PI-30, PI-1 de la instancia |
 | 013 | `work/013-cluster-botler-generico/` — directorio (cluster) · diseño rector (Fable, para refrendo): el Botler como runtime genérico con registro de proto-Botlets, `pis → lets`, Daftar como segundo proto-Botlet en una instancia «estudios», `botler-ops` | 2026-09-05 | 013 | terreno medido: server/*, packages/botler, deploy/rollout, soveria-host; AgencyDomains v1.1 Cap 5 |
 | 014 | `work/014-314-total-pie-tabla/` — directorio · plan (Fable) y ejecución del total al pie de la tabla por columna (`table.columns[].total`: `sum`/`avg`/`count`), con su semántica cerrada y los 8 tests que lo ponen en riesgo | 2026-09-21 | 014 | issue #314 · PI-15 de la instancia GH (c.11428) |
+| 015 | `work/015-316-subtotal-por-grupo/` — directorio · plan (Fable) y ejecución del subtotal por grupo en la fila de cabecera de cada nivel de agrupación (columnas con `total`), con la reconciliación Σ subtotales = pie y los 7 casos que lo ponen en riesgo | 2026-09-21 | 015 | issue #316 · PI-37 y PI-15 de la instancia GH · continúa #314 |
 
-Próximo disponible: 015
+Próximo disponible: 016
 
 ---
 
