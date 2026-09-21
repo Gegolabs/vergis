@@ -84,6 +84,23 @@ log de arranque. Para una instancia de Mira, una línea menos; para una de Dafta
 advertencia, mejor nombrada. **Límite declarado:** el padrón se evalúa **al arrancar**, igual que el
 predicado de nodo-sin-motor-de-datos, así que una spec de Daftar agregada en caliente a un nodo que
 arrancó sin la env no vuelve a disparar el aviso hasta el próximo arranque.
+### El ítem «Miranda» del menú del avatar deja de desaparecer en `/admin` y en `/impresiones`
+
+**Corrección, sin capacidad nueva.** Quien tenía el scope de Miranda veía su entrada en el menú de
+identidad **solo en el catálogo**: al entrar a `/admin` o a «Mis impresiones» el ítem desaparecía, y
+volvía al salir. No era un permiso que se evaluara distinto — era que en esas dos pantallas nadie lo
+evaluaba.
+
+La causa no es un prop olvidado: es que el menú de identidad se armaba **una vez por pantalla**. Cada
+marco llamaba al componente compartido con los datos que tenía a mano en su propio archivo, así que
+una propiedad nacida en uno no llegaba a los otros salvo que alguien la propagara a mano — el mismo
+reparto que ya había obligado a que las secciones declaradas por la instancia (`VERGIS_MENU`) se
+cablearan tres veces. Ahora la pregunta «¿esta identidad ve Miranda?» tiene **una sola definición**,
+resuelta por identidad y en el momento de pintar, que las tres pantallas comparten; una pantalla nueva
+la recibe o no pinta avatar. Cierra #307.
+
+Sin efecto sobre quién puede **usar** Miranda: el gate de `/miranda` no cambia, y fuera de la
+instancia que la tiene encendida el menú es byte a byte el de antes.
 
 ## 0.31.0 — 2026-09-21
 
