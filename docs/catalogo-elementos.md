@@ -230,7 +230,7 @@ Es la misma familia que §4·bis: afordancia del lector.
 - **Lo deciden `vtIsNumericCol` y `vtIsDateCol`**, en ese orden, o sea el dato materializado. Una
   columna es de fecha solo si **todos** sus valores no vacíos son ISO `YYYY-MM-DD` (hora opcional):
   un folio de ocho dígitos es número, un `2026-7-3` es texto.
-- **Override por columna (CAP-191)** — la columna puede FIJAR su clase de embudo con
+- **Override por columna (CAP-192)** — la columna puede FIJAR su clase de embudo con
   `filter: vals | num | date`, y esa declaración **prevalece sobre la heurística del dato**:
 
   ```yaml

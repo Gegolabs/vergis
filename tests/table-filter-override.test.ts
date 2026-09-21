@@ -1,4 +1,4 @@
-// Clase de embudo DECLARADA por la columna (CAP-191) — `filter: vals | num | date`.
+// Clase de embudo DECLARADA por la columna (CAP-192) — `filter: vals | num | date`.
 //
 // El caso medido: en PI-12 la columna «Id Persona» es un identificador numérico, y desde 0.24.0
 // (CAP-184) el embudo lo decide el DATO: `vtIsNumericCol` la ve numérica y le ofrece «Positivos /
