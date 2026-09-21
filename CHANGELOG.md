@@ -101,6 +101,46 @@ la recibe o no pinta avatar. Cierra #307.
 
 Sin efecto sobre quién puede **usar** Miranda: el gate de `/miranda` no cambia, y fuera de la
 instancia que la tiene encendida el menú es byte a byte el de antes.
+### El nodo publica sus novedades: `/novedades` sirve el CHANGELOG embarcado
+
+**Qué trae:** una ruta `/novedades` que renderiza como página el `CHANGELOG.md` que viaja **dentro de
+la imagen** (`/app/CHANGELOG.md`, #229), con el marco de la plataforma —avatar, tema persistido, cero
+CDN— y **la misma autorización que el resto del nodo**: el token del gate que ya se verificó arriba, sin
+rol nuevo. La **versión que corre** encabeza la página, marcada; el historial va debajo con su índice
+de anclas, y `/novedades#<versión>` es ancla estable. El número de versión del **pie del inspector** y
+el del **pie del catálogo** dejan de ser texto muerto: enlazan a la ruta. Catálogo: `CAP-196`. Cierra
+el contrato del issue #308.
+
+**Por qué:** hasta acá, la única forma declarada de leer ese archivo era `docker run --rm --entrypoint
+cat <imagen> /app/CHANGELOG.md` — acceso de **operador con shell**. Un especificador que ve
+`Vergis v0.31.0` al pie del inspector no tenía ningún camino desde ese número a «¿qué trae?». En el
+inventario de artefactos sin puerta de A.R.B.O.L. (2026-09-07) fue la única fila donde no había nada
+que enlazar, porque la puerta era capacidad de Producto, no de instancia.
+
+**Qué exige:** nada. No hay variable de entorno nueva, ni migración, ni cambio de despliegue: el
+archivo ya viajaba en la imagen desde 0.20.1. Si por lo que sea **no** viajara, `/novedades` responde
+**503 diciendo exactamente eso** y el resto del nodo sigue intacto.
+
+**Qué NO hace:**
+
+- **No sirve «Sin publicar».** Lo que corre es una versión cortada, y mostrar lo no publicado le
+  prometería al lector capacidades que su nodo no tiene. El filtro vive en una sola función y tiene
+  test propio **con control positivo** (la fixture trae la sección y otro test comprueba que el parseo
+  la ve, para que «no aparece» no se confunda con «nunca estuvo»).
+- **No publica la prosa de proceso** del documento (el esquema X.Y.Z, la tabla de tags de la imagen,
+  el cotejo del corte): es el manual de quien corta versiones, no las novedades de quien la usa.
+- **No trae un renderer de markdown.** El HTML lo produce un conversor propio de ~120 líneas acotado a
+  lo que este documento escribe (encabezados, párrafos, listas, tablas, citas, reglas, cercas y los
+  inline de siempre); una dependencia nueva en la imagen habría comprado sintaxis que el archivo no
+  usa. El texto se escapa **antes** del marcado y el destino de cada enlace se valida (`javascript:`
+  se cae), así que el CHANGELOG no puede inyectar HTML en la página.
+- **No notifica** «hay versión nueva» ni hay changelog por PI: fuera de alcance del issue.
+- **No se recarga.** El archivo vive dentro de la imagen y no cambia mientras el proceso vive: se lee
+  y se parsea una vez por proceso, y `SIGHUP` no lo toca porque no hay nada que recargar.
+
+**Sin medir:** que la página se vea bien **en un navegador real** contra el CHANGELOG completo (2.245
+líneas). Lo medido es el HTML emitido —estructura, orden, anclas, ausencia de «Sin publicar», escape—
+por la suite; el render visual no tiene arnés en este repo y se corrobora al desplegar.
 
 ## 0.31.0 — 2026-09-21
 

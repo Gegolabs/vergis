@@ -5,6 +5,7 @@
  */
 import { escapeHtml } from '@vergis/capabilities'
 import { AVATAR_CSS } from './ui'
+import { VERGIS_VERSION } from '../packages/capabilities/src/version'
 
 export interface CatalogItem {
   code: string
@@ -39,6 +40,10 @@ export function indexHtml(
   const lis = items.map((r) => `<li><a href="/${encodeURIComponent(r.slug)}"><div class="pi-id"><span class="c">${escapeHtml(r.code)}</span> ${escapeHtml(r.name)}</div>${govLine(r)}</a></li>`).join('')
   const logo = opts.logoUrl ? `<img class="logo" src="${opts.logoUrl}" alt="">` : ''
   const avatar = opts.avatar ?? ''
+  // La versión ENLAZA a `/novedades` (issue #308), igual que el pie del inspector: el catálogo es la
+  // otra puerta por la que un consumidor llega sin pasar por un PI. Sin versión declarada, el pie
+  // queda byte a byte como estaba — jamás un número fantasma.
+  const version = VERGIS_VERSION ? ` · <a href="/novedades">v${escapeHtml(VERGIS_VERSION)}</a>` : ''
   // Theme oscuro (default, gruvbox) / blanco — vía CSS vars + data-theme; el toggle vive en el avatar.
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)}</title><style>
@@ -48,10 +53,11 @@ body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:v
 .head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700;flex:1}
 ul{list-style:none;padding:0;max-width:680px}li a{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:13px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
 li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:auto;padding-top:24px;color:var(--muted);font-size:11px;opacity:.7}
+.f a{color:var(--muted);text-decoration:none}.f a:hover{color:var(--accent);text-decoration:underline}
 .pi-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gov{flex:none;text-align:right;font-size:11px;color:var(--muted);line-height:1.5;white-space:nowrap}.gov .gk{text-transform:uppercase;letter-spacing:.04em;font-size:9px;opacity:.7}.gov .na{font-style:italic;opacity:.7}.gov .ginfo{cursor:help;opacity:.6;margin-left:2px}
 ${AVATAR_CSS}</style></head>
-<body>${avatar}<div class="head">${logo}<h1>${escapeHtml(title)}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis</div>
+<body>${avatar}<div class="head">${logo}<h1>${escapeHtml(title)}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis${version}</div>
 <script>
 (function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();
 </script></body></html>`
