@@ -2,7 +2,7 @@
  * Fase de carga de la CONFIG DECLARATIVA DE INSTANCIA — fail-closed y FATAL (issue #117).
  *
  * Los YAML que declaran qué gobierna esta instancia (dominios, slots de ingesta, data maestra,
- * grupos semilla, dueños de PI, registro de fuentes, destinos de aviso) se cargan aquí, en un solo lugar, ANTES del
+ * grupos semilla, dueños de PI, registro de fuentes, destinos de aviso, secciones de menú) se cargan aquí, en un solo lugar, ANTES del
  * bloque de administración y FUERA de su `try/catch` de infra. Motivo: ese catch existe para fallas
  * de infraestructura («administración deshabilitada», no-fatal), y al envolver también la carga de
  * config convertía un archivo roto en una degradación silenciosa. Un archivo declarado que no
@@ -35,7 +35,7 @@ import {
   type SourcesConfig,
 } from '@vergis/capabilities'
 import { parseNotifyConfig, type NotifyConfig } from './notify'
-import { countMenuLinks, parseMenuConfig, type MenuSection } from './menu-config'
+import { countMenuLinks, parseMenuConfig, type MenuConfig, type MenuSection } from './menu-config'
 
 /**
  * Una plantilla de job declarada por la instancia, con el contenido CRUDO de sus partes ya leído del
@@ -68,9 +68,17 @@ export interface InstanceConfig {
    * Secciones que la instancia agrega al menú de identidad (`VERGIS_MENU`). Sin el env: cero secciones
    * ⇒ el menú queda idéntico. Una sección o un enlace inválidos se OMITEN (queda su aviso en
    * `menuWarnings`) en vez de tumbar el arranque: ver la cabecera de `menu-config.ts`.
+   *
+   * ARREGLO VIVO (CAP-194): la recarga en caliente lo repuebla POR SPLICE, nunca reasignando la
+   * propiedad — el cableado de `/admin` captura ESTA referencia al arranque (`createAdmin({ menuSections })`
+   * en `serve-rls.ts`, leída a render-time en `admin.ts`), así que un reemplazo del arreglo dejaría
+   * al avatar de administración sirviendo el menú viejo mientras el catálogo sirve el nuevo.
    */
   menuSections: MenuSection[]
-  /** Avisos de lo que se omitió de `VERGIS_MENU`. El arranque los imprime uno por línea. */
+  /**
+   * Avisos de lo que se omitió de `VERGIS_MENU`. El arranque los imprime uno por línea, y la recarga
+   * los re-emite nombrando que vienen de una recarga. Arreglo vivo por el mismo criterio de arriba.
+   */
   menuWarnings: string[]
   /** URL pública de la instancia, normalizada sin slash final. Exigida si hay destinos de aviso. */
   publicUrl: string
@@ -144,23 +152,30 @@ function loadJobTemplates(env: EnvLike, readFile: ReadFile): LoadedJobTemplate[]
  * es imposible por construcción, que es el riesgo real de tener dos caminos de carga.
  */
 export interface InstanceSlice<T> {
-  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES'
+  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES' | 'VERGIS_MENU'
   parse: (doc: unknown) => T
 }
 
 /**
- * Los slices que se recargan sin recrear el proceso (fase 1 de #138·2: avisos, dueños de PI y
- * registro de fuentes). Fase 3 añade `VERGIS_GROUPS` acá y en el watch; el resto de la config de
- * instancia es irreductiblemente de arranque (arrastra esquema y superficies cableadas).
+ * Los slices que se recargan sin recrear el proceso: avisos, dueños de PI y registro de fuentes
+ * (fase 1 de #138·2) y las secciones de menú de la instancia (CAP-194). Fase 3 añade `VERGIS_GROUPS`
+ * acá y en el watch; el resto de la config de instancia es irreductiblemente de arranque (arrastra
+ * esquema y superficies cableadas).
+ *
+ * El menú entra por la MISMA puerta que los otros tres, y eso es lo único que lo volvió recargable:
+ * su parser ya devolvía un valor puro y sus consumidores ya lo leían del arreglo vivo. Lo que NO
+ * cambia es el arranque — la clave raíz `menu:` ausente sigue siendo fatal (contrato de #117).
  */
 export const RELOADABLE_SLICES: {
   notify: InstanceSlice<NotifyConfig>
   piOwners: InstanceSlice<Record<string, string>>
   sources: InstanceSlice<SourcesConfig>
+  menu: InstanceSlice<MenuConfig>
 } = {
   notify: { env: 'VERGIS_NOTIFY', parse: parseNotifyConfig },
   piOwners: { env: 'VERGIS_PI_OWNERS', parse: parsePiOwnersConfig },
   sources: { env: 'VERGIS_SOURCES', parse: parseSourcesConfig },
+  menu: { env: 'VERGIS_MENU', parse: parseMenuConfig },
 }
 
 /**
@@ -185,12 +200,12 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const domains = loadOne(env, 'VERGIS_DOMAINS', parseDomainsConfig, readFile)
   const intakeSlots = loadOne(env, 'VERGIS_INTAKE', parseIntakeConfig, readFile)
   const jobTemplates = loadJobTemplates(env, readFile)
-  // Los tres slices recargables se cargan por la MISMA tabla que usa la recarga (arriba): el boot no
-  // puede parsearlos distinto de como los parseará el watch.
+  // Los cuatro slices recargables se cargan por la MISMA tabla que usa la recarga (arriba): el boot
+  // no puede parsearlos distinto de como los parseará el watch.
   const sourceReg = loadSlice(env, RELOADABLE_SLICES.sources, readFile)
   const piOwners = loadSlice(env, RELOADABLE_SLICES.piOwners, readFile)
   const notify = loadSlice(env, RELOADABLE_SLICES.notify, readFile)
-  const menu = loadOne(env, 'VERGIS_MENU', parseMenuConfig, readFile)
+  const menu = loadSlice(env, RELOADABLE_SLICES.menu, readFile)
 
   // Los avisos llevan enlaces ABSOLUTOS a la vista de detalle (issue #100): sin URL pública, un
   // destino declarado produciría avisos sin dónde mirar. Se rompe el arranque —donde el operador está
