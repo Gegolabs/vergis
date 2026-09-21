@@ -133,6 +133,14 @@ toca, `--retain 1` no los toca. Es la línea que este comando no cruza.
 
 - **Un solo host, FS local.** El lease del plano de control se ordena por rename atómico y relojes del
   mismo kernel. Un volumen de red con relojes desfasados queda **fuera de contrato**.
+- **`VERGIS_OUT` va en un volumen nombrado o en un FS local, nunca en un bind-mount de macOS.** El
+  sustrato virtualizado de Docker Desktop devuelve un **inodo distinto** para el mismo archivo con el
+  mismo tamaño y el mismo `mtime` (medido con control de dos brazos: `deploy/carga/CORRIDAS.md` §3).
+  Desde el issue #299 eso ya no degrada el store —el guard de escritura concurrente decide por el
+  **contenido**, no por el inodo—, pero sí le cuesta un read del store en cada persist. Y si el store
+  llegara a degradarse, ahora se ve: `/healthz` responde `ok:false`, `phase:"degraded"` y
+  `stores:{degraded:N}`, así que el conmutador y el poller lo sacan en vez de dejarlo en rotación
+  devolviendo 500 en cada escritura.
 - La sala de espera **no** cubre la muerte del propio borde (residual: `restart: unless-stopped` del
   contenedor de Caddy — y ese corte sí es corte).
 - El smoke por el borde verifica el predicado de salud y el índice. **No** recorre las rutas de cada PI:
