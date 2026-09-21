@@ -63,7 +63,29 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-_(nada todavía)_
+### El menú declarado por la instancia se recarga en caliente (`VERGIS_MENU`)
+
+**Qué trae:** `VERGIS_MENU` pasa a ser un slice **recargable** de la config de instancia. El watch de
+config de instancia y `SIGHUP` re-parsean el archivo y repueblan las secciones vivas **sin recrear el
+proceso**: editar el YAML cambia el menú que sirven el catálogo, `avatarFor` y `/admin`. El contrato
+del nodo (`GET /contrato`) deja de clasificar la clave como `bootOnly` — la reclasificación es
+derivada del watch registrado, no de una lista aparte. Catálogo: `CAP-194`.
+
+**Por qué:** medido el 2026-09-21 contra `0.29.0` en producción. La instancia GH reemplazó seis
+enlaces del menú por su portal de ayuda (`/ayuda/`), se escribió el `menu.yaml` nuevo y el catálogo
+vivo siguió sirviendo los seis enlaces viejos: el watch de instancia no cubría el menú, y el cambio
+quedó atrapado hasta la promoción siguiente. El menú se cargaba con su propia puerta (`loadOne`) en
+vez de pasar por la tabla que comparten el arranque y la recarga.
+
+**Qué exige:** nada — sin env nueva, sin migración, sin cambio de contrato. Una instancia sin
+`VERGIS_MENU` no registra el watch y se comporta idéntico.
+
+**Qué NO hace:** no cambia el **arranque**, donde la clave raíz `menu:` ausente sigue siendo fatal
+(contrato de #117); una sección o un enlace inválidos se siguen omitiendo uno por uno con su aviso, y
+la recarga los re-emite nombrando que vienen de una recarga. Una recarga inválida **jamás tumba el
+nodo**: conserva lo vigente, avisa el motivo y `/contrato` la registra como `ok:false`. No cubre el
+resto de la config de instancia (`VERGIS_GROUPS`, plantillas de jobs y lo que arrastra esquema o
+superficies cableadas siguen siendo de arranque).
 
 ## 0.29.0 — 2026-09-21
 

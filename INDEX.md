@@ -19,8 +19,9 @@
 | 013 | `work/013-cluster-botler-generico/` — directorio (cluster) · diseño rector (Fable, para refrendo): el Botler como runtime genérico con registro de proto-Botlets, `pis → lets`, Daftar como segundo proto-Botlet en una instancia «estudios», `botler-ops` | 2026-09-05 | 013 | terreno medido: server/*, packages/botler, deploy/rollout, soveria-host; AgencyDomains v1.1 Cap 5 |
 | 014 | `work/014-314-total-pie-tabla/` — directorio · plan (Fable) y ejecución del total al pie de la tabla por columna (`table.columns[].total`: `sum`/`avg`/`count`), con su semántica cerrada y los 8 tests que lo ponen en riesgo | 2026-09-21 | 014 | issue #314 · PI-15 de la instancia GH (c.11428) |
 | 015 | `work/015-316-subtotal-por-grupo/` — directorio · plan (Fable) y ejecución del subtotal por grupo en la fila de cabecera de cada nivel de agrupación (columnas con `total`), con la reconciliación Σ subtotales = pie y los 7 casos que lo ponen en riesgo | 2026-09-21 | 015 | issue #316 · PI-37 y PI-15 de la instancia GH · continúa #314 |
+| 016 | `work/016-menu-hot-reload/` — directorio · plan (Fable) y ejecución de la recarga en caliente de `VERGIS_MENU` (CAP-194): el slice entra en `RELOADABLE_SLICES`, el watch de instancia lo vigila y el swap es un splice del arreglo vivo (el cableado de `/admin` lo capturó al arranque) | 2026-09-21 | 016 | instancia GH: portal de ayuda `/ayuda/`, medido contra `0.29.0` |
 
-Próximo disponible: 016
+Próximo disponible: 017
 
 ---
 
