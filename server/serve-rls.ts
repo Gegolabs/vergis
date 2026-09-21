@@ -80,6 +80,7 @@ import {
   mirandaTransportFrom,
   mirandaDestination,
   mirandaValidateCaps,
+  mirandaMenuScope,
   previewIdentityFor,
   resolvePolicyFor,
   type MirandaServerDeps,
@@ -174,7 +175,7 @@ import { fail, readBody } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
 import { createDiscovery, type Report } from './discovery'
-import { catalogoSinDatosGobernados, createProtoRegistry } from './proto-registry'
+import { avisoEnvDeFamilia, catalogoSinDatosGobernados, createProtoRegistry } from './proto-registry'
 import { createDaftarProto, crearInstrumentos, type Instrumentos } from '@vergis/daftar'
 import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
@@ -413,7 +414,9 @@ const instrumentos: Instrumentos = crearInstrumentos({
   dir: INSTRUMENTOS_DIR ? resolve(INSTRUMENTOS_DIR) : resolve(process.cwd(), 'instrumentos-ausentes'),
   log: (m) => console.warn(m),
 })
-if (!INSTRUMENTOS_DIR) console.warn('[vergis-rls] VERGIS_INSTRUMENTOS_DIR no está definida: un Let de Daftar serviría un catálogo vacío.')
+// El AVISO por la env ausente NO se emite acá: acá todavía no se sabe si alguna spec declara un Let
+// de Daftar, y avisar sin saberlo es la falla del issue #297 (ruido en toda instancia de Mira pura).
+// Se emite abajo, cuando el padrón ya está descubierto — ver `avisoEnvDeFamilia`.
 
 // REGISTRO DE PROTO-BOTLETS (H0 · #289; segunda familia en H3 · #295). El nodo no sabe que sus specs
 // son de Mira: sabe que hay familias de Lets registradas. Cada proto recibe en su CONSTRUCCIÓN lo que
@@ -553,6 +556,20 @@ let bootstrapAll: () => Promise<void>
  * motor no le da un motor. Eso es un restart, y el log lo dice.
  */
 const NODO_SIN_MOTOR_DE_DATOS = catalogoSinDatosGobernados(discover(), protos)
+
+// #297 · La env de instrumentos solo le importa a Daftar: el aviso se emite si —y solo si— el padrón
+// descubierto tiene al menos un Let de esa familia. Una instancia de Mira pura no lee una línea
+// sobre una familia que no hospeda; una que SÍ la hospeda sin volumen montado la lee entera.
+{
+  const aviso = avisoEnvDeFamilia(
+    'VERGIS_INSTRUMENTOS_DIR',
+    Boolean(INSTRUMENTOS_DIR),
+    'daftar',
+    discover(),
+    'servirán un catálogo VACÍO (cero guías, cero devoluciones) hasta que se monte el volumen y se declare la env.',
+  )
+  if (aviso) console.warn(aviso)
+}
 
 if (NODO_SIN_MOTOR_DE_DATOS) {
   console.log(
@@ -1091,6 +1108,15 @@ const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCod
     { logoUrl: INDEX_LOGO || undefined, avatar },
   )
 
+// ¿Esta identidad ve la entrada «Miranda» en el menú del avatar? UNA sola definición para las TRES
+// superficies que pintan ese menú — el catálogo, `/admin` (`createAdmin({ hasMiranda })`) y
+// `/impresiones` (`avatarFor`). El #307 fue exactamente esto al revés: el prop nacía y moría en el
+// catálogo porque cada marco armaba su `avatarMenu(...)` por su cuenta. La decisión vive en
+// `./miranda` (testeable; este módulo no es importable) y acá solo se cierra sobre el estado vivo
+// —`config.miranda` y `governance`, leídos a request-time, no capturados—.
+const hasMirandaFor = (emailLc: string, isAdmin: boolean): Promise<boolean> =>
+  mirandaMenuScope(config.miranda, governance, emailLc, isAdmin)
+
 // Operaciones per-request que el router (`routes.ts`) inyecta. Viven acá porque cierran sobre el
 // estado del server (governance/piAclEnabled/domainsCfg/…), leído a request-time. Lógica verbatim.
 const indexReports = async (all: Report[], identity: IdentityContext): Promise<Report[]> => {
@@ -1114,7 +1140,7 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
     hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false, ug).length > 0
   }
   // Entrada «Miranda» en el menú: solo si el flag está ON y la identidad tiene el scope (admin o grupo).
-  const hasMiranda = config.miranda.enabled && governance ? isAdmin || (await governance.isMember(config.miranda.scopeGroup, emailLc)) : false
+  const hasMiranda = await hasMirandaFor(emailLc, isAdmin)
   const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
   const govByCode: GovByCode = new Map()
   if (governance) {
@@ -1279,7 +1305,8 @@ try {
     },
     avatarFor: async (email) => {
       const isAdmin = governance ? await governance.isAdmin(email) : false
-      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+      const hasMiranda = await hasMirandaFor(email, isAdmin)
+      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
     },
     audit: (e) => console.log(`[vergis-notas] ${JSON.stringify(e)}`),
     secret: CSRF_SECRET,
@@ -1996,6 +2023,9 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // de /admin tenga las mismas que el catálogo (un marco sin ellas sería un menú que cambia
       // según la pantalla).
       menuSections: INSTANCE_CFG.menuSections,
+      // …y por lo mismo el scope de Miranda (#307): el ítem es del marco, así que `/admin` lo resuelve
+      // con la MISMA función que el catálogo, por identidad y a render-time.
+      hasMiranda: hasMirandaFor,
       piCount: discover().length,
       // Tile «Cargas» del dashboard (#161·§6.1): resumen del vigilante desde la PROYECCIÓN — el
       // request path no lista OneLake. Sin vigilante cableado no se ofrece: un tile que diga «0 en

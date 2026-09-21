@@ -103,6 +103,45 @@ bind-mount que churnea inodos ocurre en cada persist, y es el precio de no degra
 recomendación de operación no cambia: para `VERGIS_OUT` con escritura sostenida, **volumen nombrado,
 no bind-mount**.
 
+### El aviso por `VERGIS_INSTRUMENTOS_DIR` solo se emite si el nodo hospeda un Let de Daftar
+
+**Qué trae:** la línea `VERGIS_INSTRUMENTOS_DIR no está definida…` se emitía en **todo** arranque sin
+esa env, incluidas las instancias de Mira pura, que no hospedan ni un Let de Daftar y no tienen nada
+que hacer al respecto. Ahora el aviso se decide **después** del descubrimiento y contra el padrón: se
+emite si —y solo si— falta la env **y** al menos una spec descubierta es de la familia `daftar`, y
+entonces nombra la familia, cuántos Lets quedan sin catálogo y con qué slug. El predicado
+(`avisoEnvDeFamilia`) es una función pura en `server/proto-registry.ts`, del mismo corte que
+`catalogoSinDatosGobernados`. Cierra el issue #297.
+
+**Por qué:** observado en la promoción de A.R.B.O.L. a 0.27.0 (2026-09-06). Un aviso de arranque
+existe para que el operador **actúe**; el que se emite cuando no hay nada que hacer entrena a ignorar
+la franja de avisos, y el día que aparezca uno real pasará desapercibido. Silenciarlo siempre habría
+sido igual de malo con el daño diferido: un nodo de Daftar sin volumen montado sirve un catálogo
+vacío y merece la línea entera.
+
+**Qué exige:** nada. Ningún cambio de conducta, de env ni de contrato — solo cambia qué se lee en el
+log de arranque. Para una instancia de Mira, una línea menos; para una de Daftar sin la env, la misma
+advertencia, mejor nombrada. **Límite declarado:** el padrón se evalúa **al arrancar**, igual que el
+predicado de nodo-sin-motor-de-datos, así que una spec de Daftar agregada en caliente a un nodo que
+arrancó sin la env no vuelve a disparar el aviso hasta el próximo arranque.
+### El ítem «Miranda» del menú del avatar deja de desaparecer en `/admin` y en `/impresiones`
+
+**Corrección, sin capacidad nueva.** Quien tenía el scope de Miranda veía su entrada en el menú de
+identidad **solo en el catálogo**: al entrar a `/admin` o a «Mis impresiones» el ítem desaparecía, y
+volvía al salir. No era un permiso que se evaluara distinto — era que en esas dos pantallas nadie lo
+evaluaba.
+
+La causa no es un prop olvidado: es que el menú de identidad se armaba **una vez por pantalla**. Cada
+marco llamaba al componente compartido con los datos que tenía a mano en su propio archivo, así que
+una propiedad nacida en uno no llegaba a los otros salvo que alguien la propagara a mano — el mismo
+reparto que ya había obligado a que las secciones declaradas por la instancia (`VERGIS_MENU`) se
+cablearan tres veces. Ahora la pregunta «¿esta identidad ve Miranda?» tiene **una sola definición**,
+resuelta por identidad y en el momento de pintar, que las tres pantallas comparten; una pantalla nueva
+la recibe o no pinta avatar. Cierra #307.
+
+Sin efecto sobre quién puede **usar** Miranda: el gate de `/miranda` no cambia, y fuera de la
+instancia que la tiene encendida el menú es byte a byte el de antes.
+
 ## 0.31.0 — 2026-09-21
 
 ### El nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`)
