@@ -19,7 +19,7 @@ networks:
 services:
   # El store gobernado del motor B. Vive acá y no como anillo: es la FUENTE, no el sujeto.
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:24.8-alpine@sha256:b002e56ed5c16e224c312527f6fcba7e77216fec5d7a88a7828f59efc614feb5
     container_name: benchv14-clickhouse
     environment:
       # El nodo crea rol, row policy y usuario consumidor en el bootstrap: sin access management el
@@ -36,7 +36,7 @@ services:
 
   # El borde que conmuta y espera — el SUJETO de la medición.
   caddy:
-    image: caddy:2
+    image: caddy:2@sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f
     container_name: benchv14-caddy
     depends_on:
       clickhouse: { condition: service_healthy }
@@ -57,7 +57,7 @@ services:
 
   # EL INSTRUMENTO. Se levanta cuando el banco ya está estable y sobrevive al acto entero.
   poller:
-    image: node:22-slim
+    image: node:22-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
     container_name: benchv14-poller
     profiles: ["medicion"]
     depends_on: [caddy]
@@ -77,7 +77,7 @@ services:
 
   # El loop de mutaciones (V13 de work/210 §10, 1/s) — hermano del poller, tampoco lo recrea el acto.
   mutador:
-    image: node:22-slim
+    image: node:22-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
     container_name: benchv14-mutador
     profiles: ["medicion"]
     depends_on: [caddy]
