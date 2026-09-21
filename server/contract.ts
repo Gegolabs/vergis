@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { watchPaths } from './hot-reload'
 import type { ContractJournal } from './contract-delta'
+import type { StaticCollectionState } from './static-config'
 import { VERGIS_VERSION } from '../packages/capabilities/src/version'
 
 /** Un watch instalado: qué envs lo configuran, qué rutas vigila y qué recarga cuando dispara. */
@@ -147,6 +148,14 @@ export interface ContractSnapshot {
   /** Familias de Lets (proto-Botlets) que este nodo sabe hospedar (#289). DERIVADO del registro vivo.
    *  `[]`/ausente = el proceso no cableó ninguna (tests, utilitarios). */
   protos?: string[]
+  /**
+   * COLECCIONES ESTÁTICAS que el nodo sirve por cuenta de la instancia (`VERGIS_STATIC`, CAP-195).
+   * DERIVADO del estado vivo: cada entrada trae el veredicto de DISCO de este instante (`exists`,
+   * `readable`) y si un Let le ganó el prefijo. Una colección declarada sobre un directorio que no
+   * está NO impide arrancar; sin esta sección esa degradación sería silenciosa, que es justo lo que
+   * el contrato existe para no permitir. `[]`/ausente = el proceso no cableó el proveedor.
+   */
+  static?: (StaticCollectionState & { shadowedByLet?: boolean })[]
 }
 
 export interface ContractRegistry {
@@ -219,6 +228,10 @@ export function createContractRegistry(opts: {
   /** Proveedor de las familias registradas (#289). CLOSURE sobre el registro vivo, igual que `control`:
    *  lo que el contrato dice hospedar es lo que el proceso cableó, no una lista escrita a mano. */
   protos?: () => string[]
+  /** Proveedor de las colecciones estáticas (CAP-195). CLOSURE sobre el estado vivo —config de
+   *  instancia recargable + catálogo de Lets + disco—, igual que `control` y `miranda`: lo que el
+   *  contrato dice servir es lo que el nodo serviría ahora mismo, no lo que se declaró al arrancar. */
+  staticCollections?: () => (StaticCollectionState & { shadowedByLet?: boolean })[]
 }): ContractRegistry {
   const envSource = opts.envSource ?? process.env
   const clock = opts.now ?? ((): Date => new Date())
@@ -238,6 +251,18 @@ export function createContractRegistry(opts: {
     } catch (e) {
       console.error(`[contrato] no se pudo derivar el plano de control: ${errMsg(e)}`)
       return null
+    }
+  }
+
+  /** Igual que `control`: observabilidad, jamás un 500 en `/contrato`. Un `stat` que falla no puede
+   *  costar la consulta entera del contrato. */
+  const estaticos = (): (StaticCollectionState & { shadowedByLet?: boolean })[] => {
+    if (!opts.staticCollections) return []
+    try {
+      return opts.staticCollections()
+    } catch (e) {
+      console.error(`[contrato] no se pudo derivar el estado de los estáticos de instancia: ${errMsg(e)}`)
+      return []
     }
   }
 
@@ -343,6 +368,7 @@ export function createContractRegistry(opts: {
         control: control(),
         miranda: miranda(),
         protos: opts.protos?.() ?? [],
+        static: estaticos(),
       }
     },
   }

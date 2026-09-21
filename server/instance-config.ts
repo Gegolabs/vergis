@@ -2,7 +2,7 @@
  * Fase de carga de la CONFIG DECLARATIVA DE INSTANCIA — fail-closed y FATAL (issue #117).
  *
  * Los YAML que declaran qué gobierna esta instancia (dominios, slots de ingesta, data maestra,
- * grupos semilla, dueños de PI, registro de fuentes, destinos de aviso, secciones de menú) se cargan aquí, en un solo lugar, ANTES del
+ * grupos semilla, dueños de PI, registro de fuentes, destinos de aviso, secciones de menú, colecciones estáticas) se cargan aquí, en un solo lugar, ANTES del
  * bloque de administración y FUERA de su `try/catch` de infra. Motivo: ese catch existe para fallas
  * de infraestructura («administración deshabilitada», no-fatal), y al envolver también la carga de
  * config convertía un archivo roto en una degradación silenciosa. Un archivo declarado que no
@@ -36,6 +36,7 @@ import {
 } from '@vergis/capabilities'
 import { parseNotifyConfig, type NotifyConfig } from './notify'
 import { countMenuLinks, parseMenuConfig, type MenuConfig, type MenuSection } from './menu-config'
+import { parseStaticConfig, type StaticCollection, type StaticConfig } from './static-config'
 
 /**
  * Una plantilla de job declarada por la instancia, con el contenido CRUDO de sus partes ya leído del
@@ -80,6 +81,25 @@ export interface InstanceConfig {
    * los re-emite nombrando que vienen de una recarga. Arreglo vivo por el mismo criterio de arriba.
    */
   menuWarnings: string[]
+  /**
+   * Colecciones de archivos estáticos que el nodo sirve por cuenta de la instancia (`VERGIS_STATIC`,
+   * CAP-195). Sin el env: cero colecciones ⇒ la superficie es idéntica a la de antes de la capacidad
+   * (ningún prefijo se intercepta). Una entrada inválida se OMITE (queda su aviso en `staticWarnings`)
+   * en vez de tumbar el arranque: ver la cabecera de `static-config.ts`.
+   *
+   * ARREGLO VIVO, por el MISMO criterio que `menuSections` (CAP-194): la recarga en caliente lo
+   * repuebla POR SPLICE, nunca reasignando la propiedad. Hoy el único consumidor —el despacho de
+   * `routes.ts`— lo lee por request a través de un getter (`getStaticCollections`), así que una
+   * reasignación no lo rompería; el splice se mantiene igual porque el día que alguien capture esta
+   * referencia al arranque (como hizo `createAdmin` con el menú) la falla sería silenciosa y por
+   * pantalla, que es exactamente la que CAP-194 costó descubrir en producción.
+   */
+  staticCollections: StaticCollection[]
+  /**
+   * Avisos de lo que se omitió de `VERGIS_STATIC`. El arranque los imprime uno por línea y la recarga
+   * los re-emite nombrando que vienen de una recarga. Arreglo vivo por el mismo criterio de arriba.
+   */
+  staticWarnings: string[]
   /** URL pública de la instancia, normalizada sin slash final. Exigida si hay destinos de aviso. */
   publicUrl: string
   /** Línea de conteos para el log de arranque; SOLO las configs con env definido. */
@@ -152,7 +172,7 @@ function loadJobTemplates(env: EnvLike, readFile: ReadFile): LoadedJobTemplate[]
  * es imposible por construcción, que es el riesgo real de tener dos caminos de carga.
  */
 export interface InstanceSlice<T> {
-  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES' | 'VERGIS_MENU'
+  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES' | 'VERGIS_MENU' | 'VERGIS_STATIC'
   parse: (doc: unknown) => T
 }
 
@@ -171,11 +191,16 @@ export const RELOADABLE_SLICES: {
   piOwners: InstanceSlice<Record<string, string>>
   sources: InstanceSlice<SourcesConfig>
   menu: InstanceSlice<MenuConfig>
+  static: InstanceSlice<StaticConfig>
 } = {
   notify: { env: 'VERGIS_NOTIFY', parse: parseNotifyConfig },
   piOwners: { env: 'VERGIS_PI_OWNERS', parse: parsePiOwnersConfig },
   sources: { env: 'VERGIS_SOURCES', parse: parseSourcesConfig },
   menu: { env: 'VERGIS_MENU', parse: parseMenuConfig },
+  // Los estáticos de instancia (CAP-195) entran por la MISMA puerta que el menú, y por el mismo
+  // motivo: su parser devuelve un valor puro y su consumidor lo lee del arreglo vivo. Publicar una
+  // página no puede exigir recrear el proceso — ése era justamente el costo que la capacidad retira.
+  static: { env: 'VERGIS_STATIC', parse: parseStaticConfig },
 }
 
 /**
@@ -200,12 +225,13 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const domains = loadOne(env, 'VERGIS_DOMAINS', parseDomainsConfig, readFile)
   const intakeSlots = loadOne(env, 'VERGIS_INTAKE', parseIntakeConfig, readFile)
   const jobTemplates = loadJobTemplates(env, readFile)
-  // Los cuatro slices recargables se cargan por la MISMA tabla que usa la recarga (arriba): el boot
+  // Los cinco slices recargables se cargan por la MISMA tabla que usa la recarga (arriba): el boot
   // no puede parsearlos distinto de como los parseará el watch.
   const sourceReg = loadSlice(env, RELOADABLE_SLICES.sources, readFile)
   const piOwners = loadSlice(env, RELOADABLE_SLICES.piOwners, readFile)
   const notify = loadSlice(env, RELOADABLE_SLICES.notify, readFile)
   const menu = loadSlice(env, RELOADABLE_SLICES.menu, readFile)
+  const estaticos = loadSlice(env, RELOADABLE_SLICES.static, readFile)
 
   // Los avisos llevan enlaces ABSOLUTOS a la vista de detalle (issue #100): sin URL pública, un
   // destino declarado produciría avisos sin dónde mirar. Se rompe el arranque —donde el operador está
@@ -229,6 +255,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   if (notify) partes.push(`notify ${notify.destinations.length}`)
   if (jobTemplates) partes.push(`jobs-templates ${jobTemplates.length}`)
   if (menu) partes.push(`menu ${menu.sections.length} sección(es) · ${countMenuLinks(menu.sections)} enlace(s)`)
+  if (estaticos) partes.push(`static ${estaticos.collections.length} colección(es)`)
 
   return {
     entities: entities ?? [],
@@ -241,6 +268,8 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
     notify: notify ?? { destinations: [] },
     menuSections: menu?.sections ?? [],
     menuWarnings: menu?.warnings ?? [],
+    staticCollections: estaticos?.collections ?? [],
+    staticWarnings: estaticos?.warnings ?? [],
     publicUrl,
     summary: partes.join(' · '),
   }

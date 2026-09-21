@@ -20,9 +20,9 @@
 | 014 | `work/014-314-total-pie-tabla/` — directorio · plan (Fable) y ejecución del total al pie de la tabla por columna (`table.columns[].total`: `sum`/`avg`/`count`), con su semántica cerrada y los 8 tests que lo ponen en riesgo | 2026-09-21 | 014 | issue #314 · PI-15 de la instancia GH (c.11428) |
 | 015 | `work/015-316-subtotal-por-grupo/` — directorio · plan (Fable) y ejecución del subtotal por grupo en la fila de cabecera de cada nivel de agrupación (columnas con `total`), con la reconciliación Σ subtotales = pie y los 7 casos que lo ponen en riesgo | 2026-09-21 | 015 | issue #316 · PI-37 y PI-15 de la instancia GH · continúa #314 |
 | 016 | `work/016-menu-hot-reload/` — directorio · plan (Fable) y ejecución de la recarga en caliente de `VERGIS_MENU` (CAP-194): el slice entra en `RELOADABLE_SLICES`, el watch de instancia lo vigila y el swap es un splice del arreglo vivo (el cableado de `/admin` lo capturó al arranque) | 2026-09-21 | 016 | instancia GH: portal de ayuda `/ayuda/`, medido contra `0.29.0` |
-| 017 | `work/017-estaticos-de-instancia/` — directorio · diseño (para ejecutar): el nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`, CAP-195) y el borde deja de tener un bloque por colección. Criterio de excelencia aplicado sobre el incidente del portal de ayuda; antecedente #304 | 2026-09-21 | 017 | issue #304 · instancia A.R.B.O.L. |
+| 017 | `work/017-estaticos-de-instancia/` — directorio · diseño y ejecución de la Fase 1: el nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`, CAP-195) y el borde deja de tener un bloque por colección. Criterio de excelencia aplicado sobre el incidente del portal de ayuda; antecedente #304. Fase 2 (retirar el andamio de la instancia) queda pendiente y exige ventana del borde | 2026-09-21 | 017 | issues #319, #304 · instancia A.R.B.O.L. |
 
-Próximo disponible: 017
+Próximo disponible: 018
 
 ---
 
