@@ -26,6 +26,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # EL npm VA PINNEADO, por la misma razón que shellcheck (ver el job `shell`): sin este paso la
+      # versión de npm del gate la decide la imagen del runner — `setup-node` con `node-version: 22`
+      # trae hoy npm 10.9.8, que es MENOR que el `engines.npm: ">=10.9.9"` que este repo declara, así
+      # que toda corrida venía advirtiendo EBADENGINE contra el propio manifiesto. Un gate con
+      # toolchain incidental no es reproducible: el lock que `npm ci` valida depende de qué npm lo
+      # escribió, y local y CI tienen que resolver el MISMO árbol.
+      # MEDIDO el 2026-09-21, con control positivo: npm 10.9.8 instala el lock de `main` (rc=0) y
+      # revienta al resolver el árbol de vitest 4.1.11 (`Cannot read properties of null (reading
+      # 'edgesOut')`), mientras un lock escrito por npm 11 lo rechaza con `Missing: esbuild@0.28.2`.
+      # Se pinnea la MISMA versión que corre la máquina de desarrollo, que es el punto.
+      - run: npm i -g npm@11.19.0
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run typecheck
