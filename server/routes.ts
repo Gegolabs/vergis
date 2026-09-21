@@ -78,6 +78,15 @@ export interface RouteDeps {
    * null = el motor no distingue servibilidad por PI (clickhouse). */
   healthSummary?: () => { total: number; serving: number } | null
   /**
+   * Cuántos stores embebidos quedaron DEGRADADOS por el guard de escritura concurrente (#299). Esa
+   * condición es **terminal**: el nodo sigue sirviendo lecturas pero toda escritura falla hasta que
+   * se lo reinicie. Antes no salía en `/healthz` —el nodo decía `serving` y `ok:true` mientras
+   * devolvía 500 en cada `POST`—, así que ni el conmutador de anillos ni un balanceador lo sacaban.
+   *
+   * AUSENTE ⇒ 0: un despliegue que no la inyecta ve exactamente el healthz de antes.
+   */
+  degradedStores?: () => number
+  /**
    * PLANO DE CONTROL del nodo. Un nodo sin control **sirve lecturas** y no escribe nada: sus lazos de
    * fondo están desarmados y sus mutaciones se rechazan con 409 nombrando al activo.
    *
@@ -141,9 +150,22 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
       const ready = deps.isReady()
       const lets = deps.healthSummary?.() ?? null
       const degraded = lets ? lets.total - lets.serving : 0
-      const phase = !ready ? 'starting' : !hasControl() ? 'standby' : degraded ? 'degraded' : 'serving'
+      // Un store degradado degrada el NODO (#299): sirve lecturas, pero no escribe ninguna y no se
+      // recupera solo. Entra en `phase` y en `ok` por el mismo eje que los Lets degradados, y se
+      // publica como CONTEO —`stores.degraded`— solo cuando lo hay: con cero, el JSON es el de antes.
+      const stores = deps.degradedStores?.() ?? 0
+      const roto = degraded > 0 || stores > 0
+      const phase = !ready ? 'starting' : !hasControl() ? 'standby' : roto ? 'degraded' : 'serving'
       res.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: ready && degraded === 0, engine: deps.engine, phase, ...(lets ? { lets } : {}) }))
+      res.end(
+        JSON.stringify({
+          ok: ready && !roto,
+          engine: deps.engine,
+          phase,
+          ...(lets ? { lets } : {}),
+          ...(stores > 0 ? { stores: { degraded: stores } } : {}),
+        }),
+      )
       return
     }
     // A10 · gate opt-in: sin el token del proxy no se sirve nada (salvo el healthz de arriba).

@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import type { SqlDb } from '@vergis/capabilities'
 import {
   SqliteGovernanceStore,
   SCHEMA_VERSION,
@@ -128,6 +129,136 @@ describe('plano de escritura único · fencing de escritura concurrente', () => 
       await g.close()
     }
     expect(await adminsEnArchivo(file)).toEqual(['a@gh.com', 'b@gh.com', 'cesar@ratio.cl'])
+  })
+
+  /**
+   * ── El sustrato que miente sobre el inodo (#299) ──────────────────────────────────────────────
+   *
+   * Reemplaza `file` por una réplica BYTE A BYTE con **otro inodo**, conservando tamaño y `mtime`.
+   * Es la señal que el guard veía en un bind-mount de macOS contra su PROPIA escritura
+   * (`deploy/carga/CORRIDAS.md` §3): `ino=113964 size=958464 mtime=…937.676` contra
+   * `ino=113963 size=958464 mtime=…937.676`.
+   *
+   * **Lo que esto reproduce es la SEÑAL, no la causa.** Cuál de los dos `statSync` devuelve el inodo
+   * rancio, y por qué, sigue sin medirse (el issue lo deja escrito como conjetura). Lo que el test
+   * afirma —y verifica en sus propios `expect`— es que el guard recibe exactamente esa huella.
+   *
+   * `contenido` permite montar el CONTROL POSITIVO: la misma huella con bytes distintos.
+   */
+  const replicarConOtroInodo = (file: string, contenido?: Uint8Array): void => {
+    const antes = statSync(file)
+    const tmp = `${file}.replica`
+    writeFileSync(tmp, contenido === undefined ? readFileSync(file) : Buffer.from(contenido))
+    renameSync(tmp, file)
+    // `utimesSync` solo preserva milisegundos, así que el mtime del archivo se alinea a ms ANTES de
+    // abrir el handle: así la huella que el guard guarda y la que restaura esta función son la misma.
+    utimesSync(file, antes.atime, antes.mtime)
+    const después = statSync(file)
+    if (después.ino === antes.ino) throw new Error('el sustrato no cambió el inodo: el test no mide nada')
+    if (después.mtimeMs !== antes.mtimeMs) throw new Error(`mtime no preservado (${antes.mtimeMs} → ${después.mtimeMs})`)
+  }
+
+  /**
+   * Alinea el mtime a un SEGUNDO entero. `utimesSync` recibe los segundos como `double` y solo un
+   * valor entero de segundos sobrevive el viaje sin residuo: con milisegundos ya aparece un `.01` de
+   * coma flotante, y entonces el mtime restaurado deja de ser el que el guard guardó — el test
+   * mediría otra señal (mtime movido) en vez de la del issue (solo el inodo).
+   */
+  const alinearMtime = (file: string): void => {
+    const t = new Date(Math.floor(statSync(file).mtimeMs / 1000) * 1000)
+    utimesSync(file, t, t)
+  }
+
+  /**
+   * Los dos tests de #299 manejan el guard por la API BAJA (`openSqliteDb` + `persistSqliteDb`)
+   * porque necesitan controlar **cuándo** se escribe el archivo: `SqliteGovernanceStore.open()`
+   * vuelca al abrir, y ese volcado le pondría al archivo un `mtime` con fracción sub-milisegundo que
+   * `utimesSync` no sabe restaurar. Con la API baja, la huella que el guard guarda al abrir es la de
+   * un `mtime` alineado a segundo, y la réplica la reproduce exacta.
+   */
+  const abrirGuardado = (file: string): Promise<SqlDb> =>
+    openSqliteDb(file, { schemaVersion: SCHEMA_VERSION, writer: 'solo' }) as Promise<SqlDb>
+
+  it('#299 · mismo contenido con OTRO INODO (bind-mount de macOS) no es escritura ajena', async () => {
+    const file = tmpStore('bind-mount')
+    const semilla = await SqliteGovernanceStore.open(file, { admins: ['cesar@ratio.cl'] })
+    await semilla.close()
+    alinearMtime(file)
+
+    // Un ÚNICO escritor. No hay segundo handle: lo que sigue es el FS mintiendo sobre el inodo.
+    const db = await abrirGuardado(file)
+    const antes = statSync(file)
+    replicarConOtroInodo(file)
+    const después = statSync(file)
+
+    // La huella que recibe el guard es la del issue: difiere SOLO en el inodo.
+    expect(después.ino).not.toBe(antes.ino)
+    expect(después.size).toBe(antes.size)
+    expect(después.mtimeMs).toBe(antes.mtimeMs)
+
+    // Antes de #299 esto lanzaba `SqliteConcurrentWriteError` y dejaba el nodo degradado para siempre.
+    db.run(`INSERT INTO admin (email, seed) VALUES ('nuevo@gh.com', 0)`)
+    expect(() => persistSqliteDb(db, file)).not.toThrow()
+    expect(sqliteControlStatus(db)!.degraded).toBe(false)
+    db.close()
+    expect(await adminsEnArchivo(file)).toEqual(['cesar@ratio.cl', 'nuevo@gh.com'])
+    expect(sqliteDegradedStores().some((s) => s.file === file)).toBe(false)
+  })
+
+  it('#299 · CONTROL POSITIVO · la MISMA huella con otro CONTENIDO sí es escritura ajena', async () => {
+    // Este es el test que distingue «guard arreglado» de «guard desactivado». Si el arreglo hubiera
+    // sido sacar el inodo de la comparación, acá no pasaría nada: tamaño y mtime son idénticos, y el
+    // volcado de este handle borraría en silencio lo que el otro escritor dejó.
+    const file = tmpStore('bind-mount-control')
+    const semilla = await SqliteGovernanceStore.open(file, { admins: ['cesar@ratio.cl'] })
+    await semilla.close()
+    alinearMtime(file)
+
+    const db = await abrirGuardado(file)
+
+    // El volcado de un escritor AJENO real: mismo archivo de partida, mismo esquema, otro admin.
+    const rivalFile = `${file}.rival`
+    copyFileSync(file, rivalFile)
+    const rival = await openSqliteDb(rivalFile)
+    rival.run(`INSERT INTO admin (email, seed) VALUES ('rival@gh.com', 0)`)
+    persistSqliteDb(rival, rivalFile)
+    rival.close()
+    const bytesRival = readFileSync(rivalFile)
+
+    // Si los dos volcados dejaran de tener el mismo tamaño, este test mediría la rama fácil (tamaño
+    // distinto ⇒ drift sin leer) en vez de la que importa. Se afirma para que falle ruidoso.
+    expect(bytesRival.length).toBe(statSync(file).size)
+    expect(bytesRival.equals(readFileSync(file))).toBe(false)
+
+    const antes = statSync(file)
+    replicarConOtroInodo(file, bytesRival)
+    const después = statSync(file)
+    expect(después.ino).not.toBe(antes.ino)
+    expect(después.size).toBe(antes.size)
+    expect(después.mtimeMs).toBe(antes.mtimeMs)
+
+    db.run(`INSERT INTO admin (email, seed) VALUES ('otro@gh.com', 0)`)
+    expect(() => persistSqliteDb(db, file)).toThrow(SqliteConcurrentWriteError)
+    expect(sqliteControlStatus(db)!.degraded).toBe(true)
+    expect(sqliteControlStatus(db)!.degradedReason).toMatch(/contenido vigente/)
+    db.close()
+    // Y lo que importa: la escritura del rival sigue intacta en el archivo.
+    expect(await adminsEnArchivo(file)).toEqual(['cesar@ratio.cl', 'rival@gh.com'])
+  })
+
+  it('#299 · un `touch` (mtime movido, contenido intacto) tampoco es escritura ajena', async () => {
+    const file = tmpStore('touch')
+    const semilla = await SqliteGovernanceStore.open(file, { admins: ['cesar@ratio.cl'] })
+    await semilla.close()
+
+    const g = await SqliteGovernanceStore.open(file, {}, { writer: 'solo' })
+    const t = new Date(statSync(file).mtimeMs + 5_000)
+    utimesSync(file, t, t)
+
+    expect(await g.add('nuevo@gh.com')).toBe(true)
+    expect(g.controlStatus()!.degraded).toBe(false)
+    await g.close()
+    expect(await adminsEnArchivo(file)).toEqual(['cesar@ratio.cl', 'nuevo@gh.com'])
   })
 
   it('un store en memoria no tiene plano de escritura que proteger', async () => {

@@ -1187,6 +1187,11 @@ const server = createServer(
       // fabric: los verificados con veredicto OK, MÁS los que no se verifican porque no consumen datos.
       return { total: all.length, serving: [...piState.values()].filter((v) => v.ok).length + sinDatos }
     },
+    // GUARD DEL STORE (#299): un store embebido que detectó escritura concurrente queda degradado de
+    // forma TERMINAL —no vuelve a escribir hasta el reinicio— y eso tiene que verse en el predicado
+    // del borde. Se cuenta sobre los handles VIVOS, no sobre el registro global de guards degradados:
+    // un handle que ya fue reabierto no debe seguir degradando al nodo.
+    degradedStores: (): number => embeddedStores().filter((s) => s.status()?.degraded === true).length,
     // PLANO DE CONTROL (#210 · I5): sin control, `healthz` declara `standby` (200, pero NO `serving`) y
     // toda mutación de las superficies de gestión responde 409 nombrando al activo.
     control: { hasControl: () => plane.hasControl(), activeHolder: () => activeHolderLabel() },

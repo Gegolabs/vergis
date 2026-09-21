@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, copyFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import initSqlJs from 'sql.js'
@@ -20,11 +21,26 @@ import initSqlJs from 'sql.js'
  *   registrada en el archivo lo copia a `<archivo>.pre-<versión>.bak`. Es recuperación de desastre,
  *   NO el camino de vuelta atrás: restaurar un respaldo descarta escrituras posteriores, y eso solo
  *   lo decide una persona.
- * - **Fencing de escritura concurrente**: antes del rename se compara la huella del archivo vigente
- *   (inodo + tamaño + mtime) con la que dejó el último persist de ESTE handle. Si difiere, otro
- *   escritor pasó por ahí: el persist se aborta con error ruidoso y el handle queda `degraded` en
- *   vez de volcar encima. La época del plano de control se estampa en `control_meta` en cada
- *   persist, y abrir en escritura con una época MENOR que la del archivo se niega.
+ * - **Fencing de escritura concurrente**: antes del rename se verifica que el archivo vigente siga
+ *   siendo el que dejó el último persist de ESTE handle. Si no lo es, otro escritor pasó por ahí: el
+ *   persist se aborta con error ruidoso y el handle queda `degraded` en vez de volcar encima. La
+ *   época del plano de control se estampa en `control_meta` en cada persist, y abrir en escritura con
+ *   una época MENOR que la del archivo se niega.
+ *
+ *   **La señal es el CONTENIDO, no los metadatos del FS** (#299). Los metadatos siguen ahí como vía
+ *   rápida —si inodo, tamaño y mtime son los mismos, nada se movió y no se lee nada—, pero cuando se
+ *   mueven sin cambiar el tamaño el veredicto lo da el **hash de los bytes**, no el inodo. El motivo
+ *   está medido: con `VERGIS_OUT` en un bind-mount de macOS, el `statSync` posterior al propio rename
+ *   devuelve un inodo DISTINTO con el mismo tamaño y el mismo mtime al microsegundo, y el guard
+ *   declaraba escritura ajena sobre su propia escritura (`deploy/carga/CORRIDAS.md` §3, brazo A:
+ *   819 ok / 4.181 fallos; brazo B con volumen nombrado, 5.000/5.000).
+ *
+ *   Lo que se pierde al no creerle al inodo es NADA que el guard existiera para atrapar: el único
+ *   caso que el contenido no distingue es que el otro escritor haya dejado bytes IDÉNTICOS, y ahí no
+ *   hay nada suyo que este volcado pueda borrar. Todo lo demás sigue detectado, y en particular el
+ *   adversario real —otro nodo del plano de control— es imposible que empate: cada persist estampa
+ *   `control_meta` con su `writer` y su `written_at`, así que dos volcados distintos difieren siempre
+ *   en bytes aunque coincidan en tamaño, mtime e inodo.
  *
  * `openSqliteDb(file)` sin opciones devuelve un handle **crudo** (sin gate ni fencing) — es la vía
  * de bajo nivel para tests y utilitarios. Los stores del nodo abren siempre con opciones.
@@ -159,6 +175,8 @@ interface Fingerprint {
   ino: number
   size: number
   mtimeMs: number
+  /** Hash de los bytes del archivo tal como los dejó (o los leyó) este handle. La señal del guard. */
+  hash: string
 }
 
 interface Guard {
@@ -182,7 +200,16 @@ const CONTROL_META_DDL = `CREATE TABLE IF NOT EXISTS control_meta (
   written_at TEXT
 );`
 
-const fingerprintOf = (file: string): Fingerprint | null => {
+interface FsStamp {
+  ino: number
+  size: number
+  mtimeMs: number
+}
+
+const hashOf = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+
+/** Metadatos del archivo vigente. `null` = no existe. NO decide por sí solo: ver `persistSqliteDb`. */
+const stampOf = (file: string): FsStamp | null => {
   try {
     const s = statSync(file)
     return { ino: Number(s.ino), size: s.size, mtimeMs: s.mtimeMs }
@@ -191,7 +218,10 @@ const fingerprintOf = (file: string): Fingerprint | null => {
   }
 }
 
-const describe = (f: Fingerprint | null): string =>
+/** Huella = metadatos del archivo vigente + el hash de los bytes que se sabe que tiene. */
+const withHash = (st: FsStamp | null, hash: string): Fingerprint | null => (st === null ? null : { ...st, hash })
+
+const describe = (f: Fingerprint | FsStamp | null): string =>
   f === null ? 'ausente' : `ino=${f.ino} size=${f.size} mtime=${f.mtimeMs}`
 
 const resolveEpoch = (e: EpochProvider | undefined): number => {
@@ -229,7 +259,7 @@ const stampControlMeta = (db: SqlDb, epoch: number, writer: string): void => {
  * Lanza (sin dejar el handle registrado) cuando el archivo es de un esquema más nuevo o de una época
  * posterior — los dos casos en que abrir en escritura haría daño.
  */
-function attachControlGuard(db: SqlDb, file: string, opts: SqliteOpenOptions): void {
+function attachControlGuard(db: SqlDb, file: string, opts: SqliteOpenOptions, fileHash: string | undefined): void {
   const supported = opts.schemaVersion
   if (!Number.isInteger(supported) || supported < 0) {
     throw new TypeError(`schemaVersion debe ser un entero >= 0 (recibido: ${String(supported)})`)
@@ -282,7 +312,9 @@ function attachControlGuard(db: SqlDb, file: string, opts: SqliteOpenOptions): v
     epochOf: () => resolveEpoch(opts.epoch),
     fencing: status.fencing,
     status,
-    seen: fingerprintOf(file),
+    // La huella inicial describe los MISMOS bytes que cargó este handle: releer el archivo abriría
+    // una ventana en la que la huella habla de un contenido distinto del que la DB tiene en memoria.
+    seen: fileHash === undefined ? null : withHash(stampOf(file), fileHash),
   })
 }
 
@@ -313,10 +345,15 @@ export async function openSqliteDb(file: string | null, opts?: SqliteOpenOptions
   const sqlJsDist = dirname(createRequire(import.meta.url).resolve('sql.js'))
   const SQL = await initSqlJs({ locateFile: (f: string) => `${sqlJsDist}/${f}` })
   const bytes = file && existsSync(file) ? readFileSync(file) : undefined
+  // ⚠ El hash se toma ANTES de construir la Database. sql.js adopta el buffer como el archivo de su
+  // VFS en memoria: todo lo que se escriba después (el `PRAGMA user_version` y el sello de
+  // `control_meta` del propio guard) MUTA estos mismos bytes, y hashearlos después describiría un
+  // contenido que el archivo en disco nunca tuvo. Medido: el guard se declaraba a sí mismo ajeno.
+  const fileHash = bytes === undefined ? undefined : hashOf(bytes)
   const db = new SQL.Database(bytes) as unknown as SqlDb
   if (file && opts) {
     try {
-      attachControlGuard(db, file, opts)
+      attachControlGuard(db, file, opts, fileHash)
     } catch (e) {
       db.close()
       throw e
@@ -348,18 +385,46 @@ export function persistSqliteDb(db: SqlDb, file: string | null): void {
     return
   }
   if (guard && guard.fencing) {
-    const actual = fingerprintOf(file)
-    const drifted =
-      guard.seen === null
-        ? actual !== null
-        : actual === null ||
-          actual.ino !== guard.seen.ino ||
-          actual.size !== guard.seen.size ||
-          actual.mtimeMs !== guard.seen.mtimeMs
-    if (drifted) {
-      const reason = `el archivo vigente (${describe(actual)}) no es el que dejó este handle (${describe(guard.seen)})`
-      markDegraded(guard, reason)
-      throw new SqliteConcurrentWriteError(file, reason)
+    const seen = guard.seen
+    const actual = stampOf(file)
+    // La pregunta del guard es una sola: ¿el archivo vigente tiene el CONTENIDO que dejó este handle?
+    // Los metadatos son la vía rápida para responderla sin leer, no la respuesta.
+    //
+    //   · aparición/desaparición del archivo → drift sin más (no hay contenido que comparar)
+    //   · tamaño distinto                    → drift sin leer (bytes distintos, garantizado)
+    //   · inodo + tamaño + mtime iguales     → sin drift, sin leer (nada se movió)
+    //   · lo demás (mismo tamaño, inodo o mtime movidos) → AMBIGUO: lo resuelve el hash de los bytes.
+    //
+    // Esa última rama es la que el bind-mount de macOS dispara contra la propia escritura del handle
+    // (#299): mismo tamaño, mismo mtime, inodo distinto. Leer el archivo cuesta un read del tamaño del
+    // store, y se paga solo cuando los metadatos se movieron — no en el camino sano.
+    const drift = ((): string | null => {
+      if (seen === null) return actual === null ? null : `apareció un archivo donde este handle no dejó ninguno`
+      if (actual === null) return `el archivo que dejó este handle (${describe(seen)}) ya no está`
+      if (actual.size !== seen.size || actual.ino !== seen.ino || actual.mtimeMs !== seen.mtimeMs) {
+        if (actual.size !== seen.size) {
+          return `el archivo vigente (${describe(actual)}) no es el que dejó este handle (${describe(seen)})`
+        }
+        const hash = ((): string | null => {
+          try {
+            return hashOf(readFileSync(file))
+          } catch {
+            return null
+          }
+        })()
+        if (hash !== seen.hash) {
+          return (
+            `el contenido vigente de ${describe(actual)} no es el que dejó este handle ` +
+            `(${describe(seen)}, sha256 ${seen.hash.slice(0, 12)}…; vigente ${hash === null ? 'ilegible' : `${hash.slice(0, 12)}…`})`
+          )
+        }
+        return null
+      }
+      return null
+    })()
+    if (drift !== null) {
+      markDegraded(guard, drift)
+      throw new SqliteConcurrentWriteError(file, drift)
     }
   }
   if (guard && guard.mode === 'write') {
@@ -371,10 +436,13 @@ export function persistSqliteDb(db: SqlDb, file: string | null): void {
   // tmp propio del proceso: dos escritores que compartieran el mismo tmp se corromperían el volcado
   // entre sí, y el rename entregaría un archivo íntegro con contenido mezclado.
   const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, Buffer.from(db.export()))
+  const bytes = Buffer.from(db.export())
+  writeFileSync(tmp, bytes)
   renameSync(tmp, file)
   if (guard) {
-    guard.seen = fingerprintOf(file)
+    // El hash sale de los bytes que este proceso acaba de escribir, no de releer el archivo: releerlo
+    // costaría un read por persist y, en el sustrato de #299, sería preguntarle al FS que miente.
+    guard.seen = withHash(stampOf(file), hashOf(bytes))
     guard.status.persists += 1
     guard.status.lastPersistAt = new Date().toISOString()
   }
