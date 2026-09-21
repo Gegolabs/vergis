@@ -121,6 +121,35 @@ export const mirandaValidateCaps = (servingCaps: Iterable<string>): string[] => 
 ]
 
 /**
+ * ¿Esta identidad ve la entrada «Miranda» en el menú del avatar? DEFINICIÓN ÚNICA para las TRES
+ * superficies que pintan ese menú — el catálogo, `/admin` y `/impresiones`.
+ *
+ * Existe por el defecto #307: no había tal definición. Cada marco armaba su `avatarMenu(...)` con
+ * los props que tenía a mano en su propio sitio, así que `hasMiranda` —nacido en el catálogo— nunca
+ * llegó a los otros dos y el ítem desaparecía al entrar a `/admin` o a `/impresiones` con el scope
+ * puesto. La causa no es el prop olvidado sino que el menú se arma N veces; con la decisión en una
+ * sola función, inyectada, una superficie nueva no puede nacer con un menú distinto de las demás.
+ *
+ * Se inyecta como FUNCIÓN y no como booleano por dos razones: el scope es POR IDENTIDAD (un booleano
+ * capturado congelaría el de la primera que entre), y `/admin` captura sus deps al arranque y las lee
+ * a render-time — el mismo criterio que obligó a `menuSections` a ser un arreglo vivo (CAP-194).
+ *
+ * Fail-closed: con el flag apagado o sin store de gobierno no la ve nadie.
+ *
+ * Vive acá y no en `serve-rls.ts` por la razón de `mirandaValidateCaps`: ese módulo tiene top-level
+ * `await` y no se puede importar desde un test — escrita ahí, la decisión sería inobservable.
+ */
+export async function mirandaMenuScope(
+  cfg: { enabled: boolean; scopeGroup: string },
+  gov: { isMember(group: string, email: string): Promise<boolean> } | null | undefined,
+  emailLc: string,
+  isAdmin: boolean,
+): Promise<boolean> {
+  if (!cfg.enabled || !gov) return false
+  return isAdmin || gov.isMember(cfg.scopeGroup, emailLc)
+}
+
+/**
  * Identidad con la que se rinde una preview impersonada: los campos del roster TAL CUAL. NO se
  * enriquece desde `VERGIS_IDENTITY_MAP` — el roster es la única fuente de verdad de lo suplantado
  * (una impersonación a medias que se ve «verificada» es peor que ninguna). `agent` se pasa desde el
