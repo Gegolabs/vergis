@@ -63,7 +63,40 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-_(nada todavía)_
+### El nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`)
+
+**Qué trae:** una instancia declara **colecciones de archivos estáticos** —`static: [{ path, dir,
+label? }]`— y el nodo las sirve bajo su propio gate, con la **misma autorización que el catálogo**.
+`path` es un prefijo público validado al cargar (minúsculas, dígitos y guiones; no puede tapar
+`healthz`, `contrato`, `admin`, `oauth2`, `config`, `miranda` ni `impresiones`), y si choca con el
+slug de un Let servido **gana el Let** y la colección se omite nombrando el choque. Servir es de solo
+lectura: `GET`/`HEAD` (un `POST` es 405), contención de ruta verificada **léxicamente y sobre el
+camino real** —`..`, `%2e%2e%2f` y un symlink que escapa dan **403**—, `index.html` para un
+directorio y 404 si no lo tiene (jamás un listado), `Content-Type` por **lista blanca** de extensión
+con `application/octet-stream` de default y `X-Content-Type-Options: nosniff` siempre. Los archivos se
+leen **por request**. `VERGIS_STATIC` entra en `RELOADABLE_SLICES`: el watch de config de instancia y
+`SIGHUP` recargan el conjunto en caliente, y una recarga inválida conserva lo vigente. `GET /contrato`
+declara las colecciones con su veredicto de disco (`exists`, `readable`, `shadowedByLet`). Catálogo:
+`CAP-195`. Cierra el contrato del issue #319.
+
+**Por qué:** medido el 2026-09-21 en la instancia GH. El portal de ayuda (`/ayuda/`) se publicó como
+HTML servido por un contenedor `caddy` aparte, con un bloque nuevo en el Caddyfile del borde, y **dio
+404 al usuario**: el `Caddyfile` se monta como bind de **archivo** y el despliegue lo reemplazó con
+`mv`, que cambia el inodo — el contenedor siguió sirviendo el archivo anterior y `caddy reload`
+releyó el viejo sin avisar. Reparar exigió recrear el borde, con ventana aprobada y **61 ms** de corte
+medido. La lección no es «montar por directorio»: es que **publicar una página no debería tocar el
+borde**. Cada colección costaba un montaje en el compose, un bloque con su `forward_auth` copiado, una
+familia en la sonda de paridad, y el riesgo de que el borde quedara sirviendo algo que nadie declaró.
+
+**Qué exige:** nada. Sin `VERGIS_STATIC` no se intercepta ningún prefijo y la superficie es
+exactamente la de antes — sin env, sin migración, sin cambio de contrato. Una instancia que quiera
+usarlo monta sus directorios en el contenedor y declara el YAML.
+
+**Qué NO hace:** **no genera** contenido —el generador del catálogo de esquema (datadoc) es un alcance
+separado y sigue abierto—, **no autoriza por grupo** (queda declarada como extensión futura en
+`docs/arquitectura-multi-reporte.md`, y no se construye a medias porque media autorización invita a
+confiar en ella) y **no cachea en memoria ni hace fingerprinting**: actualizar el contenido es copiar
+el archivo, y ésa es justamente la propiedad que se busca.
 
 ## 0.30.0 — 2026-09-21
 
