@@ -111,6 +111,8 @@ export const TRAY_CSS = `
 .tray-catalog:hover{color:var(--green,#2563eb)}
 .tray-foot{margin-top:auto;padding-top:14px;text-align:center}
 .tray-version{font-size:10px;color:var(--fg-dim,#94a3b8);opacity:.6;letter-spacing:.03em}
+.tray-version a{color:inherit;text-decoration:none}
+.tray-version a:hover{color:var(--green,#2563eb);text-decoration:underline}
 .tray-credit{border-top:none;padding-top:3px;font-size:9px;line-height:1.5;color:var(--fg-dim,#94a3b8);opacity:.32;word-break:break-word}
 .tray-tabin{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
 .tray-tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border,#e2e8f0)}

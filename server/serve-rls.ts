@@ -185,6 +185,7 @@ import { createBackgroundLoops } from './control-loops'
 import { createContractJournal } from './contract-delta'
 import { avatarMenu, csrfFactory } from './ui'
 import { indexHtml as renderCatalog } from './catalog'
+import { createNovedadesHandler } from './novedades'
 import { createPiConfig, type PiConfigHandler } from './pi-config'
 import { createNotas, sinDrills, type CongeladoPi, type NotasHandler } from './notas'
 import { purgarRetencion, PURGA_INTERVALO_MS } from './notas-settings'
@@ -1153,6 +1154,24 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
 const canOpenPi = (report: Report, identity: IdentityContext): Promise<boolean> =>
   piAclEnabled && governance ? piManagementRole(report.code, identity.user).then(canOpen) : Promise.resolve(true)
 
+/**
+ * El CHANGELOG EMBARCADO (`COPY CHANGELOG.md ./CHANGELOG.md` del Dockerfile, issue #229). Mismos dos
+ * candidatos que el schema del DSL: junto al bundle (`/app/dist/../CHANGELOG.md` en la imagen, la
+ * raíz del repo bajo `tsx`) y el cwd. `null` si ninguno existe — la página lo dice con esas palabras
+ * en vez de servirse vacía.
+ */
+const leerChangelogEmbarcado = (): string | null => {
+  for (const c of [resolve(dirname(fileURLToPath(import.meta.url)), '../CHANGELOG.md'), resolve(process.cwd(), 'CHANGELOG.md')]) {
+    try {
+      return readFileSync(c, 'utf8')
+    } catch {
+      /* siguiente candidato */
+    }
+  }
+  console.error('[vergis-rls] novedades: el CHANGELOG.md no viajó en esta imagen (/novedades responderá 503)')
+  return null
+}
+
 const server = createServer(
   createRequestHandler({
     engine: ENGINE,
@@ -1170,6 +1189,20 @@ const server = createServer(
       journal: contractJournal,
       isAdmin: ((gov) => (gov ? (email: string | undefined) => gov.isAdmin(email ?? '') : null))(governance),
       identityOf: (headers) => ({ user: identityFor(headers as GateHeaders).user }),
+    }),
+    // NOVEDADES (`/novedades`, issue #308): el CHANGELOG que viaja DENTRO de la imagen, como página.
+    // El handler se construye en CALL-TIME por la misma razón que el contrato — `governance` se asigna
+    // en el bootstrap async y capturarlo acá daría `null` para siempre, dejando el avatar sin rol.
+    getNovedades: () => createNovedadesHandler({
+      leerChangelog: leerChangelogEmbarcado,
+      version: VERGIS_VERSION,
+      identityOf: (headers) => ({ user: identityFor(headers as GateHeaders).user }),
+      avatarFor: async (email) => {
+        const isAdmin = governance ? await governance.isAdmin(email) : false
+        const hasMiranda = config.miranda.enabled && governance ? isAdmin || (await governance.isMember(config.miranda.scopeGroup, email)) : false
+        return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+      },
+      brand: INDEX_TITLE,
     }),
     getPiConfig: () => piConfig,
     // Estáticos de instancia (CAP-195): el arreglo VIVO, leído en call-time. Una recarga en caliente

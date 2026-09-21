@@ -691,7 +691,10 @@ function renderTrayShell(
   const footer =
     `<div class="tray-foot">` +
     (piLabel ? `<div class="tray-version tray-piversion">${escapeHtml(piLabel)}</div>` : '') +
-    `<div class="tray-version">${escapeHtml(VERGIS_VERSION_LABEL)}</div>` +
+    // La versión ENLAZA a `/novedades` (issue #308): el número dejó de ser un callejón sin salida —
+    // el CHANGELOG viaja dentro de la imagen y el nodo lo publica. Ruta absoluta: el pie se emite
+    // igual bajo `/<slug>` y bajo una impresión, y una relativa apuntaría a otro lado en cada una.
+    `<div class="tray-version"><a href="/novedades">${escapeHtml(VERGIS_VERSION_LABEL)}</a></div>` +
     `<div class="tray-credit">Powered by Vergis · © 2026 Gegolabs · AGPL-3.0 · https://agencydomains.org/</div>` +
     `</div>`
   // Tab por defecto (radio `checked`): Controles cuando trae maquinaria (facetas de dashboard o

@@ -32,9 +32,16 @@ describe('render · versión del motor en el pie del Inspector', () => {
 
   it('el HTML renderizado muestra esa misma versión, no el fantasma 0.1.0', async () => {
     const html = await render({ piece: piece(), title: 'PI test', theme: 'arbol' })
-    expect(html).toContain(`<div class="tray-version">Vergis v${rootVersion}</div>`)
+    expect(html).toContain(`>Vergis v${rootVersion}</a>`)
     // salvo que la versión real FUERA 0.1.0, el fallback difunto no debe aparecer
     if (rootVersion !== '0.1.0') expect(html).not.toContain('Vergis v0.1.0')
+  })
+
+  it('esa versión ENLAZA a `/novedades` (#308): el número dejó de ser un callejón sin salida', async () => {
+    // REFUTARÍA: el pie de antes, `<div class="tray-version">Vergis vX.Y.Z</div>` sin enlace — un
+    // especificador veía el número y de ahí no salía ningún camino a saber qué trae.
+    const html = await render({ piece: piece(), title: 'PI test', theme: 'arbol' })
+    expect(html).toContain(`<div class="tray-version"><a href="/novedades">Vergis v${rootVersion}</a></div>`)
   })
 
   it('la resolución no depende del filesystem en runtime (cero lectura de package.json)', () => {
