@@ -78,3 +78,40 @@ export function createProtoRegistry(protos: ProtoBotlet[]): ProtoRegistry {
 export function catalogoSinDatosGobernados(reports: { proto: string }[], protos: ProtoRegistry): boolean {
   return reports.length > 0 && reports.every((r) => protos.byType(r.proto)?.consumesData === false)
 }
+
+/**
+ * ¿Hay que avisar por una env que solo sirve a UNA familia de Lets? (#297)
+ *
+ * Una env de recurso —el directorio de instrumentos de Daftar, por caso— no es config del nodo: es
+ * config de una familia. Avisar por su ausencia SIN mirar el padrón produce la falla que este
+ * predicado corrige: una instancia de Mira pura, que jamás monta un Let de Daftar, leía en cada
+ * arranque una línea sobre una familia que no hospeda. **Un aviso que se emite cuando no hay nada
+ * que hacer entrena al operador a ignorar la franja de avisos**, y el día que aparezca uno real
+ * pasará desapercibido.
+ *
+ * La regla, entonces: **se avisa cuando la env falta Y el padrón descubierto tiene al menos un Let
+ * de esa familia** — ahí sí hay algo que hacer (montar el volumen, declarar la env) y la
+ * consecuencia es observable por el usuario del Let. Con el padrón vacío de esa familia la ausencia
+ * es el estado normal y no se dice nada.
+ *
+ * Es la misma semántica de dos niveles que `menu-config.ts`: lo que rompe el contrato del nodo es
+ * fatal, y lo que solo degrada una pieza se avisa NOMBRANDO la pieza. Acá la pieza ni siquiera está
+ * montada, así que no hay nada que nombrar.
+ *
+ * **Su límite, dicho:** el padrón se evalúa donde se lo llame — al arranque, como
+ * `catalogoSinDatosGobernados`—, así que una spec de la familia agregada EN CALIENTE a un nodo que
+ * arrancó sin la env no vuelve a disparar el aviso hasta el próximo arranque.
+ */
+export function avisoEnvDeFamilia(
+  env: string,
+  definida: boolean,
+  familia: string,
+  reports: { proto: string; slug: string }[],
+  consecuencia: string,
+): string | null {
+  if (definida) return null
+  const lets = reports.filter((r) => r.proto === familia)
+  if (lets.length === 0) return null
+  return `[${familia}] ${env} no está definida y el padrón declara ${lets.length} Let(s) de la familia ` +
+    `(${lets.map((r) => r.slug).join(', ')}): ${consecuencia}`
+}
