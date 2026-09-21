@@ -40,6 +40,69 @@
       ],
       "pinDigests": false,
       "enabled": false
+    },
+    {
+      "description": "Agrupación: todos los digests de imagenes docker viajan en UNA sola PR (`docker digests`). Con `docker:pinDigests` activo el bot abre una PR por imagen y por digest, y el tablero (#169) se satura hasta topar el límite de concurrencia, que frena TODO lo demás. Un digest no cambia la versión: agruparlos no mezcla riesgos distintos.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "groupName": "docker digests"
+    },
+    {
+      "description": "Agrupación: todas las actions de GitHub viajan en UNA sola PR (`github actions`). Con `helpers:pinGitHubActionDigests` cada action pineada genera su propia PR de digest; agrupadas se revisan de una vez y el conteo de PRs concurrentes baja solo, sin tocar `prConcurrentLimit`.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Banco de medición (`deploy/rollout/bench/**`): solo digests, nada de minor/major/patch. Ese directorio es el INSTRUMENTO con que se miden los cortes de servicio de las promociones por anillos, y cambiarle el store le cambia el instrumento: una medición hecha con un banco que el bot movió no es comparable con la serie histórica. Los digests SÍ entran porque el banco usa los mismos tags flotantes que producción, y quedarse atrás ahí sería medir contra algo que producción ya no es.",
+      "matchFileNames": [
+        "deploy/rollout/bench/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major",
+        "patch"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Imagenes base `node` y `python`: solo digests. El salto de major de la imagen base no es una PR del bot: se hace a mano y se mide por anillos (instalar, promover, medir el corte), porque cambia el runtime de todo lo que corre encima. Los digests sí entran: son el parche de seguridad del mismo tag, que es justamente lo que `docker:pinDigests` está ahí para traer.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "node",
+        "python"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major",
+        "patch"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "`node` fuera de los managers npm y github-actions. `engines.node` es una POLITICA (`>=22`), no un pin: declara el piso que el código exige, no la versión exacta con que corre. Pinearle el patch obliga a bumps perpetuos sin ningún efecto en producción, porque la versión real con que corre la plataforma la fija el digest de la imagen base en el `Dockerfile`, no este campo. Lo mismo para `node-version` de las actions.",
+      "matchPackageNames": [
+        "node"
+      ],
+      "matchManagers": [
+        "npm",
+        "github-actions"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "CANDADO con condición de retiro escrita, para que no quede enterrado como quedó el de npm. `package.json` tiene un `overrides.fast-uri` puesto en 8afa39e (`fix(deps): fast-uri 3.1.7 - el advisory que tenía el CI de main en rojo`, 2026-09-02): cuatro GHSA high sobre fast-uri@3.1.5, transitiva vía `ajv`, que cortaban `npm audit` antes de typecheck y suite. Ese override es lo que hace peligroso un major: `ajv` declara `\"fast-uri\": \"^3.0.1\"`, así que si Renovate sube el override a v4 le mete a ajv un major que ajv NO soporta, y el fallo no aparece en el lockfile sino en tiempo de ejecución. SE RETIRA el dia que `ajv` suba su propio rango a `^4` (verificar con `grep '\"fast-uri\"' node_modules/ajv/package.json`): ese día esta regla y el override sobran juntos.",
+      "matchPackageNames": [
+        "fast-uri"
+      ],
+      "allowedVersions": "<4"
     }
   ]
 }
