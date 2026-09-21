@@ -130,6 +130,17 @@ ruta + clave, en vez de degradar en silencio.
 fatal, pero una **sección o un enlace** inválidos se omiten con aviso nombrado y el nodo levanta. Un
 ítem de menú mal escrito no vale el costo de dejar la plataforma sin servir.
 
+**Y el menú se recarga en caliente** (`CAP-194`): `VERGIS_MENU` es un slice de `RELOADABLE_SLICES`, así
+que el watch de config de instancia —y `SIGHUP`— lo re-parsean y **spliceean** el arreglo vivo de
+secciones sin recrear el proceso. Editar el YAML cambia el menú que sirven el catálogo y `/admin`.
+El splice no es estilo: el cableado de `/admin` captura esa referencia al arranque, y reasignar la
+propiedad dejaría un menú distinto según la pantalla.
+
+La regla de fallo de la recarga es la de todos los slices: **una recarga jamás tumba el nodo**. Si el
+archivo no parsea, perdió su clave raíz o está a medio escribir, se **conserva lo vigente**, se avisa
+por log con el motivo y `/contrato` registra la recarga como `ok:false` (el archivo de disco queda
+`pending`). El arranque no cambia: ahí la clave raíz ausente sigue siendo fatal.
+
 **Servicios transversales**: el audit log append-only (`$VERGIS_OUT/admin-audit.log`), la capa de
 notas (store propio `VERGIS_NOTES_DB`, no-fatal), el branding del catálogo (`VERGIS_INDEX_TITLE` /
 `VERGIS_INDEX_LOGO`, con el título **editable in-app** vía el setting `index_title` — ver

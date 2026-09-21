@@ -298,7 +298,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-162` | Specs de PI re-leídos **por request**: subir un spec no exige reiniciar | descubrimiento de specs | ≤0.9 | [arquitectura-multi-reporte.md §6](arquitectura-multi-reporte.md) |
 | `CAP-163` | Watch de políticas y de gobierno de dominio: el YAML se toma al escribirlo | `watch:policies`; el arranque declara `[hot-reload] activo · specs=… · policies=N · gobierno-dominio=N` | ≤0.9 | [arquitectura-multi-reporte.md §6](arquitectura-multi-reporte.md) |
 | `CAP-164` | Conexiones, dominios e intake recargables, con validate-before-swap por archivo | `VERGIS_CONNECTIONS` (ruta o JSON inline) | 0.4.0 (#50) | [CHANGELOG 0.4.0](../CHANGELOG.md) |
-| `CAP-165` | Config recargable por slice, y una señal que fuerza la recarga sin cortar | `VERGIS_NOTIFY` · `VERGIS_PI_OWNERS` · `VERGIS_SOURCES`; `SIGHUP` | 0.15.0 | [arquitectura-multi-reporte.md §6](arquitectura-multi-reporte.md) |
+| `CAP-165` | Config recargable por slice, y una señal que fuerza la recarga sin cortar | `VERGIS_NOTIFY` · `VERGIS_PI_OWNERS` · `VERGIS_SOURCES` (y `VERGIS_MENU` desde CAP-194); `SIGHUP` | 0.15.0 | [arquitectura-multi-reporte.md §6](arquitectura-multi-reporte.md) |
 
 ## Miranda
 
@@ -328,6 +328,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-182` | Consola de administración de plataforma y de dominio | `/admin`, `/admin/…` (gateada por rol dentro del handler) | ≤0.9 | [gestion-de-dominio.md §6](gestion-de-dominio.md) |
 | `CAP-183` | Configuración por PI desde la propia plataforma | `/<slug>/config` (gate de rol de PI) | 0.18.0 | [gestion-de-dominio.md §1](gestion-de-dominio.md) |
 | `CAP-190` | Secciones de menú declaradas por la INSTANCIA en el avatar (rótulo + enlaces; agrega, no reemplaza) | `VERGIS_MENU` → `menu: [{ title, links: [{ label, href, description?, newTab? }] }]` | 0.28.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
+| `CAP-194` | **Las secciones de menú de la instancia se recargan en caliente**; una recarga inválida conserva lo vigente y el nodo sigue sirviendo | `VERGIS_MENU` entra en `RELOADABLE_SLICES` — el watch de config de instancia y `SIGHUP` la recargan | sin publicar | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
 
 ## Capacidades retiradas
 
