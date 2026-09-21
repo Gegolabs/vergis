@@ -352,6 +352,12 @@ export interface AdminDeps {
   signoutRd?: string
   /** Secciones que la instancia agrega al menú de identidad (`VERGIS_MENU`). Sin ellas, el menú de siempre. */
   menuSections?: MenuSection[]
+  /** ¿La identidad ve la entrada «Miranda» en el menú? (#307). Viaja por las MISMAS deps que
+   * `menuSections` y por el mismo motivo: el menú de identidad es del MARCO, no de la administración,
+   * y tiene que ser el mismo en las tres superficies que lo pintan. Es una FUNCIÓN porque el scope es
+   * por identidad y `/admin` captura sus deps al arranque: un booleano quedaría congelado en el de la
+   * primera identidad que entre. Ausente ⇒ sin entrada (fail-closed, el menú de siempre). */
+  hasMiranda?: (email: string, isAdmin: boolean) => Promise<boolean>
 }
 
 export interface AdminHandler {
@@ -404,7 +410,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     const manageable = isAdmin || stewardAll ? allDomains : manageableDomains(allDomains, email, isAdmin, myGroups)
     if (!isAdmin && manageable.length === 0) {
       deps.audit({ type: 'admin-access-denied', user: email || '(anónimo)', path })
-      const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home', false), avatar: buildAvatar(deps, email, false, false) }
+      const bare: Chrome = { sidebar: buildSidebar(deps, [], 'gestion', 'home', false), avatar: await buildAvatar(deps, email, false, false) }
       send(res, 403, adminPage(deps, bare, 'Acceso restringido', `<p class="msg err">No gestionas ninguna plataforma ni dominio.</p><p>Sesión actual: <code>${escapeHtml(email || '(anónima)')}</code>. ¿No eres tú? <a href="/oauth2/sign_out?rd=%2Fadmin">Inicia sesión con otra cuenta</a>.</p><p><a href="/">← Volver al catálogo</a></p>`))
       return true
     }
@@ -429,7 +435,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         active = e?.domain ? `dom:${e.domain}/maestra/${e.id}` : 'home'
       }
     }
-    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active, isAdmin), avatar: buildAvatar(deps, email, isAdmin, manageable.length > 0) }
+    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active, isAdmin), avatar: await buildAvatar(deps, email, isAdmin, manageable.length > 0) }
     const denyPlatform = (): boolean => {
       send(res, 403, adminPage(deps, nav, 'Solo plataforma', `<p class="msg err">Esta sección es de gestión de plataforma (solo administradores).</p>`))
       return true
@@ -1037,8 +1043,9 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
 
 /** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir.
  * Usa el componente compartido (`avatarMenu`) — el mismo marco del catálogo. */
-function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): string {
-  return avatarMenu({ email, isAdmin, hasDomains, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
+async function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): Promise<string> {
+  const hasMiranda = deps.hasMiranda ? await deps.hasMiranda(email, isAdmin) : false
+  return avatarMenu({ email, isAdmin, hasDomains, hasMiranda, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>
