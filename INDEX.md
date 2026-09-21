@@ -22,7 +22,10 @@
 | 016 | `work/016-menu-hot-reload/` — directorio · plan (Fable) y ejecución de la recarga en caliente de `VERGIS_MENU` (CAP-194): el slice entra en `RELOADABLE_SLICES`, el watch de instancia lo vigila y el swap es un splice del arreglo vivo (el cableado de `/admin` lo capturó al arranque) | 2026-09-21 | 016 | instancia GH: portal de ayuda `/ayuda/`, medido contra `0.29.0` |
 | 017 | `work/017-estaticos-de-instancia/` — directorio · diseño y ejecución de la Fase 1: el nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`, CAP-195) y el borde deja de tener un bloque por colección. Criterio de excelencia aplicado sobre el incidente del portal de ayuda; antecedente #304. Fase 2 (retirar el andamio de la instancia) queda pendiente y exige ventana del borde | 2026-09-21 | 017 | issues #319, #304 · instancia A.R.B.O.L. |
 
-Próximo disponible: 018
+| 018 | `work/018-generador-datadoc/` — directorio · diseño (Fable) del generador del Datadoc en el nodo: la unidad de medición es la conexión (`database_ref`) y no el dominio, dos slices nuevos de instancia (`VERGIS_WRITERS`, `VERGIS_SEMANTICA`), caché del modelo medido en disco con sello por conexión, y la salida servida por el mismo `resolveStatic` de CAP-195. Los conteos de filas solo sobre tablas no gobernadas o abiertas | 2026-09-21 | 018 | issue #304 · continúa #319/CAP-195 · instancia A.R.B.O.L. (`gen-datadoc.mjs`) |
+| 019 | `work/019-consola-sql/` — directorio · diseño (Fable) de la Consola SQL: NO ejecuta bajo el SP de serving (es Admin de los workspaces y su prelude no usa `@read_only` ⇒ bypass por dos vías), sino bajo un principal de consola `Viewer` por Conector con los claims del ingeniero y `@read_only = 1` en conexión dedicada. Gate binario fail-closed por Conector, auditoría hash-encadenada, y un mecanismo bloqueante sin medir en Fabric (que `@read_only` se honre) | 2026-09-21 | 019 | issue #306 · reabre la decisión de #61 (XLSX) |
+
+Próximo disponible: 020
 
 ---
 
