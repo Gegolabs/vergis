@@ -61,7 +61,7 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.32.0 — 2026-09-21
 
 ### El guard de escritura concurrente del store mira el CONTENIDO, y un store degradado sale en `/healthz`
 
@@ -149,7 +149,7 @@ CDN— y **la misma autorización que el resto del nodo**: el token del gate que
 rol nuevo. La **versión que corre** encabeza la página, marcada; el historial va debajo con su índice
 de anclas, y `/novedades#<versión>` es ancla estable. El número de versión del **pie del inspector** y
 el del **pie del catálogo** dejan de ser texto muerto: enlazan a la ruta. Catálogo: `CAP-196`. Cierra
-el contrato del issue #308.
+el contrato del issue #308 (PR #323).
 
 **Por qué:** hasta acá, la única forma declarada de leer ese archivo era `docker run --rm --entrypoint
 cat <imagen> /app/CHANGELOG.md` — acceso de **operador con shell**. Un especificador que ve
@@ -181,6 +181,8 @@ archivo ya viajaba en la imagen desde 0.20.1. Si por lo que sea **no** viajara, 
 **Sin medir:** que la página se vea bien **en un navegador real** contra el CHANGELOG completo (2.245
 líneas). Lo medido es el HTML emitido —estructura, orden, anclas, ausencia de «Sin publicar», escape—
 por la suite; el render visual no tiene arnés en este repo y se corrobora al desplegar.
+
+**Publicada desde `main@d32d421`.**
 
 ## 0.31.0 — 2026-09-21
 
