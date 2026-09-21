@@ -63,6 +63,38 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### Total al pie de la tabla por columna (`columns[].total`)
+
+Una tabla podía mostrar su totalizador solo como una fila más del dato, con el riesgo de que se
+confunda con un registro o quede perdida en el cuerpo. Ahora el elemento `table` dibuja un `<tfoot>`
+con el agregado de **cada columna que lo declare**:
+
+```yaml
+- table:
+    data: data.cosecha
+    columns:
+      - { field: especie, label: "Especie" }
+      - { field: cantidad, label: "Cantidad", format: int_0, align: right, total: sum }
+```
+
+- **Opt-in por columna, nunca automático.** `sum` · `avg` · `count` (`true` es alias de `sum`). Un
+  valor desconocido **rechaza la spec** (`table-column-total-invalid`); no se degrada a suma en
+  silencio. Un total sobre un porcentaje o sobre un stock a fechas distintas es peor que ninguno,
+  porque al pie de una tabla nadie lo cuestiona.
+- **El total sigue a los filtros de la bandeja**: en una tabla interactiva se recalcula sobre las
+  filas visibles (facetas, búsqueda, filtros de número y de fecha), con el mismo cálculo que corrió
+  en el servidor — una sola función, `vtTotals`, servidor y browser.
+- **Los tres modos de render lo traen** (interactivo, estático y papel), y siempre sobre TODAS las
+  filas del dataset: el recorte SSR de 500 filas y el techo de impresión acotan el cuerpo, no el pie.
+- **Qué exige: nada.** Sin env nuevo, sin migración, sin estado. Una tabla que no declara `total` no
+  cambia en nada — ni una marca de más en su HTML.
+- **Qué NO hace:** el CSV no incluye la fila de total; no hay subtotales por grupo cuando la
+  agrupación está activa (el pie es el total de las filas filtradas); la suma es en `Number`, así que
+  un `SUM` sobre BIGINT por encima de `Number.MAX_SAFE_INTEGER` perdería dígitos bajos (sin BigInt en
+  esta entrega).
+
+Catálogo: `CAP-191`. Referencias: #314; petición de origen en PI-15 de la instancia GH.
+
 ### La publicación de data maestra vuelve a llegar a un warehouse de Fabric (VARCHAR, no NVARCHAR)
 
 **Corrección, sin capacidad nueva.** Desde el 2026-07-08 el plan de publicación creaba la tabla
