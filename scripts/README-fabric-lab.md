@@ -15,7 +15,7 @@ respondían — y la Norma 7 dice que el experimento lo corre quien publica.
 
 ```bash
 export VERGIS_FAB_SUB=b9ce0759-1cf3-4be9-af83-149c926fd584   # suscripción ultraBASE
-export FAB_SERVER="$(…)"                                      # ver RESOURCES.md
+export FAB_SERVER=b5towqozkz5ebe7ayhs6w67cdq-vei4k2srzm5efe57d5tj2a75by.datawarehouse.fabric.microsoft.com
 export FAB_TOKEN=$(az account get-access-token --subscription $VERGIS_FAB_SUB \
                      --resource https://database.windows.net/ --query accessToken -o tsv)
 
@@ -24,6 +24,27 @@ npm run fab:proof     # la prueba
 npm run fab:pause     # y a otra cosa — NO se deja prendida
 npm run fab:state     # Paused | Active, para verificar
 ```
+
+**De dónde sale `FAB_SERVER`, si algún día cambia.** Es el `connectionString` del warehouse
+`vergislab` en el workspace `vergis-fabric-lab` (`6ac511a9-cb51-423a-93bf-1f669d03fd0e`). No es un
+secreto —el acceso lo da el token—, por eso vive acá y no en `local/`. Se redescubre así, y hay dos
+cosas medidas el 2026-09-21 que conviene saber antes de intentarlo:
+
+```bash
+T=$(az account get-access-token --subscription $VERGIS_FAB_SUB \
+      --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
+curl -s -H "Authorization: Bearer $T" \
+  "https://api.fabric.microsoft.com/v1/workspaces/6ac511a9-cb51-423a-93bf-1f669d03fd0e/warehouses"
+```
+
+· **Exige la capacidad PRENDIDA.** Con la capacidad `Paused` ese endpoint devuelve
+  `InternalServerError` —no un 404 ni un campo vacío—, así que el error *parece* del API y es del
+  estado del recurso. El descubrimiento va DENTRO de la ventana, no antes.
+· **Tarda en aparecer tras el `resume`.** Medido: la capacidad marcó `Active` de inmediato y el
+  `connectionString` recién llegó al **tercer** intento, ~2 min después. Reintentar, no concluir que
+  no existe.
+· El campo `connectionString` de la API **legacy** (`api.powerbi.com/v1.0/myorg/groups/{ws}/datawarehouses`)
+  viene `None` aun con la capacidad activa: sirve para listar y para ver el `ownerUser`, no para esto.
 
 **`fab:pause` no es opcional.** Una capacidad olvidada encendida es la forma clásica de que esto se
 cancele por factura. El costo es despreciable **por el modelo de ventana**, no por sí mismo.
