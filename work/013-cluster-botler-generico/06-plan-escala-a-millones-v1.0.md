@@ -278,11 +278,20 @@ docker run -d --name carga-daftar --init --memory 512m -p 127.0.0.1:8080:8080 \
   -e VERGIS_IDENTITY_MAP=/identity/map.json -e VERGIS_OUT=/governance \
   -e VERGIS_ADMIN_SEED=admin@carga.local -e VERGIS_CONTROL=lease \
   -v $C/specs:/specs:ro -v $C/instrumentos:/instrumentos:ro -v $C/identity:/identity:ro \
-  -v $C/governance:/governance vergis:carga
+  -v cargavol:/governance vergis:carga
 
 # 4. El standby para CN-A: mismo VERGIS_OUT, otro puerto
-docker run -d --name carga-daftar-standby ... -p 127.0.0.1:8081:8080 ... -v $C/governance:/governance vergis:carga
+docker run -d --name carga-daftar-standby ... -p 127.0.0.1:8081:8080 ... -v cargavol:/governance vergis:carga
 ```
+
+> ⚠ **`VERGIS_OUT` va en un VOLUMEN NOMBRADO, no en un bind-mount de macOS.** La receta original de
+> este plan usaba `-v $C/governance:/governance` y con ella **la serie S₁ no se puede completar**: el
+> guard de escritura concurrente del store se dispara contra la propia escritura del nodo (819 ok /
+> 4.181 fallos, store degradado de forma terminal; con volumen nombrado, 5.000/5.000 dos veces). El
+> hallazgo, con su control de dos brazos, está en `deploy/carga/CORRIDAS.md` §3, y el guard se corrigió
+> en el issue #299 —ahora el veredicto lo da el contenido, no el inodo—, pero la recomendación se
+> mantiene: en un bind-mount que churnea inodos el guard paga un read del store en cada persist.
+> El volumen se prepara con `docker volume create cargavol` y un `chown` inicial (`deploy/carga/README.md`).
 
 La identidad se manda por cabecera `X-Forwarded-Email` directo al nodo (`gate.ts:35`); sin `VERGIS_GATE_SECRET` no hay token que exigir (`routes.ts:136`, `serve-rls.ts:750-755`). **No se encontró verificación CSRF en `packages/daftar/src/let.ts`** (grep `csrf` vacío): si el `POST` recibe 403 por otra causa, es hallazgo del arnés, no ajuste.
 

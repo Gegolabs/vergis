@@ -61,6 +61,48 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### El guard de escritura concurrente del store mira el CONTENIDO, y un store degradado sale en `/healthz`
+
+**Qué cambia (#299):** el fencing de los stores embebidos ya no declara escritura ajena por un cambio
+de **inodo**. La huella que compara sigue teniendo inodo, tamaño y `mtime`, pero ahora como **vía
+rápida**: si los tres coinciden, nada se movió y no se lee nada; si el tamaño cambió, hay bytes
+distintos y aborta sin leer; y si el tamaño es el mismo pero el inodo o el `mtime` se movieron, el
+veredicto lo da el **sha256 de los bytes del archivo**, no el metadato. Además, un store degradado
+—condición **terminal**: el nodo no vuelve a escribir hasta reiniciarse— pasa a verse en `GET
+/healthz`: `ok:false`, `phase:"degraded"` y el bloque de conteo `stores: { degraded: N }`, que solo
+aparece cuando `N > 0`.
+
+**Por qué:** medido con control de dos brazos (`deploy/carga/CORRIDAS.md` §3). Con `VERGIS_OUT` en un
+**bind-mount de macOS**, el `statSync` posterior al propio `rename` del nodo devuelve un inodo
+distinto con el **mismo tamaño y el mismo `mtime` al microsegundo**: el guard se declaraba ajeno a su
+propia escritura y la siembra de 5.000 `POST` murió a los 819, con el nodo devolviendo 500 para
+siempre. El mismo binario con un **volumen nombrado**: 5.000/5.000, repetido. Y como `/healthz`
+seguía diciendo `serving` y `ok:true`, ni el conmutador de anillos ni un balanceador sacaban a ese
+nodo de rotación.
+
+**Qué se sigue detectando:** todo escritor ajeno que deje **bytes distintos** de los que este handle
+dejó. El único caso que el contenido no distingue es que el otro haya escrito bytes **idénticos**, y
+ahí no hay nada suyo que este volcado pueda borrar. El adversario que importa —otro nodo del plano de
+control— no puede empatar ni por casualidad: cada persist estampa `control_meta` con su `writer` y su
+`written_at`, así que dos volcados distintos difieren en bytes aunque coincidan en tamaño, `mtime` e
+inodo. Los tests lo miden en los dos sentidos: el falso positivo del bind-mount (misma huella, mismo
+contenido) deja de disparar, y su **control positivo** (misma huella, contenido de un escritor rival)
+sigue disparando y conservando lo que el rival escribió.
+
+**Qué exige:** nada en la instancia — ni env, ni migración, ni cambio de esquema del store. **Sí
+cambia el predicado del borde**: un nodo con un store degradado pasa de `phase:"serving"` a
+`phase:"degraded"`, así que el conmutador de anillos y el poller de cortes lo verán caer. Eso es lo
+buscado (antes ese nodo se quedaba en rotación devolviendo 500 en cada escritura), pero conviene
+saberlo antes de promover.
+
+**Costo:** cuando los metadatos se mueven sin cambiar el tamaño, el guard **lee el archivo** para
+hashearlo — un read del tamaño del store por persist. En un sustrato sano no ocurre nunca; en un
+bind-mount que churnea inodos ocurre en cada persist, y es el precio de no degradar el nodo. La
+recomendación de operación no cambia: para `VERGIS_OUT` con escritura sostenida, **volumen nombrado,
+no bind-mount**.
+
 ## 0.31.0 — 2026-09-21
 
 ### El nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`)
