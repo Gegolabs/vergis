@@ -15,6 +15,9 @@ import type { AdminHandler } from './admin'
 import type { PiConfigHandler } from './pi-config'
 import type { MirandaHandler } from './miranda'
 import type { NotasHandler } from './notas'
+import { omitirPorLets, type StaticCollection } from './static-config'
+import { resolveStatic } from './static-serve'
+import { createReadStream } from 'node:fs'
 
 export interface RouteDeps {
   engine: string
@@ -33,6 +36,16 @@ export interface RouteDeps {
    *  store no abrió: sin él, sus rutas caen al 404 normal y el resto del serving sigue intacto. */
   getNotas?: () => NotasHandler | null
   discover: () => Report[]
+  /**
+   * COLECCIONES ESTÁTICAS de la instancia (`VERGIS_STATIC`, CAP-195) — el arreglo VIVO, leído en
+   * call-time igual que `getAdmin`/`getPiConfig`: una recarga en caliente cambia lo que se sirve sin
+   * re-cablear el router.
+   *
+   * AUSENTE (o vacío) ⇒ ningún prefijo se intercepta y la superficie es EXACTAMENTE la de antes de la
+   * capacidad. Es la propiedad que hace seguro el despliegue: una instancia que no declara estáticos
+   * no puede notar que el nodo aprendió a servirlos.
+   */
+  getStaticCollections?: () => readonly StaticCollection[]
   identityFor: (headers: GateHeaders) => IdentityContext
   /** Render por-consumidor de un PI (con RLS). */
   renderReport: (report: Report, headers: GateHeaders, nav: ReturnType<typeof navFromUrl>) => Promise<string>
@@ -205,6 +218,37 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     if (!deps.isReady()) return fail(res, 503, 'Inicializando…')
     const all = deps.discover()
     const blockedReason = (report: Report): string | null => deps.piBlocked?.(report) ?? null
+    // CONTENIDO ESTÁTICO DE LA INSTANCIA (`VERGIS_STATIC`, CAP-195) — despacho por prefijo, con la
+    // MISMA autorización que el catálogo: lo que el gate dejó entrar arriba ve el contenido, que es
+    // exactamente lo que daba el `forward_auth` del borde que esta capacidad retira.
+    //
+    // Va DESPUÉS de `/healthz`, `/contrato`, `/admin`, la config por-PI y las notas —una colección no
+    // puede taparlas, y el parser además rechaza esos prefijos al cargar—, y ANTES del despacho por
+    // slug de Let. Y va DESPUÉS del gate `ready`, deliberadamente: el desempate con un Let se decide
+    // contra el catálogo VIVO (`all`), y durante el arranque en frío el catálogo está vacío, así que
+    // despachar antes le daría la ruta a la colección justo en la ventana en que el Let todavía no se
+    // descubrió. Un `503 Inicializando…` es la respuesta honesta de esa ventana.
+    const estaticas = deps.getStaticCollections?.() ?? []
+    if (estaticas.length) {
+      // GANA EL LET, siempre: el dato gobernado manda. Misma función que usan el contrato del nodo y
+      // el aviso de arranque — la regla de desempate vive en un solo lugar (`omitirPorLets`).
+      const servibles = omitirPorLets(estaticas, new Set(all.map((r) => r.slug))).collections
+      const hit = resolveStatic(servibles, url, req.method ?? 'GET')
+      if (hit) {
+        if (hit.status !== 200) return fail(res, hit.status, hit.error)
+        res.writeHead(200, hit.headers)
+        if ((req.method ?? 'GET').toUpperCase() === 'HEAD') return void res.end()
+        // Se lee del disco POR REQUEST (sin caché en memoria): actualizar el contenido es copiar el
+        // archivo, y ésa es la propiedad que la capacidad busca. El stream evita cargar en memoria un
+        // PDF o una fuente enteros; su error se traga al log porque las cabeceras ya salieron.
+        const stream = createReadStream(hit.file)
+        stream.on('error', (e) => {
+          console.error(`[vergis-rls] estático '${hit.collection.path}' (${hit.file}): ${errMsg(e)}`)
+          res.destroy()
+        })
+        return void stream.pipe(res)
+      }
+    }
     // Rutas de notas ATADAS A UN PI: necesitan el PI descubierto (por eso van tras el gate `ready`).
     const notasPiMatch = url.match(/^\/([^/]+)\/(?:imprimir|notas|comentarios)$/)
     if (notas && notasPiMatch && !esDeOtraFamilia(notasPiMatch[1])) {

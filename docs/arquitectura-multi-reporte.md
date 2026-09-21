@@ -122,7 +122,7 @@ registro de fuentes, registro de cargas y proyección de ingestión — el detal
 
 **La config declarativa de instancia** (`loadInstanceConfig`, `server/instance-config.ts`):
 `VERGIS_MASTER_DATA` · `VERGIS_GROUPS` · `VERGIS_DOMAINS` · `VERGIS_INTAKE` · `VERGIS_SOURCES` ·
-`VERGIS_PI_OWNERS` · `VERGIS_NOTIFY` (+ `VERGIS_PUBLIC_URL`) · `VERGIS_MENU`. Fail-closed y **fatal**
+`VERGIS_PI_OWNERS` · `VERGIS_NOTIFY` (+ `VERGIS_PUBLIC_URL`) · `VERGIS_MENU` · `VERGIS_STATIC`. Fail-closed y **fatal**
 (issue #117): un YAML declarado que no parsea o perdió su clave raíz tumba el arranque nombrando ENV +
 ruta + clave, en vez de degradar en silencio.
 
@@ -140,6 +140,71 @@ La regla de fallo de la recarga es la de todos los slices: **una recarga jamás 
 archivo no parsea, perdió su clave raíz o está a medio escribir, se **conserva lo vigente**, se avisa
 por log con el motivo y `/contrato` registra la recarga como `ok:false` (el archivo de disco queda
 `pending`). El arranque no cambia: ahí la clave raíz ausente sigue siendo fatal.
+
+### El nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`, `CAP-195`)
+
+Una instancia declara **colecciones de archivos estáticos** y **el nodo las sirve**, bajo el mismo gate
+que ya protege el catálogo:
+
+```yaml
+static:
+  - path: ayuda            # prefijo público: /ayuda/
+    dir: /static/ayuda     # directorio DENTRO del contenedor (bind de la instancia)
+    label: Portal de ayuda # opcional: para el log de arranque y el contrato del nodo
+  - path: datadoc
+    dir: /static/datadoc
+```
+
+**¿Por qué está en el Producto y no en el borde?** Porque publicar una página no debería tocar el
+borde. Antes, cada colección costaba un montaje en el compose, un bloque de proxy con su
+`forward_auth` copiado, una familia en la sonda de paridad, y el riesgo de que el borde quedara
+sirviendo algo que nadie declaró. El caso que lo cerró es del 2026-09-21: el portal de ayuda de una
+instancia dio **404 al usuario** porque el Caddyfile se monta como bind de **archivo** y el despliegue
+lo reemplazó con `mv` —que cambia el inodo—, así que el contenedor siguió sirviendo el anterior y
+`caddy reload` releyó el viejo sin avisar. La lección no es «montar por directorio»: es retirarle al
+borde una responsabilidad que el nodo puede tener.
+
+**Autorización: la del catálogo, ni más ni menos.** Cualquier identidad autenticada que el gate ya
+dejó entrar ve el contenido — exactamente lo que daba el `forward_auth` que esta capacidad retira, así
+que no cambia quién ve qué. La **autorización por grupo es una extensión futura** y deliberadamente no
+se construyó a medias: media autorización es peor que ninguna, porque invita a confiar en ella. El día
+que se construya, su forma natural es un `grant:` por colección resuelto contra los mismos grupos del
+gobierno, con `default-deny` y sin inferir identidad.
+
+**`path` es un prefijo reservado, validado al cargar**: minúsculas, dígitos y guiones
+(`^[a-z0-9][a-z0-9-]*$`), sin chocar con una ruta propia del nodo (`healthz`, `contrato`, `admin`,
+`oauth2`, `config`, `miranda`, `impresiones`) ni repetirse. Lo que no pasa se **omite con aviso
+nombrado** y el nodo levanta igual, misma graduación que el menú.
+
+**La colisión con el slug de un Let es la peligrosa, y la gana el Let.** El dato gobernado manda: una
+colección cuyo prefijo es el slug de un Let servido se omite nombrando el choque, y el PI conserva su
+ruta. El desempate se resuelve contra el catálogo **vivo** en cada request —un spec entra y sale en
+caliente—, no contra una lista de arranque.
+
+**Servir es de solo lectura y sin sorpresas**: solo `GET`/`HEAD` (un `POST` es 405, no 404); la ruta se
+decodifica y se resuelve contra la raíz declarada, y se verifica que el resultado siga dentro
+**léxicamente** y **sobre el camino real** (`realpath`) — `..`, `%2e%2e%2f` y un symlink que escapa dan
+**403**; un directorio se sirve con su `index.html` y da 404 si no lo tiene (jamás un listado);
+`Content-Type` por **lista blanca** de extensión (`.html .css .js .json .svg .png .jpg .jpeg .gif
+.webp .woff2 .txt .pdf .ico`) y `application/octet-stream` para todo lo demás, siempre con
+`X-Content-Type-Options: nosniff`.
+
+**Los archivos se leen por request**, sin caché en memoria ni fingerprinting: actualizar el contenido
+es copiar el archivo, y ésa es justamente la propiedad que se busca. El HTML sale `cache-control:
+no-cache`; `immutable` no se usa porque prometería lo que no hay.
+
+**Se recarga en caliente** como el menú: `VERGIS_STATIC` es un slice de `RELOADABLE_SLICES`, el watch de
+config de instancia y `SIGHUP` re-parsean el archivo y **spliceean** el arreglo vivo de colecciones sin
+recrear el proceso. Una recarga inválida **conserva lo vigente**.
+
+**El contrato del nodo (`GET /contrato`) las declara**, con el veredicto de disco del instante:
+`path`, `dir`, `exists`, `readable` y `shadowedByLet`. Un `dir` declarado que no existe **no impide
+arrancar** y **no se omite**: suele ser un bind-mount que aparece después, así que la colección queda
+declarada, el arranque emite su aviso, el contrato la marca `exists:false` y servir desde ella responde
+404 hasta que el directorio aparezca.
+
+**Qué NO hace:** no **genera** contenido (el generador del catálogo de esquema es otro alcance), no
+autoriza por grupo y no cachea.
 
 **Servicios transversales**: el audit log append-only (`$VERGIS_OUT/admin-audit.log`), la capa de
 notas (store propio `VERGIS_NOTES_DB`, no-fatal), el branding del catálogo (`VERGIS_INDEX_TITLE` /

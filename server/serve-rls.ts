@@ -63,6 +63,7 @@ import { fileURLToPath } from 'node:url'
 import { swapRecordInPlace, reloadLiveList } from './hot-reload'
 import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES } from './instance-config'
 import { countMenuLinks } from './menu-config'
+import { avisosDeDirectorio, estadoDeColecciones, omitirPorLets } from './static-config'
 import { masterDataPublishing } from './master-data-publishing'
 import { navFromUrl, type NavQuery } from './nav'
 import { hostname, tmpdir } from 'node:os'
@@ -233,6 +234,14 @@ const contract = createContractRegistry({
   // Familias de Lets que este nodo sabe hospedar (#289). DERIVADO del registro vivo, no declarado:
   // el contrato no puede mentir sobre lo que el proceso realmente cableó.
   protos: () => protos.list().map((x) => x.type),
+  // Colecciones estáticas de la instancia (CAP-195). CLOSURE sobre TRES cosas vivas: la config
+  // recargable, el catálogo de Lets (que gana el desempate de prefijo) y el disco. Un `dir` declarado
+  // que no está no impide arrancar — y sin esta sección esa degradación no la vería nadie hasta el
+  // 404 del usuario, que es exactamente el camino que esta capacidad existe para cerrar.
+  staticCollections: () => {
+    const slugs = new Set(discover().map((r) => r.slug))
+    return estadoDeColecciones(INSTANCE_CFG.staticCollections).map((c) => ({ ...c, shadowedByLet: slugs.has(c.path) }))
+  },
 })
 contract.envKeys(configEnvKeys())
 // Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
@@ -1137,6 +1146,10 @@ const server = createServer(
       identityOf: (headers) => ({ user: identityFor(headers as GateHeaders).user }),
     }),
     getPiConfig: () => piConfig,
+    // Estáticos de instancia (CAP-195): el arreglo VIVO, leído en call-time. Una recarga en caliente
+    // cambia lo que se sirve sin re-cablear el router; sin `VERGIS_STATIC` es `[]` y ningún prefijo
+    // se intercepta — la superficie de antes de la capacidad, exacta.
+    getStaticCollections: () => INSTANCE_CFG.staticCollections,
     getMiranda: () => miranda,
     getNotas: () => notasHandler,
     discover,
@@ -1351,6 +1364,11 @@ if (INSTANCE_CFG.summary) console.log(`[vergis-rls] config de instancia: ${INSTA
 // Lo descartado de VERGIS_MENU se nombra una línea por omisión: se omite, pero no en silencio — un
 // enlace que no aparece en el menú sin dejar rastro es indistinguible de un menú que no se actualizó.
 for (const w of INSTANCE_CFG.menuWarnings) console.log(`[vergis-rls] VERGIS_MENU: ${w}`)
+// Ídem para los estáticos (CAP-195), en dos familias: lo que el parser omitió, y lo que quedó
+// declarado sobre un directorio que hoy no se puede leer (no se omite: puede ser un bind-mount que
+// aparece después, y `GET /contrato` lo marca `exists:false`).
+for (const w of INSTANCE_CFG.staticWarnings) console.log(`[vergis-rls] VERGIS_STATIC: ${w}`)
+for (const w of avisosDeDirectorio(INSTANCE_CFG.staticCollections)) console.log(`[vergis-rls] VERGIS_STATIC: ${w}`)
 
 // Sinks por flujo (issues #100/#102): la creación resuelve passEnv/caFile de los destinos email —
 // config rota tumba el BOOT con nombre (patrón #117), no muere como «administración deshabilitada».
@@ -2795,11 +2813,13 @@ const NOTIFY_PATH = contract.env('VERGIS_NOTIFY') ? resolve(contract.env('VERGIS
 const PI_OWNERS_PATH = contract.env('VERGIS_PI_OWNERS') ? resolve(contract.env('VERGIS_PI_OWNERS') as string) : null
 const SOURCES_PATH = contract.env('VERGIS_SOURCES') ? resolve(contract.env('VERGIS_SOURCES') as string) : null
 const MENU_PATH = contract.env('VERGIS_MENU') ? resolve(contract.env('VERGIS_MENU') as string) : null
+const STATIC_PATH = contract.env('VERGIS_STATIC') ? resolve(contract.env('VERGIS_STATIC') as string) : null
 const instanceArtifacts = (): { source: string; path: string }[] => [
   ...(NOTIFY_PATH ? [{ source: 'notify', path: NOTIFY_PATH }] : []),
   ...(PI_OWNERS_PATH ? [{ source: 'pi-owners', path: PI_OWNERS_PATH }] : []),
   ...(SOURCES_PATH ? [{ source: 'sources', path: SOURCES_PATH }] : []),
   ...(MENU_PATH ? [{ source: 'menu', path: MENU_PATH }] : []),
+  ...(STATIC_PATH ? [{ source: 'static', path: STATIC_PATH }] : []),
 ]
 
 /**
@@ -2903,6 +2923,35 @@ function reloadInstanceSlices(reason: string): void {
       const msg = e instanceof Error ? e.message : String(e)
       console.error(`[hot-reload] VERGIS_MENU: recarga rechazada, se conserva lo vigente (${reason}): VERGIS_MENU (${MENU_PATH}): ${msg}`)
       contract.record({ reason, ok: false, error: `menu: ${msg}` })
+    }
+  }
+  // ── static: colecciones de archivos estáticos de la instancia, swap del arreglo VIVO (CAP-195) ──
+  // El swap es un SPLICE por el mismo contrato que el menú. Hoy el ÚNICO consumidor —el despacho de
+  // `routes.ts`— lee la propiedad por request (`getStaticCollections`), así que una reasignación no
+  // lo rompería: esto está VERIFICADO en el cableado de arriba, no supuesto. Se mantiene el splice
+  // porque el día que alguien capture la referencia al arranque —como `createAdmin` capturó la del
+  // menú— la falla sería silenciosa y por pantalla, y ese descubrimiento ya se pagó una vez.
+  if (STATIC_PATH) {
+    try {
+      // `?? { collections: [], warnings: [] }` es inalcanzable acá (STATIC_PATH no-nulo ⇒ el env está
+      // declarado); va por totalidad del tipo, no por conducta esperada.
+      const next = loadSlice(contractEnv, RELOADABLE_SLICES.static) ?? { collections: [], warnings: [] }
+      // Validate-before-swap: `parseStaticConfig` ya lanzó arriba si el YAML no parsea o perdió su
+      // clave raíz. Un archivo a medio escribir NUNCA tumba el nodo — se conserva lo vigente.
+      INSTANCE_CFG.staticCollections.splice(0, INSTANCE_CFG.staticCollections.length, ...next.collections)
+      INSTANCE_CFG.staticWarnings.splice(0, INSTANCE_CFG.staticWarnings.length, ...next.warnings)
+      console.log(`[hot-reload] estáticos de instancia (${reason}): ${INSTANCE_CFG.staticCollections.length} colección(es)`)
+      for (const w of INSTANCE_CFG.staticWarnings) console.log(`[hot-reload] VERGIS_STATIC (${reason}): ${w}`)
+      for (const w of avisosDeDirectorio(INSTANCE_CFG.staticCollections)) console.log(`[hot-reload] VERGIS_STATIC (${reason}): ${w}`)
+      // El desempate con un Let se re-emite acá porque el catálogo pudo cambiar entre recargas: una
+      // colección que ayer servía puede haber sido tapada hoy por un spec nuevo con su mismo slug.
+      for (const w of omitirPorLets(INSTANCE_CFG.staticCollections, new Set(discover().map((r) => r.slug))).warnings)
+        console.log(`[hot-reload] VERGIS_STATIC (${reason}): ${w}`)
+      contract.record({ reason, ok: true }, [{ source: 'static', path: STATIC_PATH }])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[hot-reload] VERGIS_STATIC: recarga rechazada, se conserva lo vigente (${reason}): VERGIS_STATIC (${STATIC_PATH}): ${msg}`)
+      contract.record({ reason, ok: false, error: `static: ${msg}` })
     }
   }
 }
@@ -3074,7 +3123,7 @@ if (HOT_RELOAD) {
       () => reloadGovernance('watch:dominio'),
     )
   }
-  // Config de INSTANCIA (issue #138·2 · CAP-194): UN watch para los cuatro archivos, con recarga POR ARCHIVO
+  // Config de INSTANCIA (issue #138·2 · CAP-194 · CAP-195): UN watch para los cinco archivos, con recarga POR ARCHIVO
   // adentro. El debounce de `watchPaths` ya coalesce las ráfagas y las recargas son idempotentes, así
   // que re-correr los tres ante el toque de uno es barato — mismo criterio que el watch de dominio.
   // El slice `sources` solo se vigila si hay bloque de gobierno: sin store no hay dónde sembrarlo.
@@ -3083,6 +3132,7 @@ if (HOT_RELOAD) {
     ...(PI_OWNERS_PATH ? [PI_OWNERS_PATH] : []),
     ...(SOURCES_PATH && governance ? [SOURCES_PATH] : []),
     ...(MENU_PATH ? [MENU_PATH] : []),
+    ...(STATIC_PATH ? [STATIC_PATH] : []),
   ]
   if (instanceTargets.length) {
     contract.watch(
@@ -3095,12 +3145,14 @@ if (HOT_RELOAD) {
           ...(PI_OWNERS_PATH ? ['VERGIS_PI_OWNERS'] : []),
           ...(SOURCES_PATH && governance ? ['VERGIS_SOURCES'] : []),
           ...(MENU_PATH ? ['VERGIS_MENU'] : []),
+          ...(STATIC_PATH ? ['VERGIS_STATIC'] : []),
         ],
         reloads:
           'config de instancia, por archivo: destinos de aviso y cadencia del reporte · dueños semilla de PI ' +
           '(solo aplican a PIs aún sin gobierno: el traspaso de dueño es in-app) · re-siembra del registro de fuentes ' +
           '(lo gestionado in-app gana; la semilla nunca remueve) · secciones de menú de la instancia ' +
-          '(swap del arreglo vivo; una recarga inválida conserva lo vigente)',
+          '(swap del arreglo vivo; una recarga inválida conserva lo vigente) · colecciones de archivos ' +
+          'estáticos de la instancia (mismo swap: declarar una página deja de exigir tocar el borde)',
       },
       instanceTargets,
       () => reloadInstanceSlices('watch:instancia'),
@@ -3129,7 +3181,7 @@ if (HOT_RELOAD) {
   contract.signal({
     signal: 'SIGHUP',
     action:
-      'fuerza la recarga completa: gobierno (equivale a watch:policies) + mapa identidad→claims (re-lee el store) + config de instancia (avisos, dueños de PI, fuentes, secciones de menú)',
+      'fuerza la recarga completa: gobierno (equivale a watch:policies) + mapa identidad→claims (re-lee el store) + config de instancia (avisos, dueños de PI, fuentes, secciones de menú, colecciones estáticas)',
   })
   console.log(
     `[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} · ` +
