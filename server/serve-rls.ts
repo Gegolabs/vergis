@@ -62,6 +62,7 @@ import { fileURLToPath } from 'node:url'
 // sola llamada — ver server/contract.ts), que es quien lo invoca.
 import { swapRecordInPlace, reloadLiveList } from './hot-reload'
 import { loadInstanceConfig, loadSlice, RELOADABLE_SLICES } from './instance-config'
+import { countMenuLinks } from './menu-config'
 import { masterDataPublishing } from './master-data-publishing'
 import { navFromUrl, type NavQuery } from './nav'
 import { hostname, tmpdir } from 'node:os'
@@ -2793,10 +2794,12 @@ function reloadDomainGovernance(reason: string): void {
 const NOTIFY_PATH = contract.env('VERGIS_NOTIFY') ? resolve(contract.env('VERGIS_NOTIFY') as string) : null
 const PI_OWNERS_PATH = contract.env('VERGIS_PI_OWNERS') ? resolve(contract.env('VERGIS_PI_OWNERS') as string) : null
 const SOURCES_PATH = contract.env('VERGIS_SOURCES') ? resolve(contract.env('VERGIS_SOURCES') as string) : null
+const MENU_PATH = contract.env('VERGIS_MENU') ? resolve(contract.env('VERGIS_MENU') as string) : null
 const instanceArtifacts = (): { source: string; path: string }[] => [
   ...(NOTIFY_PATH ? [{ source: 'notify', path: NOTIFY_PATH }] : []),
   ...(PI_OWNERS_PATH ? [{ source: 'pi-owners', path: PI_OWNERS_PATH }] : []),
   ...(SOURCES_PATH ? [{ source: 'sources', path: SOURCES_PATH }] : []),
+  ...(MENU_PATH ? [{ source: 'menu', path: MENU_PATH }] : []),
 ]
 
 /**
@@ -2872,6 +2875,35 @@ function reloadInstanceSlices(reason: string): void {
         contract.record({ reason, ok: false, error: `sources: ${msg}` })
       }
     })()
+  }
+  // ── menu: secciones declaradas por la instancia, swap del arreglo VIVO (CAP-194) ──
+  // El swap es un SPLICE y no una reasignación, y no es estilo: el cableado de `/admin` capturó ESTA
+  // referencia al arranque (`createAdmin({ menuSections: INSTANCE_CFG.menuSections })`) y la lee a
+  // render-time. Reasignar la propiedad dejaría al avatar de `/admin` sirviendo el menú viejo mientras
+  // el catálogo sirve el nuevo — un menú que cambia según la pantalla, que es justo lo que CAP-190
+  // existe para evitar. Medido en los tres consumidores: `/` y `avatarFor` leen la propiedad por
+  // request (les daría igual), `createAdmin` no.
+  if (MENU_PATH) {
+    try {
+      // `?? { sections: [], warnings: [] }` es inalcanzable acá (MENU_PATH no-nulo ⇒ el env está
+      // declarado); va por totalidad del tipo, no por conducta esperada.
+      const next = loadSlice(contractEnv, RELOADABLE_SLICES.menu) ?? { sections: [], warnings: [] }
+      // Validate-before-swap: `parseMenuConfig` ya lanzó arriba si el YAML no parsea o perdió su
+      // clave raíz. Un menú a medio escribir NUNCA tumba el nodo — se conserva lo vigente.
+      INSTANCE_CFG.menuSections.splice(0, INSTANCE_CFG.menuSections.length, ...next.sections)
+      INSTANCE_CFG.menuWarnings.splice(0, INSTANCE_CFG.menuWarnings.length, ...next.warnings)
+      console.log(
+        `[hot-reload] menú de instancia (${reason}): ${INSTANCE_CFG.menuSections.length} sección(es) · ${countMenuLinks(INSTANCE_CFG.menuSections)} enlace(s)`,
+      )
+      // Las omisiones se re-emiten nombrando que vienen de una recarga: un enlace que desaparece del
+      // menú sin dejar rastro es indistinguible de un menú que no se actualizó.
+      for (const w of INSTANCE_CFG.menuWarnings) console.log(`[hot-reload] VERGIS_MENU (${reason}): ${w}`)
+      contract.record({ reason, ok: true }, [{ source: 'menu', path: MENU_PATH }])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[hot-reload] VERGIS_MENU: recarga rechazada, se conserva lo vigente (${reason}): VERGIS_MENU (${MENU_PATH}): ${msg}`)
+      contract.record({ reason, ok: false, error: `menu: ${msg}` })
+    }
   }
 }
 
@@ -3042,11 +3074,16 @@ if (HOT_RELOAD) {
       () => reloadGovernance('watch:dominio'),
     )
   }
-  // Config de INSTANCIA (issue #138·2): UN watch para los tres archivos, con recarga POR ARCHIVO
+  // Config de INSTANCIA (issue #138·2 · CAP-194): UN watch para los cuatro archivos, con recarga POR ARCHIVO
   // adentro. El debounce de `watchPaths` ya coalesce las ráfagas y las recargas son idempotentes, así
   // que re-correr los tres ante el toque de uno es barato — mismo criterio que el watch de dominio.
   // El slice `sources` solo se vigila si hay bloque de gobierno: sin store no hay dónde sembrarlo.
-  const instanceTargets = [...(NOTIFY_PATH ? [NOTIFY_PATH] : []), ...(PI_OWNERS_PATH ? [PI_OWNERS_PATH] : []), ...(SOURCES_PATH && governance ? [SOURCES_PATH] : [])]
+  const instanceTargets = [
+    ...(NOTIFY_PATH ? [NOTIFY_PATH] : []),
+    ...(PI_OWNERS_PATH ? [PI_OWNERS_PATH] : []),
+    ...(SOURCES_PATH && governance ? [SOURCES_PATH] : []),
+    ...(MENU_PATH ? [MENU_PATH] : []),
+  ]
   if (instanceTargets.length) {
     contract.watch(
       {
@@ -3057,11 +3094,13 @@ if (HOT_RELOAD) {
           ...(NOTIFY_PATH ? ['VERGIS_NOTIFY'] : []),
           ...(PI_OWNERS_PATH ? ['VERGIS_PI_OWNERS'] : []),
           ...(SOURCES_PATH && governance ? ['VERGIS_SOURCES'] : []),
+          ...(MENU_PATH ? ['VERGIS_MENU'] : []),
         ],
         reloads:
           'config de instancia, por archivo: destinos de aviso y cadencia del reporte · dueños semilla de PI ' +
           '(solo aplican a PIs aún sin gobierno: el traspaso de dueño es in-app) · re-siembra del registro de fuentes ' +
-          '(lo gestionado in-app gana; la semilla nunca remueve)',
+          '(lo gestionado in-app gana; la semilla nunca remueve) · secciones de menú de la instancia ' +
+          '(swap del arreglo vivo; una recarga inválida conserva lo vigente)',
       },
       instanceTargets,
       () => reloadInstanceSlices('watch:instancia'),
@@ -3090,7 +3129,7 @@ if (HOT_RELOAD) {
   contract.signal({
     signal: 'SIGHUP',
     action:
-      'fuerza la recarga completa: gobierno (equivale a watch:policies) + mapa identidad→claims (re-lee el store) + config de instancia (avisos, dueños de PI, fuentes)',
+      'fuerza la recarga completa: gobierno (equivale a watch:policies) + mapa identidad→claims (re-lee el store) + config de instancia (avisos, dueños de PI, fuentes, secciones de menú)',
   })
   console.log(
     `[hot-reload] activo · specs=${specTargets.join(',')} · policies=${POLICY_PATHS.length} · gobierno-dominio=${domainGovTargets.length} · ` +
