@@ -71,7 +71,13 @@ export function aggregate(rows: Record<string, unknown>[], agg: Aggregation): nu
   }
 }
 
-/** Spec de columna de tabla (pasa tal cual al renderer; tipado estructural). */
+/**
+ * Spec de columna de tabla (pasa al renderer; tipado estructural).
+ *
+ * `total` es la ÚNICA clave que no pasa tal cual: el DSL admite `true` como alias de `sum` y compose
+ * lo NORMALIZA al copiar las columnas, de modo que aguas abajo (render y runtime) el vocabulario es
+ * cerrado: `sum` | `avg` | `count`.
+ */
 export interface TableColumn {
   field: string
   label?: string
@@ -82,6 +88,8 @@ export interface TableColumn {
   searchable?: boolean
   filter?: boolean
   groupBy?: boolean
+  /** Agregado al pie de la columna (#314). `true` es alias de `sum` y compose lo normaliza. */
+  total?: 'sum' | 'avg' | 'count' | true
 }
 
 /**
@@ -420,7 +428,9 @@ export function composePiece(
       rows,
       // COPIA del arreglo de columnas (no la referencia al spec): el spec está MEMOIZADO por mtime
       // (run.ts) y cualquier enriquecimiento posterior sobre la referencia mutaría el spec cacheado.
-      columnsSpec: [...(t.columns ?? [])],
+      // `total: true` es alias de `sum` (#314): se normaliza ACÁ, en el único punto por el que pasa
+      // toda columna, para que el render y el runtime lean un vocabulario cerrado.
+      columnsSpec: (t.columns ?? []).map((c) => (c.total === true ? { ...c, total: 'sum' as const } : { ...c })),
       title: t.title,
       interactive: t.interactive,
       drills: drills.length ? drills : undefined,

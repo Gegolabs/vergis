@@ -615,6 +615,57 @@ export function vtGroupTree(rows: Record<string, unknown>[], fields: string[]): 
 }
 
 /**
+ * Agregado al pie de UNA tabla por columna (#314) — la ÚNICA implementación del cálculo: la usan el
+ * render server-side (`renderTableFoot`) y el runtime del browser (viaja en `PURE_FNS` vía
+ * `.toString()`), para que el pie servido y el pie recalculado tras un filtro no puedan divergir.
+ *
+ * Solo entran las columnas que DECLARAN `total` (opt-in: un total en la columna equivocada —un
+ * porcentaje, un promedio, un stock a fechas distintas— es peor que ninguno, porque nadie lo
+ * cuestiona). El resto ni siquiera aparece en el resultado.
+ *
+ * Qué celdas se consideran: las que COACCIONAN a número finito. Un `number` finito, o un `string` no
+ * vacío cuyo `Number()` es finito (los drivers SQL entregan los enteros de 64 bits como string). Los
+ * `null`, los vacíos y los no numéricos (`'n/a'`) se SALTAN — no anulan el total ni lo vuelven `NaN`.
+ * Un valor de otro tipo (boolean, Date, objeto) tampoco entra: `Number(true)` daría 1 y sumaría un
+ * dato que nadie escribió.
+ *
+ * `sum` = Σ de los considerados · `avg` = Σ / n de los considerados (n = 0 ⇒ `null`) · `count` = n.
+ *
+ * PRECISIÓN: la suma es en `Number` (doble IEEE-754). Un SUM sobre BIGINT que supere
+ * `Number.MAX_SAFE_INTEGER` (9.007.199.254.740.991) pierde dígitos bajos. No se implementa BigInt en
+ * esta issue: el caso vivo (cantidades, montos en pesos) está órdenes de magnitud por debajo.
+ *
+ * AUTOCONTENIDA a propósito (sin imports, sin helpers): viaja al browser en `PURE_FNS`.
+ */
+export function vtTotals(
+  // `true` (alias de `sum`) lo normaliza compose; acá se acepta igual porque esta función también
+  // corre en el browser sobre el payload embebido, y un alias sin normalizar no puede caer en `sum`
+  // por accidente ni dejar la columna muda.
+  cols: { field: string; total?: 'sum' | 'avg' | 'count' | true }[],
+  rows: Record<string, unknown>[],
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {}
+  for (let ci = 0; ci < cols.length; ci++) {
+    const col = cols[ci]
+    if (!col || !col.total) continue
+    const op = col.total === true ? 'sum' : String(col.total)
+    let suma = 0
+    let n = 0
+    for (let ri = 0; ri < rows.length; ri++) {
+      const v = rows[ri][col.field]
+      if (typeof v !== 'number' && typeof v !== 'string') continue
+      if (v === '') continue
+      const num = Number(v)
+      if (!isFinite(num)) continue
+      suma += num
+      n++
+    }
+    out[col.field] = op === 'count' ? n : op === 'avg' ? (n ? suma / n : null) : suma
+  }
+  return out
+}
+
+/**
  * Una celda CSV — la ÚNICA regla de celda de la plataforma (GH #61 / D4). La usan el export del
  * cliente (viaja al browser en PURE_FNS) y el CSV de delivery (`render-csv-piece` la importa),
  * con el separador como parámetro: `;` en el cliente (Excel es-CL usa coma decimal) y `,` en
@@ -730,6 +781,7 @@ const PURE_FNS = [
   vtPopHtml,
   vtGroup,
   vtGroupTree,
+  vtTotals,
   vtCsvCell,
   vtCsv,
   vtCsvName,
@@ -844,6 +896,7 @@ function vtBootstrap(root){
   var tbody = root.querySelector('tbody');
   var chipsEl = root.querySelector('.vt-chips');
   var footEl = root.querySelector('.vt-count-foot'); // pie de la CARA de esta tabla (contador de filas)
+  var totEl = root.querySelector('tfoot .vt-total-row'); /* fila de TOTALES (#314), si alguna columna la declaro */
   var badge = document.getElementById('vergis-count'); // uña/pestaña de la bandeja común
   var SEP = '~|~'; // separador de path de grupo (token improbable en datos reales)
   function colLabel(field){ var c=cols.filter(function(x){return x.field===field;})[0]; return c?(c.label||c.field):field; }
@@ -1148,6 +1201,18 @@ function vtBootstrap(root){
       tbody.innerHTML = vtBodyRows(rc, view, drills, carry, ancla, fltQ) || '<tr class="vt-empty"><td colspan="'+ncols+'">Sin resultados</td></tr>';
     }
     if(footEl) footEl.textContent = view.length + (view.length===1?' fila':' filas') + (view.length!==rows.length?(' de '+rows.length):'');
+    /* #314 · el total SIGUE A LOS FILTROS: se recalcula sobre view (las filas tras vtApply), no
+       sobre el dataset. Con agrupacion activa sigue siendo el total de todas las filas filtradas:
+       los subtotales por grupo no existen. Mismo calculo que el servidor (vtTotals, una sola vez). */
+    if(totEl){
+      var tot = vtTotals(cols, view);
+      var tds = totEl.querySelectorAll('td[data-total-field]');
+      for(var ti=0; ti<tds.length; ti++){
+        var tf = tds[ti].getAttribute('data-total-field');
+        var tv = tot[tf];
+        tds[ti].textContent = (tv==null) ? '—' : vtFormat(tv, colFormat(tf));
+      }
+    }
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){
       var f=th.getAttribute('data-field'); var ind=th.querySelector('.vt-sort-ind');
       if(ind) ind.textContent = (state.sort.field===f) ? (state.sort.dir==='asc'?'▲':'▼') : '';

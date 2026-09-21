@@ -3,7 +3,7 @@ import { VERGIS_VERSION_LABEL } from './version'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
 import { TABLE_RUNTIME_SOURCE } from './table-runtime'
-import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS } from './piece-css'
+import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS, TABLE_TOTALS_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
 import { CHART_HOVER_CSS, CHART_HOVER_SOURCE } from './chart-hover'
@@ -41,7 +41,7 @@ export const renderHtmlPiece: Capability = {
     // sin re-compilar Vega en el browser (el contrato del motor es SVG server-side).
     const chartVars = chartVarMap(chartTokens)
     const carry = carryCtx ?? {}
-    const signals: RenderSignals = { interactiveTable: false, drillActions: false, magnitude: false }
+    const signals: RenderSignals = { interactiveTable: false, drillActions: false, magnitude: false, tableTotals: false }
     const flt = fltCarry ?? {}
     const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, print: !!print, carry, signals, fltQ: fltQuery(flt) }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
@@ -111,6 +111,7 @@ export const renderHtmlPiece: Capability = {
     if (descargarSection) css += TRAY_PDF_CSS
     if (signals.magnitude) css += MAGNITUDE_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
+    if (signals.tableTotals) css += TABLE_TOTALS_CSS
     // #263 · el realce del rótulo se emite SOLO si el documento trae un gráfico, y nunca en papel
     // (#65 · D4: en print no viaja JS). La señal es el propio marcado ya compuesto — un documento sin
     // charts no paga ni una línea de cromo.

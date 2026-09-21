@@ -47,6 +47,7 @@ export {
   vtPopHtml,
   vtGroup,
   vtGroupTree,
+  vtTotals,
   vtCsvCell,
   vtCsv,
   vtCsvName,

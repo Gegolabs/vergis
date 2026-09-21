@@ -5,6 +5,7 @@
 import { escapeHtml } from './markdown'
 import { ctxQuery, formatValue } from './piece-util'
 import { llaveCanonicaDeFila, type TablaAncla } from './notas-render'
+import { vtTotals } from './table-runtime'
 import type { ResolvedNode, RenderOpts, Drill, CarryCtx, TableColumn } from './piece-types'
 
 export const TABLE_SSR_MAX_ROWS = 500
@@ -26,6 +27,9 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   // #210 · La señal la marca quien emite la feature: si ninguna columna resultó rampeable, no hay
   // CSS que inyectar ni interruptor que ofrecer.
   if (Object.keys(ranges).length > 0) opts.signals.magnitude = true
+  // #314 · la señal la marca quien emite la feature: el pie de totales existe en los tres modos
+  // (interactivo, estático, papel) y su CSS no puede colgar del CSS de la tabla interactiva.
+  if (cols.some((c) => c.total)) opts.signals.tableTotals = true
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
 
   // PRINT (D5): SIEMPRE estática y COMPLETA — el tope SSR de 500 es un contrato con el runtime JS, que
@@ -39,9 +43,11 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
         ? `<tr class="vt-trunc"><td colspan="${cols.length}">… mostrando ${TABLE_PRINT_MAX_ROWS} de ${rows.length} filas — el detalle completo se descarga en CSV</td></tr>`
         : ''
     const tbody = renderTableBody(cols, shown, ranges, [], carry, node.ancla, fltQ) + trunc
+    // El pie totaliza TODAS las filas aunque el cuerpo se trunque: el papel dice cuántas muestra
+    // (fila `vt-trunc`) y cuánto suma el conjunto — un total de las primeras 5.000 mentiría.
     return (
       `<section class="table">${titleHtml}` +
-      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
+      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody>${renderTableFoot(cols, rows)}</table></section>`
     )
   }
   // Las señales las marca quien emite la feature (no un sniff del HTML de salida): drills → celdas
@@ -61,7 +67,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
       (drills.length ? `<th class="vt-actions" aria-label="Acciones"></th>` : '')
     return (
       `<section class="table">${titleHtml}` +
-      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody></table></section>`
+      `<table><thead><tr>${head}</tr></thead><tbody>${tbody}</tbody>${renderTableFoot(cols, rows, drills)}</table></section>`
     )
   }
   // Interactiva (auto-on): recién aquí se prende la señal → runtime + bandeja + CSS interactivo.
@@ -69,6 +75,43 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
   const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla, fltQ)
   return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete, fltQ)
+}
+
+/**
+ * Pie de totales de la tabla (#314) — `<tfoot>` con el agregado de cada columna que lo DECLARE.
+ *
+ * Devuelve `''` si ninguna columna declara `total`: una tabla que no lo pidió no cambia en nada.
+ *
+ * Tres decisiones que se leen del HTML que emite:
+ * 1. **Se calcula sobre TODAS las filas del nodo**, no sobre el recorte SSR del cuerpo: el pie servido
+ *    es el total del dataset, no el de las 500 filas que alcanzó a pintar el primer paint. En modo
+ *    interactivo el runtime lo recalcula sobre las filas filtradas y pisa estas celdas.
+ * 2. **El rótulo `Total` va en la PRIMERA columna sin total.** Si todas totalizan, no hay rótulo —
+ *    poner uno encima de un número lo falsearía.
+ * 3. **Ninguna celda del pie lleva `--mag`**: el color de magnitud rampea valores comparables entre
+ *    sí, y un total no es comparable con sus propios sumandos.
+ */
+export function renderTableFoot(cols: TableColumn[], rows: Record<string, unknown>[], drills: Drill[] = []): string {
+  if (!cols.some((c) => c.total)) return ''
+  const totals = vtTotals(cols, rows)
+  let labelPuesto = false
+  const cells = cols
+    .map((c) => {
+      const align = `align-${c.align ?? 'left'}`
+      if (c.total) {
+        const v = totals[c.field]
+        const text = v == null ? '—' : formatValue(v, c.format)
+        return `<td class="${align} vt-total" data-total-field="${escapeHtml(c.field)}">${escapeHtml(text)}</td>`
+      }
+      if (!labelPuesto) {
+        labelPuesto = true
+        return `<td class="${align} vt-total-label">Total</td>`
+      }
+      return `<td class="${align}"></td>`
+    })
+    .join('')
+  const acciones = drills.length ? `<td class="vt-actions"></td>` : ''
+  return `<tfoot><tr class="vt-total-row">${cells}${acciones}</tr></tfoot>`
 }
 
 /** href server-side de una acción de drill: preserva el carry (ctx) + los filtros activos (flt) y
@@ -147,6 +190,7 @@ function renderInteractiveTable(
     searchable: c.searchable !== false,
     filter: c.filter,
     groupBy: c.groupBy,
+    total: c.total,
   }))
   // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
   // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.
@@ -185,7 +229,7 @@ function renderInteractiveTable(
   return (
     `<section class="table vtable">${titleHtml}${chips}` +
     `<div class="vt-scroll"><table><thead><tr class="vt-head-row">${headCells}</tr></thead>` +
-    `<tbody>${tbody}</tbody></table></div>` +
+    `<tbody>${tbody}</tbody>${renderTableFoot(cols, rows, drills)}</table></div>` +
     `<div class="vt-count-foot" role="status" aria-live="polite"></div>` +
     `<script type="application/json" class="vtable-data">${payload}</script></section>`
   )
