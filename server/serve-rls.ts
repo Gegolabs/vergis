@@ -1199,7 +1199,9 @@ const server = createServer(
       identityOf: (headers) => ({ user: identityFor(headers as GateHeaders).user }),
       avatarFor: async (email) => {
         const isAdmin = governance ? await governance.isAdmin(email) : false
-        const hasMiranda = config.miranda.enabled && governance ? isAdmin || (await governance.isMember(config.miranda.scopeGroup, email)) : false
+        // `hasMirandaFor` es LA definición compartida del scope (#307): un marco que arma su menú
+        // con su propio cálculo es exactamente la causa raíz que ese issue cerró.
+        const hasMiranda = await hasMirandaFor(email, isAdmin)
         return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
       },
       brand: INDEX_TITLE,
