@@ -63,6 +63,29 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### Subtotal por grupo en la fila de cabecera (columnas con `total`)
+
+Cuando el usuario agrupa una tabla desde la bandeja, la fila de cabecera de cada grupo muestra, en
+las columnas que declaran `total`, el agregado de las filas de ese grupo — su subárbol completo. Es
+el mismo cálculo del pie (`vtTotals`, una sola implementación), así que la Σ de los subtotales de un
+nivel es exactamente el total de la tabla.
+
+- **Opt-in doble, nada automático:** la columna declara `total` (0.28.0) **y** el usuario agrupa.
+  Sin agrupación no cambia nada; con agrupación pero sin columnas que totalicen, la cabecera de
+  grupo queda exactamente como está.
+- **Sigue a los filtros:** el árbol de grupos se construye sobre las filas ya filtradas.
+- El rótulo del grupo ocupa la primera columna que no totaliza, con la sangría de su nivel; si todas
+  totalizan, ocupa la primera y su subtotal no se muestra. Sin celdas consideradas, `—`.
+
+**Qué exige:** nada — sin env nuevo, sin migración, sin vocabulario nuevo en el DSL: una tabla que ya
+declaraba `total` lo hereda al agrupar.
+
+**Qué NO hace:** no lo trae el CSV (exporta el dato, no la lectura), ni la tabla estática ni el papel
+—la agrupación es del navegador—, ni aparece en una tabla sin columnas que declaren `total`.
+
+Referencias: #316; origen PI-37 y PI-15 de la instancia GH (Claudio Cornejo, 2026-09-21: «totalizador
+a discreción por mes y/o semana y/o especie y/o variedad»). Continúa #314.
+
 ### Una columna puede declarar su clase de embudo: `filter: vals | num | date` (#309)
 
 **Cambia lo que ve la persona que lee un PI, en las columnas que lo declaren.** Desde 0.24.0 la clase

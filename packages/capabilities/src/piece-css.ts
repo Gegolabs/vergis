@@ -51,6 +51,10 @@ export const TABLE_INTERACTIVE_CSS = `
 .vtable tr.vt-group-head[data-depth="3"] td,.vtable tr.vt-group-head[data-depth="4"] td{font-size:11px;opacity:.78;text-transform:none;letter-spacing:0;font-weight:600}
 .vtable .vt-gcaret{display:inline-block;width:.9em;color:var(--fg-dim,#94a3b8)}
 .vtable .vt-gcount{color:var(--fg-dim,#64748b);font-weight:600}
+/* #316 · subtotal por grupo en la cabecera: el numero no hereda la caja de rotulo del grupo
+   (mayusculas y tracking), y se alinea en columna con tabular-nums. El text-align lo da la clase
+   global .align-right del tema — no se duplica aca. */
+.vtable tr.vt-group-head td.vt-gtotal{text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums;font-weight:600}
 /* El cuerpo scrollea dentro de .vt-scroll con el thead sticky arriba: sin esto el pie se va fuera
    del área visible y el total deja de verse justo cuando la tabla es grande — que es cuando importa. */
 .vtable .vt-scroll tfoot td{position:sticky;bottom:0;z-index:2}
