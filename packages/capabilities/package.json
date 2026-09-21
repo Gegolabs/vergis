@@ -10,7 +10,7 @@
   "dependencies": {
     "@vergis/botler": "*",
     "@vergis/policy": "*",
-    "mssql": "^12.5.4",
+    "mssql": "^12.7.0",
     "sql.js": "^1.14.2",
     "tedious": "^19.2.2",
     "vega": "^6.4.0",
