@@ -63,6 +63,12 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+_(nada todavía)_
+
+## 0.29.0 — 2026-09-21
+
+**Qué exige:** nada nuevo — sin env obligatorio, sin migración, sin cambio de contrato. Trae dos capacidades de tabla que solo actúan cuando la spec las declara (`columns[].total` ya existente + agrupación; `columns[].filter: vals|num|date`). Publicada desde `main@1406dd0`.
+
 ### Subtotal por grupo en la fila de cabecera (columnas con `total`)
 
 Cuando el usuario agrupa una tabla desde la bandeja, la fila de cabecera de cada grupo muestra, en
