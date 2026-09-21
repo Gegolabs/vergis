@@ -51,6 +51,9 @@ export const TABLE_INTERACTIVE_CSS = `
 .vtable tr.vt-group-head[data-depth="3"] td,.vtable tr.vt-group-head[data-depth="4"] td{font-size:11px;opacity:.78;text-transform:none;letter-spacing:0;font-weight:600}
 .vtable .vt-gcaret{display:inline-block;width:.9em;color:var(--fg-dim,#94a3b8)}
 .vtable .vt-gcount{color:var(--fg-dim,#64748b);font-weight:600}
+/* El cuerpo scrollea dentro de .vt-scroll con el thead sticky arriba: sin esto el pie se va fuera
+   del área visible y el total deja de verse justo cuando la tabla es grande — que es cuando importa. */
+.vtable .vt-scroll tfoot td{position:sticky;bottom:0;z-index:2}
 .vtable tr.vt-empty td{text-align:center;color:var(--fg-dim,#64748b);padding:18px;font-style:italic}
 .tray .vt-tray-section .vt-ctl-grp{margin-bottom:18px}
 .tray .vt-tray-section .vt-ctl-grp:last-child{margin-bottom:0}
@@ -130,4 +133,15 @@ export const TRAY_CSS = `
 .tray-saved .vt-saved-upd:hover{color:var(--green,#2563eb)}
 .tray-saved .vt-saved-del:hover{color:var(--red,#dc2626)}
 .tray-saved .vt-saved-empty{font-size:12px;color:var(--fg-dim,#94a3b8);font-style:italic;padding:6px 2px}
+`
+
+/**
+ * CSS del pie de totales de la tabla (#314). Va APARTE del CSS interactivo porque el pie existe en
+ * los TRES modos —interactivo, estático y papel— y el interactivo solo se inyecta cuando hay una
+ * tabla con runtime: una tabla estática con total se habría servido sin estilo. Lo inyecta quien ve
+ * la señal `tableTotals` (la marca el render del pie, no un sniff del HTML).
+ */
+export const TABLE_TOTALS_CSS = `
+.table tfoot td{font-weight:600;border-top:2px solid var(--border,#e2e8f0);background:var(--card,#f8fafc)}
+.table tfoot .vt-total-label{color:var(--fg-dim,#64748b);text-transform:uppercase;font-size:11px;letter-spacing:.04em}
 `

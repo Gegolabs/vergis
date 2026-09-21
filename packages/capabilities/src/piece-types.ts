@@ -109,6 +109,11 @@ export interface TableColumn {
   filter?: boolean
   /** Override de la heurística: disponible para agrupar (default: igual que filter). */
   groupBy?: boolean
+  /**
+   * Agregado al pie de la tabla para ESTA columna (#314), opt-in: `sum` · `avg` · `count`.
+   * Ya NORMALIZADO por compose (el DSL admite `true` como alias de `sum`).
+   */
+  total?: 'sum' | 'avg' | 'count'
 }
 export interface Aggregation {
   dataset?: string
@@ -222,4 +227,7 @@ export interface RenderSignals {
    *  interruptor de la bandeja. La marca quien la emite: un interruptor que no enciende nada es
    *  peor que su ausencia, y una tabla ESTÁTICA también puede traer magnitud. */
   magnitude: boolean
+  /** Hay al menos una tabla con pie de totales (#314) → requiere TABLE_TOTALS_CSS. También en una
+   *  tabla estática o en papel, que no reciben el CSS interactivo. */
+  tableTotals: boolean
 }

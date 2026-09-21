@@ -17,8 +17,9 @@
 | 011 | `work/011-235-default-del-dato/` — directorio · diseño del default que viene del dato (`defaultField`), con los seis puntos donde el issue no calzaba con el código y la semántica cerrada en S1–S7 | 2026-08-19 | 011 | issues #235, #246 |
 | 012 | `work/012-facetas-naturales-y-cadencia-manual/` — directorio · plan de los realizadores A (#285 orden natural + #286 opciones acotadas en facetas de `table`) y B (#279 «Aplicar cadencia» vigila y no programa slots manuales); integración y corte 0.26.0 por la custodia | 2026-09-03 | 012 | issues #285, #286, #279 · PI-30, PI-1 de la instancia |
 | 013 | `work/013-cluster-botler-generico/` — directorio (cluster) · diseño rector (Fable, para refrendo): el Botler como runtime genérico con registro de proto-Botlets, `pis → lets`, Daftar como segundo proto-Botlet en una instancia «estudios», `botler-ops` | 2026-09-05 | 013 | terreno medido: server/*, packages/botler, deploy/rollout, soveria-host; AgencyDomains v1.1 Cap 5 |
+| 014 | `work/014-314-total-pie-tabla/` — directorio · plan (Fable) y ejecución del total al pie de la tabla por columna (`table.columns[].total`: `sum`/`avg`/`count`), con su semántica cerrada y los 8 tests que lo ponen en riesgo | 2026-09-21 | 014 | issue #314 · PI-15 de la instancia GH (c.11428) |
 
-Próximo disponible: 014
+Próximo disponible: 015
 
 ---
 
