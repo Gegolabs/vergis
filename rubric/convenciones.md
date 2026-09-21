@@ -8,17 +8,25 @@ No entra una entrada sin fuente canónica del Producto o caso real registrado.
 
 ## ¿Quién es fuente y quién derivado?
 
-**La fuente viva del catálogo es la instancia**; este archivo es su **derivado** para el cinturón de
-Miranda. La sede donde una convención nace, se argumenta, se revisa y se retira es la pieza `11`
-de la práctica del proceso de PI (`practicas/a-proceso-produccion-de-pi/11-convenciones-de-plataforma`,
-IDs `CV-NN`), que vive en el repo de instancia y sostiene además el respaldo externo de cada entrada
-con su contra-evidencia. Lo que se monta en `MIRANDA_RUBRIC_DIR` es **este** archivo, destilado de
-aquél: la regla, cómo suena y la respuesta lista.
+**La sede canónica de este catálogo es este archivo, en este repo** — y sigue siéndolo: lo fija la
+decisión **D5**, aprobada por César el 2026-08-08, cuyo racional es que un ledger que vive solo en el
+terreno de una instancia convierte el umbral «≥2 casos» en folclore. El conteo tiene que medirse con
+un comando sobre un artefacto versionado, y eso es lo que este archivo es.
 
-La dirección importa porque es lo que evita que dos documentos aprobados se contradigan en silencio:
-**una convención nueva o revisada se escribe primero allá y baja acá; jamás al revés.** Un cambio
-nacido en este archivo sin su contraparte en la instancia queda huérfano de argumento y de respaldo.
-Lo que sí es propio de acá y no sube: nada — este archivo no agrega doctrina, la recorta.
+**Lo que pasó, y por eso este archivo se reescribió:** el catálogo de la práctica de la instancia
+(`practicas/a-proceso-produccion-de-pi`, pieza `11`, IDs `CV-NN`) avanzó a v1.2 con casos reales
+mientras esta sede se quedó en v1.0 con el ledger en cero. Se verificó entrada por entrada: el
+contenido de esta sede era un **subconjunto** del de allá, y **ninguna de las once convenciones es
+específica de un cliente** — diez anclan en documentos de este repo. Así que no se invirtió ninguna
+dirección: **se trajo a casa el contenido que se había quedado afuera**, con sus casos, que es
+exactamente lo que D5 quería. Los IDs adoptados son los `CV-NN` porque son los que están citados en
+decenas de archivos; adoptarlos evita un tercer numerador.
+
+> 🙋 **Pregunta abierta, y es de César.** El §9 del catálogo de la instancia propone la dirección
+> **contraria** a D5 —que este archivo se derive de allá— y lo deja explícitamente como hipótesis
+> suya. Las dos direcciones están escritas en documentos vigentes y **no se resuelve acá**: hasta que
+> él se pronuncie, rige D5 y esta sede es la fuente. Lo que este archivo no hace es fingir que la
+> contradicción no existe.
 
 **Qué se recorta al derivar** (vive en la instancia y no acá): la conducta de cada clase dentro del
 proceso de revisión de specs (qué rebota como brecha y en qué columna), el protocolo de educación en
