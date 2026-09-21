@@ -61,7 +61,7 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.31.0 — 2026-09-21
 
 ### El nodo sirve el contenido estático de la instancia (`VERGIS_STATIC`)
 
@@ -77,7 +77,7 @@ con `application/octet-stream` de default y `X-Content-Type-Options: nosniff` si
 leen **por request**. `VERGIS_STATIC` entra en `RELOADABLE_SLICES`: el watch de config de instancia y
 `SIGHUP` recargan el conjunto en caliente, y una recarga inválida conserva lo vigente. `GET /contrato`
 declara las colecciones con su veredicto de disco (`exists`, `readable`, `shadowedByLet`). Catálogo:
-`CAP-195`. Cierra el contrato del issue #319.
+`CAP-195`. Cierra el contrato del issue #319 (PR #320).
 
 **Por qué:** medido el 2026-09-21 en la instancia GH. El portal de ayuda (`/ayuda/`) se publicó como
 HTML servido por un contenedor `caddy` aparte, con un bloque nuevo en el Caddyfile del borde, y **dio
@@ -90,7 +90,7 @@ familia en la sonda de paridad, y el riesgo de que el borde quedara sirviendo al
 
 **Qué exige:** nada. Sin `VERGIS_STATIC` no se intercepta ningún prefijo y la superficie es
 exactamente la de antes — sin env, sin migración, sin cambio de contrato. Una instancia que quiera
-usarlo monta sus directorios en el contenedor y declara el YAML.
+usarlo monta sus directorios en el contenedor y declara el YAML. Publicada desde `main@f90ea87`.
 
 **Qué NO hace:** **no genera** contenido —el generador del catálogo de esquema (datadoc) es un alcance
 separado y sigue abierto—, **no autoriza por grupo** (queda declarada como extensión futura en
