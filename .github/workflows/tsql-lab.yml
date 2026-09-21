@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 15
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: 'Vergis!Lab2026'
