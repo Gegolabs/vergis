@@ -328,7 +328,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-182` | Consola de administración de plataforma y de dominio | `/admin`, `/admin/…` (gateada por rol dentro del handler) | ≤0.9 | [gestion-de-dominio.md §6](gestion-de-dominio.md) |
 | `CAP-183` | Configuración por PI desde la propia plataforma | `/<slug>/config` (gate de rol de PI) | 0.18.0 | [gestion-de-dominio.md §1](gestion-de-dominio.md) |
 | `CAP-190` | Secciones de menú declaradas por la INSTANCIA en el avatar (rótulo + enlaces; agrega, no reemplaza) | `VERGIS_MENU` → `menu: [{ title, links: [{ label, href, description?, newTab? }] }]` | 0.28.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
-| `CAP-194` | **Las secciones de menú de la instancia se recargan en caliente**; una recarga inválida conserva lo vigente y el nodo sigue sirviendo | `VERGIS_MENU` entra en `RELOADABLE_SLICES` — el watch de config de instancia y `SIGHUP` la recargan | sin publicar | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
+| `CAP-194` | **Las secciones de menú de la instancia se recargan en caliente**; una recarga inválida conserva lo vigente y el nodo sigue sirviendo | `VERGIS_MENU` entra en `RELOADABLE_SLICES` — el watch de config de instancia y `SIGHUP` la recargan | 0.30.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
 
 ## Capacidades retiradas
 

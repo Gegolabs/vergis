@@ -63,6 +63,12 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+_(nada todavía)_
+
+## 0.30.0 — 2026-09-21
+
+**Qué exige:** nada nuevo — sin env, sin migración, sin cambio de contrato. Lo único que cambia de comportamiento es que `VERGIS_MENU`, si la instancia lo declara, pasa a recargarse en caliente. Publicada desde `main@f60a185`.
+
 ### El menú declarado por la instancia se recarga en caliente (`VERGIS_MENU`)
 
 **Qué trae:** `VERGIS_MENU` pasa a ser un slice **recargable** de la config de instancia. El watch de
@@ -86,6 +92,8 @@ la recarga los re-emite nombrando que vienen de una recarga. Una recarga inváli
 nodo**: conserva lo vigente, avisa el motivo y `/contrato` la registra como `ok:false`. No cubre el
 resto de la config de instancia (`VERGIS_GROUPS`, plantillas de jobs y lo que arrastra esquema o
 superficies cableadas siguen siendo de arranque).
+
+Referencias: #318; origen en la instancia GH (portal de ayuda `/ayuda/`).
 
 ## 0.29.0 — 2026-09-21
 
