@@ -117,7 +117,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-52` | Cascada `narrows:` entre controles — **(no construido)** | `narrows:` | — | [superficie-de-estado.md §7·2](superficie-de-estado.md) |
 | `CAP-184` | **Filtros de número** en el embudo de una columna numérica (atajos `> 0` / `< 0` / `= 0` + operador `mayor que` · `menor que` · `entre` · `igual a`), con chip legible removible | convención de plataforma, decidida por el dato (`vtIsNumericCol`) — no se declara en el spec | 0.24.0 | [catalogo-elementos.md §4·ter](catalogo-elementos.md) |
 | `CAP-185` | **Rango de fechas** en el embudo de una columna de fecha ISO (`Desde` / `Hasta` inclusivos + atajos `Este mes` · `Mes anterior` · `Últimos 30 días`), con chip legible removible | convención de plataforma, decidida por el dato (`vtIsDateCol`, evaluada después de `vtIsNumericCol`) — no se declara en el spec | 0.25.0 | [catalogo-elementos.md §4·ter](catalogo-elementos.md) |
-| `CAP-191` | **Total al pie de la tabla por columna** (`sum` · `avg` · `count`), en los tres modos de render (interactivo, estático, papel) y **recalculado con los filtros de la bandeja** | `table.columns[].total` (opt-in por columna; `true` es alias de `sum`) | <sin publicar> | [catalogo-elementos.md §4·quáter](catalogo-elementos.md) |
+| `CAP-191` | **Total al pie de la tabla por columna** (`sum` · `avg` · `count`), en los tres modos de render (interactivo, estático, papel) y **recalculado con los filtros de la bandeja** | `table.columns[].total` (opt-in por columna; `true` es alias de `sum`) | 0.28.0 | [catalogo-elementos.md §4·quáter](catalogo-elementos.md) |
 
 ## Vistas multi-página
 
@@ -262,7 +262,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-138` | Señal para soltar el control sin bajar el proceso | `SIGUSR2` (suelta y queda en espera); `SIGTERM` suelta antes de cerrar | 0.20.0 | [CHANGELOG 0.20.0](../CHANGELOG.md) |
 | `CAP-139` | Handover **dirigido** por intent, en vez de esperar el vencimiento del lease | `${VERGIS_OUT}/control.handover.json` = `{successor, expiresAt}` | 0.22.0 (#232) | [CHANGELOG 0.22.0](../CHANGELOG.md) |
 | `CAP-140` | Despliegue por **anillos** conmutados en el borde, sin ventana de mantención | `deploy/Caddyfile.reference`, listener interno `:8079`, `rings/active.caddy` | 0.21.0 (#210) | [deploy/rollout/RUNBOOK.md](../deploy/rollout/RUNBOOK.md) |
-| `CAP-141` | Herramienta de ciclo de vida de anillos | `botler-rollout`: `install` · `promote` · `rollback` · `retire` · `prune` · `status` (antes `vergis-rollout`; el nombre viejo queda como alias que avisa) | 0.21.0 (desde <sin publicar>: `botler-rollout`) | [deploy/rollout/RUNBOOK.md](../deploy/rollout/RUNBOOK.md) |
+| `CAP-141` | Herramienta de ciclo de vida de anillos | `botler-rollout`: `install` · `promote` · `rollback` · `retire` · `prune` · `status` (antes `vergis-rollout`; el nombre viejo queda como alias que avisa) | 0.21.0 (desde 0.27.0: `botler-rollout`) | [deploy/rollout/RUNBOOK.md](../deploy/rollout/RUNBOOK.md) |
 | `CAP-142` | Identidad de anillo por versión + digest, con rechazo de tags móviles | rechazo de `latest` · `main` · una serie | 0.21.0 | [CHANGELOG 0.21.0](../CHANGELOG.md) |
 | `CAP-143` | Pre-flight y smoke de la promoción, contra el bloque `control` de `/contrato` | pre-flight + smoke por el borde con el predicado canónico | 0.21.0 | [CHANGELOG 0.21.0](../CHANGELOG.md) |
 | `CAP-144` | Sala de espera del borde durante el flip | página 503 con auto-refresh (`deploy/edge/espera.html`) | 0.21.0 | [CHANGELOG 0.21.0 · 0.22.0 (#256)](../CHANGELOG.md) |
@@ -316,16 +316,16 @@ registro fino y su versión exacta no se puede afirmar.
 
 | ID | Capacidad | Cómo se llama / se declara | Desde | Dónde se explica |
 |--|--|--|--|--|
-| `CAP-175` | Salud del nodo con **fase** y conteos, sin gate y sin filtrar slugs | `GET /healthz` → `{ ok, engine, phase, lets: { total, serving } }` | 0.4.0 (#52) (desde <sin publicar>: `lets`) | [superficie-de-estado.md](superficie-de-estado.md) |
+| `CAP-175` | Salud del nodo con **fase** y conteos, sin gate y sin filtrar slugs | `GET /healthz` → `{ ok, engine, phase, lets: { total, serving } }` | 0.4.0 (#52) (desde 0.27.0: `lets`) | [superficie-de-estado.md](superficie-de-estado.md) |
 | `CAP-176` | Fases que no se colapsan | `starting` → `standby` → `degraded` → `serving` | 0.4.0 · 0.20.0 | [server/routes.ts](../server/routes.ts) |
-| `CAP-177` | Predicado canónico de salud, el que usan el conmutador y el poller de cortes | `HTTP 200 ∧ phase=serving ∧ lets.serving == lets.total` | 0.21.0 (desde <sin publicar>: `lets`) | [CHANGELOG 0.21.0](../CHANGELOG.md) |
+| `CAP-177` | Predicado canónico de salud, el que usan el conmutador y el poller de cortes | `HTTP 200 ∧ phase=serving ∧ lets.serving == lets.total` | 0.21.0 (desde 0.27.0: `lets`) | [CHANGELOG 0.21.0](../CHANGELOG.md) |
 | `CAP-178` | Un nodo en espera rechaza toda mutación con 409, **nombrando al nodo activo** y su época | 409 en admin, config de PI, notas y Miranda | 0.20.0 | [server/routes.ts](../server/routes.ts) |
 | `CAP-179` | Healthcheck del despliegue de referencia que juzga por la FASE, no por «responde» | `healthcheck` de `docker-compose.yml` y de `deploy/compose.reference.yml` | 0.22.0 | [CHANGELOG 0.22.0](../CHANGELOG.md) |
 | `CAP-180` | Centinela de desenmascarado, con tres estados que no se colapsan | `[<schema>].[vergis_unmask_probe]` (presente / medida ausente / no se pudo medir) | 0.21.0 (#238) | [gobierno-permisos.md §6·bis](gobierno-permisos.md) |
 | `CAP-181` | Índice **per-consumidor**: cada identidad ve solo los PIs que puede abrir | `GET /` (con un solo PI visible, se sirve ese PI directamente) | ≤0.9 | [arquitectura-multi-reporte.md §1](arquitectura-multi-reporte.md) |
 | `CAP-182` | Consola de administración de plataforma y de dominio | `/admin`, `/admin/…` (gateada por rol dentro del handler) | ≤0.9 | [gestion-de-dominio.md §6](gestion-de-dominio.md) |
 | `CAP-183` | Configuración por PI desde la propia plataforma | `/<slug>/config` (gate de rol de PI) | 0.18.0 | [gestion-de-dominio.md §1](gestion-de-dominio.md) |
-| `CAP-190` | Secciones de menú declaradas por la INSTANCIA en el avatar (rótulo + enlaces; agrega, no reemplaza) | `VERGIS_MENU` → `menu: [{ title, links: [{ label, href, description?, newTab? }] }]` | <sin publicar> | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
+| `CAP-190` | Secciones de menú declaradas por la INSTANCIA en el avatar (rótulo + enlaces; agrega, no reemplaza) | `VERGIS_MENU` → `menu: [{ title, links: [{ label, href, description?, newTab? }] }]` | 0.28.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
 
 ## Capacidades retiradas
 
