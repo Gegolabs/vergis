@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.33.2 — 2026-09-22
 
-### La Consola admite una segunda forma de cobertura: `DENY SELECT` de objeto (issue #342)
+### La Consola admite una segunda forma de cobertura: `DENY SELECT` de objeto (issue #342, PR #343)
 
 **El hueco.** La condición (b) del gate exigía que **toda** tabla base del almacén tuviera
 `SECURITY POLICY`. Es correcto para el Silver, pero los almacenes tienen tablas que **el pipeline lee
