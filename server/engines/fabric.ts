@@ -707,6 +707,17 @@ export function interpretarVisibilidadGobierno(rows: Record<string, unknown>[]):
 /** Qué dijo la sonda de `@read_only` — y «no se pudo medir» es un estado propio, no un veredicto. */
 export type ReadOnlyHonrado = 'honra' | 'no-honra' | 'indeterminado'
 
+/**
+ * Lo que la sonda (d) devuelve. **El error viaja con el veredicto**: un `indeterminado` mudo rechaza
+ * ocho Conectores sin que ningún log diga por qué (medido en producción el 2026-09-22, con la sonda
+ * emitiendo el control por `batch()` — que no liga parámetros — y muriendo con el 15600).
+ */
+export interface SondaReadOnly {
+  veredicto: ReadOnlyHonrado
+  /** Solo en `indeterminado`: el fallo tal como lo reportó el motor — `«<número>: <mensaje>»`. */
+  error?: string
+}
+
 /** Veredicto por Conector. `motivo` es lo que se publica en `/contrato` para que nadie adivine. */
 export interface ConsolaConectorEstado {
   ofrecible: boolean
@@ -733,6 +744,8 @@ export interface ConsolaConectorEstado {
     tablasPermisoNoMedido?: string[]
     unmask?: UnmaskCapability
     readOnly?: ReadOnlyHonrado
+    /** Por qué la sonda (d) no pudo medir. Sin esto, «indeterminado» es un rechazo sin causa. */
+    readOnlyError?: string
     /** ¿El principal que sondeó el terreno podía VER las políticas? (#340) */
     gobiernoVisible?: GobiernoVisible
     /** ¿El policy store declara reglas de columna en tablas de este Conector? */
@@ -767,7 +780,7 @@ export interface ConsolaGateInput {
    * batch de su consulta. Que los dos modos difieran es conjetura; el refutador es correr la sonda de
    * ambas formas contra un warehouse de QA.
    */
-  sondaReadOnly: () => Promise<ReadOnlyHonrado>
+  sondaReadOnly: () => Promise<SondaReadOnly>
   /** Policy store vivo (la misma referencia que usa el gate de PIs). */
   store: Map<string, PolicyDecl>
   /** Tablas del store que pertenecen a ESTE Conector (`schema.tabla`), según los PIs descubiertos. */
@@ -932,13 +945,19 @@ export async function verificarConectorConsola(input: ConsolaGateInput): Promise
   }
 
   // ── (d) ¿el motor honra `@read_only`? ─────────────────────────────────────────────────────────
-  const readOnly = await input.sondaReadOnly().catch((): ReadOnlyHonrado => 'indeterminado')
-  medido.readOnly = readOnly
-  if (readOnly === 'no-honra') {
+  const readOnly = await input.sondaReadOnly().catch((e: unknown): SondaReadOnly => ({ veredicto: 'indeterminado', error: errorCorto(e) }))
+  medido.readOnly = readOnly.veredicto
+  if (readOnly.error) medido.readOnlyError = readOnly.error
+  if (readOnly.veredicto === 'no-honra') {
     return no('el motor NO honra `@read_only` en `sp_set_session_context`: el texto del usuario podría reescribir sus propios claims dentro del batch.')
   }
-  if (readOnly === 'indeterminado') {
-    return no('no se pudo medir si el motor honra `@read_only`: sin esa medición el plano de fila no está garantizado.')
+  if (readOnly.veredicto === 'indeterminado') {
+    // El motivo CITA el error del motor: «no se pudo medir» sin la causa manda a diagnosticar a
+    // ciegas un fallo que el instrumento ya tenía en la mano.
+    return no(
+      `no se pudo medir si el motor honra \`@read_only\`${readOnly.error ? ` (${readOnly.error})` : ''}: ` +
+        'sin esa medición el plano de fila no está garantizado.',
+    )
   }
 
   // Ofrecible. Si parte de la cobertura la puso el `DENY` de objeto y no una política, se DICE: el

@@ -294,6 +294,8 @@ export type {
   ConsolaMotivo,
   ConsolaPoolLike,
   ConsolaRequestLike,
+  SesionConsolaOptions,
+  SondaReadOnlyResultado,
 } from './consola-sql'
 export { createExecuteSqlClickHouse, fetchChTransport } from './execute-sql-ch'
 export type { ClickHouseProfile, ChQueryRequest, ChQueryResult, ChTransport } from './execute-sql-ch'

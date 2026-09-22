@@ -256,11 +256,29 @@ function ejecutarEnPool(
 // sonda de `@read_only`: una clave marcada read_only queda clavada por toda la sesión, así que
 // sondear en la conexión de trabajo la dejaría inservible para las consultas siguientes.
 
+/**
+ * Lo que devuelve la sonda (d). **El error viaja con el veredicto, y esa es la mitad del contrato**:
+ * un `indeterminado` mudo hizo que los ocho Conectores se rechazaran en producción sin que ningún
+ * log dijera por qué (2026-09-22). Un instrumento que no sabe reportar su propio fallo produce datos
+ * con cara de verdad.
+ */
+/** Opciones de la sesión de verificación. El seam existe para el arnés, no para producción. */
+export interface SesionConsolaOptions {
+  /** Abre UNA conexión (la de trabajo y cada descartable de la sonda). Default: `mssql` con AAD. */
+  abrir?: (cfg: sql.config) => Promise<sql.ConnectionPool>
+}
+
+export interface SondaReadOnlyResultado {
+  veredicto: 'honra' | 'no-honra' | 'indeterminado'
+  /** Solo en `indeterminado`: el fallo tal como lo reportó el motor — `«<número>: <mensaje>»`. */
+  error?: string
+}
+
 export interface SesionConsola {
   /** Consulta de sistema bajo el principal de consola (sin `read_only`: no ejecuta texto ajeno). */
   ejecutar(sqlText: string): Promise<Record<string, unknown>[]>
   /** Sonda (d): ¿el motor honra `@read_only`, con la clave REAL y en el MISMO batch que un SELECT? */
-  sondaReadOnly(): Promise<'honra' | 'no-honra' | 'indeterminado'>
+  sondaReadOnly(): Promise<SondaReadOnlyResultado>
   cerrar(): Promise<void>
 }
 
@@ -275,6 +293,7 @@ export async function abrirSesionConsola(
   perfil: SqlConnectionProfile,
   ref: string,
   injections: { setting: string; claim: string }[],
+  opts: SesionConsolaOptions = {},
 ): Promise<SesionConsola> {
   if (!perfil.consola) throw new Error(`database_ref '${ref}': el perfil no declara el sub-perfil 'consola'.`)
   const provider = credentialProviderFor(perfil.consola, { label: `database_ref '${ref}' (consola)` })
@@ -288,16 +307,21 @@ export async function abrirSesionConsola(
     requestTimeout: 60_000,
     pool: { max: 1, min: 0, idleTimeoutMillis: 1_000 },
   })
-  const pool = await new sql.ConnectionPool(cfg()).connect()
+  // Seam de conexión — el ÚNICO motivo de que exista: el arnés `lab:proof` abre estas mismas
+  // conexiones contra un motor local para ejercitar LA FUNCIÓN REAL. Sin él, la sonda de producción
+  // solo se podía medir con SQL escrito aparte, que es medir el mecanismo y no el instrumento; eso
+  // es lo que dejó viva la llamada a `batch()` hasta producción.
+  const abrir = opts.abrir ?? ((cfg2: sql.config): Promise<sql.ConnectionPool> => new sql.ConnectionPool(cfg2).connect())
+  const pool = await abrir(cfg())
 
   return {
     async ejecutar(sqlText: string): Promise<Record<string, unknown>[]> {
       const r = await pool.request().query(sqlText)
       return (r.recordset ?? []) as unknown as Record<string, unknown>[]
     },
-    async sondaReadOnly(): Promise<'honra' | 'no-honra' | 'indeterminado'> {
+    async sondaReadOnly(): Promise<SondaReadOnlyResultado> {
       // Conexión propia y descartable: la clave queda clavada y la sesión no sirve para nada más.
-      const sonda = await new sql.ConnectionPool(cfg()).connect()
+      const sonda = await abrir(cfg())
       try {
         const clave = injections[0]?.setting ?? CLAVE_SONDA_CONSOLA
         const prelude = injections.length
@@ -306,26 +330,39 @@ export async function abrirSesionConsola(
         // CONTROL POSITIVO, primero: el MISMO batch SIN el re-set tiene que funcionar. Sin él, un
         // fallo del batch de abajo no distingue «el motor honró read_only» de «acá no anda nada» —
         // y un instrumento que confunde eso produce datos con cara de verdad.
+        //
+        // `query()`, JAMÁS `batch()`: en `node-mssql`, **`batch()` no liga parámetros** — el texto
+        // viaja crudo al motor y `@vergis_sc_0` llega sin declarar, así que el prelude muere con el
+        // 15600 («An invalid parameter or option was specified for procedure
+        // 'sp_set_session_context'») y la sonda entera es ciega. `query()` lo manda por
+        // `sp_executesql`, que SÍ declara los parámetros — y `@read_only` se sigue honrando bajo esa
+        // vía (medido bajo el principal de consola real contra `wh_presupuesto`, 2026-09-22: con
+        // `batch` ⇒ 15600; con `query` ⇒ el control pasa y el ataque muere con el 15664 esperado).
+        // Es la misma vía que usan el serving y la ejecución real de la Consola; solo la sonda se
+        // había quedado en `batch`.
         const control = sonda.request()
         for (const p of prelude.params) control.input(p.name, sql.NVarChar, p.value)
         try {
-          await control.batch(`${prelude.sql}\nSELECT 1 AS uno;`)
-        } catch {
-          return 'indeterminado'
+          await control.query(`${prelude.sql}\nSELECT 1 AS uno;`)
+        } catch (e) {
+          return { veredicto: 'indeterminado', error: detalleErrorMotor(e) }
         }
         // El ATAQUE, en una sesión nueva: re-set de la clave REAL en el MISMO batch que el SELECT.
-        const ataque = await new sql.ConnectionPool(cfg()).connect()
+        const ataque = await abrir(cfg())
         try {
           const req = ataque.request()
           for (const p of prelude.params) req.input(p.name, sql.NVarChar, p.value)
           req.input('vergis_sonda_v', sql.NVarChar, 'VERGIS-SONDA')
-          await req.batch(
+          await req.query(
             `${prelude.sql}\nEXEC sys.sp_set_session_context @key = N'${clave}', @value = @vergis_sonda_v;\nSELECT 1 AS uno;`,
           )
           // No lanzó ⇒ el re-set pasó ⇒ el motor NO honra `@read_only`.
-          return 'no-honra'
-        } catch {
-          return 'honra'
+          return { veredicto: 'no-honra' }
+        } catch (e) {
+          // Falla, sí — ¿pero por LA razón? Solo el rechazo de `@read_only` (15664) prueba que el
+          // motor lo honra; cualquier otro fallo es un ataque que no llegó a correr, y eso es «no
+          // se midió», no «estamos protegidos».
+          return esRechazoReadOnly(e) ? { veredicto: 'honra' } : { veredicto: 'indeterminado', error: detalleErrorMotor(e) }
         } finally {
           await ataque.close().catch(() => {})
         }
@@ -337,4 +374,20 @@ export async function abrirSesionConsola(
       await pool.close().catch(() => {})
     },
   }
+}
+
+/**
+ * El fallo del motor, legible y citable: `mssql` pone el número del error en `RequestError.number`,
+ * y ese número ES el dato — 15600 («parámetro inválido», el prelude que no se ligó) y 15664
+ * («read_only», el ataque rechazado) son dos hechos opuestos con el mismo aspecto sin él.
+ */
+function detalleErrorMotor(e: unknown): string {
+  const numero = (e as { number?: unknown } | null)?.number
+  const mensaje = (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 200)
+  return typeof numero === 'number' ? `${numero}: ${mensaje}` : mensaje
+}
+
+/** ¿El motor rechazó por `@read_only` (15664), o por cualquier otra cosa? */
+function esRechazoReadOnly(e: unknown): boolean {
+  return /15664|read[_ ]?only/i.test(detalleErrorMotor(e))
 }
