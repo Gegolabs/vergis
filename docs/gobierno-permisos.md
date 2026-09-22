@@ -388,26 +388,42 @@ instancia de cliente, y la escalera se detuvo en el primer peldaño que funcion�
    los dos conjuntos coinciden; donde haya otros, esto los alcanza a todos, y hay que decidirlo
    sabiéndolo.
 
-   ⚠️ **Corrección del 2026-09-21 — «no se puede afinar más» NO estaba medido, y esta sección lo
-   afirmaba.** Lo medido es que Fabric rechaza `CREATE USER … FROM EXTERNAL PROVIDER`. La conclusión
-   que se sacó de ahí —que entonces no hay a quién conceder y `public` es el único grantee posible—
-   es **inferencia**, y el arnés lo dice de su propia boca: sin principal en la base, la escalera de
-   granularidad «no se puede recorrer — E3 queda SIN MEDIR» (`local/unmask-granular-y-conexion.ts`).
-   El peldaño `GRANT UNMASK … TO [<principal nombrado>]` **nunca se ejecutó**, porque el nombre venía
-   `null` y la escalera quedó vacía.
+   ✅ **MEDIDO el 2026-09-21 — el grantee acotado EXISTE, y `TO [public]` no es inevitable.** Esta
+   sección afirmaba «no se puede afinar más: Fabric rechaza `CREATE USER … FROM EXTERNAL PROVIDER`
+   (medido)». El rechazo de `CREATE USER` era cierto; la conclusión era **inferencia**, y el arnés que
+   la produjo lo declaraba en su propia salida: «sin principal en la BD, la escalera no se puede
+   recorrer — E3 queda SIN MEDIR». El peldaño nunca se ejecutó porque el nombre venía `null`.
 
-   **Lo que la documentación de Microsoft dice, y va como conjetura hasta que se mida acá:** en un
-   warehouse de Fabric `CREATE USER` no está soportado **para ningún principal** —no es una
-   limitación de los service principals— y **el propio `GRANT` crea el usuario de base de datos**.
-   Si eso vale para un service principal nombrado, el grantee acotado existe y `public` es más ancho
-   de lo necesario. **El refutador es de dos minutos**: correr la escalera con el nombre forzado, con
-   control de premisa (el principal lee la máscara antes) y **control negativo** (un segundo principal
-   que siga leyéndola después). Hasta que esa corrida exista, esta sección **no** puede usarse para
-   afirmar que `public` es inevitable.
+   **Corrido en el F2 propio** (`local/unmask-grantee-nombrado.ts`, ventana de 5 min 06 s, US$0,031,
+   fila en `POLICIES-ledger.md`):
 
-   Y un dato de la instancia de referencia que conviene tener presente: donde el principal de serving
-   es **Admin del workspace**, tiene `CONTROL` y con eso `UNMASK` sin necesidad de ningún `GRANT` —
-   así que ahí `TO [public]` puede no estar comprando nada y sí estar abriendo a los demás.
+   ```
+   GRANT UNMASK ON [dbo].[areas]([rut]) TO [vergis-lab-serving-sp]
+   ```
+
+   · **acepta** — el motor no exige `CREATE USER`: el propio `GRANT` crea el usuario de base de datos.
+   · **surte efecto** — en conexión NUEVA el SP pasó de leer `"xxxx"` a leer `"33.333.333-3"`.
+   · **control negativo OK** — tras el `REVOKE` volvió a `"xxxx"`, así que el GRANT era la causa y no
+     una staleness ni otro privilegio.
+   · **premisa verificada antes de tocar nada**: el SP leía enmascarado.
+
+   ⇒ **La sentencia recomendada pasa a nombrar al principal**, que es mínimo privilegio en los **dos**
+   ejes —la columna y el principal— en vez de solo en uno:
+
+   ```
+   GRANT UNMASK ON [dbo].[<tabla>]([<columna>]) TO [<principal de serving>]
+   ```
+
+   El nombre es el **display name** del service principal (lo que funcionó acá). `TO [public]` queda
+   como último recurso, y con su costo dicho: alcanza a **todo** principal que pueda consultar ese
+   warehouse. **Lo que sigue sin medir**: si el `appId` sirve igual que el display name (no se llegó a
+   probar — el primer candidato funcionó), y si esto se comporta igual en el SKU de un cliente: acá se
+   midió en el F2 propio, con datos sintéticos.
+
+   Y un dato que conviene tener presente al elegir: donde el principal de serving es **Admin del
+   workspace** ya tiene `CONTROL`, y con eso `UNMASK` sin ningún `GRANT` — ahí `TO [public]` no compra
+   nada y sí abre a los demás.
+
 2. **La vía del rol tiene una asimetría de propagación que además invalida mediciones**: conceder
    propaga a una conexión nueva en **≤11 s**; **revocar no propagó en >20 min** (techo sin medir), y
    **ni una conexión nueva ni un token de acceso nuevo la destraban**. Una conexión ya abierta
