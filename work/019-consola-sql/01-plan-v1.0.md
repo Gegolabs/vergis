@@ -6,7 +6,7 @@
 | Origen | Issue [#306](https://github.com/Gegolabs/vergis/issues/306) — expectativa escrita por César Obach (2026-09-07). Regla rectora del issue: *«la Consola acota, nunca amplía»* (data-anchored / no-bypass, MUST). |
 | Ejecutor | Un subagente Opus con este documento como único contexto, en un worktree sobre `main` (0.32.0). Reparto Norma 8: este plan es el contrato; el ejecutor no reabre las decisiones marcadas **(decidido)**, y deja **sin implementar** lo marcado 🙋 (decisión humana pendiente). |
 | Estado | **Diseño listo para ejecutar la Fase 1 (Producto).** La Fase 2 (instancia A.R.B.O.L.) tiene pendientes gated a César, listados al final. |
-| Versión de este plan | 1.1 · 2026-09-21 — cierra la segunda mirada: P-1 y P-6 resueltas, ClickHouse sale por alcance y no por límite del motor (medido), y la sonda del gate (d) prueba con la clave real en el mismo batch |
+| Versión de este plan | 1.2 · P-2 reencuadrada (el permiso de superficie no protege el dato; lo que acota es el alcance entre tablas) · 1.1 · 2026-09-21 — cierra la segunda mirada: P-1 y P-6 resueltas, ClickHouse sale por alcance y no por límite del motor (medido), y la sonda del gate (d) prueba con la clave real en el mismo batch |
 | Versión | Entra en «Sin publicar» → corte **0.33.0** (capacidad ⇒ sube la Y). Fila nueva en `docs/capacidades.md` con el próximo `CAP-NN` libre al momento del PR (**no se reserva acá**; el último visto es `CAP-196`). |
 | Motor cubierto en v1 | **Fabric / T-SQL** (`engine=fabric`). ClickHouse queda **fuera con su razón** (§10). |
 | Alcance de escritura | **Solo lectura, absoluto**, garantizado por el **principal** de la conexión, no por un parser (§5). Escritura = fuera de alcance de v1. |
@@ -124,7 +124,7 @@ Mismo patrón que Miranda (`config.ts:496`, `serve-rls.ts:2280`): **scope = admi
 - Con scope y capacidad apagada o sin Conector ofrecible: **503** con la razón (solo a quien tiene scope).
 - **No aparece en el avatar** sin scope (`ui.ts:134` es el precedente: `hasMiranda`).
 
-**Visibilidad por Conector** («un usuario sin acceso a una fuente no la ve ni por URL directa», criterio del issue): en v1 el scope abre **todos** los Conectores ofrecibles; lo que cada uno muestra lo decide la RLS. Restringir *qué Conectores* ve cada ingeniero es una segunda capa de autorización de acción (p. ej. grupos `consola-sql:<ref>`) que **no se inventa acá** → 🙋 **P-2**. Si César la quiere en v1, el gate de I5 ya está escrito de modo que agregar `isMember(`consola-sql:${ref}`)` sea una línea.
+**Visibilidad por Conector** («un usuario sin acceso a una fuente no la ve ni por URL directa», criterio del issue): en v1 se ofrecen **todos** los Conectores que pasan el gate, y lo que cada uno muestra lo decide la RLS. Un recorte de superficie **no protege el dato** —lo protegen (a)(b)(c)(d)— y anclarlo en la superficie contradice la doctrina data-anchored; lo único que un recorte acota es el **alcance entre tablas**: la Consola convierte «tus filas en los PI que te construyeron» en «tus filas en toda tabla gobernada del Conector». Si ese alcance importa, la granularidad honesta es **por Conector** (la única que Fabric permite para un service principal), y es decisión de **despliegue**, no de seguridad → 🙋 **P-2**. El gate de I5 queda escrito de modo que agregar `isMember(`consola-sql:${ref}`)` sea una línea, **sin** que nada del gate dependa de ello.
 
 ---
 
@@ -340,7 +340,7 @@ Severidad: **B** bloqueante (sin esto la Consola es un bypass o no existe) · **
 - **No loguear valores de claims** ni el `clientSecret` ni el prelude con sus parámetros.
 - **No agregar dependencias** (editor, grillas, xlsx): ADR-001.
 - **No tocar `sessionContextPrelude` de serving** más que agregando la opción `readOnly` con default `false` y un test de byte-igualdad.
-- **No inventar una política de escritura** ni un grupo por Conector: P-1/P-2 son de César.
+- **No inventar una política de escritura**: P-1 es de César. **Y no inventar un permiso de superficie como si protegiera el dato**: no lo protege (P-2, reencuadrada el 2026-09-21) — si se agrega, se agrega por despliegue y el gate no depende de él.
 - **No renumerar ni tocar `INDEX.md`, ni el `work/018`** del repo: este cluster es `019` y su registro en INDEX lo hace la sesión orquestadora al integrar.
 - **No desplegar en la instancia**: Fase 2 es otra corrida, con sus gates (§17).
 
@@ -421,10 +421,10 @@ Las mismas C1, C2, C4, C6, C7 y C8 con un **segundo SP con rol `Viewer`** en el 
 | ID | Decisión | Recomendación del diseño | Bloquea |
 |--|--|--|--|
 | ~~**P-1**~~ | ¿Existe una política de **escritura** ad-hoc (el «CRUDLEX» del issue)? Hoy el policy store no la conoce | **CERRADA por segunda mirada (2026-09-21): v1 solo lectura.** La objeción «el ingeniero escribirá por otro lado sin auditoría» describe el presente, no una consecuencia: esa vía ya existe (T-SQL directo con token propio) y la Consola no la crea ni la agranda. Y una escritura «auditada» desde la Consola sería un **retroceso** frente al gobierno vigente del terreno, que exige reclamo y radio de impacto **antes** — **un log no es un gate**. Si algún día entra, entra con su doctrina, y esa pregunta sigue siendo de César | Nada de v1 |
-| **P-2** | ¿Visibilidad **por Conector** (grupos `consola-sql:<ref>`) o scope único? | Scope único en v1; el gate de I5 deja el punto de extensión | Nada de v1 |
+| **P-2** | ¿La Consola necesita un permiso propio de superficie? | **REENCUADRADA por César el 2026-09-21** («¿por qué restringir si la data ya viene RLS desde el motor?»): **no lo necesita para proteger el dato** — eso lo hacen las cuatro condiciones del gate, y anclar autorización en la superficie contradice la doctrina data-anchored. Lo que un recorte sí acota es el **alcance entre tablas** (la Consola convierte «tus filas en los PI que te construyeron» en «tus filas en toda tabla gobernada del Conector»), y si eso importa, la única granularidad disponible es **por Conector** — no un permiso global. Decisión de **despliegue y costo**, no de seguridad, y **no bloquea la construcción** | Nada del gate |
 | **P-3** | ¿Reabrir #61 para XLSX? A (mantener CSV+JSON) · B (escritor propio client-side) · C (dependencia) | **A** | I8 |
 | **P-4** | Doctrina de `UNMASK` en instancias con Consola: hoy `GRANT … TO public` (E3) hace no-ofrecible todo Conector con reglas de columna | Medir C6 en Fabric y, si se confirma, documentar en `gobierno-permisos.md` que **`public` y Consola son incompatibles** en el mismo warehouse; alternativa a medir: grupo Entra como usuario de base con el SP consola dentro (experimento, no verificado) | Fase 2 en warehouses con columnas |
-| **P-5** | Nombre del grupo de scope (`consola-sql`) y quién entra en la instancia | El default; miembros los decide César | Fase 2 |
+| ~~**P-5**~~ | Nombre del grupo de scope (`consola-sql`) y quién entra en la instancia | El default; miembros los decide César | Fase 2 |
 | ~~**P-6**~~ | ¿Consola sobre ClickHouse? | **CERRADA por segunda mirada (2026-09-21): fuera de v1 por alcance.** El canal exclusivo del nodo está **demostrado** (usuario por ingeniero con claim `READONLY` de perfil, o roles concedidos); lo que falta es rediseñar el transporte. La superficie y `/contrato` lo dicen así y **no** como limitación del motor | Nada de v1 |
 
 ---
