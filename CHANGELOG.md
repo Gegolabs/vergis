@@ -61,6 +61,51 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### La sonda de `@read_only` del gate de la Consola medía nada: `batch()` no liga parámetros (issue #344)
+
+**El hueco.** La condición **(d)** del gate —*¿el motor honra `@read_only`?*— emitía su control
+positivo y su ataque con `request.batch(...)` después de cargar los parámetros con `.input(...)`. En
+`node-mssql`, **`batch()` no liga parámetros**: el SQL viaja crudo y `@vergis_sc_0` llega al motor sin
+declarar, así que el prelude moría con el **15600** antes de medir absolutamente nada. Resultado en
+producción el 2026-09-22 (0.33.2): **los ocho Conectores rechazados** con «no se pudo medir si el
+motor honra `@read_only`», y ningún log decía por qué. La sonda **nunca había corrido en
+producción**: hasta 0.33.2 la condición (b) fallaba antes de llegar a (d).
+
+**Medido bajo el principal de consola real contra `wh_presupuesto`:**
+
+```
+M1  batch() + input   =>  ERROR 15600  «An invalid parameter or option was specified for procedure 'sp_set_session_context'»
+M2  query() + input   =>  OK           — la MISMA sonda, parametrizada por sp_executesql
+M3  query() ataque    =>  ERROR 15664  — @read_only SIGUE honrado bajo sp_executesql
+```
+
+El serving y la ejecución real de la Consola ya usaban `query()`; **solo la sonda se había quedado en
+`batch()`**.
+
+**Qué cambia.**
+
+1. **`batch()` → `query()`** en el control y en el ataque. Lo demás, igual: conexión propia y
+   descartable, control positivo primero, ataque en sesión nueva.
+2. **El fallo del instrumento deja de ser mudo.** `sondaReadOnly()` devuelve `{ veredicto, error? }`;
+   el gate publica el error en `medido.readOnlyError` y lo **cita en el motivo**: «no se pudo medir si
+   el motor honra `@read_only` (15600: …)». *Un instrumento que no sabe reportar su propio fallo
+   produce datos con cara de verdad* — éste lo hizo en ocho Conectores.
+3. **Un ataque que falla por otra razón ya no se lee como `honra`.** Solo el rechazo por `read_only`
+   (15664) prueba que el motor lo honra; cualquier otro fallo es `indeterminado` con su error, porque
+   es un ataque que no llegó a correr.
+
+**El hueco de método, cerrado.** La sonda de producción **nunca se había ejercitado contra un
+motor**: `lab:proof` C2 mide el *mecanismo* con SQL propio del arnés, y por eso estaba verde mientras
+la sonda real moría en su control positivo. La sección nueva **C2b** llama a la función real
+(`abrirSesionConsola().sondaReadOnly()`) contra el motor del lab con un perfil `consola`, por un seam
+de conexión que solo sustituye la credencial. Es **discriminante**, y las dos corridas están hechas:
+con `batch()` da `indeterminado — 15600: An invalid parameter…` (✗ 2 fallos); con `query()` da
+`honra` (✓ sin fallos).
+
+Corrección de `CAP-198`; no hay capacidad nueva.
+
 ## 0.33.2 — 2026-09-22
 
 ### La Consola admite una segunda forma de cobertura: `DENY SELECT` de objeto (issue #342, PR #343)

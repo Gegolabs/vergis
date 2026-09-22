@@ -43,7 +43,7 @@ import {
   consolaSelectPermisoSQL,
   interpretarPermisosSelect,
 } from '../server/engines/fabric'
-import { createConsolaSql } from '../packages/capabilities/src/consola-sql'
+import { createConsolaSql, abrirSesionConsola, type SondaReadOnlyResultado } from '../packages/capabilities/src/consola-sql'
 import type { SqlConnectionProfile } from '../packages/capabilities/src/execute-sql-dwh'
 
 const HOST = process.env['TSQL_HOST'] ?? 'localhost'
@@ -624,11 +624,48 @@ async function main(): Promise<void> {
     hallazgo('C2 mide la FAMILIA T-SQL. Que Fabric honre `@read_only` sigue SIN medir: es `fab:proof`, y sin ese verde la Fase 1 no se mergea.')
   }
 
+  // ── C2b (#344) · LA SONDA DE PRODUCCIÓN, la función real, contra el motor ────────────────────
+  // C2 mide el MECANISMO con SQL que escribe el propio arnés. Esto mide el INSTRUMENTO:
+  // `abrirSesionConsola().sondaReadOnly()`, la MISMA función que corre en el gate. La distinción no
+  // es académica — es exactamente el hueco por el que pasó #344: C2 estaba verde y la sonda real
+  // moría en su propio control positivo, porque emitía con `batch()` y en `node-mssql` `batch()` NO
+  // liga parámetros (el prelude llega con `@vergis_sc_0` sin declarar ⇒ error 15600). Un arnés que
+  // mide el mecanismo con su propio SQL no puede ver eso: la sonda de producción nunca se había
+  // ejercitado contra un motor.
+  //
+  // CORRIDA DISCRIMINANTE: esta sección FALLA con `batch()` (veredicto 'indeterminado' + el 15600
+  // conservado) y PASA con `query()`. Si un día vuelve a ser verde con `batch`, es que dejó de medir.
+  seccion('C2b (#344) · la sonda REAL del gate (`abrirSesionConsola().sondaReadOnly()`) contra el motor')
+  const perfilSonda: SqlConnectionProfile = {
+    server: HOST, database: DB, port: PORT,
+    auth: 'secret', tenantId: 't', clientId: 'sp-serving', clientSecret: 'x',
+    consola: { auth: 'secret', tenantId: 't', clientId: 'sp-consola', clientSecret: 'x' },
+  }
+  // El seam abre el MISMO pool que abriría AAD, pero contra el motor local y con el principal de
+  // consola del laboratorio: lo único que se sustituye es la credencial, no la sonda.
+  const sesionSonda = await abrirSesionConsola(perfilSonda, 'lab', enf.injections, {
+    abrir: async () => conectar('consola_lab', USER_PASS),
+  })
+  let sondaReal: SondaReadOnlyResultado
+  try {
+    sondaReal = await sesionSonda.sondaReadOnly()
+  } finally {
+    await sesionSonda.cerrar()
+  }
+  ok(
+    sondaReal.veredicto === 'honra',
+    `C2b · la sonda REAL del gate dice '${sondaReal.veredicto}'${sondaReal.error ? ` — ${sondaReal.error}` : ''}`,
+  )
+  ok(
+    sondaReal.error === undefined,
+    `C2b · y sin fallo que conservar: error=${sondaReal.error ?? '(ninguno)'} (con \`batch()\` acá aparece «15600: An invalid parameter…»)`,
+  )
+
   // ── C4/C5/C6 · el GATE de ofrecibilidad, contra el motor ──────────────────────────────────────
   seccion('C4/C5/C6 (#306) · el gate de ofrecibilidad por Conector, medido contra el motor')
   const ejecutarCon = (pool: sql.ConnectionPool) => async (q: string): Promise<Record<string, unknown>[]> =>
     (await pool.request().query(q)).recordset as unknown as Record<string, unknown>[]
-  const sondaSiempre = async (): Promise<'honra' | 'no-honra' | 'indeterminado'> => 'honra'
+  const sondaSiempre = async (): Promise<SondaReadOnlyResultado> => ({ veredicto: 'honra' })
   const storeLab = new Map<string, PolicyDecl>([['dbo.areas', POLICY]])
   const storeSoloFila = new Map<string, PolicyDecl>([['dbo.areas', { ...POLICY, columnRules: undefined } as PolicyDecl]])
 
