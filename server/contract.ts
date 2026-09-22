@@ -121,6 +121,23 @@ export interface MirandaContract {
   baseUrl?: string
 }
 
+
+/**
+ * Estado de la CONSOLA SQL (#306) tal como el nodo lo vive. Derivado del estado vivo, jamás
+ * declarado: `conectores` es el veredicto del gate de ofrecibilidad de este instante, con su motivo
+ * — para que el operador de la instancia sepa qué arreglar sin adivinar ni leer logs.
+ *
+ * Apagada, la sección es SOLO `{enabled:false}`: superficie cero incluye el contrato.
+ */
+export interface ConsolaContract {
+  enabled: boolean
+  motor?: string
+  scopeGroup?: string
+  limites?: { timeoutMs: number; maxRows: number; maxConcurrentes: number }
+  auditLog?: { path: string; exists: boolean }
+  conectores?: Record<string, { ofrecible: boolean; motivo?: string; verificadoEn?: string; medido?: unknown }>
+}
+
 export interface ContractSnapshot {
   /** Versión del producto (`VERGIS_VERSION`, build-time). `null` = ausencia honesta. */
   version: string | null
@@ -145,6 +162,8 @@ export interface ContractSnapshot {
   control?: ControlContract | null
   /** Miranda (#266 · #265). `null`/ausente = el proceso no cableó el proveedor (tests, utilitarios). */
   miranda?: MirandaContract | null
+  /** Consola SQL (#306). `null`/ausente = el proceso no cableó el proveedor (tests, utilitarios). */
+  consola?: ConsolaContract | null
   /** Familias de Lets (proto-Botlets) que este nodo sabe hospedar (#289). DERIVADO del registro vivo.
    *  `[]`/ausente = el proceso no cableó ninguna (tests, utilitarios). */
   protos?: string[]
@@ -244,6 +263,9 @@ export function createContractRegistry(opts: {
    * montó. Ausente ⇒ `miranda: null`: un proceso que no la cableó lo dice, no lo finge.
    */
   miranda?: () => MirandaContract
+  /** Proveedor del bloque `consola` (#306). CLOSURE sobre el estado vivo del gate por Conector: lo que
+   *  el contrato dice ofrecer es lo que el nodo ofrecería ahora mismo, no lo que se decidió al arrancar. */
+  consola?: () => ConsolaContract
   /** Proveedor de las familias registradas (#289). CLOSURE sobre el registro vivo, igual que `control`:
    *  lo que el contrato dice hospedar es lo que el proceso cableó, no una lista escrita a mano. */
   protos?: () => string[]
@@ -273,6 +295,17 @@ export function createContractRegistry(opts: {
       return opts.control()
     } catch (e) {
       console.error(`[contrato] no se pudo derivar el plano de control: ${errMsg(e)}`)
+      return null
+    }
+  }
+
+  /** Igual que `control`: un fallo del proveedor cuesta la sección, jamás la consulta del contrato. */
+  const consola = (): ConsolaContract | null => {
+    if (!opts.consola) return null
+    try {
+      return opts.consola()
+    } catch (e) {
+      console.error(`[contrato] no se pudo derivar la Consola SQL: ${errMsg(e)}`)
       return null
     }
   }
@@ -402,6 +435,7 @@ export function createContractRegistry(opts: {
         caveats: [...caveats],
         control: control(),
         miranda: miranda(),
+        consola: consola(),
         protos: opts.protos?.() ?? [],
         static: estaticos(),
         datadoc: datadoc(),

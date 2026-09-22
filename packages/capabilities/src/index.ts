@@ -281,6 +281,20 @@ export { publicarArtefacto } from './publicar-artefacto'
 export { renderMarkdown, escapeHtml } from './markdown'
 export { createExecuteSqlDwh } from './execute-sql-dwh'
 export type { SqlConnectionProfile } from './execute-sql-dwh'
+// Consola SQL (#306): ejecución de T-SQL libre bajo el principal de consola del Conector.
+export { createConsolaSql, ConsolaError, abrirSesionConsola, CLAVE_SONDA_CONSOLA } from './consola-sql'
+export { xlsxUnaHoja } from './xlsx-writer'
+export type {
+  SesionConsola,
+  ConsolaSql,
+  ConsolaSqlOptions,
+  ConsolaResultado,
+  ConsolaRecordset,
+  ConsolaColumna,
+  ConsolaMotivo,
+  ConsolaPoolLike,
+  ConsolaRequestLike,
+} from './consola-sql'
 export { createExecuteSqlClickHouse, fetchChTransport } from './execute-sql-ch'
 export type { ClickHouseProfile, ChQueryRequest, ChQueryResult, ChTransport } from './execute-sql-ch'
 export { bootstrapClickHouse, createIngestClickHouse } from './clickhouse-store'

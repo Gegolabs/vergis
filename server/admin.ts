@@ -386,6 +386,8 @@ export interface AdminDeps {
    * por identidad y `/admin` captura sus deps al arranque: un booleano quedaría congelado en el de la
    * primera identidad que entre. Ausente ⇒ sin entrada (fail-closed, el menú de siempre). */
   hasMiranda?: (email: string, isAdmin: boolean) => Promise<boolean>
+  /** Ídem para la Consola SQL (#306): misma dep, mismo motivo — el menú de identidad es del MARCO. */
+  hasConsola?: (email: string, isAdmin: boolean) => Promise<boolean>
 }
 
 export interface AdminHandler {
@@ -1106,7 +1108,8 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
  * Usa el componente compartido (`avatarMenu`) — el mismo marco del catálogo. */
 async function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): Promise<string> {
   const hasMiranda = deps.hasMiranda ? await deps.hasMiranda(email, isAdmin) : false
-  return avatarMenu({ email, isAdmin, hasDomains, hasMiranda, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
+  const hasConsola = deps.hasConsola ? await deps.hasConsola(email, isAdmin) : false
+  return avatarMenu({ email, isAdmin, hasDomains, hasMiranda, hasConsola, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>

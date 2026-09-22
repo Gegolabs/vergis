@@ -115,6 +115,9 @@ export function avatarMenu(opts: {
   hasDomains: boolean
   /** ¿Mostrar la entrada «Miranda» (el agente que autora specs)? Solo con scope (cluster 077). */
   hasMiranda?: boolean
+  /** ¿Mostrar la entrada «Consola SQL»? Solo con scope (issue #306): la superficie no se anuncia a
+   *  quien no puede abrirla, igual que Miranda. */
+  hasConsola?: boolean
   /** Secciones declaradas por la instancia (`VERGIS_MENU`). Vacío o ausente ⇒ el menú de siempre. */
   sections?: MenuSection[]
   signoutRd?: string
@@ -132,6 +135,7 @@ export function avatarMenu(opts: {
   // la veía. Si no está en el menú, no existe (D9).
   m += it('/impresiones', 'Mis impresiones')
   if (opts.hasMiranda) m += it('/miranda', 'Miranda')
+  if (opts.hasConsola) m += it('/consola', 'Consola SQL')
   if (hasDomains) m += it('/admin', 'Gestión')
   if (isAdmin) m += it('/admin/plataforma', 'Configuración')
   // Secciones de la instancia. Cero secciones ⇒ ni separador ni rótulo: el menú de una instancia que

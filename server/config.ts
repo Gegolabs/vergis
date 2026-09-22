@@ -55,6 +55,8 @@ export interface ServerConfig {
   csrfSecret: { value: string; ephemeral: boolean }
   /** Miranda — el agente conversacional de especificación de PIs (cluster 077). Todo detrás del flag. */
   miranda: MirandaConfig
+  /** Consola SQL — superficie de Ingeniería sobre los Conectores registrados (issue #306). Tras el flag. */
+  consola: ConsolaConfig
   /** «Descargar PDF» server-side (issue #65). Ver `PdfConfig`. */
   pdf: PdfConfig
   /**
@@ -91,6 +93,32 @@ export interface PdfConfig {
   serviceUrl: string
   /** Tope de espera de la conversión; agotado, el endpoint responde 503 con mensaje claro. */
   timeoutMs: number
+}
+
+/**
+ * Config de la CONSOLA SQL (issue #306). Con `enabled=false` (default) NADA se activa: ni rutas, ni
+ * entrada de menú, ni sección de `/contrato` más allá de `enabled:false` — superficie cero, el mismo
+ * patrón de `PdfConfig`/`MirandaConfig`.
+ *
+ * Los límites son de EJECUCIÓN, no de autorización: lo que la Consola deja ver lo decide el gate de
+ * ofrecibilidad por Conector (`server/engines/fabric.ts`) y la RLS nativa de la fuente. Un límite
+ * mal puesto hace una consola incómoda; jamás una fuga.
+ */
+export interface ConsolaConfig {
+  enabled: boolean
+  /** Grupo de Mira que concede el scope (además de los admins). */
+  scopeGroup: string
+  /** Tope de espera por ejecución; agotado se cancela la query y se cierra la conexión. */
+  timeoutMs: number
+  /** Tope de filas devueltas por ejecución (se corta por streaming, jamás envolviendo el SQL). */
+  maxRows: number
+  /**
+   * Consultas en vuelo en TODO el nodo. Default **1 — una consulta a la vez**, y es requisito, no
+   * ajuste (decisión de César, 2026-09-21): la Consola corre contra la misma capacidad de producción
+   * de la que cuelgan los PIs, los almacenes y las ingestas, así que compite con lo que está
+   * sirviendo. Subirlo es una decisión del operador de la instancia, no un default del Producto.
+   */
+  maxConcurrentes: number
 }
 
 /**
@@ -342,8 +370,14 @@ export const FATAL_ENVS: EnvClass[] = [
     where: 'configFromEnv',
   },
   {
-    envs: ['PORT', 'VERGIS_REFRESH_MS', 'VERGIS_DATA_CACHE_TTL_MS', 'VERGIS_INTERACTIVE_MAX_ROWS', 'VERGIS_PDF_TIMEOUT_MS'],
-    why: 'Un numérico inválido se propaga como NaN al núcleo (listen(NaN), topes de materialización).',
+    envs: [
+      'PORT', 'VERGIS_REFRESH_MS', 'VERGIS_DATA_CACHE_TTL_MS', 'VERGIS_INTERACTIVE_MAX_ROWS', 'VERGIS_PDF_TIMEOUT_MS',
+      'VERGIS_CONSOLA_TIMEOUT_MS', 'VERGIS_CONSOLA_MAX_ROWS', 'VERGIS_CONSOLA_MAX_CONCURRENTES',
+    ],
+    why:
+      'Un numérico inválido se propaga como NaN al núcleo (listen(NaN), topes de materialización). Los ' +
+      'de la Consola caen del lado FATAL por la misma regla y no por su superficie: un tope de filas o ' +
+      'un tope de concurrencia que es NaN no acota NADA, y un límite que no limita es peor que ausente.',
     where: 'configFromEnv (`num`/`numOpt`)',
   },
 ]
@@ -362,6 +396,14 @@ export const DEGRADABLE_ENVS: EnvClass[] = [
     envs: ['MIRANDA_ENABLED', 'ANTHROPIC_API_KEY', 'MIRANDA_API_BASE_URL'],
     why: 'Miranda es opcional y de alcance restringido (un grupo). Mal configurada se apaga a sí misma con su razón; los PIs siguen sirviendo.',
     where: 'mirandaConfig → `MirandaConfig.disabledReason`',
+  },
+  {
+    envs: ['VERGIS_CONSOLA_ENABLED', 'VERGIS_CONSOLA_SCOPE_GROUP'],
+    why:
+      'La Consola SQL es opcional y de alcance restringido (un grupo). Apagada —default— su superficie ' +
+      'es cero: ni rutas, ni menú, ni sección de contrato. Sus NUMÉRICOS, en cambio, son fatales: ver ' +
+      '`FATAL_ENVS` (un tope NaN no acota).',
+    where: 'consolaConfig → `ConsolaConfig.enabled`; el gate por Conector vive en engines/fabric.ts',
   },
   {
     envs: ['VERGIS_PDF_SERVICE_URL'],
@@ -389,6 +431,7 @@ export function configFromEnv(env: Env = process.env, randomSecret: () => string
   return {
     engine,
     miranda: mirandaConfig(env),
+    consola: consolaConfig(env),
     pdf: {
       serviceUrl: (env['VERGIS_PDF_SERVICE_URL'] ?? '').trim(),
       timeoutMs: num(env, 'VERGIS_PDF_TIMEOUT_MS', 30_000),
@@ -456,6 +499,22 @@ export function configEnvKeys(env: Env = process.env): string[] {
     /* config inválida: se devuelve lo registrado hasta el fallo */
   }
   return [...seen].sort()
+}
+
+/**
+ * Parsea la config de la Consola SQL (#306). Los numéricos pasan por `num`, que LANZA ante un valor
+ * no numérico: un `VERGIS_CONSOLA_MAX_ROWS=abc` que se colara como `NaN` haría que el tope no acotara
+ * nada, y un tope que no acota es peor que no tenerlo. `maxConcurrentes` se piso en 1 por la misma
+ * razón: un `0` apagaría la Consola por una vía que nadie declaró (el flag es `VERGIS_CONSOLA_ENABLED`).
+ */
+function consolaConfig(env: Env): ConsolaConfig {
+  return {
+    enabled: TRUTHY.has((env['VERGIS_CONSOLA_ENABLED'] ?? '').toLowerCase()),
+    scopeGroup: (env['VERGIS_CONSOLA_SCOPE_GROUP'] ?? 'consola-sql').trim().toLowerCase(),
+    timeoutMs: num(env, 'VERGIS_CONSOLA_TIMEOUT_MS', 60_000),
+    maxRows: num(env, 'VERGIS_CONSOLA_MAX_ROWS', 5_000),
+    maxConcurrentes: Math.max(1, num(env, 'VERGIS_CONSOLA_MAX_CONCURRENTES', 1)),
+  }
 }
 
 /**

@@ -83,3 +83,15 @@ describe('avatarMenu · secciones declaradas por la instancia', () => {
     expect(html).toContain('href="/x?a=1&amp;b=&quot;2&quot;"')
   })
 })
+
+describe('avatarMenu · entrada de la Consola SQL (#306)', () => {
+  it('sin `hasConsola` no aparece: una superficie no se anuncia a quien no puede abrirla', () => {
+    expect(avatarMenu(base)).not.toContain('/consola')
+    expect(avatarMenu({ ...base, hasConsola: false })).not.toContain('/consola')
+  })
+  it('con `hasConsola` aparece, y DESPUÉS de Miranda', () => {
+    const m = avatarMenu({ ...base, hasMiranda: true, hasConsola: true })
+    expect(m).toContain('>Consola SQL<')
+    expect(m.indexOf('/miranda')).toBeLessThan(m.indexOf('/consola'))
+  })
+})
