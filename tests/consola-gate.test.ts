@@ -15,6 +15,7 @@ import {
   consolaSelectPermisoSQL,
   UNMASK_PROBE_SCHEMAS_SQL,
   UNMASK_PROBE_EXPECTED,
+  type SondaReadOnly,
 } from '../server/engines/fabric'
 import type { PolicyDecl } from '@vergis/policy'
 
@@ -84,7 +85,12 @@ const ejecutorTerrenoDe = (t: Terreno) => async (q: string): Promise<Record<stri
   if (q === SYS_POLICY_VISIBILITY_SQL && (t.sonda ?? 'vidente') === 'vidente') return [{ viewdef: 1, viewany: 0 }]
   return ejecutorDe(t)(q)
 }
-const correr = (t: Terreno, store: Map<string, PolicyDecl>, tablasDelRef: string[] = ['dbo.areas'], readOnly: 'honra' | 'no-honra' | 'indeterminado' = 'honra') =>
+const correr = (
+  t: Terreno,
+  store: Map<string, PolicyDecl>,
+  tablasDelRef: string[] = ['dbo.areas'],
+  readOnly: SondaReadOnly = { veredicto: 'honra' },
+) =>
   verificarConectorConsola({
     ejecutar: ejecutorDe(t),
     ejecutarTerreno: ejecutorTerrenoDe(t),
@@ -194,7 +200,7 @@ describe('gate de la Consola · (b·guarda) la ceguera NO es ausencia de gobiern
         llamadas.push(q)
         return ejecutorTerrenoDe({})(q)
       },
-      sondaReadOnly: async () => 'honra',
+      sondaReadOnly: async () => ({ veredicto: 'honra' as const }),
       store: SOLO_FILA,
       tablasDelRef: ['dbo.areas'],
       ref: 'fin',
@@ -215,7 +221,7 @@ describe('gate de la Consola · (b·guarda) la ceguera NO es ausencia de gobiern
         terreno.push(q)
         return ejecutorTerrenoDe({})(q)
       },
-      sondaReadOnly: async () => 'honra',
+      sondaReadOnly: async () => ({ veredicto: 'honra' as const }),
       store: SOLO_FILA,
       tablasDelRef: ['dbo.areas'],
       ref: 'fin',
@@ -295,7 +301,7 @@ describe('gate de la Consola · (b·permiso) lo que no se puede leer no puede fi
         return ejecutorDe({})(q)
       },
       ejecutarTerreno: ejecutorTerrenoDe({}),
-      sondaReadOnly: async () => 'honra',
+      sondaReadOnly: async () => ({ veredicto: 'honra' as const }),
       store: SOLO_FILA,
       tablasDelRef: ['dbo.areas'],
       ref: 'fin',
@@ -313,7 +319,7 @@ describe('gate de la Consola · (b·permiso) lo que no se puede leer no puede fi
         return ejecutorDe({ tablas: ['a.t1', 'a.t2', 'a.t3'], protegidas: [], sinSelect: ['a.t1', 'a.t2', 'a.t3'] })(q)
       },
       ejecutarTerreno: ejecutorTerrenoDe({ tablas: ['a.t1', 'a.t2', 'a.t3'], protegidas: [], sonda: 'vidente' }),
-      sondaReadOnly: async () => 'honra',
+      sondaReadOnly: async () => ({ veredicto: 'honra' as const }),
       store: SOLO_FILA,
       tablasDelRef: ['dbo.areas'],
       ref: 'fin',
@@ -355,14 +361,37 @@ describe('gate de la Consola · P-7 y (c) son problemas DISTINTOS', () => {
 
 describe('gate de la Consola · (d) el motor honra @read_only', () => {
   it('si el re-set NO falla, el plano de fila no está garantizado ⇒ no se ofrece', async () => {
-    const r = await correr({}, SOLO_FILA, ['dbo.areas'], 'no-honra')
+    const r = await correr({}, SOLO_FILA, ['dbo.areas'], { veredicto: 'no-honra' })
     expect(r.ofrecible).toBe(false)
     expect(r.motivo).toContain('read_only')
   })
   it('indeterminado ⇒ no se ofrece (un instrumento que no midió no absuelve a nadie)', async () => {
-    const r = await correr({}, SOLO_FILA, ['dbo.areas'], 'indeterminado')
+    const r = await correr({}, SOLO_FILA, ['dbo.areas'], { veredicto: 'indeterminado' })
     expect(r.ofrecible).toBe(false)
     expect(r.medido.readOnly).toBe('indeterminado')
+  })
+  it('y el motivo CITA el error del motor: «no se pudo medir» a secas manda a diagnosticar a ciegas (#344)', async () => {
+    const error = "15600: An invalid parameter or option was specified for procedure 'sp_set_session_context'."
+    const r = await correr({}, SOLO_FILA, ['dbo.areas'], { veredicto: 'indeterminado', error })
+    expect(r.ofrecible).toBe(false)
+    expect(r.medido.readOnlyError).toBe(error)
+    expect(r.motivo).toContain('15600')
+    expect(r.motivo).toContain('no se pudo medir si el motor honra')
+  })
+  it('la sonda que LANZA se atrapa y su error también se conserva', async () => {
+    const r = await verificarConectorConsola({
+      ejecutar: ejecutorDe({}),
+      ejecutarTerreno: ejecutorTerrenoDe({}),
+      sondaReadOnly: async () => {
+        throw new Error('la conexión de la sonda no abrió')
+      },
+      store: SOLO_FILA,
+      tablasDelRef: ['dbo.areas'],
+      ref: 'fin',
+    })
+    expect(r.ofrecible).toBe(false)
+    expect(r.medido.readOnly).toBe('indeterminado')
+    expect(r.motivo).toContain('la conexión de la sonda no abrió')
   })
 })
 
