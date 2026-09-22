@@ -621,6 +621,64 @@ export const SYS_POLICY_VISIBILITY_SQL =
   `CAST(HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW ANY DEFINITION') AS int) AS viewany`
 
 /**
+ * (b·permiso) ¿Tiene el **principal de consola** `SELECT` sobre estas tablas? — **una sola consulta**.
+ *
+ * La segunda forma de cobertura de (b): una tabla que la Consola **no puede leer** no puede filtrar,
+ * así que no necesita `SECURITY POLICY` para no ser una fuga. El instrumento que lo consigue es
+ * `DENY SELECT ON <tabla> TO [<principal de consola>]`, y no una política de fila `deny`: la RLS
+ * aplica a **todos** los principales por igual —un `deny` sobre `dbo._migrations` dejaría al runner
+ * de migraciones leyendo cero filas y re-aplicando migraciones sobre producción—, mientras que el
+ * `DENY` de objeto afecta **solo** al principal nombrado y el pipeline ni se entera.
+ *
+ * **Medido en producción** el 2026-09-22 sobre `wh_presupuesto`: con la premisa positiva (la consola
+ * leía `_migrations`), el `DENY` lo aceptó Fabric, `HAS_PERMS_BY_NAME('dbo._migrations','OBJECT',
+ * 'SELECT')` pasó de 1 a 0 bajo el principal de consola, **el MOTOR** rechazó su `SELECT` (error de
+ * permiso, no un parser), y el control negativo se mantuvo: el principal de serving siguió leyendo
+ * su fila.
+ *
+ * **Un RTT por Conector, no uno por tabla**, y solo cuando hay tablas sin política: la lista de
+ * nombres viaja en un `VALUES` y el motor evalúa la función escalar por fila. Con el terreno entero
+ * gobernado esta consulta **no se paga**.
+ *
+ * Se pregunta **bajo el principal de consola** —al revés que (b), que es propiedad del terreno—
+ * porque tener o no `SELECT` es una propiedad de ESE principal y de ningún otro.
+ */
+export function consolaSelectPermisoSQL(tablas: string[]): string {
+  const lit = (x: string) => `N'${x.replace(/'/g, "''")}'`
+  const values = tablas
+    .map((t) => {
+      const i = t.lastIndexOf('.')
+      return `(${lit(i < 0 ? 'dbo' : t.slice(0, i))}, ${lit(i < 0 ? t : t.slice(i + 1))})`
+    })
+    .join(', ')
+  return (
+    `SELECT v.sch AS sch, v.tbl AS tbl, ` +
+    `CAST(HAS_PERMS_BY_NAME(QUOTENAME(v.sch) + N'.' + QUOTENAME(v.tbl), 'OBJECT', 'SELECT') AS int) AS sel ` +
+    `FROM (VALUES ${values}) AS v(sch, tbl)`
+  )
+}
+
+/**
+ * Qué dijo la sonda de permiso, por tabla. `no-medido` NO es `no-puede`: es la confesión de que el
+ * instrumento no contestó, y **fail-closea** (la tabla no cuenta como cubierta), igual que el
+ * `unknown` de la guarda de visibilidad (#341).
+ */
+export type PermisoSelect = 'puede' | 'no-puede' | 'no-medido'
+
+/** Lee la sonda. Una fila ausente, un `NULL` o cualquier forma irreconocible ⇒ `no-medido`. */
+export function interpretarPermisosSelect(rows: Record<string, unknown>[], tablas: string[]): Map<string, PermisoSelect> {
+  const out = new Map<string, PermisoSelect>(tablas.map((t) => [t, 'no-medido' as PermisoSelect]))
+  for (const r of rows) {
+    const clave = `${String(r['sch'])}.${String(r['tbl'])}`
+    if (!out.has(clave)) continue
+    const v = r['sel']
+    if (v === 1 || v === true || v === '1') out.set(clave, 'puede')
+    else if (v === 0 || v === false || v === '0') out.set(clave, 'no-puede')
+  }
+  return out
+}
+
+/**
  * Qué se sabe de la capacidad del principal sondeador de VER el gobierno.
  *
  * Tres estados y ninguno se colapsa con otro (Norma 7, corolario de instrumentos): `visible` es una
@@ -652,12 +710,27 @@ export type ReadOnlyHonrado = 'honra' | 'no-honra' | 'indeterminado'
 /** Veredicto por Conector. `motivo` es lo que se publica en `/contrato` para que nadie adivine. */
 export interface ConsolaConectorEstado {
   ofrecible: boolean
+  /**
+   * Lo que se publica en `/contrato` para que nadie adivine. **No es solo el motivo del rechazo**:
+   * un Conector ofrecible que apoya parte de su cobertura en el `DENY` de objeto lo dice acá, porque
+   * «se ofrece» y «se ofrece porque N tablas están excluidas por permiso» son dos hechos distintos y
+   * el segundo es el que un operador tiene que poder auditar. Ofrecible y sin exclusiones ⇒ ausente.
+   */
   motivo?: string
   verificadoEn: string
   /** Lo MEDIDO, aunque no sea lo que decidió: `/contrato` lo publica para el operador. */
   medido: {
     permisos?: string[]
+    /** Las tablas base SIN `SECURITY POLICY` — la medición cruda de (b), antes de la segunda forma. */
     tablasSinPolitica?: string[]
+    /** Cuántas tablas base quedaron cubiertas POR POLÍTICA (la población N del motivo). */
+    tablasConPolitica?: number
+    /** Sin política, pero el principal de consola NO tiene `SELECT` sobre ellas: cubiertas (población M). */
+    tablasExcluidasPorPermiso?: string[]
+    /** Ni política ni exclusión por permiso — la población K, la ÚNICA que bloquea. */
+    tablasSinCobertura?: string[]
+    /** De las sin política, aquéllas cuyo permiso NO se pudo medir: cuentan en K, y se dicen aparte. */
+    tablasPermisoNoMedido?: string[]
     unmask?: UnmaskCapability
     readOnly?: ReadOnlyHonrado
     /** ¿El principal que sondeó el terreno podía VER las políticas? (#340) */
@@ -789,12 +862,54 @@ export async function verificarConectorConsola(input: ConsolaGateInput): Promise
   }
   const sinPolitica = tablasDeDato.filter((t) => !protegidas.has(t)).sort()
   medido.tablasSinPolitica = sinPolitica
+  medido.tablasConPolitica = tablasDeDato.length - sinPolitica.length
+  // ── (b·permiso) LA SEGUNDA FORMA DE COBERTURA ────────────────────────────────────────────────
+  // Una tabla base está cubierta si tiene `SECURITY POLICY` **o** si el principal de consola no
+  // puede leerla: lo que no se puede leer no puede filtrar. Es la única vía para las tablas que el
+  // PIPELINE lee y la Consola no debe ver (`_migrations`, `_bak_*`, `raw_*`), donde una política de
+  // fila `deny` sería peligrosa —la RLS es de FILAS y de TODOS los principales: un `deny` sobre
+  // `_migrations` deja al runner viendo cero filas y re-aplicando migraciones sobre producción—.
+  // `DENY SELECT` es de OBJETO y de UN principal: lo cumple el motor y el pipeline ni se entera.
+  // Se paga UN RTT por Conector, y SOLO si hay tablas sin política: con el terreno entero gobernado
+  // esta consulta no se emite.
+  let excluidas: string[] = []
+  let noMedidas: string[] = []
   if (sinPolitica.length > 0) {
-    const muestra = sinPolitica.slice(0, 5).map((t) => `\`${t}\``).join(', ')
-    return no(
-      `${sinPolitica.length} tabla(s) sin SECURITY POLICY: ${muestra}${sinPolitica.length > 5 ? ', …' : ''} ` +
-        '(una tabla sin política devuelve TODAS sus filas: el motor no niega por omisión).',
-    )
+    let permisos: Map<string, PermisoSelect>
+    let falloSonda: string | null = null
+    try {
+      permisos = interpretarPermisosSelect(await input.ejecutar(consolaSelectPermisoSQL(sinPolitica)), sinPolitica)
+    } catch (e) {
+      // La sonda que no contesta NO absuelve a ninguna tabla: TODAS quedan `no-medido` y cuentan en K.
+      permisos = new Map(sinPolitica.map((t) => [t, 'no-medido' as PermisoSelect]))
+      falloSonda = errorCorto(e)
+    }
+    excluidas = sinPolitica.filter((t) => permisos.get(t) === 'no-puede')
+    noMedidas = sinPolitica.filter((t) => permisos.get(t) === 'no-medido')
+    medido.tablasExcluidasPorPermiso = excluidas
+    medido.tablasPermisoNoMedido = noMedidas
+    const sinCobertura = sinPolitica.filter((t) => permisos.get(t) !== 'no-puede')
+    medido.tablasSinCobertura = sinCobertura
+    if (sinCobertura.length > 0) {
+      const muestra = sinCobertura.slice(0, 5).map((t) => `\`${t}\``).join(', ')
+      return no(
+        `${sinCobertura.length} tabla(s) sin SECURITY POLICY y legibles por el principal de consola: ` +
+          `${muestra}${sinCobertura.length > 5 ? ', …' : ''} ` +
+          `(cobertura: ${medido.tablasConPolitica} con política · ${excluidas.length} excluida(s) por permiso · ` +
+          `${sinCobertura.length} sin cobertura). Una tabla sin política devuelve TODAS sus filas: el motor no ` +
+          'niega por omisión. Remediación: aplicar la SECURITY POLICY, o —si la Consola no debe verla— ' +
+          '`DENY SELECT ON <tabla> TO [<principal de consola>]`, que es de objeto y de un principal y no ' +
+          'toca al pipeline.' +
+          (noMedidas.length > 0
+            ? ` No se pudo medir el permiso de ${noMedidas.length} de ellas${falloSonda ? ` (${falloSonda})` : ''}: ` +
+              'sin medición NO cuentan como cubiertas.'
+            : ''),
+      )
+    }
+  } else {
+    medido.tablasExcluidasPorPermiso = []
+    medido.tablasSinCobertura = []
+    medido.tablasPermisoNoMedido = []
   }
 
   // ── P-7 · reglas de columna ⇒ no se ofrece (inferencia por predicado, C3) ─────────────────────
@@ -826,7 +941,14 @@ export async function verificarConectorConsola(input: ConsolaGateInput): Promise
     return no('no se pudo medir si el motor honra `@read_only`: sin esa medición el plano de fila no está garantizado.')
   }
 
-  return { ofrecible: true, verificadoEn, medido }
+  // Ofrecible. Si parte de la cobertura la puso el `DENY` de objeto y no una política, se DICE: el
+  // operador tiene que poder auditar de qué está hecha la cobertura, no solo que alcanzó.
+  const motivoOk =
+    excluidas.length > 0
+      ? `ofrecible · cobertura: ${medido.tablasConPolitica} con política · ${excluidas.length} excluida(s) por ` +
+        `permiso (${excluidas.map((t) => `\`${t}\``).join(', ')}) · 0 sin cobertura.`
+      : undefined
+  return { ofrecible: true, ...(motivoOk ? { motivo: motivoOk } : {}), verificadoEn, medido }
 }
 
 /** Centinela de #238 leído BAJO EL PRINCIPAL DE CONSOLA. Sin centinela ⇒ `uninstrumented`. */
