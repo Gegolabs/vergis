@@ -228,6 +228,40 @@ sentidos, `Member` vs `Viewer`) o un `GRANT UNMASK` por columna (medido el 2026-
 surte efecto en conexión nueva, y el `REVOKE` verificado leyendo el dato). Cuál de las dos usa la
 instancia no cambia lo que el arnés mide: el veredicto se lee del dato, no del plano de control.
 
+## El SEGUNDO principal: el SP de consola (#306)
+
+La Consola SQL ejecuta bajo un principal **distinto** del de serving, y medir su mecanismo bajo el de
+serving no contestaría nada: el de serving es Admin del workspace. Por eso la sección **C2** de
+`fab:proof` —el **bloqueante de merge** de la Consola— exige un **segundo Service Principal con rol
+`Viewer`** en el workspace del lab.
+
+**Crearlo es parte de la corrida**, no un prerrequisito escondido:
+
+1. Registrar una aplicación en Entra (tenant del lab) y generar su secreto.
+2. Darle rol **`Viewer`** en el workspace del lab (no `Member`: `Member` trae `UNMASK` y mediría otra
+   cosa).
+3. Exportar la credencial y correr el arnés:
+
+```bash
+npm run fab:resume                                  # la capacidad encendida ES la ventana
+export FAB_SERVER=… FAB_DB=… FAB_TOKEN=…            # admin, como el resto del arnés
+export FAB_CONSOLA_SP_APP_ID=… FAB_CONSOLA_SP_SECRET=… FAB_TENANT=…
+npm run fab:proof
+npm run fab:pause
+```
+
+**Criterio de éxito de C2 — los tres, o no hay verde:**
+
+1. **Control positivo** — el mismo batch SIN el re-set devuelve solo las filas del claim.
+2. El batch CON el re-set de la clave real **falla** y no devuelve filas ajenas.
+3. Falla **por la razón**: el mensaje nombra `read_only` (error 15664). Un fallo por sintaxis o por
+   permiso no cuenta — sería una sonda rota absolviendo al motor sin haber medido.
+
+Sin la credencial, C2 imprime **NO MEDIDO** y el arnés sale con código 3. Eso **no es un verde**: el
+arnés de Docker (`lab:proof`) ya midió el mecanismo para la familia T-SQL —el re-set falló con el
+15664 esperado—, y un negativo de allá refutaría para Fabric, pero un **positivo de allá no afirma
+para Fabric**. Mientras C2 no esté verde acá, la Fase 1 de la Consola no se mergea.
+
 ## Lo que este terreno NO hace, por decisión
 
 - **No copia datos de ninguna instancia**, ni anonimizados. El arnés mide **formas**, no datos, y una

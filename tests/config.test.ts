@@ -182,3 +182,36 @@ describe('configFromEnv · HOST (interfaz de escucha, opcional)', () => {
     expect(configFromEnv({ HOST: ' ::1 ' }, fixedSecret).host).toBe('::1')
   })
 })
+
+// ── CONSOLA SQL (#306) ───────────────────────────────────────────────────────────────────────────
+describe('configFromEnv · Consola SQL', () => {
+  it('sin env: apagada, con los defaults del diseño — y `maxConcurrentes` es UNO', () => {
+    const c = configFromEnv({}, fixedSecret)
+    expect(c.consola).toEqual({
+      enabled: false,
+      scopeGroup: 'consola-sql',
+      timeoutMs: 60_000,
+      maxRows: 5_000,
+      maxConcurrentes: 1,
+    })
+  })
+
+  it('«una consulta a la vez» es el default y NO se puede apagar por debajo de 1', () => {
+    // Que el env exista es para que una instancia con capacidad holgada pueda SUBIRLO por decisión
+    // del operador. Bajarlo a 0 apagaría la Consola por una vía que nadie declaró: el interruptor
+    // es `VERGIS_CONSOLA_ENABLED`, y un límite que apaga en silencio no es un límite.
+    expect(configFromEnv({ VERGIS_CONSOLA_MAX_CONCURRENTES: '0' }, fixedSecret).consola.maxConcurrentes).toBe(1)
+    expect(configFromEnv({ VERGIS_CONSOLA_MAX_CONCURRENTES: '4' }, fixedSecret).consola.maxConcurrentes).toBe(4)
+  })
+
+  it('el grupo de scope se normaliza a minúsculas y el flag acepta 1/true/on', () => {
+    expect(configFromEnv({ VERGIS_CONSOLA_SCOPE_GROUP: '  Ingeniería-SQL ' }, fixedSecret).consola.scopeGroup).toBe('ingeniería-sql')
+    for (const v of ['1', 'true', 'ON']) expect(configFromEnv({ VERGIS_CONSOLA_ENABLED: v }, fixedSecret).consola.enabled).toBe(true)
+    for (const v of ['0', 'no', '']) expect(configFromEnv({ VERGIS_CONSOLA_ENABLED: v }, fixedSecret).consola.enabled).toBe(false)
+  })
+
+  it('un numérico inválido LANZA: un tope que es NaN no acota nada (FATAL_ENVS)', () => {
+    expect(() => configFromEnv({ VERGIS_CONSOLA_MAX_ROWS: 'muchas' }, fixedSecret)).toThrow(/VERGIS_CONSOLA_MAX_ROWS/)
+    expect(() => configFromEnv({ VERGIS_CONSOLA_TIMEOUT_MS: 'ya' }, fixedSecret)).toThrow(/VERGIS_CONSOLA_TIMEOUT_MS/)
+  })
+})

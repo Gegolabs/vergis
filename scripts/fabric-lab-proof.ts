@@ -870,6 +870,96 @@ async function main(): Promise<void> {
     }
     await sp2.close()
   }
+  // ══ CONSOLA SQL (#306) · C2 — EL BLOQUEANTE DE MERGE ════════════════════════════════════════
+  //
+  // LA PREGUNTA: ¿Fabric honra `@read_only = 1` de `sp_set_session_context` DENTRO del mismo batch?
+  // De eso cuelga TODO el plano de fila de la Consola: si no lo honra, el texto del usuario reescribe
+  // sus propios claims entre el prelude y su `SELECT`, y la Consola no se implementa hasta resolverlo.
+  //
+  // POR QUÉ ESTÁ ACÁ Y NO CORRIÓ TODAVÍA: exige una VENTANA de Fabric (capacidad encendida) y un
+  // SEGUNDO Service Principal con rol `Viewer` en el workspace del lab — el de serving es Admin, y
+  // medir bajo él mediría otra cosa. El arnés de Docker YA midió esto para la familia T-SQL y el
+  // re-set falló con el 15664 esperado; un negativo de allá refuta para Fabric, pero un POSITIVO de
+  // allá NO afirma para Fabric. Por eso este bloque existe y por eso su ausencia no es un verde.
+  //
+  // CÓMO SE CORRE:
+  //   npm run fab:resume                       # encender la capacidad (es la ventana)
+  //   export FAB_SERVER=… FAB_DB=… FAB_TOKEN=…             # admin, como el resto del arnés
+  //   export FAB_CONSOLA_SP_APP_ID=… FAB_CONSOLA_SP_SECRET=… FAB_TENANT=…   # el SP `Viewer`
+  //   npm run fab:proof
+  //   npm run fab:pause
+  //
+  // CRITERIO DE ÉXITO (los tres, o no hay verde):
+  //   1. CONTROL POSITIVO — el MISMO batch SIN el re-set devuelve solo las filas del claim.
+  //   2. El batch CON el re-set FALLA y no devuelve ninguna fila ajena.
+  //   3. Falla por LA razón: el mensaje del motor nombra `read_only` (o el error 15664). Un fallo por
+  //      sintaxis o por permiso NO cuenta — sería una sonda rota absolviendo al motor sin medir.
+  //
+  // Mientras no exista el SP, esto imprime NO MEDIDO y el arnés sale con código 3: la ausencia de la
+  // medición se ve, en vez de esconderse detrás de un resumen verde.
+  seccion('C2 (#306) · ¿Fabric honra `@read_only` en el MISMO batch? — BLOQUEANTE DE MERGE de la Consola')
+  {
+    const appId = process.env['FAB_CONSOLA_SP_APP_ID']
+    const secret = process.env['FAB_CONSOLA_SP_SECRET']
+    const tenant = process.env['FAB_TENANT']
+    let tokenConsola: string | null = process.env['FAB_CONSOLA_SP_TOKEN'] ?? null
+    if (!tokenConsola && appId && secret && tenant) {
+      const body = new URLSearchParams({ client_id: appId, client_secret: secret, scope: 'https://database.windows.net/.default', grant_type: 'client_credentials' })
+      try {
+        const r = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, { method: 'POST', body })
+        const j = (await r.json()) as { access_token?: string; error_description?: string }
+        tokenConsola = j.access_token ?? null
+        if (!tokenConsola) noMedido(`el SP de consola no obtuvo token: ${j.error_description ?? r.status}`)
+      } catch (e) {
+        noMedido(`el SP de consola no obtuvo token: ${(e as Error).message.split('\n')[0]}`)
+      }
+    }
+    if (!tokenConsola) {
+      noMedido(
+        'C2 NO CORRIÓ: falta el SEGUNDO SP con rol `Viewer` (FAB_CONSOLA_SP_TOKEN, o el trío ' +
+          'FAB_CONSOLA_SP_APP_ID/FAB_CONSOLA_SP_SECRET/FAB_TENANT). Sin esta medición la Fase 1 de la ' +
+          'Consola SQL NO se mergea: el arnés de Docker refuta para la familia T-SQL, no afirma para Fabric.',
+      )
+    } else {
+      const consolaSp = await conectar(tokenConsola)
+      const preludeRO = sessionContextPrelude(enf.injections, { groups: ['Finanzas'] }, { readOnly: true })
+      const bindear = (pool: sql.ConnectionPool): sql.Request => {
+        const r = pool.request()
+        for (const p of preludeRO.params) r.input(p.name, sql.NVarChar, p.value)
+        return r
+      }
+      // (1) CONTROL POSITIVO, en su PROPIA sesión: una clave read_only queda clavada por toda la
+      // sesión, así que reusar esta conexión para el ataque mediría un residuo, no el mecanismo.
+      let ctrl: Record<string, unknown>[] | null = null
+      try {
+        ctrl = (await bindear(consolaSp).query(`${preludeRO.sql}\nSELECT area FROM ${TARGET.schema}.${TARGET.table}`)).recordset as unknown as Record<string, unknown>[]
+      } catch (e) {
+        noMedido(`CONTROL POSITIVO FALLIDO (${(e as Error).message.split('\n')[0]}): nada se concluye sobre read_only`)
+      }
+      if (ctrl) {
+        ok(ctrl.length > 0 && ctrl.every((r) => String(r['area']) === 'Finanzas'), `CONTROL POSITIVO · con read_only y sin ataque, la RLS devuelve solo el claim: [${ctrl.map((r) => String(r['area'])).join(' ')}]`)
+        // (2) y (3) EL ATAQUE, en una sesión nueva.
+        const atacante = await conectar(tokenConsola)
+        const req = bindear(atacante)
+        req.input('vergis_atacante', sql.NVarChar, 'Producción')
+        let filas: Record<string, unknown>[] | null = null
+        let err = ''
+        try {
+          filas = (await req.query(
+            `${preludeRO.sql}\nEXEC sys.sp_set_session_context @key = N'${enf.injections[0]!.setting}', @value = @vergis_atacante;\nSELECT area FROM ${TARGET.schema}.${TARGET.table}`,
+          )).recordset as unknown as Record<string, unknown>[]
+        } catch (e) {
+          err = (e as Error).message.split('\n')[0]
+        }
+        const gano = filas !== null && filas.some((r) => String(r['area']) !== 'Finanzas')
+        ok(!gano, `el batch con re-set ${gano ? '⚠ DEVOLVIÓ FILAS AJENAS — el plano de fila de la Consola NO se sostiene en Fabric' : `falla sin devolver filas ajenas — ${err.slice(0, 100)}`}`)
+        ok(/15664|read_only|read only/i.test(err), `y falla por LA razón (read_only / 15664), no por otra: ${err.slice(0, 100) || '(no falló)'}`)
+        await atacante.close()
+      }
+      await consolaSp.close()
+    }
+  }
+
   // C5 · LIMPIEZA VERIFICADA MIDIENDO. El centinela se deja instalado a propósito —es infraestructura
   // compartida por schema y el `teardownSQL` del emisor NO lo retira, por diseño (retirarlo al
   // desinstalar UNA tabla dejaría ciegas a las demás)—, así que lo que se verifica es que quede en el
