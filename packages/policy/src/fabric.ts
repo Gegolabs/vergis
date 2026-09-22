@@ -781,8 +781,17 @@ export interface SessionContextPrelude {
  * SEGURIDAD (la nuance del doc 10 §5): se emite UN statement por CADA inyección del nodo,
  * incluidas las de claim ausente (valor ''). Reinyectar TODO en cada request sobreescribe el
  * SESSION_CONTEXT que pudiera quedar de un consumidor previo en una conexión del pool → no
- * fuga, y el '' dispara el guard `<> ''` de la policy → default-deny. NO se usa `@read_only`
- * (impediría el reseteo en el próximo request sobre la misma conexión).
+ * fuga, y el '' dispara el guard `<> ''` de la policy → default-deny. El SERVING no usa
+ * `@read_only` (impediría el reseteo en el próximo request sobre la misma conexión).
+ *
+ * `opts.readOnly` (issue #306) emite `@read_only = 1` y es **aditivo**: con el default (`false`) el
+ * batch sale byte por byte igual que siempre — hay un test que lo afirma, porque este prelude lo
+ * comparten el serving de todos los PIs y una superficie nueva, y un cambio silencioso acá tocaría
+ * todo lo que sirve la instancia. Lo pide quien ejecuta SQL LIBRE: con la clave marcada read_only, un
+ * `sp_set_session_context` del propio texto del usuario sobre esa clave FALLA en el motor (error
+ * 15664) en vez de reescribir el claim que el nodo acaba de inyectar. El precio es que la conexión ya
+ * no puede volver a un pool —la clave queda clavada para toda la sesión—, y por eso la Consola abre
+ * una conexión dedicada y la cierra al terminar.
  *
  * El nombre del setting (@key) es identificador validado → literal seguro; el VALOR va
  * parametrizado (`@vergis_sc_N`) → el claim nunca se concatena al SQL (injection-safe, como
@@ -791,6 +800,7 @@ export interface SessionContextPrelude {
 export function sessionContextPrelude(
   injections: { setting: string; claim: string }[],
   claims: ClaimSet,
+  opts: { readOnly?: boolean } = {},
 ): SessionContextPrelude {
   // Reusa el cálculo del back-end ClickHouse: una entrada por inyección (incl. vacías), rechaza comas.
   const values = settingsForInjections(injections, claims)
@@ -799,7 +809,9 @@ export function sessionContextPrelude(
   injections.forEach((inj, i) => {
     const setting = settingForClaim(inj.claim) // re-valida el identificador
     const paramName = `vergis_sc_${i}`
-    lines.push(`EXEC sys.sp_set_session_context @key = N'${setting}', @value = @${paramName};`)
+    lines.push(
+      `EXEC sys.sp_set_session_context @key = N'${setting}', @value = @${paramName}${opts.readOnly ? ', @read_only = 1' : ''};`,
+    )
     params.push({ name: paramName, value: values[inj.setting] ?? '' })
   })
   return { sql: lines.join('\n'), params }

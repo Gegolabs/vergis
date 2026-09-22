@@ -32,6 +32,9 @@ import { compileFabric, sessionContextPrelude } from '../packages/policy/src/fab
 import { emulateFabricMaskView } from '../packages/policy/src/fabric'
 import { MASK_VALUE, type ClaimSet, type ColumnRule, type PolicyDecl } from '../packages/policy/src/ir'
 import { settingsForInjections } from '../packages/policy/src/clickhouse'
+import { verificarConectorConsola, unmaskProbeReadSQL, UNMASK_PROBE_EXPECTED } from '../server/engines/fabric'
+import { createConsolaSql } from '../packages/capabilities/src/consola-sql'
+import type { SqlConnectionProfile } from '../packages/capabilities/src/execute-sql-dwh'
 
 const HOST = process.env['TSQL_HOST'] ?? 'localhost'
 const PORT = Number(process.env['TSQL_PORT'] ?? 11433)
@@ -411,6 +414,316 @@ async function main(): Promise<void> {
     const norm = (rows: Record<string, unknown>[]) =>
       rows.map((r) => `${r['area']}|${r['rut']}`).sort().join(' · ')
     ok(norm(esperado) === norm(real), `${c.nombre} → emulador y motor coinciden  [${norm(real) || '(vacío)'}]`)
+  }
+
+  // ══ C · CONSOLA SQL (#306) ═══════════════════════════════════════════════════════════════════
+  //
+  // La Consola ejecuta T-SQL LIBRE bajo un principal de solo lectura, con los claims del ingeniero
+  // en `SESSION_CONTEXT`. Este bloque mide, en el motor, las tres cosas de las que depende que eso
+  // «acote y nunca amplíe»: que el predicado no filtre lo que la máscara esconde (C3), que el
+  // principal no pueda escribir (C1) y que `@read_only` clave el claim dentro del batch (C2).
+
+  // ── C3 · INFERENCIA POR PREDICADO bajo DDM ───────────────────────────────────────────────────
+  //
+  // El DDM enmascara la PROYECCIÓN. La pregunta que decide si un Conector con `columnRules` es
+  // ofrecible es otra: ¿el motor evalúa el `WHERE` contra el valor REAL o contra la máscara? Si es
+  // contra el real, un `WHERE rut LIKE '33.%'` acota el valor sin mostrarlo nunca — y la promesa
+  // «ves lo que un PI te mostraría» es falsa, porque el PI no deja escribir el `WHERE`.
+  //
+  // Los tres controles que lo vuelven una medición y no una impresión:
+  //   PREMISA  · bajo este mismo principal y en esta misma sesión, la proyección sale enmascarada
+  //              (si saliera en claro no habría nada que inferir y el resultado no diría nada).
+  //   POSITIVO · las mismas sondas bajo el principal CON `UNMASK` discriminan (si no, el
+  //              instrumento no mide: un cero podría ser «no filtró» o «la sonda no corrió»).
+  //   NEGATIVO · un predicado que NINGUNA fila satisface devuelve 0 bajo ambos (si diera > 0, el
+  //              contador estaría midiendo otra cosa).
+  seccion('C3 (#306) · ¿se INFIERE el valor de una columna enmascarada con predicados, sin verlo nunca?')
+  const RUT_C3 = '33.333.333-3' // el de Comercial
+  const unoDe = async (pool: sql.ConnectionPool, sqlText: string): Promise<number | null> => {
+    try {
+      const filas = await consultarRaw(pool, enf.injections, TODOS, sqlText)
+      return Number((filas[0] as Record<string, unknown>)['n'])
+    } catch (err) {
+      // NO cuenta como «aguantó»: cuenta como NO MEDIDA (Norma 7, corolario de instrumentos).
+      hallazgo(`sonda RECHAZADA por el motor (${(err as Error).message.split('\n')[0].slice(0, 70)}) — no mide`)
+      return null
+    }
+  }
+
+  const premisaC3 = (await consultarRaw(plain, enf.injections, TODOS, `SELECT rut AS r FROM ${T}`)).map((r) => String(r['r']))
+  // El valor de la máscara acá es el DEFAULT del DDM del motor (`xxxx` para NVARCHAR), NO el
+  // `MASK_VALUE` del compilador (`•••`), que es de la vista de máscara: la sonda lee la TABLA BASE.
+  // Por eso la premisa se afirma por lo que importa —que el RUT real no aparece— y no por la cadena.
+  ok(
+    premisaC3.length === 3 && premisaC3.every((v) => !v.includes('-')),
+    `CONTROL DE PREMISA · sin UNMASK la PROYECCIÓN sale enmascarada: [${premisaC3.join(' ')}]`,
+  )
+
+  const SONDAS_C3: { nombre: string; sql: string; esperadoSiFiltraPorElReal: number }[] = [
+    { nombre: 'igualdad exacta contra el valor real', sql: `SELECT COUNT(*) AS n FROM ${T} WHERE rut = N'${RUT_C3}'`, esperadoSiFiltraPorElReal: 1 },
+    { nombre: "prefijo con LIKE ('33.%')", sql: `SELECT COUNT(*) AS n FROM ${T} WHERE rut LIKE N'33.%'`, esperadoSiFiltraPorElReal: 1 },
+    { nombre: 'rango con BETWEEN (acota por bisección)', sql: `SELECT COUNT(*) AS n FROM ${T} WHERE rut BETWEEN N'20' AND N'30'`, esperadoSiFiltraPorElReal: 1 },
+    { nombre: 'comparación de orden (>)', sql: `SELECT COUNT(*) AS n FROM ${T} WHERE rut > N'30'`, esperadoSiFiltraPorElReal: 1 },
+    { nombre: 'subcadena en el predicado', sql: `SELECT COUNT(*) AS n FROM ${T} WHERE SUBSTRING(rut, 1, 2) = N'22'`, esperadoSiFiltraPorElReal: 1 },
+  ]
+
+  let infiereAlguna = false
+  let medidasC3 = 0
+  for (const s of SONDAS_C3) {
+    const sinUnmask = await unoDe(plain, s.sql)
+    const conUnmask = await unoDe(unmask, s.sql)
+    if (sinUnmask === null || conUnmask === null) continue
+    // CONTROL POSITIVO por sonda: si CON UNMASK tampoco da lo esperado, esta sonda no mide nada.
+    if (conUnmask !== s.esperadoSiFiltraPorElReal) {
+      hallazgo(`${s.nombre}: CONTROL POSITIVO FALLÓ (con UNMASK devolvió ${conUnmask}, se esperaba ${s.esperadoSiFiltraPorElReal}) — la sonda NO mide`)
+      continue
+    }
+    medidasC3++
+    const infiere = sinUnmask === s.esperadoSiFiltraPorElReal
+    if (infiere) infiereAlguna = true
+    console.log(`  ${infiere ? '◆' : '✓'} ${s.nombre}: sin UNMASK → ${sinUnmask} · con UNMASK → ${conUnmask} ${infiere ? '⚠ EL PREDICADO FILTRA POR EL VALOR REAL' : '(el predicado NO ve el valor real)'}`)
+    if (infiere) hallazgos++
+  }
+
+  // CONTROL NEGATIVO del contador: un predicado que no satisface NINGUNA fila.
+  const vacioSin = await unoDe(plain, `SELECT COUNT(*) AS n FROM ${T} WHERE rut LIKE N'99.%'`)
+  const vacioCon = await unoDe(unmask, `SELECT COUNT(*) AS n FROM ${T} WHERE rut LIKE N'99.%'`)
+  ok(vacioSin === 0 && vacioCon === 0, `CONTROL NEGATIVO · un prefijo que ninguna fila satisface da 0 bajo ambos principales (sin=${vacioSin} · con=${vacioCon})`)
+
+  // ORDER BY: ordena por el valor real o por la máscara (todas iguales ⇒ orden de inserción).
+  try {
+    const ordenSin = (await consultarRaw(plain, enf.injections, TODOS, `SELECT area AS r FROM ${T} ORDER BY rut DESC`)).map((r) => String(r['r']))
+    const ordenCon = (await consultarRaw(unmask, enf.injections, TODOS, `SELECT area AS r FROM ${T} ORDER BY rut DESC`)).map((r) => String(r['r']))
+    const ordenaPorElReal = ordenSin.join('|') === ordenCon.join('|') && ordenCon[0] === 'Comercial'
+    console.log(`  ${ordenaPorElReal ? '◆' : '✓'} ORDER BY sobre la columna enmascarada: sin UNMASK [${ordenSin.join(' ')}] · con UNMASK [${ordenCon.join(' ')}]${ordenaPorElReal ? ' ⚠ MISMO ORDEN: ordena por el valor real' : ''}`)
+    if (ordenaPorElReal) { infiereAlguna = true; hallazgos++ }
+    medidasC3++
+  } catch (err) {
+    hallazgo(`ORDER BY: LA SONDA NO CORRIÓ (${(err as Error).message.split('\n')[0].slice(0, 70)}) — no mide`)
+  }
+
+  if (medidasC3 === 0) {
+    ok(false, 'C3 NO SE MIDIÓ: ninguna sonda con su control positivo corrió. Nada se concluye sobre DDM y predicados.')
+  } else if (infiereAlguna) {
+    hallazgo(
+      `C3 REFUTADA (${medidasC3} sonda(s) con control positivo): bajo SQL libre el predicado se evalúa contra el valor REAL, ` +
+        'así que una columna enmascarada se infiere sin verse. ⇒ un Conector con `columnRules` NO se ofrece en la Consola (P-7, fail-closed).',
+    )
+  } else {
+    hallazgo(`C3 CORROBORADA en ${medidasC3} sonda(s): ningún predicado filtró por el valor real. Corrobora, NO demuestra (es una lista, no una prueba de imposibilidad)`)
+  }
+
+  // ── El terreno de la Consola: una tabla SIN política y los dos principales del gate ───────────
+  seccion('C · terreno de la Consola (#306): tabla sin política + principal lector + principal escritor')
+  await sa.request().batch(`
+    DROP TABLE IF EXISTS dbo.zz_sin_politica;
+    CREATE TABLE dbo.zz_sin_politica (id INT NOT NULL, dato NVARCHAR(40) NOT NULL);
+    INSERT INTO dbo.zz_sin_politica (id, dato) VALUES (1, N'uno'), (2, N'dos');`)
+  await sa.request().batch(`
+    DROP TABLE IF EXISTS dbo.diez;
+    CREATE TABLE dbo.diez (n INT NOT NULL);
+    INSERT INTO dbo.diez (n) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);`)
+  await sa.request().batch(`
+    IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'consola_lab') DROP LOGIN consola_lab;
+    IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'consola_lab_escritor') DROP LOGIN consola_lab_escritor;
+    CREATE LOGIN consola_lab WITH PASSWORD = '${USER_PASS}', CHECK_POLICY = OFF;
+    CREATE LOGIN consola_lab_escritor WITH PASSWORD = '${USER_PASS}', CHECK_POLICY = OFF;`)
+  // El principal de consola: SELECT en la base y NADA más. Sin `UNMASK`, sin escritura.
+  await sa.request().batch(`
+    CREATE USER consola_lab FOR LOGIN consola_lab;
+    CREATE USER consola_lab_escritor FOR LOGIN consola_lab_escritor;
+    GRANT SELECT TO consola_lab;
+    GRANT VIEW DEFINITION TO consola_lab;
+    GRANT SELECT TO consola_lab_escritor;
+    ALTER ROLE db_datawriter ADD MEMBER consola_lab_escritor;`)
+  const consolaPool = await conectar('consola_lab', USER_PASS)
+  const escritorPool = await conectar('consola_lab_escritor', USER_PASS)
+
+  // ── C1 · ¿el principal de consola puede escribir? ─────────────────────────────────────────────
+  // La garantía de «solo lectura» del diseño NO vive en un parser: vive en el permiso del principal.
+  // Acá se pone en riesgo esa afirmación con las cuatro escrituras que importan.
+  seccion('C1 (#306) · bajo el principal de consola, ¿las escrituras fallan POR PERMISO?')
+  const ESCRITURAS: { nombre: string; sql: string }[] = [
+    { nombre: 'INSERT', sql: `INSERT INTO dbo.areas (area, rut, sueldo) VALUES (N'X', N'9', 1)` },
+    { nombre: 'CREATE TABLE', sql: `CREATE TABLE dbo.zz_intruso (id INT NOT NULL)` },
+    { nombre: 'ALTER SECURITY POLICY … STATE = OFF', sql: `ALTER SECURITY POLICY dbo.secpol_areas WITH (STATE = OFF)` },
+    { nombre: 'DROP TABLE', sql: `DROP TABLE dbo.zz_sin_politica` },
+  ]
+  for (const e of ESCRITURAS) {
+    const r = await intentar(consolaPool, e.sql)
+    // El TEXTO del rechazo es el dato: «permission was denied» es permiso; un error de sintaxis
+    // sería una sonda mal escrita que exonera al motor sin haber medido nada.
+    const porPermiso = !r.ok && /permission|denied|principal|no tiene permiso/i.test(r.error)
+    ok(porPermiso, `${e.nombre}: ${r.ok ? '⚠ ¡PASÓ! el principal PUEDE escribir' : `rechazado — ${r.error.slice(0, 90)}`}`)
+  }
+  // CONTROL POSITIVO: el escritor SÍ escribe en el mismo terreno. Sin él, cuatro rechazos podrían
+  // significar «acá no anda nada» en vez de «a este principal le falta el permiso».
+  const ctrlEscritor = await intentar(escritorPool, `INSERT INTO dbo.zz_sin_politica (id, dato) VALUES (99, N'control')`)
+  ok(ctrlEscritor.ok, `CONTROL POSITIVO · el principal ESCRITOR sí inserta en el mismo terreno${ctrlEscritor.ok ? '' : ` — ${ctrlEscritor.error}`}`)
+
+  // ── C2 · ¿`@read_only` clava el claim DENTRO del batch? ───────────────────────────────────────
+  // Es el mecanismo del que cuelga todo el plano de fila de la Consola. Acá se mide para la FAMILIA
+  // T-SQL: un negativo refutaría para Fabric también; un positivo NO lo afirma para Fabric — eso lo
+  // dice `fab:proof` y solo él, y sin ese verde la Fase 1 no se mergea.
+  seccion('C2 (#306) · con `@read_only = 1`, ¿un re-set del claim en el MISMO batch falla?')
+  const preludeRO = sessionContextPrelude(enf.injections, { groups: ['Finanzas'] }, { readOnly: true })
+  const conParams = (pool: sql.ConnectionPool) => {
+    const req = pool.request()
+    for (const p of preludeRO.params) req.input(p.name, sql.NVarChar, p.value)
+    return req
+  }
+  // CONTROL POSITIVO: el MISMO batch SIN el re-set devuelve solo Finanzas.
+  // OJO (medido acá): una clave marcada `read_only` queda clavada por toda la SESIÓN, así que el
+  // control NO puede correr sobre `consolaPool` — lo dejaría inservible para C6 y C7 con un error
+  // que parecería un fallo del gate. Sesión propia y descartable, igual que hace el gate real.
+  const ctrlPool = await conectar('consola_lab', USER_PASS)
+  let ctrlC2: Record<string, unknown>[] | null = null
+  try {
+    ctrlC2 = (await conParams(ctrlPool).query(`${preludeRO.sql}\nSELECT area FROM dbo.areas`)).recordset as unknown as Record<string, unknown>[]
+  } catch (e) {
+    hallazgo(`C2 CONTROL POSITIVO NO CORRIÓ (${(e as Error).message.split('\n')[0].slice(0, 70)}) — C2 no mide`)
+  }
+  if (ctrlC2) {
+    ok(
+      ctrlC2.length === 1 && String(ctrlC2[0]!['area']) === 'Finanzas',
+      `CONTROL POSITIVO · con read_only y sin ataque, la RLS devuelve solo lo del claim: [${ctrlC2.map((r) => String(r['area'])).join(' ')}]`,
+    )
+    // EL ATAQUE: re-setear la clave REAL en el MISMO batch que el SELECT. Sesión nueva, porque la
+    // clave del control ya quedó clavada en la anterior.
+    const atacante = await conectar('consola_lab', USER_PASS)
+    const reqA = atacante.request()
+    for (const p of preludeRO.params) reqA.input(p.name, sql.NVarChar, p.value)
+    reqA.input('vergis_atacante', sql.NVarChar, 'Producción')
+    let filasAtaque: Record<string, unknown>[] | null = null
+    let errorAtaque = ''
+    try {
+      filasAtaque = (await reqA.query(
+        `${preludeRO.sql}\nEXEC sys.sp_set_session_context @key = N'${enf.injections[0]!.setting}', @value = @vergis_atacante;\nSELECT area FROM dbo.areas`,
+      )).recordset as unknown as Record<string, unknown>[]
+    } catch (e) {
+      errorAtaque = (e as Error).message.split('\n')[0]
+    }
+    const gano = filasAtaque !== null && filasAtaque.some((r) => String(r['area']) === 'Producción')
+    ok(!gano, `el batch con re-set ${gano ? `⚠ DEVOLVIÓ FILAS AJENAS [${filasAtaque!.map((r) => String(r['area'])).join(' ')}]` : `falla y no devuelve filas — ${errorAtaque.slice(0, 90)}`}`)
+    ok(/15664|read_only|read only/i.test(errorAtaque), `y falla por LA razón (read_only, error 15664), no por otra: ${errorAtaque.slice(0, 90) || '(no falló)'}`)
+    await atacante.close()
+    await ctrlPool.close()
+    hallazgo('C2 mide la FAMILIA T-SQL. Que Fabric honre `@read_only` sigue SIN medir: es `fab:proof`, y sin ese verde la Fase 1 no se mergea.')
+  }
+
+  // ── C4/C5/C6 · el GATE de ofrecibilidad, contra el motor ──────────────────────────────────────
+  seccion('C4/C5/C6 (#306) · el gate de ofrecibilidad por Conector, medido contra el motor')
+  const ejecutarCon = (pool: sql.ConnectionPool) => async (q: string): Promise<Record<string, unknown>[]> =>
+    (await pool.request().query(q)).recordset as unknown as Record<string, unknown>[]
+  const sondaSiempre = async (): Promise<'honra' | 'no-honra' | 'indeterminado'> => 'honra'
+  const storeLab = new Map<string, PolicyDecl>([['dbo.areas', POLICY]])
+  const storeSoloFila = new Map<string, PolicyDecl>([['dbo.areas', { ...POLICY, columnRules: undefined } as PolicyDecl]])
+
+  // C4 · con `dbo.zz_sin_politica` presente, el Conector NO se ofrece y el motivo la nombra.
+  const c4 = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(!c4.ofrecible && (c4.motivo ?? '').includes('zz_sin_politica'), `C4 · tabla sin política ⇒ no ofrecible, y el motivo la nombra: ${c4.motivo?.slice(0, 110)}`)
+  // …y el centinela de #238, que TAMPOCO tiene política, no cuenta: es instrumento, no dato.
+  ok(!(c4.medido.tablasSinPolitica ?? []).some((t) => t.includes('vergis_unmask_probe')), 'C4 · el centinela de #238 NO se cuenta como tabla sin gobierno (es instrumento)')
+
+  // Remediación: artefacto allow-all sobre TODAS las huérfanas que el gate nombró (el terreno del
+  // arnés acumula tablas auxiliares de las secciones anteriores; el gate las ve igual, que es
+  // justamente lo que tiene que hacer). Se aplica lo que EMITE el compilador, no SQL a mano.
+  for (const t of c4.medido.tablasSinPolitica ?? []) {
+    const enfAllow = compileFabric({ public: true }, { schema: t.split('.')[0], table: t.split('.')[1] })
+    for (const stmt of enfAllow.setupSQL) await intentar(sa, stmt)
+  }
+  const c4b = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(c4b.ofrecible, `C4 · tras aplicar allow-all a la tabla huérfana ⇒ ofrecible${c4b.ofrecible ? '' : ` — ${c4b.motivo}`}`)
+
+  // C5 · el principal ESCRITOR nunca es ofrecible, y el motivo nombra el permiso ofensor.
+  const c5 = await verificarConectorConsola({ ejecutar: ejecutarCon(escritorPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(!c5.ofrecible && /INSERT|UPDATE|DELETE/.test(c5.motivo ?? ''), `C5 · principal escritor ⇒ no ofrecible, con el permiso nombrado: ${c5.motivo?.slice(0, 110)}`)
+
+  // C6 · el plano de columna bajo el principal de consola: base y vista, ambas enmascaradas.
+  const baseC6 = (await consultarRaw(consolaPool, enf.injections, { ...TODOS, ve_pii: ['1'] }, `SELECT rut AS r FROM dbo.areas`)).map((r) => String(r['r']))
+  const vistaC6 = (await consultarRaw(consolaPool, enf.injections, { ...TODOS, ve_pii: ['1'] }, `SELECT rut AS r FROM ${enf.maskView.qualifiedName}`)).map((r) => String(r['r']))
+  ok(baseC6.every((v) => !v.includes('-')), `C6 · TABLA BASE bajo el principal de consola: enmascarada [${baseC6.join(' ')}]`)
+  ok(vistaC6.every((v) => !v.includes('-')), `C6 · VISTA DE MÁSCARA bajo el principal de consola: enmascarada [${vistaC6.join(' ')}] (el claim NO la abre: la vista solo discrimina con UNMASK)`)
+  const c6Antes = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeLab, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(c6Antes.medido.unmask === 'incapable', `C6 · (c) medido: el principal de consola es \`${c6Antes.medido.unmask}\` de desenmascarar`)
+  ok(!c6Antes.ofrecible && (c6Antes.motivo ?? '').includes('P-7'), 'C6 · y AUN ASÍ no se ofrece: con reglas de columna manda P-7 (inferencia por predicado, C3), no (c)')
+  // CONTROL de (c): con `UNMASK` concedido, ¿algo lo delata? Se mide en DOS niveles, y el primero
+  // fue un HALLAZGO de esta corrida: `UNMASK` es un permiso de base, así que `fn_my_permissions` lo
+  // devuelve y (a) apaga el Conector ANTES de que (c) llegue a medirse. Es defensa en profundidad
+  // que el diseño no había previsto — y, como (c) ya no corre, el control de que el CENTINELA
+  // discrimina hay que hacerlo directo contra el instrumento, o no se habría medido nada.
+  await sa.request().batch(`GRANT UNMASK TO consola_lab;`)
+  const c6Despues = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeLab, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(!c6Despues.ofrecible && (c6Despues.motivo ?? '').includes('UNMASK'), `CONTROL · con UNMASK concedido, (a) ya lo apaga: ${c6Despues.motivo?.slice(0, 100)}`)
+  const centinela = (await ejecutarCon(consolaPool)(unmaskProbeReadSQL('dbo'))).map((r) => String(r['probe']))
+  ok(centinela[0] === UNMASK_PROBE_EXPECTED, `CONTROL · y el CENTINELA discrimina: con UNMASK lee '${centinela[0]}' donde sin UNMASK leía enmascarado (no es un no-op)`)
+  await sa.request().batch(`REVOKE UNMASK FROM consola_lab;`)
+
+  // ── C7/C8/C9/C10 · la capability I2 contra el motor ───────────────────────────────────────────
+  // El seam `connect` inyecta el pool LOCAL: lo que se mide es la lógica de streaming, corte,
+  // timeout y cierre contra un motor de verdad, sin AAD de por medio.
+  seccion('C7/C8/C9/C10 (#306) · la ejecución (streaming, corte, timeout, multi-recordset, costo)')
+  const perfilLab: Record<string, SqlConnectionProfile> = {
+    lab: {
+      server: HOST, database: DB, port: PORT,
+      auth: 'secret', tenantId: 't', clientId: 'sp-serving', clientSecret: 'x',
+      consola: { auth: 'secret', tenantId: 't', clientId: 'sp-consola', clientSecret: 'x' },
+    },
+  }
+  const conectarLocal = async (): Promise<sql.ConnectionPool> =>
+    new sql.ConnectionPool({
+      server: HOST, port: PORT, database: DB, user: 'consola_lab', password: USER_PASS,
+      options: { encrypt: false, trustServerCertificate: true },
+      pool: { max: 1, min: 0 }, connectionTimeout: 30000, requestTimeout: 60000,
+    }).connect()
+  const capDe = (maxRows: number, timeoutMs: number) =>
+    createConsolaSql(perfilLab, { injections: enf.injections, maxRows, timeoutMs, connect: async () => (await conectarLocal()) as never })
+  const identLab = { agent: 'vergis', user: 'ing@lab', claims: TODOS }
+
+  // C7 · tope por streaming con cancelación efectiva.
+  try {
+    const r7 = await capDe(3, 20000).execute({ ref: 'lab', sql: 'SELECT n FROM dbo.diez ORDER BY n' }, identLab)
+    ok(r7.filas === 3 && r7.truncado, `C7 · tope de 3 sobre 10 filas: ${r7.filas} fila(s), truncado=${r7.truncado}`)
+    const vivas = (await sa.request().query(`SELECT COUNT(*) AS n FROM sys.dm_exec_sessions WHERE login_name = N'consola_lab' AND status = 'running'`)).recordset[0] as Record<string, unknown>
+    hallazgo(`C7 · sesiones de consola en estado 'running' tras el corte: ${Number(vivas['n'])} (la cancelación liberó la conexión)`)
+  } catch (e) {
+    ok(false, `C7 NO MIDIÓ: ${(e as Error).message.split('\n')[0]}`)
+  }
+
+  // C8 · timeout con cancelación efectiva.
+  const t8 = Date.now()
+  try {
+    await capDe(100, 2000).execute({ ref: 'lab', sql: "WAITFOR DELAY '00:00:10'; SELECT 1 AS uno" }, identLab)
+    ok(false, 'C8 · ⚠ la consulta de 10 s NO fue cortada por el tope de 2 s')
+  } catch (e) {
+    const ms = Date.now() - t8
+    const motivo = (e as { motivo?: string }).motivo
+    ok(motivo === 'consola/timeout' && ms < 6000, `C8 · cortada a los ${ms} ms con motivo '${motivo}' (tope 2000 ms)`)
+  }
+
+  // C9 · batch multi-sentencia ⇒ varios recordsets.
+  try {
+    const r9 = await capDe(100, 20000).execute({ ref: 'lab', sql: 'SELECT 1 AS uno; SELECT 2 AS dos' }, identLab)
+    ok(r9.recordsets.length === 2, `C9 · batch de dos sentencias ⇒ ${r9.recordsets.length} recordset(s)`)
+  } catch (e) {
+    ok(false, `C9 NO MIDIÓ: ${(e as Error).message.split('\n')[0]}`)
+  }
+
+  // C10 · el costo del login por ejecución (la conexión con `read_only` no vuelve a un pool).
+  const muestras: number[] = []
+  for (let i = 0; i < 20; i += 1) {
+    const t = Date.now()
+    try {
+      await capDe(10, 20000).execute({ ref: 'lab', sql: 'SELECT 1 AS uno' }, identLab)
+      muestras.push(Date.now() - t)
+    } catch { /* una corrida que no midió no entra en la muestra */ }
+  }
+  if (muestras.length >= 10) {
+    const ord = [...muestras].sort((a, b) => a - b)
+    const p = (q: number): number => ord[Math.min(ord.length - 1, Math.floor(q * ord.length))]!
+    hallazgo(`C10 · costo por ejecución con conexión dedicada (${muestras.length} corridas, motor LOCAL sin AAD): p50 ${p(0.5)} ms · p95 ${p(0.95)} ms · máx ${ord[ord.length - 1]} ms. NO es el costo en Fabric (falta el handshake TLS+AAD): eso lo mide fab:proof`)
+  } else {
+    ok(false, `C10 NO MIDIÓ: solo ${muestras.length} corridas completaron`)
   }
 
   seccion('Resumen')

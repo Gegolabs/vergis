@@ -56,7 +56,7 @@
  *                          no resoluble ⇒ el arranque LANZA (config rota, no default silencioso).
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readFileSync, readdirSync, statSync, writeFileSync, unlinkSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, writeFileSync, unlinkSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 // `watchPaths` ya no se llama directo: TODO watch pasa por `contract.watch` (instala + registra en una
 // sola llamada — ver server/contract.ts), que es quien lo invoca.
@@ -162,6 +162,8 @@ import {
   type TokenSource,
   importIdentityMapFile,
   singleFlight,
+  abrirSesionConsola,
+  createConsolaSql,
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
@@ -170,7 +172,8 @@ import { createSinks, fanout, forEvent, type Notification, type ReportSchedule }
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
-import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, unmaskProbeSchemas, type PiVerdict } from './engines/fabric'
+import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, unmaskProbeSchemas, verificarConectorConsola, type PiVerdict, type ConsolaConectorEstado } from './engines/fabric'
+import { createConsola, createConsolaLog, validarPerfilesConsola, consolaMenuScope, type ConsolaHandler, type ConsolaLog } from './consola'
 import { fail, readBody } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
@@ -256,6 +259,29 @@ const contract = createContractRegistry({
   // Bloque `miranda` (#266 · #265): una superficie opcional ahora puede quedar APAGADA sin tumbar el
   // nodo — si el contrato no lo dijera, la degradación sería silenciosa. Closure sobre la config viva.
   miranda: () => mirandaContractView(config.miranda, mirandaBootFailure),
+  // Bloque `consola` (#306): CLOSURE sobre el veredicto VIVO del gate por Conector. Apagada, la
+  // sección es solo `{enabled:false}` — superficie cero incluye el contrato.
+  consola: () => {
+    if (!config.consola.enabled) return { enabled: false }
+    return {
+      enabled: true,
+      motor: ENGINE,
+      scopeGroup: config.consola.scopeGroup,
+      limites: {
+        timeoutMs: config.consola.timeoutMs,
+        maxRows: config.consola.maxRows,
+        maxConcurrentes: config.consola.maxConcurrentes,
+      },
+      auditLog: { path: `${OUT}/consola-audit.log`, exists: existsSync(`${OUT}/consola-audit.log`) },
+      conectores: Object.fromEntries(
+        Object.keys(connections ?? {}).map((ref) => {
+          const e = consolaState.get(ref)
+          if (e) return [ref, { ofrecible: e.ofrecible, ...(e.motivo ? { motivo: e.motivo } : {}), verificadoEn: e.verificadoEn, medido: e.medido }]
+          return [ref, { ofrecible: false, motivo: connections?.[ref]?.consola ? 'aún no verificado' : 'sin sub-perfil `consola`' }]
+        }),
+      ),
+    }
+  },
   // Familias de Lets que este nodo sabe hospedar (#289). DERIVADO del registro vivo, no declarado:
   // el contrato no puede mentir sobre lo que el proceso realmente cableó.
   protos: () => protos.list().map((x) => x.type),
@@ -513,6 +539,9 @@ function reportDenials(identity: IdentityContext, reports: Report[]): void {
   }
 }
 
+/** Inyecciones del nodo, publicadas para la Consola: son LAS MISMAS del serving — la RLS es la misma. */
+let consolaInjections: { setting: string; claim: string }[] = []
+
 // --- Setup del CONECTOR según el motor --------------------------------------
 // VERGIS_CONNECTIONS acepta JSON inline (compat) o una RUTA a un archivo JSON (issue #50). El archivo
 // es preferible: los perfiles llevan secretos y un env es legible en /proc y `docker inspect`; un
@@ -529,6 +558,13 @@ function parseConnections(): Record<string, SqlConnectionProfile> | null {
   // nombre; en hot-reload cae en el try/catch del watcher y el swap no ocurre (la config vigente
   // sigue viva). No hace red ni disco: solo valida la forma de la credencial.
   for (const [ref, p] of Object.entries(parsed)) credentialProviderFor(p, { label: `database_ref '${ref}'` })
+  // Sub-perfil `consola` (#306): mismas reglas y el mismo momento — un `consola` que apunta a otro
+  // destino, o que reusa el clientId del serving (bypass completo: ese principal es Admin de los
+  // workspaces), es CONFIG ROTA y muere acá, no cuando alguien abra la Consola.
+  validarPerfilesConsola(parsed)
+  for (const [ref, p] of Object.entries(parsed)) {
+    if (p.consola) credentialProviderFor(p.consola, { label: `database_ref '${ref}' (consola)` })
+  }
   return parsed
 }
 // Referencia VIVA (mismo patrón que el policy store): el hot-reload muta este objeto IN-PLACE y todos
@@ -734,6 +770,11 @@ if (NODO_SIN_MOTOR_DE_DATOS) {
   // sobre una tabla filtrada, el prelude inyecta '' y la policy niega.
   datadocExecute = (input) => dwh.execute(input, { agent: 'datadoc' }) as Promise<{ rows: Record<string, unknown>[] }>
 
+  // La Consola inyecta EXACTAMENTE lo mismo que el serving: si inyectara menos, un claim sin setear
+  // dispararía el guard `<> ''` de la policy y el ingeniero vería menos que en su PI; si inyectara
+  // más, vería lo que su PI no le muestra. La igualdad es la promesa del issue, no una comodidad.
+  consolaInjections = injections
+
   // FAIL-CLOSED POR PI (issue #52): cada tabla gobernada que sirva un PI DEBE tener RLS nativa en la
   // fuente (sin eso, push-down devolvería todas las filas → fuga). La verificación es por PI y consulta
   // SOLO las conexiones en uso: un PI que no verifica no se sirve (503 con motivo en SU ruta) y los
@@ -771,6 +812,41 @@ if (NODO_SIN_MOTOR_DE_DATOS) {
     for (const [slug, v] of degraded) console.error(`[vergis-rls] PI '${slug}' NO servible (fail-closed): ${v.reason}`)
     for (const [ref, err] of refErrors) console.error(`[vergis-rls] conexión '${ref}' no verificable: ${err}`)
     console.log(`[vergis-rls] push-down: ${state.size - degraded.length}/${state.size} PI con RLS nativa verificada (${usedRefs.length} conexión(es) en uso).`)
+    // ── CONSOLA SQL (#306) · gate de ofrecibilidad por Conector ────────────────────────────────
+    // Corre en la MISMA pasada que la verificación de PIs (arranque y cada hot-reload de conexiones),
+    // NUNCA en el request: un gate que se evalúa por request es un gate que se evalúa con el reloj
+    // del atacante. Su fallo no toca el veredicto de ningún PI — la Consola es opcional y el serving
+    // manda; por eso todo esto vive dentro de su propio try.
+    if (config.consola.enabled) {
+      const nuevo = new Map<string, ConsolaConectorEstado>()
+      const ahora = new Date().toISOString()
+      for (const [ref, perfil] of Object.entries(connections)) {
+        if (!perfil.consola) {
+          nuevo.set(ref, { ofrecible: false, motivo: 'sin sub-perfil `consola`: no hay principal de solo lectura con el que ejecutar.', verificadoEn: ahora, medido: {} })
+          continue
+        }
+        // Las tablas del store que este Conector sirve, según los PIs descubiertos. Su LÍMITE, dicho:
+        // el policy store se indexa por `schema.tabla` sin ref, así que el vínculo tabla↔Conector se
+        // deriva de los PIs — una tabla gobernada que ningún PI toca no entra en esta cuenta. No
+        // afloja el gate: (b) mide TODAS las tablas de la base contra `sys`, sin pasar por el store.
+        const tablasDelRef = [...new Set(reports.filter((r) => r.databaseRefs.includes(ref)).flatMap((r) => r.tables))]
+        try {
+          const sesion = await abrirSesionConsola(perfil, ref, consolaInjections)
+          try {
+            nuevo.set(ref, await verificarConectorConsola({ ejecutar: (q) => sesion.ejecutar(q), sondaReadOnly: () => sesion.sondaReadOnly(), store, tablasDelRef, ref }))
+          } finally {
+            await sesion.cerrar()
+          }
+        } catch (e) {
+          nuevo.set(ref, { ofrecible: false, motivo: `no se pudo verificar bajo el principal de consola: ${e instanceof Error ? e.message : String(e)}`, verificadoEn: ahora, medido: {} })
+        }
+      }
+      consolaState.clear()
+      for (const [ref, v] of nuevo) consolaState.set(ref, v)
+      const ofrecibles = [...nuevo.values()].filter((v) => v.ofrecible).length
+      console.log(`[consola] ${ofrecibles}/${nuevo.size} Conector(es) ofrecible(s) en la Consola SQL.`)
+      for (const [ref, v] of nuevo) if (!v.ofrecible) console.warn(`[consola] '${ref}' NO ofrecible: ${v.motivo}`)
+    }
     lastErr = degraded.length ? `${degraded.length} de ${state.size} PI no servibles` : null
     // Lanzar mantiene el RETRY con backoff del arranque (self-healing: al aplicar el artefacto o
     // revivir la conexión, la próxima pasada re-sirve sola). El estado por-PI YA quedó swapeado.
@@ -894,6 +970,11 @@ let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
 // Miranda (cluster 077): null salvo que MIRANDA_ENABLED esté encendido (se construye más abajo).
 let miranda: MirandaHandler | null = null
+// Consola SQL (#306): null salvo que VERGIS_CONSOLA_ENABLED esté encendido (se construye más abajo).
+let consola: ConsolaHandler | null = null
+let consolaLog: ConsolaLog | null = null
+/** Veredicto del gate por Conector — swap tras evaluar TODO, igual que `piState`. */
+const consolaState = new Map<string, ConsolaConectorEstado>()
 let piAclEnabled = false
 // Dueños semilla de PI: REGISTRO VIVO (issue #138·2). `const` + swap in-place — quien lo consulta lo
 // hace por clave a call-time (bootstrap de un PI sin gobierno), así que mutarlo recarga sin re-cablear.
@@ -1150,6 +1231,10 @@ const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCod
 const hasMirandaFor = (emailLc: string, isAdmin: boolean): Promise<boolean> =>
   mirandaMenuScope(config.miranda, governance, emailLc, isAdmin)
 
+// Idem para la Consola SQL (#306): UNA definición del scope de menú, por la misma razón de #307.
+const hasConsolaFor = (emailLc: string, isAdmin: boolean): Promise<boolean> =>
+  consolaMenuScope(config.consola, governance, emailLc, isAdmin)
+
 // Operaciones per-request que el router (`routes.ts`) inyecta. Viven acá porque cierran sobre el
 // estado del server (governance/piAclEnabled/domainsCfg/…), leído a request-time. Lógica verbatim.
 const indexReports = async (all: Report[], identity: IdentityContext): Promise<Report[]> => {
@@ -1174,7 +1259,8 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
   }
   // Entrada «Miranda» en el menú: solo si el flag está ON y la identidad tiene el scope (admin o grupo).
   const hasMiranda = await hasMirandaFor(emailLc, isAdmin)
-  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+  const hasConsola = await hasConsolaFor(emailLc, isAdmin)
+  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, hasConsola, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
   const govByCode: GovByCode = new Map()
   if (governance) {
     const groups = await governance.listGroups()
@@ -1234,7 +1320,8 @@ const server = createServer(
         // `hasMirandaFor` es LA definición compartida del scope (#307): un marco que arma su menú
         // con su propio cálculo es exactamente la causa raíz que ese issue cerró.
         const hasMiranda = await hasMirandaFor(email, isAdmin)
-        return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+        const hasConsola = await hasConsolaFor(email, isAdmin)
+        return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, hasConsola, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
       },
       brand: INDEX_TITLE,
     }),
@@ -1254,6 +1341,7 @@ const server = createServer(
           }
         : null,
     getMiranda: () => miranda,
+    getConsola: () => consola,
     getNotas: () => notasHandler,
     discover,
     identityFor,
@@ -2137,6 +2225,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       // …y por lo mismo el scope de Miranda (#307): el ítem es del marco, así que `/admin` lo resuelve
       // con la MISMA función que el catálogo, por identidad y a render-time.
       hasMiranda: hasMirandaFor,
+      hasConsola: hasConsolaFor,
       piCount: discover().length,
       // Tile «Cargas» del dashboard (#161·§6.1): resumen del vigilante desde la PROYECCIÓN — el
       // request path no lista OneLake. Sin vigilante cableado no se ofrece: un tile que diga «0 en
@@ -2536,6 +2625,87 @@ if (config.miranda.enabled) {
   }
 } else if (config.miranda.disabledReason) {
   miranda = degradeMiranda(config.miranda.disabledReason, 'configuración')
+}
+
+// ── CONSOLA SQL (#306) — superficie de Ingeniería sobre los Conectores registrados ────────────────
+// TODO detrás de `VERGIS_CONSOLA_ENABLED`: apagada, `consola` queda null → `/consola*` cae al 404 de
+// siempre, no hay entrada de menú y `/contrato` solo dice `{enabled:false}`. Solo `engine=fabric`:
+// en ClickHouse los claims viajan como settings de request por query-param, y una `SELECT … SETTINGS
+// vergis_claim_x='…'` del usuario compite por EL MISMO canal que el del nodo — el canal exclusivo
+// existe (usuario por ingeniero con claim `READONLY` de perfil, medido), pero llegar a él es
+// rediseñar el transporte, no encender un flag. Queda fuera por ALCANCE, no por límite del motor.
+if (config.consola.enabled) {
+  if (ENGINE !== 'fabric') {
+    console.warn(`[consola] Consola SQL pedida y APAGADA: el motor '${ENGINE}' no está cubierto en v1 (solo fabric).`)
+    contract.caveat(`Consola SQL pedida (VERGIS_CONSOLA_ENABLED) y APAGADA: motor '${ENGINE}' fuera de alcance en v1 (solo fabric).`)
+  } else if (!connections) {
+    console.warn('[consola] Consola SQL pedida y APAGADA: no hay VERGIS_CONNECTIONS.')
+  } else {
+    const perfiles = connections
+    const govParaConsola = governance
+    consolaLog = createConsolaLog(`${OUT}/consola-audit.log`)
+    const cap = createConsolaSql(perfiles, {
+      injections: consolaInjections,
+      maxRows: config.consola.maxRows,
+      timeoutMs: config.consola.timeoutMs,
+    })
+    // Caché de esquema por ref (60 s): el árbol de la bandeja se pide en cada carga de la página y
+    // la consulta es estable. Se lee BAJO EL PRINCIPAL DE CONSOLA para que el árbol muestre lo que
+    // ESE principal ve, no lo que ve el de serving — un árbol más generoso que la ejecución sería
+    // una promesa que la ejecución no cumple.
+    const cacheEsquema = new Map<string, { at: number; tablas: { tabla: string; columnas: { nombre: string; tipo: string }[] }[] }>()
+    const ESQUEMA_TTL_MS = 60_000
+    consola = createConsola({
+      config: config.consola,
+      identityOf: (h) => identityFor(h as GateHeaders),
+      hasScope: async (email) => (govParaConsola ? (await govParaConsola.isAdmin(email)) || (await govParaConsola.isMember(config.consola.scopeGroup, email)) : false),
+      isAdmin: async (email) => (govParaConsola ? govParaConsola.isAdmin(email) : false),
+      secret: CSRF_SECRET,
+      estado: () => consolaState,
+      databaseDe: (ref) => perfiles[ref]?.database,
+      ejecutar: (input, identity, signal) => cap.execute(input, identity, signal),
+      esquema: async (ref) => {
+        const hit = cacheEsquema.get(ref)
+        if (hit && Date.now() - hit.at < ESQUEMA_TTL_MS) return hit.tablas
+        const perfil = perfiles[ref]
+        if (!perfil) return []
+        const sesion = await abrirSesionConsola(perfil, ref, consolaInjections)
+        try {
+          const filas = await sesion.ejecutar(
+            `SELECT TABLE_SCHEMA AS sch, TABLE_NAME AS tbl, COLUMN_NAME AS col, DATA_TYPE AS tipo ` +
+              `FROM INFORMATION_SCHEMA.COLUMNS ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`,
+          )
+          const porTabla = new Map<string, { nombre: string; tipo: string }[]>()
+          for (const f of filas) {
+            const clave = `${String(f['sch'])}.${String(f['tbl'])}`
+            const cols = porTabla.get(clave) ?? []
+            cols.push({ nombre: String(f['col']), tipo: String(f['tipo']) })
+            porTabla.set(clave, cols)
+          }
+          const tablas = [...porTabla.entries()].map(([tabla, columnas]) => ({ tabla, columnas }))
+          cacheEsquema.set(ref, { at: Date.now(), tablas })
+          return tablas
+        } finally {
+          await sesion.cerrar()
+        }
+      },
+      log: consolaLog,
+      brandTitle: INDEX_TITLE,
+      avatar: async (email) => {
+        const isAdmin = govParaConsola ? await govParaConsola.isAdmin(email) : false
+        return avatarMenu({
+          email,
+          isAdmin,
+          hasDomains: isAdmin,
+          hasMiranda: await hasMirandaFor(email, isAdmin),
+          hasConsola: true, // ya pasó el scope para llegar acá
+          sections: INSTANCE_CFG.menuSections,
+          signoutRd: SIGNOUT_RD || '/',
+        })
+      },
+    })
+    console.log(`[consola] Consola SQL activa · grupo '${config.consola.scopeGroup}' · ${config.consola.maxRows} filas · ${config.consola.maxConcurrentes} consulta(s) a la vez`)
+  }
 }
 
 // ── Mapa identidad→claims: MIGRACIÓN archivo → store, y el store como fuente (issue #159, hito 2) ──
