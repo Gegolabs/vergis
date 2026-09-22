@@ -61,7 +61,7 @@ salió bien».
 | **(b·permiso)** La segunda forma de cobertura | `HAS_PERMS_BY_NAME('<sch>.<tbl>','OBJECT','SELECT')` **bajo el principal de consola**, en **una sola consulta** y solo si hay tablas sin política. `NULL` o consulta que falla ⇒ **no cubre** | No se ofrece, con «no se pudo medir el permiso» |
 | **(b·guarda)** El principal que sondea PUEDE ver el gobierno | Con tablas base y **cero** políticas visibles: `HAS_PERMS_BY_NAME` (`VIEW DEFINITION` de base · `VIEW ANY DEFINITION` de servidor). Ver al menos una política ya es prueba positiva y la guarda no se paga | No se ofrece, pero por **«no se pudo medir el gobierno»** — motivo distinto de «hay tablas sin política», porque la remediación es opuesta: conceder visibilidad de metadatos, no declarar políticas |
 | **(c)** El principal no puede desenmascarar | Centinela `vergis_unmask_probe` leído bajo el principal de consola | No se ofrece |
-| **(d)** El motor honra `@read_only` | Sonda con la clave REAL, en el MISMO batch que un `SELECT`, con control positivo | No se ofrece |
+| **(d)** El motor honra `@read_only` | Sonda con la clave REAL, en el MISMO batch que un `SELECT`, con control positivo. Se emite por `query()` —`sp_executesql`, que liga los parámetros—, **nunca por `batch()`**: `batch()` no liga nada y el prelude muere con el **15600** antes de medir (#344) | No se ofrece. Si el control falla, el veredicto es `indeterminado` y **el motivo cita el error del motor** (`medido.readOnlyError`) |
 
 `GET /contrato` publica el veredicto y el motivo **por Conector**, para que el operador no tenga que
 adivinar ni leer los logs del contenedor.
