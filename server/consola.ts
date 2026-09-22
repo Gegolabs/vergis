@@ -255,11 +255,18 @@ export function createConsola(deps: ConsolaDeps): ConsolaHandler {
         const ref = decodeURIComponent(mEsq[1]!)
         // Un ref existente pero NO ofrecible responde igual que uno inexistente: quien no puede
         // usarlo tampoco tiene por qué saber que existe.
-        if (!deps.estado().get(ref)?.ofrecible) {
+        const est = deps.estado().get(ref)
+        if (!est?.ofrecible) {
           json(res, 404, { error: 'Conector no disponible.' })
           return true
         }
-        json(res, 200, { tablas: await deps.esquema(ref) })
+        // Las tablas que el Conector cubre por `DENY SELECT` —no por política— NO se listan: el
+        // principal de consola no puede leerlas, y ofrecer en el árbol lo que la ejecución va a
+        // rechazar es una promesa que la ejecución no cumple. El filtro sale del ESTADO DEL GATE
+        // (lo medido), no de lo que el metadato quiera mostrar.
+        const excluidas = new Set(est.medido.tablasExcluidasPorPermiso ?? [])
+        const tablas = (await deps.esquema(ref)).filter((t) => !excluidas.has(t.tabla))
+        json(res, 200, { tablas })
         return true
       }
       if (path === '/consola/ejecutar' && req.method === 'POST') {

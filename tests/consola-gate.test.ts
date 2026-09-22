@@ -12,6 +12,7 @@ import {
   SYS_TABLES_SQL,
   SYS_SECURITY_POLICIES_SQL,
   SYS_POLICY_VISIBILITY_SQL,
+  consolaSelectPermisoSQL,
   UNMASK_PROBE_SCHEMAS_SQL,
   UNMASK_PROBE_EXPECTED,
 } from '../server/engines/fabric'
@@ -33,6 +34,14 @@ interface Terreno {
    * `sys.tables` con normalidad y lee CERO filas de la vista de políticas aunque existan.
    */
   sonda?: 'vidente' | 'ciega' | 'muda' | 'falla'
+  /**
+   * Tablas sobre las que el principal de CONSOLA no tiene `SELECT` — la firma de un
+   * `DENY SELECT ON <tabla> TO [<principal de consola>]` (#342). Se modela donde de verdad vive: en
+   * lo que `HAS_PERMS_BY_NAME` contesta BAJO ESE PRINCIPAL, no en el gate.
+   */
+  sinSelect?: string[]
+  /** Qué hace la sonda de permiso: por defecto contesta; `'muda'` devuelve `NULL`; `'falla'` lanza. */
+  sondaPermiso?: 'contesta' | 'muda' | 'falla'
 }
 const ejecutorDe = (t: Terreno) => async (q: string): Promise<Record<string, unknown>[]> => {
   if (t.fallaEn?.test(q)) throw new Error('credencial vencida')
@@ -44,6 +53,18 @@ const ejecutorDe = (t: Terreno) => async (q: string): Promise<Record<string, unk
       return t.sonda === 'muda' ? [{ viewdef: null, viewany: null }] : [{ viewdef: 0, viewany: 0 }]
     }
     if (q === SYS_SECURITY_POLICIES_SQL) return []
+  }
+  if (q.includes('HAS_PERMS_BY_NAME') && q.includes('OBJECT')) {
+    if ((t.sondaPermiso ?? 'contesta') === 'falla') throw new Error('credencial vencida')
+    // Las tablas sondeadas se recuperan del propio SQL: así el fake no puede contestar por tablas
+    // que el gate no preguntó, que es justo el modo de falla que haría verde un instrumento ciego.
+    const pares = [...q.matchAll(/\(N'([^']*)', N'([^']*)'\)/g)].map((m) => `${m[1]}.${m[2]}`)
+    const mudo = (t.sondaPermiso ?? 'contesta') === 'muda'
+    return pares.map((x) => ({
+      sch: x.split('.')[0],
+      tbl: x.slice(x.indexOf('.') + 1),
+      sel: mudo ? null : (t.sinSelect ?? []).includes(x) ? 0 : 1,
+    }))
   }
   if (q === FN_MY_PERMISSIONS_SQL) return (t.permisos ?? ['CONNECT', 'SELECT']).map((p) => ({ permission_name: p }))
   if (q === SYS_TABLES_SQL) return (t.tablas ?? ['dbo.areas']).map((x) => ({ sch: x.split('.')[0], tbl: x.split('.')[1] }))
@@ -202,6 +223,108 @@ describe('gate de la Consola · (b·guarda) la ceguera NO es ausencia de gobiern
     expect(r.ofrecible).toBe(true)
     expect(terreno).toEqual([SYS_TABLES_SQL, SYS_SECURITY_POLICIES_SQL]) // la propiedad del TERRENO
     expect(consola).toEqual([FN_MY_PERMISSIONS_SQL]) // lo que sí es del principal de consola
+  })
+})
+
+/**
+ * #342 · **la segunda forma de cobertura de (b)**: una tabla base está cubierta si tiene
+ * `SECURITY POLICY` **o** si el principal de consola no puede leerla. Lo que no se puede leer no
+ * puede filtrar, y para las tablas que el PIPELINE lee y la Consola no debe ver (`_migrations`,
+ * `_bak_*`, `raw_*`) es la única vía sana: una política de fila `deny` aplicaría a TODOS los
+ * principales y dejaría al runner de migraciones viendo cero filas.
+ *
+ * **La corrida discriminante es la primera**, y sin el cambio falla: el Conector se rechazaba.
+ */
+describe('gate de la Consola · (b·permiso) lo que no se puede leer no puede filtrar (#342)', () => {
+  it('LA DISCRIMINANTE · tabla sin política y SIN `SELECT` para la consola ⇒ ofrecible, y el motivo lo dice', async () => {
+    const r = await correr(
+      { tablas: ['dbo.areas', 'dbo._migrations'], protegidas: ['dbo.areas'], sinSelect: ['dbo._migrations'] },
+      SOLO_FILA,
+    )
+    expect(r.ofrecible).toBe(true)
+    expect(r.motivo).toContain('1 excluida(s) por permiso')
+    expect(r.motivo).toContain('dbo._migrations')
+    expect(r.medido.tablasConPolitica).toBe(1)
+    expect(r.medido.tablasExcluidasPorPermiso).toEqual(['dbo._migrations'])
+    expect(r.medido.tablasSinCobertura).toEqual([])
+  })
+  it('EL CONTRASTE · la misma tabla sin política pero CON `SELECT` ⇒ sigue bloqueando, con su motivo', async () => {
+    const r = await correr({ tablas: ['dbo.areas', 'dbo._migrations'], protegidas: ['dbo.areas'] }, SOLO_FILA)
+    expect(r.ofrecible).toBe(false)
+    expect(r.motivo).toContain('sin SECURITY POLICY')
+    expect(r.motivo).toContain('dbo._migrations')
+    expect(r.medido.tablasSinCobertura).toEqual(['dbo._migrations'])
+    expect(r.medido.tablasExcluidasPorPermiso).toEqual([])
+  })
+  it('las tres poblaciones se distinguen en el motivo, y solo K bloquea', async () => {
+    const r = await correr(
+      { tablas: ['dbo.areas', 'dbo._migrations', 'dbo.stg_oc'], protegidas: ['dbo.areas'], sinSelect: ['dbo._migrations'] },
+      SOLO_FILA,
+    )
+    expect(r.ofrecible).toBe(false)
+    expect(r.motivo).toContain('1 con política')
+    expect(r.motivo).toContain('1 excluida(s) por permiso')
+    expect(r.motivo).toContain('1 sin cobertura')
+    expect(r.medido.tablasSinCobertura).toEqual(['dbo.stg_oc'])
+  })
+  it('la sonda que devuelve `NULL` NO cubre: cuenta en K y el motivo confiesa que no se midió', async () => {
+    const r = await correr(
+      { tablas: ['dbo.areas', 'dbo._migrations'], protegidas: ['dbo.areas'], sondaPermiso: 'muda' },
+      SOLO_FILA,
+    )
+    expect(r.ofrecible).toBe(false)
+    expect(r.motivo).toContain('No se pudo medir el permiso')
+    expect(r.medido.tablasPermisoNoMedido).toEqual(['dbo._migrations'])
+    expect(r.medido.tablasExcluidasPorPermiso).toEqual([])
+  })
+  it('la sonda que LANZA tampoco absuelve a nadie: todas quedan sin medir, y ninguna cubierta', async () => {
+    const r = await correr(
+      { tablas: ['dbo.areas', 'dbo._migrations'], protegidas: ['dbo.areas'], sondaPermiso: 'falla' },
+      SOLO_FILA,
+    )
+    expect(r.ofrecible).toBe(false)
+    expect(r.motivo).toContain('No se pudo medir el permiso')
+    expect(r.motivo).toContain('credencial vencida')
+    expect(r.medido.tablasSinCobertura).toEqual(['dbo._migrations'])
+  })
+  it('terreno completo por política ⇒ ofrecible SIN motivo y SIN pagar el RTT de la sonda', async () => {
+    const consulta: string[] = []
+    const r = await verificarConectorConsola({
+      ejecutar: async (q) => {
+        consulta.push(q)
+        return ejecutorDe({})(q)
+      },
+      ejecutarTerreno: ejecutorTerrenoDe({}),
+      sondaReadOnly: async () => 'honra',
+      store: SOLO_FILA,
+      tablasDelRef: ['dbo.areas'],
+      ref: 'fin',
+    })
+    expect(r.ofrecible).toBe(true)
+    expect(r.motivo).toBeUndefined()
+    expect(consulta.some((q) => q.includes('HAS_PERMS_BY_NAME'))).toBe(false)
+    expect(r.medido.tablasExcluidasPorPermiso).toEqual([])
+  })
+  it('la sonda cuesta UN RTT por Conector, no uno por tabla', async () => {
+    const consulta: string[] = []
+    const r = await verificarConectorConsola({
+      ejecutar: async (q) => {
+        consulta.push(q)
+        return ejecutorDe({ tablas: ['a.t1', 'a.t2', 'a.t3'], protegidas: [], sinSelect: ['a.t1', 'a.t2', 'a.t3'] })(q)
+      },
+      ejecutarTerreno: ejecutorTerrenoDe({ tablas: ['a.t1', 'a.t2', 'a.t3'], protegidas: [], sonda: 'vidente' }),
+      sondaReadOnly: async () => 'honra',
+      store: SOLO_FILA,
+      tablasDelRef: ['dbo.areas'],
+      ref: 'fin',
+    })
+    expect(r.ofrecible).toBe(true)
+    expect(consulta.filter((q) => q.includes('HAS_PERMS_BY_NAME')).length).toBe(1)
+  })
+  it('el SQL de la sonda escapa la comilla del nombre (una tabla no reescribe la consulta)', () => {
+    const sqlText = consolaSelectPermisoSQL([`dbo.o'hara`])
+    expect(sqlText).toContain(`N'o''hara'`)
+    expect(sqlText.match(/\(N'/g)?.length).toBe(1)
   })
 })
 
