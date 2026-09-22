@@ -117,6 +117,19 @@ services:
       VERGIS_DEFAULT_COLLABORATOR_GROUPS: <grupo> # colaborador por default de todos los PIs (opcional)
       VERGIS_SIGNOUT_RD: <url-logout-idp>         # logout completo del IdP (opcional; vacío = interno)
       VERGIS_MENU: /menu.yaml                     # secciones que la instancia agrega al menú del avatar (opcional)
+
+      # --- DATADOC: el nodo genera el catálogo del esquema de datos (CAP-197) ----------------------
+      # OPT-IN. Sin VERGIS_DATADOC la superficie del nodo es exactamente la de antes: ninguna ruta
+      # nueva, ningún lazo, ninguna sección en /admin ni en /contrato. Exige VERGIS_ENGINE=fabric (con
+      # otro motor el arranque falla nombrando las dos: la introspección es INFORMATION_SCHEMA + sys.*).
+      # El sitio se sirve en /datadoc/ bajo la misma autorización del catálogo, y se genera desde
+      # Administración › Datadoc (o por schedule, que se configura ahí mismo).
+      # VERGIS_DATADOC: "1"
+      # VERGIS_WRITERS: /writers.yaml             # quién escribe cada tabla (ver examples/instance/writers.yaml)
+      # VERGIS_SEMANTICA: /semantica.yaml         # qué significa cada cosa (ver examples/instance/semantica.yaml)
+      #   Los dos son recargables en caliente: editar el YAML y regenerar basta, sin recrear el proceso.
+      #   Las conexiones se agrupan por dominio con `connections:` en domains.yaml (opcional; sin él,
+      #   cada conexión se presenta como dominio técnico rotulado por su database_ref).
       # VERGIS_PI_ACL: "1"                        # activa la ACL de artefacto de PIs (default off)
       # VERGIS_CONFIG_CHECK: strict               # strict (default) | warn | off
 

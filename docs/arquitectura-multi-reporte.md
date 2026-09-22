@@ -203,8 +203,126 @@ arrancar** y **no se omite**: suele ser un bind-mount que aparece después, así
 declarada, el arranque emite su aviso, el contrato la marca `exists:false` y servir desde ella responde
 404 hasta que el directorio aparezca.
 
-**Qué NO hace:** no **genera** contenido (el generador del catálogo de esquema es otro alcance), no
-autoriza por grupo y no cachea.
+**Qué NO hace:** no **genera** contenido —eso es `CAP-197`, abajo—, no autoriza por grupo y no cachea.
+
+### El nodo genera el catálogo del esquema: el Datadoc (`VERGIS_DATADOC`, `CAP-197`)
+
+Un consumidor que se conecta a un Datahouse necesita saber qué hay, qué significa, de dónde viene y
+cada cuánto cambia. Ese catálogo **se genera, no se escribe**: uno escrito a mano se pudre en semanas,
+y la medición que lo demuestra ya se pagó una vez (seis contradicciones entre los registros de una
+instancia y su catálogo vivo).
+
+**Opt-in.** Sin `VERGIS_DATADOC`, la superficie del nodo es exactamente la de antes de la capacidad:
+ninguna ruta, ningún lazo, ninguna sección de administración ni de contrato. Con la env y un motor que
+no es `fabric`, el arranque **falla nombrando las dos**: la introspección es `INFORMATION_SCHEMA` +
+`sys.*` de un SQL endpoint, y degradar en silencio dejaría un botón incapaz de funcionar.
+
+#### ¿De qué se hace?
+
+| Insumo | De quién es | Qué aporta |
+|--|--|--|
+| Catálogo vivo de cada conexión | Medido por el nodo | Qué existe, su forma, su gobierno, el linaje vista→base (de `sys`, no de un regex) |
+| Specs de los PI | Ya lo tiene el nodo (`discover()`) | Quién **lee** cada tabla — la misma extracción del gate de gobernanza |
+| Registro de fuentes (`VERGIS_SOURCES`) | Ya lo tiene el nodo | De dónde proviene la tabla y con qué cadencia |
+| **Registro de escritores** (`VERGIS_WRITERS`) | Declara la instancia | Quién **escribe** cada tabla, con qué disparo. No hay forma de medirlo |
+| **Diccionario semántico** (`VERGIS_SEMANTICA`) | Declara la instancia | Qué **significa** cada tabla y cada columna. El catálogo SQL no lo trae |
+
+Los dos YAML nuevos entran en `RELOADABLE_SLICES` por la misma puerta que el menú y los estáticos:
+editar el archivo y regenerar produce el catálogo nuevo **sin recrear el proceso**. Sus ejemplos
+completos están en `examples/instance/`.
+
+**La unidad de medición es la conexión, no el dominio.** El dominio es una **etiqueta declarada** que
+agrupa conexiones (`domains[].connections`, ver [`gestion-de-dominio.md`](gestion-de-dominio.md)); sin
+ella el catálogo sale igual, con cada conexión como **dominio técnico** rotulado por su
+`database_ref`. Nada se infiere por parecido de nombre.
+
+#### ¿Qué pasa cuando falta algo? (nunca se inventa)
+
+Sin escritores, «escritor no declarado». Sin diccionario, «sin descripción». Una conexión que hoy no
+respondió **conserva su medición anterior** y el sitio la marca «NO medida en esta corrida», con la
+fecha vieja y el motivo, en la portada, en su dominio y en cada una de sus entidades — desaparecerla
+afirmaría que no existe, que es más fuerte y más falso que «hoy no la pude mirar». Una conexión
+declarada y jamás medida aparece igual en el sello. Un sub-error (`sys.security_policies` denegada al
+Service Principal) **no invalida la conexión**: se declara, y todas sus tablas quedan con gobierno
+`indeterminada`.
+
+**La clasificación de una entidad sale de hechos medidos**: `publicado` = es una vista · `interno` =
+tiene lector, escritor vigente o política · `deuda` = nada de lo anterior. Las convenciones de nombre
+de una instancia (`_bak_*`, `raw_*`, prefijos de plataforma) **no entran al motor** —son su alfabeto,
+no el del Producto— y se expresan con `clase:` por entidad en el diccionario semántico.
+
+#### Los conteos de filas: solo donde la RLS no filtra
+
+Un catálogo describe el esquema, no sirve datos — pero un `COUNT(*)` sobre una tabla gobernada **es**
+información que la autorización por fila protege: cuántos registros hay del área que no me
+corresponde. La regla:
+
+| Gobierno medido de la tabla | ¿Se pide el `COUNT_BIG`? | Qué muestra la página |
+|--|--|--|
+| Sin política | Sí | El número |
+| Política con predicado **allow-all** (forma exacta) | Sí | El número |
+| Política con predicado **que filtra** | **No** | «no medidas (tabla gobernada por RLS con filtro)» |
+| Política con función **no localizada** | **No** | «no medidas (gobierno indeterminado: no se pregunta)» |
+
+La protección es **no preguntar**, no «confiar en que la respuesta venga filtrada»: si el Service
+Principal del nodo estuviera exento del predicado —algo **no verificado** en Fabric—, la respuesta
+llegaría completa. Que el generador mida con una identidad **sin claims** es defensa en profundidad,
+no la regla. El operador puede además apagarlos del todo desde `/admin/datadoc`.
+
+⚠ **La clasificación es por la forma COMPLETA de la definición, jamás por substring.** Está medido
+contra el compilador de políticas: el literal `SELECT 1 AS vergis_allowed` se emite en **las dos**
+ramas —la allow-all, sin `WHERE`, y la filtrada, con él—, así que un substring marcaría toda tabla con
+RLS real como abierta y publicaría su conteo.
+
+**Y un build rancio tampoco los publica.** El Producto **no aplica** las políticas; las aplica la
+instancia, cuando quiere. O sea que una tabla puede pasar de abierta a gobernada sin que el nodo se
+entere, y el build cacheado seguiría publicando un número que dejó de ser legítimo. Por eso la recarga
+de gobierno marca el catálogo como **rancio** y lo vuelve a dibujar **sin conteos**, desde los modelos
+ya medidos y sin tocar la red; la página lo declara y la marca se retira con la próxima generación.
+Sin este eslabón, el default sería una ventana que se abre sola.
+
+#### Read-only, y la protección es del generador
+
+El conector del nodo **no tiene** guard de solo lectura. El generador pone el suyo: cada consulta pasa
+por `guardSoloLectura` antes de tocar la red (solo `SELECT`/`WITH`, una sentencia, lista cerrada de
+verbos prohibidos tras pelar comentarios y literales), todas las consultas son literales del módulo
+—guardadas al **cargarlo**, así que un verbo introducido por una edición futura tumba el import y no
+una corrida de producción— y el único identificador interpolado se valida por parte.
+
+**Los esquemas entran por LISTA BLANCA** (`dbo` por defecto), no por lista negra. Medido: un warehouse
+de Fabric puede traer un esquema `queryinsights` con el historial de consultas de todos los usuarios,
+que un `NOT IN ('sys','INFORMATION_SCHEMA')` deja pasar y el catálogo publicaría como entidades; y el
+conjunto de esquemas de plataforma que puede aparecer no se conoce de antemano.
+
+#### ¿Cómo se sirve y cómo se dispara?
+
+El sitio se sirve en **`/datadoc/`** por el **mismo** `resolveStatic` de `CAP-195`: misma contención de
+ruta, misma lista blanca de tipos, `nosniff`, lectura por request y la misma autorización (la del
+catálogo). Es una **colección propia del nodo** y no una entrada de `VERGIS_STATIC` porque el
+directorio de salida es estado del Producto bajo `VERGIS_OUT`: si lo declarara la instancia, tendría
+que conocer el layout interno del nodo y se rompería el día que ese layout cambie, sin que el Producto
+pueda avisar. Mientras la capacidad está encendida, el prefijo `datadoc` queda **reservado** y una
+colección de instancia con ese nombre se omite con aviso. Sin un solo build, la ruta responde una
+página del nodo que dice **«aún no generado»** y apunta a Administración — un 404 pelado diría «esto no
+existe», que es otra cosa.
+
+La caché vive en `$VERGIS_OUT/datadoc/`: `modelo/<ref>.json` por conexión (por eso regenerar una no
+obliga a re-medir las demás), `sello.json`, builds `build-<ts>/` inmutables y `current` como symlink
+relativo que se mueve con `rename(2)`. Se conservan los dos últimos builds; la poda nunca toca nada
+fuera de `build-*` ni el que `current` está sirviendo.
+
+Se dispara desde **`/admin/datadoc`** (estado, «Generar» todo o una conexión, schedule y política de
+conteos), con CSRF y auditoría, **una sola corrida en vuelo**, y opcionalmente por el lazo `datadoc`
+(chequeo cada 5 min; la cadencia real la fija el operador). La generación escribe en `VERGIS_OUT`, que
+es sustrato **compartido** entre los nodos de un anillo: **la corre el que tiene el plano de control y
+nadie más** — el router rechaza con 409 toda mutación en standby, y el orquestador lo re-verifica
+porque el lazo no pasa por el router. `GET /contrato` publica el build vigente, el sello por conexión,
+el schedule y la marca de rancio.
+
+**Qué NO hace:** no cambia `resolveStatic` ni las reglas de `CAP-195`; no cachea el sitio en memoria;
+no agrega la entrada al menú del avatar (eso lo declara la instancia con `VERGIS_MENU`); y no admite
+HTML en el diccionario semántico — todo se escapa y solo se admite el acento grave, porque un YAML de
+instancia no es un canal para inyectar marcado en una página que el nodo sirve bajo su propio gate.
 
 **Servicios transversales**: el audit log append-only (`$VERGIS_OUT/admin-audit.log`), la capa de
 notas (store propio `VERGIS_NOTES_DB`, no-fatal), el branding del catálogo (`VERGIS_INDEX_TITLE` /

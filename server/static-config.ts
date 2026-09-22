@@ -146,6 +146,38 @@ export function omitirPorLets(
 }
 
 /**
+ * Quita las colecciones cuyo prefijo choca con una ruta que **el nodo sirve por sí mismo** cuando una
+ * capacidad opt-in está encendida, y devuelve el aviso que la nombra.
+ *
+ * Va aparte de `RUTAS_DEL_NODO` —que es una constante del parser PURO, y el parser no conoce las
+ * envs— por el mismo motivo por el que `omitirPorLets` va aparte: el veredicto depende del instante,
+ * no del archivo. Con la capacidad apagada el conjunto llega vacío y esta función es la identidad:
+ * la superficie de una instancia que no la enciende es byte a byte la de antes.
+ *
+ * Gana el NODO, y no es la misma decisión que con un Let: con un Let gana el dato gobernado; acá gana
+ * porque la ruta la sirve el propio nodo con contenido que él produce, y una colección de instancia
+ * encima la taparía con algo que nadie coordinó.
+ */
+export function omitirPorNodo(
+  collections: readonly StaticCollection[],
+  prefijosDelNodo: ReadonlySet<string>,
+): { collections: StaticCollection[]; warnings: string[] } {
+  if (!prefijosDelNodo.size) return { collections: [...collections], warnings: [] }
+  const out: StaticCollection[] = []
+  const warnings: string[] = []
+  for (const c of collections) {
+    if (prefijosDelNodo.has(c.path)) {
+      warnings.push(
+        `colección '${c.path}' omitida: choca con la ruta '/${c.path}' que el nodo sirve por sí mismo — el contenido del nodo gana.`,
+      )
+      continue
+    }
+    out.push(c)
+  }
+  return { collections: out, warnings }
+}
+
+/**
  * El veredicto de DISCO de ahora mismo para cada colección. Única lectura de disco del módulo, y va
  * separada del parser para que éste siga siendo puro (el arranque y la recarga no pueden diferir).
  * Un `dir` ilegible NO es una excepción: es un `readable:false` que el contrato publica.

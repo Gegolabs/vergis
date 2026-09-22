@@ -62,6 +62,37 @@ mantener un registro central que driftee:
 - Un `domains.yaml` de instancia aporta solo lo que no se infiere: **etiqueta legible** + **stewards**
   (quién lo gestiona). El dominio es un objeto real para **autorizar y agrupar**.
 
+### ¿En qué Datahouses se realiza el dominio? (`connections`, `CAP-197`)
+
+Campo **opcional** de `domains.yaml` que nombra las conexiones (`database_ref` de
+`VERGIS_CONNECTIONS`) en que el dominio se realiza:
+
+```yaml
+domains:
+  - id: finanzas
+    label: Cartera / Finanzas
+    connections: [finanzas, cartera]   # los Datahouses de este dominio
+```
+
+Lo consume el **Datadoc** (`CAP-197`), que mide **por conexión** y necesita saber bajo qué etiqueta
+agruparlas. Vive acá y no en el registro de escritores porque «el dominio X se realiza en los
+Datahouses Y» es un hecho **del dominio**: un dominio sin un solo escritor declarado tiene que poder
+decir cuáles son sus conexiones igual.
+
+Dos reglas:
+
+- **Una conexión pertenece a lo sumo a un dominio.** Dos dominios que la reclaman es un error del
+  archivo y es **fatal**, como un `id` duplicado: no hay respuesta correcta que elegir en silencio.
+  Repetirla dentro del **mismo** dominio es redundancia y se deduplica sin ruido.
+- **Sin el campo no se infiere nada.** Una conexión que ningún dominio reclama se presenta en el
+  catálogo como **dominio técnico**, rotulado por su propio `database_ref`. `wh_finanzas` ≈ `finanzas`
+  es una coincidencia de nombre, no un hecho, y adivinar ahí produciría un mapa falso que además
+  parece correcto.
+
+La **existencia** de la conexión no se valida al parsear (el parser es puro y no ve
+`VERGIS_CONNECTIONS`): una conexión reclamada que el nodo no conoce queda en los avisos de la corrida
+del generador, donde el operador la ve.
+
 ### Autorización
 - **`canManageDomain(dominio, email, isAdmin, grupos)` = admin O steward declarado.** Una entrada de
   `stewards:` **declara qué es**, no se adivina por la forma del texto:

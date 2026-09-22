@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# `VERGIS_WRITERS` — quién escribe cada tabla del terreno (CAP-197).
+#
+# El nodo puede MEDIR qué tablas existen, qué forma tienen y quién las LEE (las specs lo dicen). Lo
+# que no puede medir es quién las ESCRIBE: un job, un script a mano o un notebook dejan filas iguales.
+# Esta declaración es lo que permite que el Datadoc le diga a un consumidor de dónde viene el dato y
+# cada cuánto cambia — que es lo que necesita para decidir si puede construir encima.
+#
+# Lo no declarado sale como «escritor no declarado», con esas palabras. Nunca se inventa.
+#
+# Clave raíz `writers:` OBLIGATORIA (ausente ⇒ el arranque falla; para «no hay», `writers: []`).
+# Una entrada inválida se OMITE con aviso nombrado y el nodo levanta igual.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+writers:
+  - id: ingest-finanzas-saldos      # obligatorio, único (case-insensitive)
+    conexion: finanzas              # obligatorio: database_ref de VERGIS_CONNECTIONS donde escribe
+    tipo: sjd                       # obligatorio, texto corto: sjd · script-manual · producto · notebook…
+    estado: vigente                 # obligatorio: vigente | fallback | retirado
+    disparo: intake land-and-trigger (slot saldos_cartera)   # obligatorio, una línea
+    tablas:                         # obligatorio, ≥1, SIEMPRE `schema.tabla` (sin esquema no es cruzable)
+      - dbo.dim_socios
+      - dbo.fact_saldos
+    proceso: ingest_finanzas_saldos # opcional: id de `processes[]` de sources.yaml (enlaza a Frescura)
+    lee: [dbo.md_empresas__replica] # opcional, mismo formato
+    notas: reemplaza al legado      # opcional
+
+  - id: carga-manual-presupuesto
+    conexion: presupuesto
+    tipo: script-manual
+    estado: fallback
+    disparo: a mano, tras el cierre de mes
+    tablas: [dbo.fact_presupuesto]
