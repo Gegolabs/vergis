@@ -57,7 +57,8 @@ salió bien».
 | Condición | Cómo se mide | Si falla |
 |--|--|--|
 | **(a)** El principal no puede escribir | `sys.fn_my_permissions(NULL,'DATABASE')` contra lista blanca (`CONNECT`, `SELECT`, `SHOWPLAN` y la familia `VIEW …`, que es toda de metadatos) | No se ofrece, con el permiso ofensor nombrado |
-| **(b)** Toda tabla base tiene política nativa | `sys.tables` − `sys.security_policies` = ∅ (el centinela de #238 se excluye: es instrumento, no dato) | No se ofrece, nombrando las tablas |
+| **(b)** Toda tabla base tiene política nativa | `sys.tables` − `sys.security_policies` = ∅ (el centinela de #238 se excluye: es instrumento, no dato). **Se pregunta bajo el principal de SERVING**: es una propiedad del terreno, y `sys.security_policies` está filtrada por permiso — el de consola lee cero filas con el terreno entero gobernado (#340) | No se ofrece, nombrando las tablas |
+| **(b·guarda)** El principal que sondea PUEDE ver el gobierno | Con tablas base y **cero** políticas visibles: `HAS_PERMS_BY_NAME` (`VIEW DEFINITION` de base · `VIEW ANY DEFINITION` de servidor). Ver al menos una política ya es prueba positiva y la guarda no se paga | No se ofrece, pero por **«no se pudo medir el gobierno»** — motivo distinto de «hay tablas sin política», porque la remediación es opuesta: conceder visibilidad de metadatos, no declarar políticas |
 | **(c)** El principal no puede desenmascarar | Centinela `vergis_unmask_probe` leído bajo el principal de consola | No se ofrece |
 | **(d)** El motor honra `@read_only` | Sonda con la clave REAL, en el MISMO batch que un `SELECT`, con control positivo | No se ofrece |
 

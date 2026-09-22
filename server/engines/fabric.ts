@@ -591,6 +591,61 @@ export const SYS_TABLES_SQL =
   `SELECT s.name AS sch, t.name AS tbl FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id ` +
   `WHERE s.name NOT IN ('sys', 'INFORMATION_SCHEMA')`
 
+/**
+ * (b·guarda) ¿El principal que sondea PUEDE leer la definición de las políticas? (#340)
+ *
+ * `sys.security_policies` está **filtrada por permiso**: un principal sin visibilidad de metadatos
+ * lee CERO filas ahí mientras enumera `sys.tables` con normalidad — o sea que «no hay política» y
+ * «no puedo ver las políticas» salen por el mismo cable. Esta consulta corta el empate.
+ *
+ * **Medido** en el arnés T-SQL local (`npm run lab:up` + `scripts/tsql-lab-proof.ts`, sección C4c;
+ * primera corrida 2026-09-22 con tres principales sobre el MISMO terreno de una política habilitada):
+ *
+ * ```
+ * principal                       policies_visible  db:VIEW DEFINITION  srv:VIEW ANY DEFINITION
+ * sa (sysadmin)                          1                  1                    1
+ * solo SELECT                            0                  0                    0
+ * SELECT + GRANT VIEW DEFINITION         1                  1                    0
+ * ```
+ *
+ * Las dos legs se piden juntas porque ninguna sola alcanza: el que tiene `VIEW DEFINITION` de base
+ * no tiene el permiso de servidor, y un sysadmin puede no tener grant explícito de base. `DB_NAME()`
+ * acota la pregunta a la base conectada. **Lo que NO está medido**, y va dicho: que Fabric Warehouse
+ * conteste igual que SQL Server 2022 a `HAS_PERMS_BY_NAME` — es la misma familia T-SQL y el arnés
+ * mide la familia, no el SKU. Por eso el `NULL` (nombre de permiso que el motor no reconoce) NO se
+ * lee como «no puede»: cae en `unknown`, que **también** fail-closea, pero con el motivo que
+ * corresponde.
+ */
+export const SYS_POLICY_VISIBILITY_SQL =
+  `SELECT CAST(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION') AS int) AS viewdef, ` +
+  `CAST(HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW ANY DEFINITION') AS int) AS viewany`
+
+/**
+ * Qué se sabe de la capacidad del principal sondeador de VER el gobierno.
+ *
+ * Tres estados y ninguno se colapsa con otro (Norma 7, corolario de instrumentos): `visible` es una
+ * medición («puede leer la vista»); `blind` es la otra («NO puede»); `unknown` es la confesión de
+ * que el instrumento no contestó. `blind` y `unknown` llevan al MISMO veredicto —el Conector no se
+ * ofrece— pero **no al mismo motivo**, y el motivo es lo que el operador lee para ir a arreglar algo.
+ */
+export type GobiernoVisible = 'visible' | 'blind' | 'unknown'
+
+/** Lee la guarda. Cualquier forma que no sea un 1/0 reconocible cae en `unknown`: sin certeza no hay medición. */
+export function interpretarVisibilidadGobierno(rows: Record<string, unknown>[]): GobiernoVisible {
+  const row = rows[0]
+  if (!row) return 'unknown'
+  const leer = (k: string): 1 | 0 | null => {
+    const v = row[k]
+    if (v === 1 || v === true || v === '1') return 1
+    if (v === 0 || v === false || v === '0') return 0
+    return null
+  }
+  const legs = [leer('viewdef'), leer('viewany')]
+  if (legs.some((l) => l === 1)) return 'visible'
+  if (legs.every((l) => l === 0)) return 'blind'
+  return 'unknown'
+}
+
 /** Qué dijo la sonda de `@read_only` — y «no se pudo medir» es un estado propio, no un veredicto. */
 export type ReadOnlyHonrado = 'honra' | 'no-honra' | 'indeterminado'
 
@@ -605,6 +660,8 @@ export interface ConsolaConectorEstado {
     tablasSinPolitica?: string[]
     unmask?: UnmaskCapability
     readOnly?: ReadOnlyHonrado
+    /** ¿El principal que sondeó el terreno podía VER las políticas? (#340) */
+    gobiernoVisible?: GobiernoVisible
     /** ¿El policy store declara reglas de columna en tablas de este Conector? */
     columnRules?: boolean
   }
@@ -613,6 +670,22 @@ export interface ConsolaConectorEstado {
 export interface ConsolaGateInput {
   /** Ejecuta una consulta de sistema BAJO EL PRINCIPAL DE CONSOLA de este Conector. */
   ejecutar: (sqlText: string) => Promise<Record<string, unknown>[]>
+  /**
+   * Ejecuta una consulta de sistema BAJO EL PRINCIPAL DE SERVING — el mismo que introspecta el
+   * terreno para `verifyFabricServability` (#340).
+   *
+   * **Las dos poblaciones no se mezclan, y cuál va con cuál es el diseño, no un detalle.** Lo que se
+   * pregunta acá es una propiedad del TERRENO —qué tablas base hay y cuáles tienen `SECURITY POLICY`
+   * habilitada—: la respuesta no depende de quién pregunte, pero la CAPACIDAD DE VERLA sí, y el
+   * principal de consola es, por diseño, el que menos permisos tiene. Preguntárselo a él era
+   * preguntarle a quien no puede saberlo: `sys.security_policies` está filtrada por permiso y le
+   * devolvía cero filas con el terreno entero gobernado (medido en producción, #340: 31 políticas
+   * habilitadas invisibles, 68 tablas reportadas como desgobernadas donde faltaban 37).
+   *
+   * Lo que SÍ es del principal de consola se queda en `ejecutar`, donde siempre estuvo: (a) que no
+   * pueda escribir, (c) que no herede `UNMASK`, (d) que el motor le honre `@read_only`.
+   */
+  ejecutarTerreno: (sqlText: string) => Promise<Record<string, unknown>[]>
   /**
    * (d) Sonda de `@read_only`, en el MISMO batch que un `SELECT` y con una clave que SÍ gobierna.
    *
@@ -669,18 +742,52 @@ export async function verificarConectorConsola(input: ConsolaGateInput): Promise
     return no(`principal con permiso ${ofensores.map((p) => `\`${p}\``).join(', ')} (la Consola exige solo lectura).`)
   }
 
-  // ── (b) ¿toda tabla base tiene política nativa? ────────────────────────────────────────────────
+  // ── (b) ¿toda tabla base tiene política nativa? — BAJO EL PRINCIPAL DE SERVING (#340) ─────────
   let tablas: string[]
   let protegidas: Set<string>
   try {
-    const [t, p] = await Promise.all([input.ejecutar(SYS_TABLES_SQL), input.ejecutar(SYS_SECURITY_POLICIES_SQL)])
+    const [t, p] = await Promise.all([input.ejecutarTerreno(SYS_TABLES_SQL), input.ejecutarTerreno(SYS_SECURITY_POLICIES_SQL)])
     tablas = t.map((r) => `${String(r['sch'])}.${String(r['tbl'])}`)
     protegidas = new Set(p.map((r) => `${String(r['sch'])}.${String(r['tbl'])}`))
   } catch (e) {
     return no(`no se pudo listar el gobierno de las tablas (${errorCorto(e)}): sin medición no se ofrece.`)
   }
   // El centinela de #238 es INSTRUMENTO, no dato: exigirle política sería pedirle gobierno a la regla.
-  const sinPolitica = tablas.filter((t) => !protegidas.has(t) && !t.endsWith(`.${UNMASK_PROBE_TABLE_NAME}`)).sort()
+  const tablasDeDato = tablas.filter((t) => !t.endsWith(`.${UNMASK_PROBE_TABLE_NAME}`))
+  // ── (b·guarda) CERO políticas sobre un terreno con tablas: ¿medí, o no pude medir? (#340) ─────
+  // El modo de falla que esta guarda mata NO desaparece porque la sonda se haya mudado al principal
+  // de serving: cualquier principal cuya visibilidad de metadatos se recorte vuelve a leer cero
+  // filas, y sin esto el gate volvería a llamarle «no hay política» a «no puedo verlas» — dos
+  // hechos con remediaciones opuestas (declarar 37 políticas vs conceder un permiso).
+  // Se pregunta SOLO cuando hay empate: ver al menos una política ya es la prueba positiva de que
+  // el principal lee la vista, y ahí la guarda no tiene nada que aportar (y no se paga su RTT).
+  if (tablasDeDato.length > 0 && protegidas.size === 0) {
+    let visible: GobiernoVisible
+    try {
+      visible = interpretarVisibilidadGobierno(await input.ejecutarTerreno(SYS_POLICY_VISIBILITY_SQL))
+    } catch (e) {
+      // La sonda que no contesta NO absuelve ni condena al terreno: confiesa que no se midió.
+      medido.gobiernoVisible = 'unknown'
+      return no(
+        `no se pudo medir el gobierno: la sonda de visibilidad falló (${errorCorto(e)}) y \`sys.security_policies\` ` +
+          'devolvió cero filas, que es indistinguible de «no puedo verlas». No se ofrece hasta poder medir.',
+      )
+    }
+    medido.gobiernoVisible = visible
+    if (visible !== 'visible') {
+      return no(
+        `no se pudo medir el gobierno de ${tablasDeDato.length} tabla(s): el principal que sondea NO puede leer ` +
+          '`sys.security_policies` (`HAS_PERMS_BY_NAME` ⇒ ' +
+          (visible === 'blind' ? 'sin `VIEW DEFINITION`' : 'sin respuesta reconocible') +
+          '), así que sus cero filas NO significan «sin política». Remediación: conceder visibilidad de ' +
+          'metadatos al principal que sondea el terreno — NO declarar políticas nuevas.',
+      )
+    }
+  } else if (protegidas.size > 0) {
+    // Prueba positiva y directa, sin gastar una consulta: se vio gobierno, luego se puede ver gobierno.
+    medido.gobiernoVisible = 'visible'
+  }
+  const sinPolitica = tablasDeDato.filter((t) => !protegidas.has(t)).sort()
   medido.tablasSinPolitica = sinPolitica
   if (sinPolitica.length > 0) {
     const muestra = sinPolitica.slice(0, 5).map((t) => `\`${t}\``).join(', ')

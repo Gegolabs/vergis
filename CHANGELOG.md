@@ -61,6 +61,43 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### El gate de la Consola no puede ver el gobierno bajo el principal de consola (issue #340)
+
+**Qué pasaba.** La condición (b) del gate —«toda tabla base tiene `SECURITY POLICY`»— preguntaba
+bajo el **principal de consola**, que por diseño es el de menos permisos. `sys.security_policies`
+está **filtrada por permiso**: ese principal lee **cero filas** mientras enumera `sys.tables` con
+normalidad. El gate concluía que NINGUNA tabla estaba protegida y rechazaba **todos** los
+Conectores, con una razón falsa: en producción, `0/8 ofrecibles` y 68 tablas reportadas como
+desgobernadas donde las que de verdad faltaban eran 37 — con **31 políticas habilitadas invisibles**
+para el sondeador. No hubo fuga: el gate falló cerrado, que es la dirección correcta.
+
+**Qué cambia, en dos cosas.**
+
+1. **El gobierno se sondea bajo el principal de SERVING.** Es una propiedad del **terreno**, no del
+   principal de consola: preguntársela a él era preguntarle a quien no puede saberlo. Lo que sí es
+   suyo —que no pueda escribir (a), que no herede `UNMASK` (c), que el motor le honre `@read_only`
+   (d)— se queda donde estaba, bajo él. Las dos poblaciones no se mezclan.
+2. **La ceguera se volvió detectable, y falla como NO MEDIDO.** Con tablas base presentes y cero
+   políticas visibles, el gate ya no concluye «no hay política»: verifica con `HAS_PERMS_BY_NAME`
+   que el principal que sondea pueda leer la vista, y si no puede rechaza el Conector diciendo **«no
+   se pudo medir el gobierno»**, con la remediación que corresponde —conceder visibilidad de
+   metadatos, **no** declarar políticas nuevas—. `/contrato` publica el estado en
+   `medido.gobiernoVisible` (`visible` · `blind` · `unknown`). Ver **al menos una** política sigue
+   siendo prueba positiva y ahí la guarda no se paga.
+
+**Medido** en el arnés T-SQL local (`scripts/tsql-lab-proof.ts`, sección **C4c**, con control
+positivo y control de la guarda en la misma corrida): sobre el mismo terreno gobernado, `sa` ve 6
+políticas y el principal de solo lectura ve 0 enumerando 7 tablas; la guarda dice `visible` y `blind`
+respectivamente; con `GRANT VIEW DEFINITION` el mismo principal pasa a ver las 6 y el Conector vuelve
+a ser ofrecible. **Hallazgo de paso:** el arnés no reproducía el bug porque su principal de consola
+tenía `GRANT VIEW DEFINITION` — un laboratorio más privilegiado que la producción mide otra cosa. El
+grant se quitó.
+
+El comportamiento fail-closed **no cambia**: un Conector que no se puede medir se sigue rechazando.
+Lo que cambia es el motivo, y que ahora es verdadero.
+
 ## 0.33.0 — 2026-09-22
 
 ### El nodo genera el catálogo del esquema de datos: el Datadoc (`CAP-197`, issue #304, PR #338)
