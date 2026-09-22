@@ -11,6 +11,7 @@ import {
   FN_MY_PERMISSIONS_SQL,
   SYS_TABLES_SQL,
   SYS_SECURITY_POLICIES_SQL,
+  SYS_POLICY_VISIBILITY_SQL,
   UNMASK_PROBE_SCHEMAS_SQL,
   UNMASK_PROBE_EXPECTED,
 } from '../server/engines/fabric'
@@ -26,9 +27,24 @@ interface Terreno {
   centinelaEn?: string[]
   centinelaValor?: string
   fallaEn?: RegExp
+  /**
+   * ¿Qué ve el principal que sondea el TERRENO? (#340) Por defecto, uno que puede leer
+   * `sys.security_policies` — el caso sano. `'ciega'` es el principal permission-blind: enumera
+   * `sys.tables` con normalidad y lee CERO filas de la vista de políticas aunque existan.
+   */
+  sonda?: 'vidente' | 'ciega' | 'muda' | 'falla'
 }
 const ejecutorDe = (t: Terreno) => async (q: string): Promise<Record<string, unknown>[]> => {
   if (t.fallaEn?.test(q)) throw new Error('credencial vencida')
+  // La ceguera es del PRINCIPAL, así que la trae puesta cualquiera que ejecute con ella: es la firma
+  // medida —cero filas en la vista de políticas, `sys.tables` normal— y NO una peculiaridad del seam.
+  if (t.sonda && t.sonda !== 'vidente') {
+    if (q === SYS_POLICY_VISIBILITY_SQL) {
+      if (t.sonda === 'falla') throw new Error('credencial vencida')
+      return t.sonda === 'muda' ? [{ viewdef: null, viewany: null }] : [{ viewdef: 0, viewany: 0 }]
+    }
+    if (q === SYS_SECURITY_POLICIES_SQL) return []
+  }
   if (q === FN_MY_PERMISSIONS_SQL) return (t.permisos ?? ['CONNECT', 'SELECT']).map((p) => ({ permission_name: p }))
   if (q === SYS_TABLES_SQL) return (t.tablas ?? ['dbo.areas']).map((x) => ({ sch: x.split('.')[0], tbl: x.split('.')[1] }))
   if (q === SYS_SECURITY_POLICIES_SQL) return (t.protegidas ?? ['dbo.areas']).map((x) => ({ sch: x.split('.')[0], tbl: x.split('.')[1] }))
@@ -36,9 +52,21 @@ const ejecutorDe = (t: Terreno) => async (q: string): Promise<Record<string, unk
   if (q.includes('vergis_unmask_probe')) return [{ probe: t.centinelaValor ?? 'xxxx' }]
   throw new Error(`consulta inesperada: ${q}`)
 }
+/**
+ * El ejecutor del TERRENO. La ceguera se modela donde de verdad vive —en la VISTA, no en el gate—:
+ * el principal ciego responde `sys.tables` igual que el vidente y devuelve cero filas de
+ * `sys.security_policies` **aunque el terreno esté gobernado**. Es la firma medida en producción
+ * (#340) y reproducida en el arnés T-SQL local (SA ve 1 política, un principal con solo `SELECT` ve 0
+ * sobre el MISMO terreno).
+ */
+const ejecutorTerrenoDe = (t: Terreno) => async (q: string): Promise<Record<string, unknown>[]> => {
+  if (q === SYS_POLICY_VISIBILITY_SQL && (t.sonda ?? 'vidente') === 'vidente') return [{ viewdef: 1, viewany: 0 }]
+  return ejecutorDe(t)(q)
+}
 const correr = (t: Terreno, store: Map<string, PolicyDecl>, tablasDelRef: string[] = ['dbo.areas'], readOnly: 'honra' | 'no-honra' | 'indeterminado' = 'honra') =>
   verificarConectorConsola({
     ejecutar: ejecutorDe(t),
+    ejecutarTerreno: ejecutorTerrenoDe(t),
     sondaReadOnly: async () => readOnly,
     store,
     tablasDelRef,
@@ -97,6 +125,83 @@ describe('gate de la Consola · (b) toda tabla base gobernada', () => {
     const r = await correr({ fallaEn: /sys\.tables/ }, SOLO_FILA)
     expect(r.ofrecible).toBe(false)
     expect(r.motivo).toContain('sin medición')
+  })
+})
+
+/**
+ * #340 · **la corrida discriminante**: el terreno está gobernado y el principal que sondea NO ve las
+ * políticas. «Medí y salió negativo» y «no pude medir» son hechos distintos con remediaciones
+ * OPUESTAS —declarar 37 políticas vs conceder un permiso—, y el gate los colapsaba en el primero.
+ * Estos casos fallan si el colapso vuelve: sin la guarda, el motivo dice «sin SECURITY POLICY».
+ */
+describe('gate de la Consola · (b·guarda) la ceguera NO es ausencia de gobierno (#340)', () => {
+  it('principal ciego sobre terreno gobernado ⇒ «no se pudo medir», NUNCA «sin SECURITY POLICY»', async () => {
+    const r = await correr({ tablas: ['dbo.areas', 'dbo.saldos'], protegidas: ['dbo.areas', 'dbo.saldos'], sonda: 'ciega' }, SOLO_FILA)
+    expect(r.ofrecible).toBe(false) // fail-closed: lo que cambia es el motivo, no el veredicto
+    expect(r.motivo).toContain('no se pudo medir el gobierno')
+    expect(r.motivo).not.toContain('sin SECURITY POLICY')
+    expect(r.motivo).toContain('NO declarar políticas nuevas') // la remediación apunta al permiso
+    expect(r.medido.gobiernoVisible).toBe('blind')
+    // Y NO se publica una lista de «tablas sin política» que sería falsa.
+    expect(r.medido.tablasSinPolitica).toBeUndefined()
+  })
+  it('la sonda que contesta algo irreconocible (`NULL`) tampoco absuelve: `unknown`, y se dice', async () => {
+    const r = await correr({ tablas: ['dbo.areas'], protegidas: ['dbo.areas'], sonda: 'muda' }, SOLO_FILA)
+    expect(r.ofrecible).toBe(false)
+    expect(r.medido.gobiernoVisible).toBe('unknown')
+    expect(r.motivo).toContain('sin respuesta reconocible')
+  })
+  it('la sonda que LANZA es confesión de no-medición, no veredicto sobre el terreno', async () => {
+    const r = await correr({ tablas: ['dbo.areas'], protegidas: ['dbo.areas'], sonda: 'falla' }, SOLO_FILA)
+    expect(r.ofrecible).toBe(false)
+    expect(r.medido.gobiernoVisible).toBe('unknown')
+    expect(r.motivo).toContain('no se pudo medir el gobierno')
+  })
+  it('EL CONTRASTE · desgobierno REAL medido por un principal vidente ⇒ su propio motivo, con la tabla nombrada', async () => {
+    const r = await correr({ tablas: ['dbo.areas'], protegidas: [], sonda: 'vidente' }, SOLO_FILA)
+    expect(r.ofrecible).toBe(false)
+    expect(r.motivo).toContain('sin SECURITY POLICY')
+    expect(r.motivo).toContain('dbo.areas')
+    expect(r.medido.gobiernoVisible).toBe('visible')
+    expect(r.medido.tablasSinPolitica).toEqual(['dbo.areas'])
+  })
+  it('ver AL MENOS una política es prueba positiva: la guarda no se paga y no decide nada', async () => {
+    const llamadas: string[] = []
+    const r = await verificarConectorConsola({
+      ejecutar: ejecutorDe({}),
+      ejecutarTerreno: async (q) => {
+        llamadas.push(q)
+        return ejecutorTerrenoDe({})(q)
+      },
+      sondaReadOnly: async () => 'honra',
+      store: SOLO_FILA,
+      tablasDelRef: ['dbo.areas'],
+      ref: 'fin',
+    })
+    expect(r.ofrecible).toBe(true)
+    expect(llamadas).not.toContain(SYS_POLICY_VISIBILITY_SQL)
+    expect(r.medido.gobiernoVisible).toBe('visible')
+  })
+  it('el terreno se sondea BAJO SERVING y lo del principal de consola se queda con él (las dos poblaciones)', async () => {
+    const consola: string[] = []
+    const terreno: string[] = []
+    const r = await verificarConectorConsola({
+      ejecutar: async (q) => {
+        consola.push(q)
+        return ejecutorDe({})(q)
+      },
+      ejecutarTerreno: async (q) => {
+        terreno.push(q)
+        return ejecutorTerrenoDe({})(q)
+      },
+      sondaReadOnly: async () => 'honra',
+      store: SOLO_FILA,
+      tablasDelRef: ['dbo.areas'],
+      ref: 'fin',
+    })
+    expect(r.ofrecible).toBe(true)
+    expect(terreno).toEqual([SYS_TABLES_SQL, SYS_SECURITY_POLICIES_SQL]) // la propiedad del TERRENO
+    expect(consola).toEqual([FN_MY_PERMISSIONS_SQL]) // lo que sí es del principal de consola
   })
 })
 

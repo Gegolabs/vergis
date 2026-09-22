@@ -833,7 +833,22 @@ if (NODO_SIN_MOTOR_DE_DATOS) {
         try {
           const sesion = await abrirSesionConsola(perfil, ref, consolaInjections)
           try {
-            nuevo.set(ref, await verificarConectorConsola({ ejecutar: (q) => sesion.ejecutar(q), sondaReadOnly: () => sesion.sondaReadOnly(), store, tablasDelRef, ref }))
+            nuevo.set(
+              ref,
+              await verificarConectorConsola({
+                ejecutar: (q) => sesion.ejecutar(q),
+                // El gobierno del terreno se pregunta BAJO EL PRINCIPAL DE SERVING (#340): es una
+                // propiedad de la fuente, y `sys.security_policies` está filtrada por permiso — el
+                // principal de consola, que por diseño es el de menos permisos, leía cero filas con
+                // el terreno entero gobernado y el gate rechazaba TODO con una razón falsa.
+                ejecutarTerreno: async (q) =>
+                  ((await dwh.execute({ database_ref: ref, sql: q }, { agent: 'vergis' })) as { rows: Record<string, unknown>[] }).rows,
+                sondaReadOnly: () => sesion.sondaReadOnly(),
+                store,
+                tablasDelRef,
+                ref,
+              }),
+            )
           } finally {
             await sesion.cerrar()
           }
