@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# `VERGIS_SEMANTICA` — qué significa cada cosa (CAP-197).
+#
+# El catálogo SQL trae el nombre, el tipo y la nulabilidad de una columna; no trae qué es. Ésta es la
+# única parte del Datadoc curada a mano, y por eso es declaración de instancia: la escribe quien
+# conoce el negocio y se recarga en caliente como cualquier otro slice.
+#
+# ⚠ TEXTO PLANO, sin excepciones. Todo se escapa al renderizar; la única marca admitida es el acento
+# grave (`x` → <code>x</code>). Un YAML de instancia no es un canal para inyectar marcado en una
+# página que el nodo sirve bajo su propio gate.
+#
+# Claves raíz `semantica:` y, dentro, `conexiones:` — las dos OBLIGATORIAS (para «no hay»,
+# `conexiones: []`). Una entrada inválida se omite con aviso; el nodo levanta igual.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+semantica:
+  # Opcional: texto de la instancia en la portada del catálogo.
+  portada: >-
+    Los datos de esta plataforma se consumen por el SQL endpoint de cada conexión, con la cuenta
+    corporativa de cada persona. Ante cualquier duda de alcance, el dueño de cada dominio.
+
+  # Opcional: texto de la instancia en la página de acceso y seguridad.
+  seguridad: >-
+    Hoy toda persona autenticada ve todas las filas, a propósito: es la apertura explícita que se
+    acordó para esta etapa, no un descuido. Cuando se cierre, un consumidor externo verá cero filas.
+
+  conexiones:
+    - conexion: finanzas            # obligatorio: database_ref
+      intro: >-                     # opcional
+        Antigüedad de saldos. El grano del hecho es el documento con saldo, por semana de carga.
+      joins:                        # opcional
+        - "`fact_saldos` × `dim_socios` por `codigo_socio`"
+      entidades:                    # opcional: `schema.tabla` → { descripcion, columnas, clase }
+        dbo.fact_saldos:
+          descripcion: El hecho — un documento con saldo, en una semana de carga.
+          columnas:                 # opcional: columna (case-insensitive) → texto
+            fecha_carga: Semana de la carga (llave del snapshot; filtrar siempre por una).
+            monto: Saldo del documento, en su moneda de origen.
+        dbo._migrations:
+          descripcion: Control de migraciones del terreno.
+          # `clase` sobreescribe la clase que el nodo DERIVA de los hechos medidos (publicado |
+          # interno | deuda). Es donde vive el alfabeto de la instancia —prefijos como `_bak_` o
+          # `raw_`—, que el motor deliberadamente no conoce.
+          clase: interno

@@ -15,9 +15,9 @@ import type { AdminHandler } from './admin'
 import type { PiConfigHandler } from './pi-config'
 import type { MirandaHandler } from './miranda'
 import type { NotasHandler } from './notas'
-import { omitirPorLets, type StaticCollection } from './static-config'
+import { omitirPorLets, omitirPorNodo, type StaticCollection } from './static-config'
 import { resolveStatic } from './static-serve'
-import { createReadStream } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
 
 export interface RouteDeps {
   engine: string
@@ -51,6 +51,21 @@ export interface RouteDeps {
    * no puede notar que el nodo aprendió a servirlos.
    */
   getStaticCollections?: () => readonly StaticCollection[]
+  /**
+   * LA COLECCIÓN PROPIA DEL NODO (`VERGIS_DATADOC`, CAP-197) — el catálogo del esquema que el nodo
+   * GENERA y sirve por la misma vía que las de instancia: el mismo `resolveStatic`, la misma
+   * contención de ruta, la misma lista blanca de tipos, la misma autorización (la del catálogo).
+   *
+   * Es una dep propia y no una entrada más de `getStaticCollections` porque el directorio de salida
+   * es estado del Producto bajo `VERGIS_OUT`: si lo declarara la instancia, tendría que conocer el
+   * layout interno del nodo y se rompería el día que ese layout cambie, sin que el Producto pueda
+   * avisar. Acá el puntero lo tiene quien lo escribe.
+   *
+   * Se antepone a las de instancia y su prefijo queda RESERVADO (`omitirPorNodo`) mientras la dep
+   * esté presente. AUSENTE ⇒ ningún prefijo se reserva y la superficie es EXACTAMENTE la de antes de
+   * la capacidad — la propiedad que hace seguro el despliegue.
+   */
+  getDatadocCollection?: () => { collection: StaticCollection; sinBuild: () => string } | null
   identityFor: (headers: GateHeaders) => IdentityContext
   /** Render por-consumidor de un PI (con RLS). */
   renderReport: (report: Report, headers: GateHeaders, nav: ReturnType<typeof navFromUrl>) => Promise<string>
@@ -265,13 +280,27 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     // contra el catálogo VIVO (`all`), y durante el arranque en frío el catálogo está vacío, así que
     // despachar antes le daría la ruta a la colección justo en la ventana en que el Let todavía no se
     // descubrió. Un `503 Inicializando…` es la respuesta honesta de esa ventana.
+    const datadoc = deps.getDatadocCollection?.() ?? null
     const estaticas = deps.getStaticCollections?.() ?? []
-    if (estaticas.length) {
+    if (estaticas.length || datadoc) {
       // GANA EL LET, siempre: el dato gobernado manda. Misma función que usan el contrato del nodo y
       // el aviso de arranque — la regla de desempate vive en un solo lugar (`omitirPorLets`).
-      const servibles = omitirPorLets(estaticas, new Set(all.map((r) => r.slug))).collections
+      const deInstancia = omitirPorLets(estaticas, new Set(all.map((r) => r.slug))).collections
+      // …y el prefijo que el nodo sirve por sí mismo se le reserva: una colección de instancia con ese
+      // nombre taparía el catálogo que el nodo produce con algo que nadie coordinó.
+      const propias = datadoc ? [datadoc.collection] : []
+      const reservados = new Set(propias.map((c) => c.path))
+      const servibles = [...propias, ...omitirPorNodo(deInstancia, reservados).collections]
       const hit = resolveStatic(servibles, url, req.method ?? 'GET')
       if (hit) {
+        // Sin un solo build, `current` no existe y `resolveStatic` responde 404. Un 404 pelado en la
+        // ÚNICA URL que el menú de la instancia enlaza le diría al usuario «esto no existe» cuando lo
+        // cierto es «esto todavía no se generó» — dos cosas distintas, con remediaciones distintas.
+        if (hit.status === 404 && datadoc && !existsSync(datadoc.collection.dir)) {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' })
+          if ((req.method ?? 'GET').toUpperCase() === 'HEAD') return void res.end()
+          return void res.end(datadoc.sinBuild())
+        }
         if (hit.status !== 200) return fail(res, hit.status, hit.error)
         res.writeHead(200, hit.headers)
         if ((req.method ?? 'GET').toUpperCase() === 'HEAD') return void res.end()

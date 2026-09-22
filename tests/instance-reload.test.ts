@@ -281,3 +281,58 @@ describe('recarga de instancia · dueños de PI en caliente (#138·2, D1 y caso 
     await store.close()
   })
 })
+
+// ── (5) LOS DOS SLICES DEL DATADOC (CAP-197) POR LA MISMA PUERTA ────────────────────────────────
+//
+// Entran a `RELOADABLE_SLICES` como el menú y los estáticos, y lo que hay que medir es lo mismo que
+// se midió para aquellos: que el arreglo VIVO cambie POR SPLICE —no por reasignación— y que un
+// archivo roto conserve lo vigente en vez de reemplazarlo por nada. El generador captura estas
+// referencias al arrancar: una reasignación dejaría el catálogo leyendo el diccionario viejo mientras
+// el contrato afirma haber recargado el nuevo.
+
+describe('slices del Datadoc (CAP-197) · recarga por la misma puerta', () => {
+  it('`VERGIS_WRITERS` se carga y se recarga por splice sobre la MISMA referencia', () => {
+    const f = yamlEnv('writers.yaml', 'writers:\n  - id: w1\n    conexion: finanzas\n    tipo: sjd\n    estado: vigente\n    disparo: nocturno\n    tablas: [dbo.t]\n')
+    const env: EnvLike = { VERGIS_WRITERS: f.path }
+    const vivo = loadSlice(env, RELOADABLE_SLICES.writers)!.writers
+    const referencia = vivo
+    expect(vivo.map((w) => w.id)).toEqual(['w1'])
+
+    f.escribir('writers:\n  - id: w2\n    conexion: ventas\n    tipo: producto\n    estado: vigente\n    disparo: al publicar\n    tablas: [dbo.u]\n')
+    const next = loadSlice(env, RELOADABLE_SLICES.writers)!
+    vivo.splice(0, vivo.length, ...next.writers)
+    // REFUTARÍA una reasignación: el consumidor que capturó `referencia` seguiría con `w1`.
+    expect(referencia.map((w) => w.id)).toEqual(['w2'])
+  })
+
+  it('un `writers.yaml` que perdió su clave raíz LANZA: lo vigente se conserva y el contrato lo marca', () => {
+    const f = yamlEnv('writers.yaml', 'writers: []\n')
+    const env: EnvLike = { VERGIS_WRITERS: f.path }
+    expect(loadSlice(env, RELOADABLE_SLICES.writers)!.writers).toEqual([])
+    f.escribir('otra_cosa: 1\n')
+    expect(() => loadSlice(env, RELOADABLE_SLICES.writers)).toThrow(/falta la clave raíz 'writers'/)
+  })
+
+  it('`VERGIS_SEMANTICA` se carga, y su lista viva se repuebla por splice', () => {
+    const f = yamlEnv('semantica.yaml', 'semantica:\n  conexiones:\n    - conexion: finanzas\n      intro: uno\n')
+    const env: EnvLike = { VERGIS_SEMANTICA: f.path }
+    const cfg = loadSlice(env, RELOADABLE_SLICES.semantica)!
+    const lista = cfg.conexiones
+    expect(lista.map((c) => c.conexion)).toEqual(['finanzas'])
+
+    f.escribir('semantica:\n  conexiones:\n    - conexion: ventas\n      intro: dos\n')
+    const next = loadSlice(env, RELOADABLE_SLICES.semantica)!
+    lista.splice(0, lista.length, ...next.conexiones)
+    expect(cfg.conexiones.map((c) => c.conexion)).toEqual(['ventas'])
+  })
+
+  it('un `semantica.yaml` sin `conexiones` LANZA: es LA lista, y colapsar a cero escondería el truncado', () => {
+    const f = yamlEnv('semantica.yaml', 'semantica:\n  portada: hola\n')
+    expect(() => loadSlice({ VERGIS_SEMANTICA: f.path }, RELOADABLE_SLICES.semantica)).toThrow(/falta la clave raíz 'conexiones'/)
+  })
+
+  it('sin el env, el slice no se usa (ni error ni valor fabricado)', () => {
+    expect(loadSlice({}, RELOADABLE_SLICES.writers)).toBeUndefined()
+    expect(loadSlice({}, RELOADABLE_SLICES.semantica)).toBeUndefined()
+  })
+})

@@ -180,6 +180,9 @@ import { createDaftarProto, crearInstrumentos, type Instrumentos } from '@vergis
 import { createIdentity, clavesNoNormalizadas, IdentityProjection, type IdentityMap } from './identity'
 import { configFromEnv, configEnvKeys, decideDevIdentity, decideFreshStore, deprecatedEnvWarnings, parsePreviewIdentities, type PreviewIdentity } from './config'
 import { createContractRegistry, createContractHandler, type ControlContract } from './contract'
+import { createDatadoc, type Datadoc } from './datadoc'
+import { paginaSinBuild } from './datadoc-render'
+import type { EjecutarSql } from './datadoc-introspect'
 import { VERGIS_VERSION } from '../packages/capabilities/src/version'
 import { createBackgroundLoops } from './control-loops'
 import { createContractJournal } from './contract-delta'
@@ -203,6 +206,26 @@ import {
 
 const ENGINE = (process.env['VERGIS_ENGINE'] ?? 'clickhouse').toLowerCase()
 if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGINE inválido: '${ENGINE}' (clickhouse | fabric).`)
+/**
+ * DATADOC (`CAP-197`) — opt-in por env. SIN la env, la superficie del nodo es exactamente la de
+ * antes de la capacidad: ninguna ruta nueva, ningún lazo, ningún prefijo reservado, ninguna sección
+ * en `/admin` ni en `/contrato`. Es el precedente de `VERGIS_EVALUACIONES` y de `MIRANDA_ENABLED`.
+ *
+ * Con la env y un motor que NO es fabric, el arranque es FATAL nombrando las dos: la introspección
+ * que el catálogo necesita es `INFORMATION_SCHEMA` + `sys.*` de un SQL endpoint, y no existe para
+ * clickhouse. Degradar en silencio dejaría una pantalla de Administración con un botón que no puede
+ * funcionar — config rota que se descubre al primer clic, no al arrancar.
+ */
+const DATADOC_ON = ['1', 'true', 'yes', 'on'].includes((process.env['VERGIS_DATADOC'] ?? '').trim().toLowerCase())
+if (DATADOC_ON && ENGINE !== 'fabric')
+  throw new Error(
+    `VERGIS_DATADOC=1 exige VERGIS_ENGINE=fabric (motor actual: '${ENGINE}'). El Datadoc introspecciona ` +
+      `INFORMATION_SCHEMA y sys.* de un SQL endpoint; con otro motor no hay catálogo que leer.`,
+  )
+/** El generador del Datadoc, cableado abajo si la env está y hay conexiones. `null` = apagado. */
+let datadoc: Datadoc | null = null
+/** El handle DIRECTO del conector para el generador (jamás el envuelto en caché de resultados). */
+let datadocExecute: EjecutarSql | null = null
 // Config VALIDADA de los env numéricos (lanza claro al arranque si PORT/REFRESH/TTL/MAX_ROWS no son
 // números — antes `PORT=abc` daba `listen(NaN)` tarde y feo). El secreto CSRF se maneja aparte.
 const config = configFromEnv(process.env, () => '')
@@ -244,6 +267,9 @@ const contract = createContractRegistry({
     const slugs = new Set(discover().map((r) => r.slug))
     return estadoDeColecciones(INSTANCE_CFG.staticCollections).map((c) => ({ ...c, shadowedByLet: slugs.has(c.path) }))
   },
+  // Datadoc (CAP-197): closure sobre el generador vivo. `null` mientras la capacidad esté apagada —
+  // el contrato dice «no la cableé», no finge un estado.
+  datadoc: () => datadoc?.contrato() ?? null,
 })
 contract.envKeys(configEnvKeys())
 // Nivel 2 (#139): el journal del delta entre versiones vive donde vive el único estado persistente de
@@ -701,6 +727,12 @@ if (NODO_SIN_MOTOR_DE_DATOS) {
   )
   const dwh = createExecuteSqlDwh(connections, { injections })
   servingCap = dwh
+  // El generador del Datadoc usa ESTE handle, el directo — nunca `servingCap`, que más abajo puede
+  // quedar envuelto en la caché de resultados por consumidor. Un catálogo servido desde esa caché
+  // mezclaría mediciones del nodo con lecturas de un usuario, que son cosas distintas. La identidad
+  // va SIN claims a propósito (defensa en profundidad de §D6): si por un error se colara un COUNT
+  // sobre una tabla filtrada, el prelude inyecta '' y la policy niega.
+  datadocExecute = (input) => dwh.execute(input, { agent: 'datadoc' }) as Promise<{ rows: Record<string, unknown>[] }>
 
   // FAIL-CLOSED POR PI (issue #52): cada tabla gobernada que sirva un PI DEBE tener RLS nativa en la
   // fuente (sin eso, push-down devolvería todas las filas → fuga). La verificación es por PI y consulta
@@ -1211,6 +1243,16 @@ const server = createServer(
     // cambia lo que se sirve sin re-cablear el router; sin `VERGIS_STATIC` es `[]` y ningún prefijo
     // se intercepta — la superficie de antes de la capacidad, exacta.
     getStaticCollections: () => INSTANCE_CFG.staticCollections,
+    // El Datadoc como colección PROPIA del nodo (CAP-197): el mismo `resolveStatic`, la misma
+    // contención, la misma autorización. `null` con la capacidad apagada ⇒ el prefijo no se reserva
+    // y la superficie es byte a byte la de antes.
+    getDatadocCollection: () =>
+      datadoc
+        ? {
+            collection: { path: 'datadoc', dir: datadoc.dirServido(), label: 'Datadoc (generado por el nodo)' },
+            sinBuild: () => paginaSinBuild(INDEX_TITLE),
+          }
+        : null,
     getMiranda: () => miranda,
     getNotas: () => notasHandler,
     discover,
@@ -1436,6 +1478,8 @@ for (const w of INSTANCE_CFG.menuWarnings) console.log(`[vergis-rls] VERGIS_MENU
 // aparece después, y `GET /contrato` lo marca `exists:false`).
 for (const w of INSTANCE_CFG.staticWarnings) console.log(`[vergis-rls] VERGIS_STATIC: ${w}`)
 for (const w of avisosDeDirectorio(INSTANCE_CFG.staticCollections)) console.log(`[vergis-rls] VERGIS_STATIC: ${w}`)
+for (const w of INSTANCE_CFG.writersWarnings) console.log(`[vergis-rls] VERGIS_WRITERS: ${w}`)
+for (const w of INSTANCE_CFG.semanticaWarnings) console.log(`[vergis-rls] VERGIS_SEMANTICA: ${w}`)
 
 // Sinks por flujo (issues #100/#102): la creación resuelve passEnv/caFile de los destinos email —
 // config rota tumba el BOOT con nombre (patrón #117), no muere como «administración deshabilitada».
@@ -2028,10 +2072,42 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
             },
           }
         : fabricWiring.cargas
+    // ── DATADOC (CAP-197) ─────────────────────────────────────────────────────────────────────
+    // Se cablea solo con las TRES piezas que lo vuelven ejercible: la env, el motor fabric con su
+    // handle directo, y conexiones declaradas. Falta cualquiera ⇒ `datadoc` queda `null` y nada
+    // cambia: ni ruta, ni lazo, ni sección de administración, ni bloque en el contrato.
+    if (DATADOC_ON && datadocExecute && connections) {
+      const ejecutar = datadocExecute
+      datadoc = createDatadoc({
+        out: OUT,
+        execute: ejecutar,
+        connections,
+        discover,
+        // Los cuatro insumos de instancia se leen del objeto VIVO, en el instante de generar: editar
+        // un YAML y regenerar produce el catálogo nuevo sin restart.
+        writers: () => ({ writers: INSTANCE_CFG.writers, warnings: INSTANCE_CFG.writersWarnings }),
+        semantica: () => INSTANCE_CFG.semantica,
+        domains: () => INSTANCE_CFG.domains,
+        sources: () => INSTANCE_CFG.sourceReg,
+        settings: govStore,
+        brandTitle: () => INDEX_TITLE,
+        audit: (e) => auditLog.append(e as unknown as LogEventInput),
+        // La generación escribe en VERGIS_OUT, que es sustrato COMPARTIDO: la corre el activo y nadie
+        // más. Misma regla que todo lazo de fondo.
+        hasControl: () => plane.hasControl(),
+        log: (m) => console.log(m),
+      })
+      // LAZO 6 · generación programada. Declarado acá; lo arma el control, como los otros cinco. Su
+      // vuelta es barata (lee un setting y compara un periodKey): la cadencia de CHEQUEO es de cinco
+      // minutos, no la de generación, que la fija el operador.
+      loops.register({ name: 'datadoc', everyMs: 5 * 60_000, firstDelayMs: 30_000, tick: () => datadoc?.tickSchedule() ?? Promise.resolve() })
+      console.log(`[vergis-rls] Datadoc activo (CAP-197): ${Object.keys(connections).length} conexión(es) · se sirve en /datadoc/ · Administración › Datadoc`)
+    }
     admin = createAdmin({
       entities,
       mdStore,
       adminStore,
+      datadoc: datadoc ?? undefined,
       domains,
       domainStewardGroups: defaultStewardGroups,
       intakeSlots,
@@ -2884,12 +2960,16 @@ const PI_OWNERS_PATH = contract.env('VERGIS_PI_OWNERS') ? resolve(contract.env('
 const SOURCES_PATH = contract.env('VERGIS_SOURCES') ? resolve(contract.env('VERGIS_SOURCES') as string) : null
 const MENU_PATH = contract.env('VERGIS_MENU') ? resolve(contract.env('VERGIS_MENU') as string) : null
 const STATIC_PATH = contract.env('VERGIS_STATIC') ? resolve(contract.env('VERGIS_STATIC') as string) : null
+const WRITERS_PATH = contract.env('VERGIS_WRITERS') ? resolve(contract.env('VERGIS_WRITERS') as string) : null
+const SEMANTICA_PATH = contract.env('VERGIS_SEMANTICA') ? resolve(contract.env('VERGIS_SEMANTICA') as string) : null
 const instanceArtifacts = (): { source: string; path: string }[] => [
   ...(NOTIFY_PATH ? [{ source: 'notify', path: NOTIFY_PATH }] : []),
   ...(PI_OWNERS_PATH ? [{ source: 'pi-owners', path: PI_OWNERS_PATH }] : []),
   ...(SOURCES_PATH ? [{ source: 'sources', path: SOURCES_PATH }] : []),
   ...(MENU_PATH ? [{ source: 'menu', path: MENU_PATH }] : []),
   ...(STATIC_PATH ? [{ source: 'static', path: STATIC_PATH }] : []),
+  ...(WRITERS_PATH ? [{ source: 'writers', path: WRITERS_PATH }] : []),
+  ...(SEMANTICA_PATH ? [{ source: 'semantica', path: SEMANTICA_PATH }] : []),
 ]
 
 /**
@@ -3024,6 +3104,49 @@ function reloadInstanceSlices(reason: string): void {
       contract.record({ reason, ok: false, error: `static: ${msg}` })
     }
   }
+  // ── writers: quién escribe cada tabla del terreno (CAP-197), swap del arreglo VIVO ──
+  // Mismo contrato que el menú y los estáticos: SPLICE, no reasignación. Su consumidor —el generador
+  // del Datadoc— lee el arreglo en el instante de generar, así que editar el YAML y regenerar produce
+  // el catálogo nuevo sin recrear el proceso. Declarar un escritor no puede costar un restart.
+  if (WRITERS_PATH) {
+    try {
+      const next = loadSlice(contractEnv, RELOADABLE_SLICES.writers) ?? { writers: [], warnings: [] }
+      // Validate-before-swap: el parser ya lanzó arriba si el YAML no parsea o perdió su clave raíz.
+      INSTANCE_CFG.writers.splice(0, INSTANCE_CFG.writers.length, ...next.writers)
+      INSTANCE_CFG.writersWarnings.splice(0, INSTANCE_CFG.writersWarnings.length, ...next.warnings)
+      console.log(`[hot-reload] escritores del terreno (${reason}): ${INSTANCE_CFG.writers.length} escritor(es)`)
+      for (const w of INSTANCE_CFG.writersWarnings) console.log(`[hot-reload] VERGIS_WRITERS (${reason}): ${w}`)
+      contract.record({ reason, ok: true }, [{ source: 'writers', path: WRITERS_PATH }])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[hot-reload] VERGIS_WRITERS: recarga rechazada, se conserva lo vigente (${reason}): VERGIS_WRITERS (${WRITERS_PATH}): ${msg}`)
+      contract.record({ reason, ok: false, error: `writers: ${msg}` })
+    }
+  }
+  // ── semantica: qué significa cada cosa (CAP-197), swap del objeto VIVO ──
+  // Es un objeto y no un arreglo, así que el swap in-place es `Object.assign` sobre la MISMA
+  // referencia más el splice de su lista — por el mismo motivo: el generador capturó esta referencia.
+  if (SEMANTICA_PATH) {
+    try {
+      const next = loadSlice(contractEnv, RELOADABLE_SLICES.semantica) ?? { conexiones: [], warnings: [] }
+      INSTANCE_CFG.semantica.conexiones.splice(0, INSTANCE_CFG.semantica.conexiones.length, ...next.conexiones)
+      INSTANCE_CFG.semantica.warnings.splice(0, INSTANCE_CFG.semantica.warnings.length, ...next.warnings)
+      // `portada` y `seguridad` son opcionales: se borran explícitamente cuando el archivo nuevo ya
+      // no las trae — dejar la anterior sería servir un texto que el YAML ya no dice.
+      if (next.portada != null) INSTANCE_CFG.semantica.portada = next.portada
+      else delete INSTANCE_CFG.semantica.portada
+      if (next.seguridad != null) INSTANCE_CFG.semantica.seguridad = next.seguridad
+      else delete INSTANCE_CFG.semantica.seguridad
+      INSTANCE_CFG.semanticaWarnings.splice(0, INSTANCE_CFG.semanticaWarnings.length, ...next.warnings)
+      console.log(`[hot-reload] diccionario semántico (${reason}): ${INSTANCE_CFG.semantica.conexiones.length} conexión(es) declarada(s)`)
+      for (const w of INSTANCE_CFG.semanticaWarnings) console.log(`[hot-reload] VERGIS_SEMANTICA (${reason}): ${w}`)
+      contract.record({ reason, ok: true }, [{ source: 'semantica', path: SEMANTICA_PATH }])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[hot-reload] VERGIS_SEMANTICA: recarga rechazada, se conserva lo vigente (${reason}): VERGIS_SEMANTICA (${SEMANTICA_PATH}): ${msg}`)
+      contract.record({ reason, ok: false, error: `semantica: ${msg}` })
+    }
+  }
 }
 
 function reloadGovernance(reason: string): void {
@@ -3052,6 +3175,13 @@ function reloadGovernance(reason: string): void {
   const cached = servingCap as { clear?: () => void }
   if (typeof cached.clear === 'function') cached.clear()
   const r = discovery.rebuild()
+  // EL DATADOC QUEDA RANCIO, y este es el eslabón que cierra la regla de los conteos (§D6·6). El
+  // Producto NO aplica las políticas —las aplica la instancia, por su cuenta—, así que una tabla
+  // puede pasar de abierta a gobernada sin que el nodo lo note, y el build cacheado seguiría
+  // publicando el COUNT que calculó cuando todavía era legítimo. Marcar acá re-dibuja el sitio sin
+  // conteos, desde los modelos ya medidos y sin tocar la red. Sin esto, el default «conteos de
+  // tablas abiertas» es una ventana que se abre sola.
+  void datadoc?.marcarRancio(reason).catch((e) => console.error(`[hot-reload] datadoc: no se pudo marcar rancio: ${e instanceof Error ? e.message : String(e)}`))
   console.log(`[hot-reload] gobierno recargado (${reason}): ${store.size} política(s), ${discover().length} PI servible(s)${r.ok ? '' : ` · rebuild specs falló: ${r.error}`}`)
   // El contrato registra la recarga DONDE OCURRE, con los artefactos que acaban de entrar: sus hashes
   // son los EFECTIVAMENTE cargados, y el GET los compara contra el disco («¿tomaste mi archivo?»).
@@ -3203,6 +3333,8 @@ if (HOT_RELOAD) {
     ...(SOURCES_PATH && governance ? [SOURCES_PATH] : []),
     ...(MENU_PATH ? [MENU_PATH] : []),
     ...(STATIC_PATH ? [STATIC_PATH] : []),
+    ...(WRITERS_PATH ? [WRITERS_PATH] : []),
+    ...(SEMANTICA_PATH ? [SEMANTICA_PATH] : []),
   ]
   if (instanceTargets.length) {
     contract.watch(
@@ -3216,13 +3348,17 @@ if (HOT_RELOAD) {
           ...(SOURCES_PATH && governance ? ['VERGIS_SOURCES'] : []),
           ...(MENU_PATH ? ['VERGIS_MENU'] : []),
           ...(STATIC_PATH ? ['VERGIS_STATIC'] : []),
+          ...(WRITERS_PATH ? ['VERGIS_WRITERS'] : []),
+          ...(SEMANTICA_PATH ? ['VERGIS_SEMANTICA'] : []),
         ],
         reloads:
           'config de instancia, por archivo: destinos de aviso y cadencia del reporte · dueños semilla de PI ' +
           '(solo aplican a PIs aún sin gobierno: el traspaso de dueño es in-app) · re-siembra del registro de fuentes ' +
           '(lo gestionado in-app gana; la semilla nunca remueve) · secciones de menú de la instancia ' +
           '(swap del arreglo vivo; una recarga inválida conserva lo vigente) · colecciones de archivos ' +
-          'estáticos de la instancia (mismo swap: declarar una página deja de exigir tocar el borde)',
+          'estáticos de la instancia (mismo swap: declarar una página deja de exigir tocar el borde) · ' +
+          'registro de escritores y diccionario semántico del Datadoc (mismo swap; los consume el ' +
+          'generador en el instante de generar, así que editar y regenerar basta)',
       },
       instanceTargets,
       () => reloadInstanceSlices('watch:instancia'),
