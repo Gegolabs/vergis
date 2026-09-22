@@ -27,9 +27,26 @@ export interface DomainDecl {
    * El admin de plataforma es override (gestiona cualquier dominio).
    */
   stewards?: string[]
+  /**
+   * Las CONEXIONES (`database_ref` de `VERGIS_CONNECTIONS`) en que este dominio se realiza — el
+   * mapeo que el Datadoc (`CAP-197`) necesita para agrupar por dominio lo que mide por conexión.
+   *
+   * Vive ACÁ y no en el registro de escritores porque «el dominio X se realiza en los Datahouses Y»
+   * es un hecho DEL DOMINIO: un dominio sin un solo escritor declarado tiene que poder decir cuáles
+   * son sus conexiones igual. Opcional: sin él, la conexión se presenta como dominio técnico
+   * rotulado por su `database_ref` — nada se infiere por parecido de nombre.
+   *
+   * Una conexión pertenece **a lo sumo a un dominio**: dos dominios que la reclaman es un error del
+   * archivo (fatal, como un `id` duplicado), porque no hay respuesta correcta que elegir en silencio.
+   * La EXISTENCIA de la conexión no se valida acá (el parser es puro y no ve `VERGIS_CONNECTIONS`):
+   * el consumidor la marca «conexión desconocida» donde se note.
+   */
+  connections?: string[]
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/
+/** Un `database_ref` admisible — el mismo alfabeto con que se nombran las conexiones. */
+const REF_RE = /^[A-Za-z0-9_-]+$/
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 /** Prefijo que declara que una entrada de `stewards:` nombra un GRUPO de Mira, no una persona. */
 export const STEWARD_GROUP_PREFIX = 'group:'
@@ -44,6 +61,9 @@ export function parseDomainsConfig(doc: unknown): DomainDecl[] {
   const raw = requireRootKey(doc, 'domains', 'domains')
   if (!Array.isArray(raw)) throw new Error('domains: `domains` debe ser una lista.')
   const seen = new Set<string>()
+  // Conexión → dominio que ya la reclamó: la unicidad es ENTRE dominios, así que el acumulador vive
+  // fuera del map y el mensaje puede nombrar a los dos dominios en disputa.
+  const refOwner = new Map<string, string>()
   return raw.map((d, i) => {
     const o = (d ?? {}) as Record<string, unknown>
     const id = String(o['id'] ?? '')
@@ -78,8 +98,31 @@ export function parseDomainsConfig(doc: unknown): DomainDecl[] {
           return s
         })
     }
+    if (o['connections'] != null) {
+      if (!Array.isArray(o['connections']))
+        throw new Error(`domains: '${id}'.connections debe ser una lista de database_ref de VERGIS_CONNECTIONS.`)
+      const refs: string[] = []
+      for (const raw of o['connections']) {
+        const ref = String(raw ?? '').trim()
+        if (!REF_RE.test(ref))
+          throw new Error(`domains: '${id}'.connections tiene una entrada inválida '${ref}' (esperado [A-Za-z0-9_-]+, el database_ref de VERGIS_CONNECTIONS).`)
+        const duenno = refOwner.get(ref)
+        // La unicidad es ENTRE dominios. Repetirla dentro del MISMO es redundancia, no ambigüedad:
+        // se deduplica en silencio. Entre dos dominios no hay respuesta correcta que elegir solo.
+        if (duenno != null && duenno !== id)
+          throw new Error(`domains: la conexión '${ref}' ya fue reclamada por el dominio '${duenno}' — una conexión pertenece a lo sumo a un dominio.`)
+        refOwner.set(ref, id)
+        if (!refs.includes(ref)) refs.push(ref)
+      }
+      out.connections = refs
+    }
     return out
   })
+}
+
+/** El dominio que reclama esta conexión, o `null`. Índice invertido de `connections` (D1 de CAP-197). */
+export function domainOfConnection(domains: readonly DomainDecl[], ref: string): DomainDecl | null {
+  return domains.find((d) => (d.connections ?? []).includes(ref)) ?? null
 }
 
 /**

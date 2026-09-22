@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, accessSync, realpat
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolveStatic, tipoDe, TIPO_DESCONOCIDO, type StaticHit } from '../server/static-serve'
-import type { StaticCollection } from '../server/static-config'
+import { omitirPorNodo, type StaticCollection } from '../server/static-config'
 import { createRequestHandler, type RouteDeps } from '../server/routes'
 import type { Report } from '../server/discovery'
 
@@ -278,5 +278,121 @@ describe('routes · despacho del contenido estático (CAP-195)', () => {
     createRequestHandler(conEstaticos({ isReady: () => false, discover: () => [] }))(mkReq('/ayuda/'), res)
     await done
     expect(calls.status).toBe(503)
+  })
+})
+
+// ── (5) LA COLECCIÓN PROPIA DEL NODO: el Datadoc (`VERGIS_DATADOC`, CAP-197) ─────────────────────
+//
+// El nodo sirve en `/datadoc/` contenido que él mismo genera, por ESTA misma vía. Lo que hay que
+// medir es que herede las tres propiedades de CAP-195 (contención, tipo por lista blanca, lectura por
+// request) sin heredar la posibilidad de que una colección de instancia le tape el prefijo — y, sobre
+// todo, que SIN la dep la superficie siga siendo exactamente la de antes.
+
+describe('routes · el Datadoc como colección propia del nodo (CAP-197)', () => {
+  /** El build del nodo en disco: un `index.html`, un anidado y los mismos dos symlinks del arnés. */
+  function buildDelNodo(): { dir: string; afuera: string } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'vergis-dd-serve-')))
+    const dir = join(base, 'current')
+    mkdirSync(join(dir, 'entidades'), { recursive: true })
+    writeFileSync(join(dir, 'index.html'), '<h1>Datadoc del nodo</h1>')
+    writeFileSync(join(dir, 'entidades', 'x.html'), '<p>entidad</p>')
+    const afuera = join(base, 'secreto.txt')
+    writeFileSync(afuera, 'root:x:0:0')
+    symlinkSync(afuera, join(dir, 'fuga.txt'))
+    return { dir, afuera }
+  }
+
+  const { dir: dirNodo, afuera } = buildDelNodo()
+  const conDatadoc = (over: Partial<RouteDeps> = {}): RouteDeps =>
+    deps({
+      getDatadocCollection: () => ({
+        collection: { path: 'datadoc', dir: dirNodo, label: 'Datadoc (generado por el nodo)' },
+        sinBuild: () => '<html>aún no generado</html>',
+      }),
+      ...over,
+    })
+
+  it('sirve el `index.html` que el nodo generó', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(conDatadoc())(mkReq('/datadoc/'), res)
+    await done
+    expect(calls.status).toBe(200)
+    expect(calls.headers['content-type']).toBe('text/html; charset=utf-8')
+    expect(calls.headers['x-content-type-options']).toBe('nosniff')
+  })
+
+  it('hereda la CONTENCIÓN: el traversal en sus dos escrituras ⇒ 403', async () => {
+    // Control del instrumento: el objetivo del escape EXISTE y es legible — sin esto, un 403 no
+    // probaría que la defensa funcionó, solo que el arnés no supo construir el ataque.
+    expect(() => accessSync(afuera, constants.R_OK)).not.toThrow()
+    for (const url of ['/datadoc/../secreto.txt', '/datadoc/%2e%2e%2fsecreto.txt', '/datadoc/fuga.txt']) {
+      const { res, calls, done } = mkRes()
+      createRequestHandler(conDatadoc())(mkReq(url), res)
+      await done
+      expect(calls.status, url).toBe(403)
+    }
+  })
+
+  it('un `POST` a la colección del nodo es 405: es de solo lectura', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(conDatadoc())(mkReq('/datadoc/', 'POST'), res)
+    await done
+    expect(calls.status).toBe(405)
+  })
+
+  it('⚠ SIN la dep, la superficie es EXACTAMENTE la de antes: `/datadoc/` cae al 404 de siempre', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(deps())(mkReq('/datadoc/'), res)
+    await done
+    // REFUTARÍA: cualquier cosa distinta del 404 en una instancia que no encendió la capacidad.
+    expect(calls.status).toBe(404)
+  })
+
+  it('⚠ el prefijo queda RESERVADO: una colección de instancia llamada `datadoc` no lo tapa', async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'vergis-dd-inst-')))
+    mkdirSync(base, { recursive: true })
+    writeFileSync(join(base, 'index.html'), '<h1>contenido de la instancia</h1>')
+    const { res, calls, done } = mkRes()
+    createRequestHandler(conDatadoc({ getStaticCollections: () => [{ path: 'datadoc', dir: base }] }))(mkReq('/datadoc/'), res)
+    await done
+    expect(calls.status).toBe(200)
+    // REFUTARÍA: servir el contenido de la instancia taparía el catálogo que el nodo produce con algo
+    // que nadie coordinó.
+    expect(calls.body).toContain('Datadoc del nodo')
+    expect(calls.body).not.toContain('contenido de la instancia')
+  })
+
+  it('…y sin la dep, esa misma colección de instancia se sirve como siempre', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'vergis-dd-inst2-')))
+    writeFileSync(join(base, 'index.html'), '<h1>contenido de la instancia</h1>')
+    const { collections, warnings } = omitirPorNodo([{ path: 'datadoc', dir: base }], new Set())
+    expect(collections).toHaveLength(1)
+    expect(warnings).toEqual([])
+  })
+
+  it('`omitirPorNodo` nombra el choque cuando lo hay', () => {
+    const { collections, warnings } = omitirPorNodo([{ path: 'datadoc', dir: '/x' }, { path: 'ayuda', dir: '/y' }], new Set(['datadoc']))
+    expect(collections.map((c) => c.path)).toEqual(['ayuda'])
+    expect(warnings[0]).toMatch(/colección 'datadoc' omitida: choca con la ruta '\/datadoc' que el nodo sirve por sí mismo/)
+  })
+
+  it('sin un solo build, `/datadoc/` responde la página «aún no generado», no un 404 pelado', async () => {
+    const vacio = join(realpathSync(mkdtempSync(join(tmpdir(), 'vergis-dd-vacio-'))), 'current')
+    const { res, calls, done } = mkRes()
+    createRequestHandler(
+      deps({ getDatadocCollection: () => ({ collection: { path: 'datadoc', dir: vacio }, sinBuild: () => '<html>aún no generado</html>' }) }),
+    )(mkReq('/datadoc/'), res)
+    await done
+    // Un 404 diría «esto no existe» cuando lo cierto es «esto todavía no se generó»: cosas distintas,
+    // con remediaciones distintas.
+    expect(calls.status).toBe(200)
+    expect(calls.body).toContain('aún no generado')
+  })
+
+  it('con build presente, un archivo que NO está sigue siendo un 404 honesto', async () => {
+    const { res, calls, done } = mkRes()
+    createRequestHandler(conDatadoc())(mkReq('/datadoc/no-existe.html'), res)
+    await done
+    expect(calls.status).toBe(404)
   })
 })

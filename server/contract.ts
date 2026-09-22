@@ -156,6 +156,25 @@ export interface ContractSnapshot {
    * el contrato existe para no permitir. `[]`/ausente = el proceso no cableó el proveedor.
    */
   static?: (StaticCollectionState & { shadowedByLet?: boolean })[]
+  /**
+   * EL DATADOC del nodo (`VERGIS_DATADOC`, CAP-197). DERIVADO del estado vivo: qué build se sirve,
+   * desde cuándo, y el sello por conexión de este instante. Ausente = la capacidad no está encendida,
+   * que es distinto de «encendida y sin generar» (eso sale con `current: null`).
+   */
+  datadoc?: DatadocContract | null
+}
+
+/** Lo que `/contrato` publica del Datadoc. Ni más ni menos que lo que un operador necesita mirar. */
+export interface DatadocContract {
+  enabled: true
+  /** El build vigente, o `null` si todavía no se generó ninguna vez. */
+  current: { build: string; generadoEn: string } | null
+  conexiones: { ref: string; ok: boolean; medidoEn: string | null; error?: string }[]
+  enCurso: boolean
+  schedule: string
+  conteos: 'abiertas' | 'off'
+  /** El gobierno cambió desde la última medición: los conteos están retirados. */
+  rancio: { razon: string; desde: string } | null
 }
 
 export interface ContractRegistry {
@@ -232,6 +251,10 @@ export function createContractRegistry(opts: {
    *  instancia recargable + catálogo de Lets + disco—, igual que `control` y `miranda`: lo que el
    *  contrato dice servir es lo que el nodo serviría ahora mismo, no lo que se declaró al arrancar. */
   staticCollections?: () => (StaticCollectionState & { shadowedByLet?: boolean })[]
+  /** Proveedor del estado del Datadoc (CAP-197). CLOSURE sobre el estado vivo, igual que los otros.
+   *  SÍNCRONO como todo `snapshot()`: el sello es un JSON chico que se lee del disco en el acto, y
+   *  las perillas del operador viajan en la caché que el propio generador refresca al usarlas. */
+  datadoc?: () => DatadocContract | null
 }): ContractRegistry {
   const envSource = opts.envSource ?? process.env
   const clock = opts.now ?? ((): Date => new Date())
@@ -263,6 +286,18 @@ export function createContractRegistry(opts: {
     } catch (e) {
       console.error(`[contrato] no se pudo derivar el estado de los estáticos de instancia: ${errMsg(e)}`)
       return []
+    }
+  }
+
+  /** Igual que `control`: observabilidad, jamás un 500 en `/contrato`. Un sello ilegible cuesta la
+   *  sección, no la consulta. */
+  const datadoc = (): DatadocContract | null => {
+    if (!opts.datadoc) return null
+    try {
+      return opts.datadoc()
+    } catch (e) {
+      console.error(`[contrato] no se pudo derivar el estado del Datadoc: ${errMsg(e)}`)
+      return null
     }
   }
 
@@ -369,6 +404,7 @@ export function createContractRegistry(opts: {
         miranda: miranda(),
         protos: opts.protos?.() ?? [],
         static: estaticos(),
+        datadoc: datadoc(),
       }
     },
   }

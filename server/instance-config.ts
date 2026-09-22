@@ -37,6 +37,8 @@ import {
 import { parseNotifyConfig, type NotifyConfig } from './notify'
 import { countMenuLinks, parseMenuConfig, type MenuConfig, type MenuSection } from './menu-config'
 import { parseStaticConfig, type StaticCollection, type StaticConfig } from './static-config'
+import { parseWritersConfig, type WriterDecl, type WritersConfig } from './writers-config'
+import { parseSemanticaConfig, type SemanticaConfig } from './semantica-config'
 
 /**
  * Una plantilla de job declarada por la instancia, con el contenido CRUDO de sus partes ya leído del
@@ -100,6 +102,26 @@ export interface InstanceConfig {
    * los re-emite nombrando que vienen de una recarga. Arreglo vivo por el mismo criterio de arriba.
    */
   staticWarnings: string[]
+  /**
+   * Escritores del terreno declarados por la instancia (`VERGIS_WRITERS`, CAP-197). Sin el env: cero
+   * escritores ⇒ el catálogo dice «escritor no declarado» donde corresponde, que es la respuesta
+   * honesta y no un hueco silencioso. Una entrada inválida se OMITE (su aviso queda en
+   * `writersWarnings`) en vez de tumbar el arranque: ver la cabecera de `writers-config.ts`.
+   *
+   * ARREGLO VIVO, por el mismo criterio que `menuSections` y `staticCollections`: la recarga lo
+   * repuebla POR SPLICE. Su consumidor —el generador del Datadoc— lo lee en el instante de generar.
+   */
+  writers: WriterDecl[]
+  /** Avisos de lo que se omitió de `VERGIS_WRITERS`. Arreglo vivo, mismo criterio. */
+  writersWarnings: string[]
+  /**
+   * Diccionario semántico declarado por la instancia (`VERGIS_SEMANTICA`, CAP-197). Sin el env: cero
+   * conexiones declaradas ⇒ «sin descripción» donde falte. OBJETO VIVO: la recarga lo repuebla
+   * in-place con `Object.assign` + splice de su lista, por el mismo contrato que los arreglos.
+   */
+  semantica: SemanticaConfig
+  /** Avisos de lo que se omitió de `VERGIS_SEMANTICA`. Arreglo vivo, mismo criterio. */
+  semanticaWarnings: string[]
   /** URL pública de la instancia, normalizada sin slash final. Exigida si hay destinos de aviso. */
   publicUrl: string
   /** Línea de conteos para el log de arranque; SOLO las configs con env definido. */
@@ -172,7 +194,7 @@ function loadJobTemplates(env: EnvLike, readFile: ReadFile): LoadedJobTemplate[]
  * es imposible por construcción, que es el riesgo real de tener dos caminos de carga.
  */
 export interface InstanceSlice<T> {
-  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES' | 'VERGIS_MENU' | 'VERGIS_STATIC'
+  env: 'VERGIS_NOTIFY' | 'VERGIS_PI_OWNERS' | 'VERGIS_SOURCES' | 'VERGIS_MENU' | 'VERGIS_STATIC' | 'VERGIS_WRITERS' | 'VERGIS_SEMANTICA'
   parse: (doc: unknown) => T
 }
 
@@ -192,6 +214,8 @@ export const RELOADABLE_SLICES: {
   sources: InstanceSlice<SourcesConfig>
   menu: InstanceSlice<MenuConfig>
   static: InstanceSlice<StaticConfig>
+  writers: InstanceSlice<WritersConfig>
+  semantica: InstanceSlice<SemanticaConfig>
 } = {
   notify: { env: 'VERGIS_NOTIFY', parse: parseNotifyConfig },
   piOwners: { env: 'VERGIS_PI_OWNERS', parse: parsePiOwnersConfig },
@@ -201,6 +225,12 @@ export const RELOADABLE_SLICES: {
   // motivo: su parser devuelve un valor puro y su consumidor lo lee del arreglo vivo. Publicar una
   // página no puede exigir recrear el proceso — ése era justamente el costo que la capacidad retira.
   static: { env: 'VERGIS_STATIC', parse: parseStaticConfig },
+  // Las dos declaraciones del Datadoc (CAP-197) entran por la MISMA puerta, y por el mismo motivo:
+  // parser puro, valor puro, y un consumidor —el generador, en el instante de generar— que lee el
+  // valor vivo. Corregir una descripción o declarar un escritor nuevo no puede exigir recrear el
+  // proceso: es texto, y el catálogo se regenera bajo demanda.
+  writers: { env: 'VERGIS_WRITERS', parse: parseWritersConfig },
+  semantica: { env: 'VERGIS_SEMANTICA', parse: parseSemanticaConfig },
 }
 
 /**
@@ -232,6 +262,8 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const notify = loadSlice(env, RELOADABLE_SLICES.notify, readFile)
   const menu = loadSlice(env, RELOADABLE_SLICES.menu, readFile)
   const estaticos = loadSlice(env, RELOADABLE_SLICES.static, readFile)
+  const escritores = loadSlice(env, RELOADABLE_SLICES.writers, readFile)
+  const semantica = loadSlice(env, RELOADABLE_SLICES.semantica, readFile)
 
   // Los avisos llevan enlaces ABSOLUTOS a la vista de detalle (issue #100): sin URL pública, un
   // destino declarado produciría avisos sin dónde mirar. Se rompe el arranque —donde el operador está
@@ -256,6 +288,8 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   if (jobTemplates) partes.push(`jobs-templates ${jobTemplates.length}`)
   if (menu) partes.push(`menu ${menu.sections.length} sección(es) · ${countMenuLinks(menu.sections)} enlace(s)`)
   if (estaticos) partes.push(`static ${estaticos.collections.length} colección(es)`)
+  if (escritores) partes.push(`writers ${escritores.writers.length} escritor(es)`)
+  if (semantica) partes.push(`semantica ${semantica.conexiones.length} conexión(es) declarada(s)`)
 
   return {
     entities: entities ?? [],
@@ -270,6 +304,10 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
     menuWarnings: menu?.warnings ?? [],
     staticCollections: estaticos?.collections ?? [],
     staticWarnings: estaticos?.warnings ?? [],
+    writers: escritores?.writers ?? [],
+    writersWarnings: escritores?.warnings ?? [],
+    semantica: semantica ?? { conexiones: [], warnings: [] },
+    semanticaWarnings: semantica?.warnings ?? [],
     publicUrl,
     summary: partes.join(' · '),
   }
