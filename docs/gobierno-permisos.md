@@ -384,10 +384,30 @@ instancia de cliente, y la escalera se detuvo en el primer peldaño que funcion�
 **Tres advertencias que viajan con la sentencia:**
 
 1. **`TO [public]` alcanza a todo principal que pueda consultar ese warehouse.** Es mínimo privilegio
-   en el eje de la **columna**, no en el del principal. No se puede afinar más: Fabric rechaza
-   `CREATE USER … FROM EXTERNAL PROVIDER` (medido), así que un service principal no tiene un
-   principal propio en la base al cual conceder. Donde el único que consulta sea el de serving, los
-   dos conjuntos coinciden; donde haya otros, esto los alcanza a todos, y hay que decidirlo sabiéndolo.
+   en el eje de la **columna**, no en el del principal. Donde el único que consulta sea el de serving,
+   los dos conjuntos coinciden; donde haya otros, esto los alcanza a todos, y hay que decidirlo
+   sabiéndolo.
+
+   ⚠️ **Corrección del 2026-09-21 — «no se puede afinar más» NO estaba medido, y esta sección lo
+   afirmaba.** Lo medido es que Fabric rechaza `CREATE USER … FROM EXTERNAL PROVIDER`. La conclusión
+   que se sacó de ahí —que entonces no hay a quién conceder y `public` es el único grantee posible—
+   es **inferencia**, y el arnés lo dice de su propia boca: sin principal en la base, la escalera de
+   granularidad «no se puede recorrer — E3 queda SIN MEDIR» (`local/unmask-granular-y-conexion.ts`).
+   El peldaño `GRANT UNMASK … TO [<principal nombrado>]` **nunca se ejecutó**, porque el nombre venía
+   `null` y la escalera quedó vacía.
+
+   **Lo que la documentación de Microsoft dice, y va como conjetura hasta que se mida acá:** en un
+   warehouse de Fabric `CREATE USER` no está soportado **para ningún principal** —no es una
+   limitación de los service principals— y **el propio `GRANT` crea el usuario de base de datos**.
+   Si eso vale para un service principal nombrado, el grantee acotado existe y `public` es más ancho
+   de lo necesario. **El refutador es de dos minutos**: correr la escalera con el nombre forzado, con
+   control de premisa (el principal lee la máscara antes) y **control negativo** (un segundo principal
+   que siga leyéndola después). Hasta que esa corrida exista, esta sección **no** puede usarse para
+   afirmar que `public` es inevitable.
+
+   Y un dato de la instancia de referencia que conviene tener presente: donde el principal de serving
+   es **Admin del workspace**, tiene `CONTROL` y con eso `UNMASK` sin necesidad de ningún `GRANT` —
+   así que ahí `TO [public]` puede no estar comprando nada y sí estar abriendo a los demás.
 2. **La vía del rol tiene una asimetría de propagación que además invalida mediciones**: conceder
    propaga a una conexión nueva en **≤11 s**; **revocar no propagó en >20 min** (techo sin medir), y
    **ni una conexión nueva ni un token de acceso nuevo la destraban**. Una conexión ya abierta
