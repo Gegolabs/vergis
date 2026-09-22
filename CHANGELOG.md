@@ -61,6 +61,56 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### La Consola admite una segunda forma de cobertura: `DENY SELECT` de objeto (issue #342)
+
+**El hueco.** La condición (b) del gate exigía que **toda** tabla base del almacén tuviera
+`SECURITY POLICY`. Es correcto para el Silver, pero los almacenes tienen tablas que **el pipeline lee
+y la Consola no debe ver** —`_migrations`, `_bak_*`, `raw_*`—, y para ésas una política de fila
+`deny` es **peligrosa**: la RLS aplica a todos los principales por igual, así que un `deny` sobre
+`_migrations` dejaría al runner de migraciones viendo cero filas y **re-aplicando migraciones sobre
+producción**. El resultado era un almacén entero sin Consola, o un remedio peor que la enfermedad.
+
+**Qué cambia.** Una tabla base queda cubierta si tiene `SECURITY POLICY` **o** si el principal de
+consola **no tiene `SELECT`** sobre ella: *lo que no se puede leer no puede filtrar*. El instrumento
+es `DENY SELECT ON <tabla> TO [<principal de consola>]` — de **objeto** y de **un** principal: lo
+cumple el motor, y el pipeline ni se entera.
+
+**Medido en producción** el 2026-09-22 sobre `wh_presupuesto`, con premisa y control negativo:
+
+```
+PREMISA  consola puede leer _migrations: 1 | serving: 1
+DENY     aceptado por Fabric
+EFECTO   consola puede leer _migrations: 0 | serving: 1
+LECTURA  el MOTOR rechaza el SELECT de la consola (error de permiso, no un parser)
+CONTROL  serving sigue leyendo 1 fila
+```
+
+Y reproducido en el arnés T-SQL local (`npm run lab:proof`, sección **C4d**) con control positivo y
+negativo en la misma corrida: con el `DENY`, el Conector pasa; con el `REVOKE`, vuelve a bloquear.
+
+**Tres detalles que no son decoración.**
+
+1. **Fail-closed sobre la sonda.** La comprobación corre **bajo el principal de consola** —tener o no
+   `SELECT` es una propiedad de ése y de ningún otro— con `HAS_PERMS_BY_NAME(<objeto>,'OBJECT',
+   'SELECT')`. Si devuelve `NULL` o la consulta falla, la tabla **no** cuenta como cubierta y el
+   motivo lo dice («no se pudo medir el permiso»), igual que el `unknown` de #341.
+2. **El motivo distingue las tres poblaciones** —`N con política · M excluida(s) por permiso ·
+   K sin cobertura`— y **solo K bloquea**. `/contrato.consola` las publica en `medido`, y un Conector
+   **ofrecible** que apoya parte de su cobertura en el `DENY` **también** lleva motivo: «se ofrece» y
+   «se ofrece porque M tablas están excluidas por permiso» son dos hechos distintos, y el segundo es
+   el que un operador tiene que poder auditar.
+3. **El árbol de esquema no las lista.** `/consola/<ref>/esquema` filtra las excluidas por permiso: no
+   se ofrecen, no se muestran — ofrecer en el árbol lo que la ejecución va a rechazar es una promesa
+   que la ejecución no cumple.
+
+**Costo.** **Un RTT por Conector**, y solo cuando hay tablas sin política: los nombres viajan en un
+`VALUES` y el motor evalúa la función escalar por fila. Con el terreno entero gobernado la consulta
+**no se emite** — cero RTT adicionales sobre 0.33.1.
+
+Extiende `CAP-198`; no es capacidad nueva.
+
 ## 0.33.1 — 2026-09-22
 
 ### El gate de la Consola no puede ver el gobierno bajo el principal de consola (issue #340, PR #341)

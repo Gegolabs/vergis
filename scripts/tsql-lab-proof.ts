@@ -40,6 +40,8 @@ import {
   SYS_TABLES_SQL,
   SYS_POLICY_VISIBILITY_SQL,
   interpretarVisibilidadGobierno,
+  consolaSelectPermisoSQL,
+  interpretarPermisosSelect,
 } from '../server/engines/fabric'
 import { createConsolaSql } from '../packages/capabilities/src/consola-sql'
 import type { SqlConnectionProfile } from '../packages/capabilities/src/execute-sql-dwh'
@@ -679,6 +681,75 @@ async function main(): Promise<void> {
   )
   await ctrlVis.close()
   await sa.request().batch(`REVOKE VIEW DEFINITION FROM consola_lab;`)
+
+  // C4d (#342) · LA SEGUNDA FORMA DE COBERTURA: `DENY SELECT` de objeto sobre una tabla sin
+  // política. Lo que el principal de consola NO puede leer no puede filtrar, así que no necesita
+  // `SECURITY POLICY` para no ser una fuga. El instrumento es de OBJETO y de UN principal —al revés
+  // que una política de fila `deny`, que aplica a TODOS y dejaría al runner de migraciones ciego—.
+  // Control positivo (el `DENY` puesto) y negativo (el `REVOKE`) en la MISMA corrida: sin el segundo,
+  // un «ofrecible» constante pasaría por cobertura que funciona.
+  seccion('C4d (#342) · `DENY SELECT` de objeto: lo que la Consola no puede leer no puede filtrar')
+  await sa.request().batch(`
+    DROP TABLE IF EXISTS dbo.zz_pipeline;
+    CREATE TABLE dbo.zz_pipeline (id INT NOT NULL, aplicada NVARCHAR(40) NOT NULL);
+    INSERT INTO dbo.zz_pipeline (id, aplicada) VALUES (1, N'0001_init');`)
+  const gateC4d = (pool: sql.ConnectionPool) =>
+    verificarConectorConsola({ ejecutar: ejecutarCon(pool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  // Sesión nueva por medición: el permiso cambia con DDL, y una sesión reusada mezclaría el efecto
+  // del `DENY` con el del plan ya compilado. Lo que se mide es el permiso, no la caché.
+  const permisoDe = async (tabla: string, pool: sql.ConnectionPool) =>
+    interpretarPermisosSelect(await ejecutarCon(pool)(consolaSelectPermisoSQL([tabla])), [tabla]).get(tabla)
+
+  // PREMISA · antes del `DENY`, la consola SÍ la lee y el gate la bloquea por (b). Sin esta línea,
+  // un «ofrecible» posterior no probaría nada: podría ser una tabla que nunca fue legible.
+  const premisaPool = await conectar('consola_lab', USER_PASS)
+  const permisoAntes = await permisoDe('dbo.zz_pipeline', premisaPool)
+  const leeAntes = await intentar(premisaPool, `SELECT id FROM dbo.zz_pipeline`)
+  const c4dAntes = await gateC4d(premisaPool)
+  ok(
+    permisoAntes === 'puede' && leeAntes.ok && !c4dAntes.ofrecible && (c4dAntes.motivo ?? '').includes('zz_pipeline'),
+    `C4d PREMISA · la consola lee \`zz_pipeline\` (permiso '${permisoAntes}', SELECT ${leeAntes.ok ? 'ok' : 'rechazado'}) ` +
+      `y el gate la BLOQUEA: ${c4dAntes.motivo?.slice(0, 90)}`,
+  )
+  await premisaPool.close()
+
+  // EL `DENY` · de objeto, a UN principal.
+  const denyAplicado = await intentar(sa, `DENY SELECT ON dbo.zz_pipeline TO consola_lab`)
+  ok(denyAplicado.ok, `C4d · \`DENY SELECT ON dbo.zz_pipeline TO [consola_lab]\` aceptado por el motor${denyAplicado.ok ? '' : ` — ${denyAplicado.error}`}`)
+  const denegadaPool = await conectar('consola_lab', USER_PASS)
+  const permisoDespues = await permisoDe('dbo.zz_pipeline', denegadaPool)
+  const leeDespues = await intentar(denegadaPool, `SELECT id FROM dbo.zz_pipeline`)
+  ok(
+    permisoDespues === 'no-puede' && !leeDespues.ok && /permission|denied/i.test(leeDespues.ok ? '' : leeDespues.error),
+    `C4d EFECTO · la sonda dice '${permisoDespues}' y EL MOTOR rechaza el SELECT por permiso` +
+      `${leeDespues.ok ? ' ⚠ ¡PASÓ!' : ` — ${leeDespues.error.slice(0, 80)}`}`,
+  )
+  // CONTROL NEGATIVO · el pipeline (acá, el principal de serving) sigue leyendo la MISMA tabla: el
+  // `DENY` no es una política de fila, no aplica a todos, y por eso es el instrumento correcto.
+  const pipelineSigue = (await ejecutarCon(sa)(`SELECT COUNT(*) AS n FROM dbo.zz_pipeline`))[0]
+  ok(Number(pipelineSigue?.['n']) === 1, `C4d CONTROL · el principal de SERVING sigue leyendo la misma tabla (${String(pipelineSigue?.['n'])} fila): el \`DENY\` no toca al pipeline`)
+  // EL GATE · con la tabla excluida por permiso, el Conector se OFRECE y el motivo lo declara.
+  const c4dDeny = await gateC4d(denegadaPool)
+  ok(
+    c4dDeny.ofrecible && (c4dDeny.motivo ?? '').includes('excluida(s) por permiso') && (c4dDeny.medido.tablasExcluidasPorPermiso ?? []).includes('dbo.zz_pipeline'),
+    `C4d · el Conector PASA con la tabla excluida por permiso: ${c4dDeny.motivo?.slice(0, 120)}`,
+  )
+  ok((c4dDeny.medido.tablasSinCobertura ?? []).length === 0, `C4d · y la población que bloquea quedó vacía: ${JSON.stringify(c4dDeny.medido.tablasSinCobertura)}`)
+  await denegadaPool.close()
+
+  // CONTROL NEGATIVO del propio instrumento · `REVOKE` y el gate vuelve a bloquear. Sin esto, el
+  // «ofrecible» de arriba podría ser un gate que dejó de mirar (b), no uno que midió el permiso.
+  await sa.request().batch(`REVOKE SELECT ON dbo.zz_pipeline FROM consola_lab;`)
+  const revocadaPool = await conectar('consola_lab', USER_PASS)
+  const permisoRevoke = await permisoDe('dbo.zz_pipeline', revocadaPool)
+  const c4dRevoke = await gateC4d(revocadaPool)
+  ok(
+    permisoRevoke === 'puede' && !c4dRevoke.ofrecible && (c4dRevoke.motivo ?? '').includes('zz_pipeline'),
+    `C4d CONTROL NEGATIVO · tras el REVOKE la sonda dice '${permisoRevoke}' y el gate vuelve a BLOQUEAR: ${c4dRevoke.motivo?.slice(0, 90)}`,
+  )
+  await revocadaPool.close()
+  // El terreno vuelve como estaba: las secciones siguientes miden (b) sobre un terreno gobernado.
+  await sa.request().batch(`DROP TABLE IF EXISTS dbo.zz_pipeline;`)
 
   // C5 · el principal ESCRITOR nunca es ofrecible, y el motivo nombra el permiso ofensor.
   const c5 = await verificarConectorConsola({ ejecutar: ejecutarCon(escritorPool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })

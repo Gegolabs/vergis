@@ -57,7 +57,8 @@ salió bien».
 | Condición | Cómo se mide | Si falla |
 |--|--|--|
 | **(a)** El principal no puede escribir | `sys.fn_my_permissions(NULL,'DATABASE')` contra lista blanca (`CONNECT`, `SELECT`, `SHOWPLAN` y la familia `VIEW …`, que es toda de metadatos) | No se ofrece, con el permiso ofensor nombrado |
-| **(b)** Toda tabla base tiene política nativa | `sys.tables` − `sys.security_policies` = ∅ (el centinela de #238 se excluye: es instrumento, no dato). **Se pregunta bajo el principal de SERVING**: es una propiedad del terreno, y `sys.security_policies` está filtrada por permiso — el de consola lee cero filas con el terreno entero gobernado (#340) | No se ofrece, nombrando las tablas |
+| **(b)** Toda tabla base está **cubierta** | Cubierta = tiene `SECURITY POLICY` **o** el principal de consola no puede leerla (ver «la segunda forma», abajo). El gobierno sale de `sys.tables` − `sys.security_policies` (el centinela de #238 se excluye: es instrumento, no dato) y **se pregunta bajo el principal de SERVING**: es una propiedad del terreno, y `sys.security_policies` está filtrada por permiso — el de consola lee cero filas con el terreno entero gobernado (#340) | No se ofrece, nombrando las tablas **sin cobertura** |
+| **(b·permiso)** La segunda forma de cobertura | `HAS_PERMS_BY_NAME('<sch>.<tbl>','OBJECT','SELECT')` **bajo el principal de consola**, en **una sola consulta** y solo si hay tablas sin política. `NULL` o consulta que falla ⇒ **no cubre** | No se ofrece, con «no se pudo medir el permiso» |
 | **(b·guarda)** El principal que sondea PUEDE ver el gobierno | Con tablas base y **cero** políticas visibles: `HAS_PERMS_BY_NAME` (`VIEW DEFINITION` de base · `VIEW ANY DEFINITION` de servidor). Ver al menos una política ya es prueba positiva y la guarda no se paga | No se ofrece, pero por **«no se pudo medir el gobierno»** — motivo distinto de «hay tablas sin política», porque la remediación es opuesta: conceder visibilidad de metadatos, no declarar políticas |
 | **(c)** El principal no puede desenmascarar | Centinela `vergis_unmask_probe` leído bajo el principal de consola | No se ofrece |
 | **(d)** El motor honra `@read_only` | Sonda con la clave REAL, en el MISMO batch que un `SELECT`, con control positivo | No se ofrece |
@@ -67,6 +68,51 @@ adivinar ni leer los logs del contenedor.
 
 Nota medida: **`UNMASK` es un permiso de base**, así que (a) lo caza antes de que (c) llegue a
 correr. Es defensa en profundidad, no redundancia — las dos condiciones siguen valiendo por separado.
+
+## La segunda forma de cobertura: ¿por qué `DENY SELECT` y no una política `deny`?
+
+Un almacén no es solo Silver. Tiene tablas que **el pipeline lee y la Consola no debe ver**:
+`_migrations` (la lee el runner de migraciones), `_bak_*`, `raw_*` (las consume la ingesta). Exigirles
+`SECURITY POLICY` a ellas también dejaba al almacén entero sin Consola — y el remedio obvio es peor
+que la enfermedad.
+
+**Porque la RLS es de FILAS y de TODOS; el `DENY` es de OBJETO y de UNO.** Una política de fila
+`deny` sobre `_migrations` no distingue quién pregunta: se la aplica el motor a **todos** los
+principales, incluido el runner de migraciones, que pasaría a ver **cero filas** y a re-aplicar
+migraciones ya aplicadas **sobre producción**. `DENY SELECT ON dbo._migrations TO [<principal de
+consola>]` afecta **solo** a ese principal; el pipeline ni se entera.
+
+Por eso una tabla base queda cubierta de dos maneras, y la segunda es simplemente ésta: **lo que la
+Consola no puede leer no puede filtrar**. Una tabla que su principal no puede abrir no es una fuga
+que falte gobernar — es una tabla que no existe para ella.
+
+**Medido en producción** (`wh_presupuesto`, 2026-09-22), con premisa y control negativo:
+
+| Paso | Consola lee `_migrations` | Serving lee `_migrations` |
+|--|--|--|
+| **Premisa** (antes del `DENY`) | 1 | 1 |
+| **Efecto** (`DENY` aceptado por Fabric) | 0 | 1 |
+
+Y la lectura la rechaza **el motor** —error de permiso—, no un parser. Reproducido en el arnés T-SQL
+local (`npm run lab:proof`, sección **C4d**) con los dos controles en la misma corrida: con el `DENY`
+el Conector pasa; con el `REVOKE` vuelve a bloquear.
+
+**Fail-closed sobre la sonda.** La comprobación corre bajo el principal de consola —tener o no
+`SELECT` es una propiedad de **ése**, al revés que el gobierno, que es del terreno—, en **una sola
+consulta por Conector** y **solo si hay tablas sin política**: con el terreno entero gobernado no se
+paga. Si `HAS_PERMS_BY_NAME` devuelve `NULL` o la consulta falla, la tabla **no** cuenta como
+cubierta y el motivo lo dice. *Un instrumento que no sabe reportar su propio fallo produce datos con
+cara de verdad.*
+
+**El motivo publica las tres poblaciones** —`N con política · M excluida(s) por permiso · K sin
+cobertura`— y **solo K bloquea**. Un Conector **ofrecible** que apoya parte de su cobertura en el
+`DENY` **también** lleva motivo: «se ofrece» y «se ofrece porque M tablas están excluidas por
+permiso» son hechos distintos, y el segundo es el que un operador tiene que poder auditar en
+`/contrato`.
+
+**Y no se listan.** El árbol de esquema de `/consola/<ref>/esquema` omite las tablas excluidas por
+permiso: no se ofrecen, no se muestran. Mostrar en el árbol lo que la ejecución va a rechazar es una
+promesa que la ejecución no cumple.
 
 ## ¿Por qué un Conector con reglas de columna NO se ofrece?
 

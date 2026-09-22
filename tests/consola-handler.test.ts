@@ -71,7 +71,10 @@ describe('consola · handler', () => {
       databaseDe: () => 'wh_fin',
       // Queda «en vuelo» hasta que el test la suelte: así se observan los 409/503 de concurrencia.
       ejecutar: () => new Promise<ConsolaResultado>((ok) => { soltar = () => ok(VACIO) }),
-      esquema: async () => [{ tabla: 'dbo.areas', columnas: [{ nombre: 'area', tipo: 'nvarchar' }] }],
+      esquema: async () => [
+        { tabla: 'dbo.areas', columnas: [{ nombre: 'area', tipo: 'nvarchar' }] },
+        { tabla: 'dbo._migrations', columnas: [{ nombre: 'id', tipo: 'int' }] },
+      ],
       log,
     })
   })
@@ -90,6 +93,24 @@ describe('consola · handler', () => {
       expect(r.body).not.toContain('enabled')
       expect(r.body).not.toContain('wh_fin')
     }
+  })
+
+  /**
+   * #342 · una tabla cubierta por `DENY SELECT` —no por política— no se ofrece en el árbol. El
+   * principal de consola no puede leerla: listarla sería prometer lo que la ejecución va a rechazar.
+   */
+  it('el esquema NO lista las tablas excluidas por permiso, y SÍ las demás', async () => {
+    estado.set('fin', { ofrecible: true, verificadoEn: 'T', medido: { tablasExcluidasPorPermiso: ['dbo._migrations'] } })
+    const r = res()
+    await consola.tryHandle(req('GET', '/consola/fin/esquema', 'ana@gh.cl'), r as unknown as ServerResponse)
+    expect(r.statusCode).toBe(200)
+    expect(j(r)['tablas']).toEqual([{ tabla: 'dbo.areas', columnas: [{ nombre: 'area', tipo: 'nvarchar' }] }])
+  })
+
+  it('CONTROL · sin exclusiones el esquema las lista TODAS (el filtro no es un borrado ciego)', async () => {
+    const r = res()
+    await consola.tryHandle(req('GET', '/consola/fin/esquema', 'ana@gh.cl'), r as unknown as ServerResponse)
+    expect((j(r)['tablas'] as unknown[]).length).toBe(2)
   })
 
   it('una ruta ajena no se intercepta', async () => {
