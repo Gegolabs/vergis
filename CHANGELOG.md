@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.33.3 — 2026-09-22
 
-### La sonda de `@read_only` del gate de la Consola medía nada: `batch()` no liga parámetros (issue #344)
+### La sonda de `@read_only` del gate de la Consola medía nada: `batch()` no liga parámetros (issue #344, PR #345)
 
 **El hueco.** La condición **(d)** del gate —*¿el motor honra `@read_only`?*— emitía su control
 positivo y su ataque con `request.batch(...)` después de cargar los parámetros con `.input(...)`. En
