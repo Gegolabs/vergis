@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.33.0 — 2026-09-22
 
-### El nodo genera el catálogo del esquema de datos: el Datadoc (`CAP-197`, issue #304)
+### El nodo genera el catálogo del esquema de datos: el Datadoc (`CAP-197`, issue #304, PR #338)
 
 **Opt-in por `VERGIS_DATADOC=1`.** Sin la env, la superficie del nodo es **exactamente** la de
 0.32.0: ninguna ruta nueva, ningún lazo, ningún prefijo reservado, ninguna sección en `/admin` ni en
@@ -149,7 +149,7 @@ Ejemplos de los dos YAML: `examples/instance/writers.yaml` y `examples/instance/
 
 ### Consola SQL: T-SQL libre sobre un Conector, acotado por la misma RLS que un PI
 
-**Qué trae (#306, `CAP-198`):** una superficie de Ingeniería —`GET /consola`, tras el flag
+**Qué trae (issue #306, PR #337, `CAP-198`):** una superficie de Ingeniería —`GET /consola`, tras el flag
 `VERGIS_CONSOLA_ENABLED` y un scope de grupo— donde se elige un Conector registrado, se escribe T-SQL
 y se ve el resultset **viendo exactamente las filas que un PI le mostraría a esa persona**. Ejecuta
 bajo un **principal de consola propio de cada Conector** (sub-perfil `consola` de
