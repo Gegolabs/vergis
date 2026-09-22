@@ -32,7 +32,15 @@ import { compileFabric, sessionContextPrelude } from '../packages/policy/src/fab
 import { emulateFabricMaskView } from '../packages/policy/src/fabric'
 import { MASK_VALUE, type ClaimSet, type ColumnRule, type PolicyDecl } from '../packages/policy/src/ir'
 import { settingsForInjections } from '../packages/policy/src/clickhouse'
-import { verificarConectorConsola, unmaskProbeReadSQL, UNMASK_PROBE_EXPECTED } from '../server/engines/fabric'
+import {
+  verificarConectorConsola,
+  unmaskProbeReadSQL,
+  UNMASK_PROBE_EXPECTED,
+  SYS_SECURITY_POLICIES_SQL,
+  SYS_TABLES_SQL,
+  SYS_POLICY_VISIBILITY_SQL,
+  interpretarVisibilidadGobierno,
+} from '../server/engines/fabric'
 import { createConsolaSql } from '../packages/capabilities/src/consola-sql'
 import type { SqlConnectionProfile } from '../packages/capabilities/src/execute-sql-dwh'
 
@@ -533,7 +541,10 @@ async function main(): Promise<void> {
     CREATE USER consola_lab FOR LOGIN consola_lab;
     CREATE USER consola_lab_escritor FOR LOGIN consola_lab_escritor;
     GRANT SELECT TO consola_lab;
-    GRANT VIEW DEFINITION TO consola_lab;
+    -- SIN \`GRANT VIEW DEFINITION\`, y es deliberado (#340): con él, el principal de consola del arnés
+    -- veía \`sys.security_policies\` y el laboratorio NO reproducía el terreno real —donde el principal
+    -- de consola tiene solo \`SELECT\`—. Un arnés más privilegiado que la producción mide otra cosa.
+    -- C4c mide la ceguera con ese permiso puesto y quitado, en la misma corrida.
     GRANT SELECT TO consola_lab_escritor;
     ALTER ROLE db_datawriter ADD MEMBER consola_lab_escritor;`)
   const consolaPool = await conectar('consola_lab', USER_PASS)
@@ -620,7 +631,7 @@ async function main(): Promise<void> {
   const storeSoloFila = new Map<string, PolicyDecl>([['dbo.areas', { ...POLICY, columnRules: undefined } as PolicyDecl]])
 
   // C4 · con `dbo.zz_sin_politica` presente, el Conector NO se ofrece y el motivo la nombra.
-  const c4 = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  const c4 = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
   ok(!c4.ofrecible && (c4.motivo ?? '').includes('zz_sin_politica'), `C4 · tabla sin política ⇒ no ofrecible, y el motivo la nombra: ${c4.motivo?.slice(0, 110)}`)
   // …y el centinela de #238, que TAMPOCO tiene política, no cuenta: es instrumento, no dato.
   ok(!(c4.medido.tablasSinPolitica ?? []).some((t) => t.includes('vergis_unmask_probe')), 'C4 · el centinela de #238 NO se cuenta como tabla sin gobierno (es instrumento)')
@@ -632,11 +643,45 @@ async function main(): Promise<void> {
     const enfAllow = compileFabric({ public: true }, { schema: t.split('.')[0], table: t.split('.')[1] })
     for (const stmt of enfAllow.setupSQL) await intentar(sa, stmt)
   }
-  const c4b = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  const c4b = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
   ok(c4b.ofrecible, `C4 · tras aplicar allow-all a la tabla huérfana ⇒ ofrecible${c4b.ofrecible ? '' : ` — ${c4b.motivo}`}`)
 
+  // C4c (#340) · LA CORRIDA DISCRIMINANTE: el terreno gobernado, y el principal que sondea sin
+  // visibilidad de metadatos. Los dos veredictos salen del MISMO terreno en el MISMO instante; lo
+  // único que cambia es QUIÉN pregunta — el control positivo es `sa`, que ve las políticas.
+  const polSA = (await ejecutarCon(sa)(SYS_SECURITY_POLICIES_SQL)).length
+  const polConsola = (await ejecutarCon(consolaPool)(SYS_SECURITY_POLICIES_SQL)).length
+  const tablasConsola = (await ejecutarCon(consolaPool)(SYS_TABLES_SQL)).length
+  ok(
+    polSA > 0 && polConsola === 0 && tablasConsola > 0,
+    `C4c · la CEGUERA existe y es la de #340: sa ve ${polSA} política(s), el principal de consola ve ${polConsola} — ` +
+      `y enumera ${tablasConsola} tabla(s) con normalidad (no es que no esté conectado)`,
+  )
+  const visSA = interpretarVisibilidadGobierno(await ejecutarCon(sa)(SYS_POLICY_VISIBILITY_SQL))
+  const visConsola = interpretarVisibilidadGobierno(await ejecutarCon(consolaPool)(SYS_POLICY_VISIBILITY_SQL))
+  ok(visSA === 'visible' && visConsola === 'blind', `C4c · y la GUARDA la nombra: sa ⇒ '${visSA}', principal de consola ⇒ '${visConsola}'`)
+  // El gate sondeando el terreno con el principal ciego: NO puede decir «sin política».
+  const c4c = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), ejecutarTerreno: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(
+    !c4c.ofrecible && (c4c.motivo ?? '').includes('no se pudo medir el gobierno') && !(c4c.motivo ?? '').includes('sin SECURITY POLICY'),
+    `C4c · con la sonda bajo el principal CIEGO el motivo es «no pude medir», no «sin política»: ${c4c.motivo?.slice(0, 120)}`,
+  )
+  // CONTROL de la guarda: concedido `VIEW DEFINITION`, el mismo principal deja de estar ciego y el
+  // gate vuelve a medir de verdad (sin esto, un `blind` constante pasaría por guarda que funciona).
+  await sa.request().batch(`GRANT VIEW DEFINITION TO consola_lab;`)
+  const ctrlVis = await conectar('consola_lab', USER_PASS)
+  const visConGrant = interpretarVisibilidadGobierno(await ejecutarCon(ctrlVis)(SYS_POLICY_VISIBILITY_SQL))
+  const polConGrant = (await ejecutarCon(ctrlVis)(SYS_SECURITY_POLICIES_SQL)).length
+  const c4cCtrl = await verificarConectorConsola({ ejecutar: ejecutarCon(ctrlVis), ejecutarTerreno: ejecutarCon(ctrlVis), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  ok(
+    visConGrant === 'visible' && polConGrant === polSA && c4cCtrl.ofrecible,
+    `CONTROL · con VIEW DEFINITION el mismo principal ve ${polConGrant} política(s) y la guarda dice '${visConGrant}' ⇒ ofrecible (la guarda discrimina, no es un no-op)`,
+  )
+  await ctrlVis.close()
+  await sa.request().batch(`REVOKE VIEW DEFINITION FROM consola_lab;`)
+
   // C5 · el principal ESCRITOR nunca es ofrecible, y el motivo nombra el permiso ofensor.
-  const c5 = await verificarConectorConsola({ ejecutar: ejecutarCon(escritorPool), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  const c5 = await verificarConectorConsola({ ejecutar: ejecutarCon(escritorPool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeSoloFila, tablasDelRef: ['dbo.areas'], ref: 'lab' })
   ok(!c5.ofrecible && /INSERT|UPDATE|DELETE/.test(c5.motivo ?? ''), `C5 · principal escritor ⇒ no ofrecible, con el permiso nombrado: ${c5.motivo?.slice(0, 110)}`)
 
   // C6 · el plano de columna bajo el principal de consola: base y vista, ambas enmascaradas.
@@ -644,7 +689,7 @@ async function main(): Promise<void> {
   const vistaC6 = (await consultarRaw(consolaPool, enf.injections, { ...TODOS, ve_pii: ['1'] }, `SELECT rut AS r FROM ${enf.maskView.qualifiedName}`)).map((r) => String(r['r']))
   ok(baseC6.every((v) => !v.includes('-')), `C6 · TABLA BASE bajo el principal de consola: enmascarada [${baseC6.join(' ')}]`)
   ok(vistaC6.every((v) => !v.includes('-')), `C6 · VISTA DE MÁSCARA bajo el principal de consola: enmascarada [${vistaC6.join(' ')}] (el claim NO la abre: la vista solo discrimina con UNMASK)`)
-  const c6Antes = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeLab, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  const c6Antes = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeLab, tablasDelRef: ['dbo.areas'], ref: 'lab' })
   ok(c6Antes.medido.unmask === 'incapable', `C6 · (c) medido: el principal de consola es \`${c6Antes.medido.unmask}\` de desenmascarar`)
   ok(!c6Antes.ofrecible && (c6Antes.motivo ?? '').includes('P-7'), 'C6 · y AUN ASÍ no se ofrece: con reglas de columna manda P-7 (inferencia por predicado, C3), no (c)')
   // CONTROL de (c): con `UNMASK` concedido, ¿algo lo delata? Se mide en DOS niveles, y el primero
@@ -653,7 +698,7 @@ async function main(): Promise<void> {
   // que el diseño no había previsto — y, como (c) ya no corre, el control de que el CENTINELA
   // discrimina hay que hacerlo directo contra el instrumento, o no se habría medido nada.
   await sa.request().batch(`GRANT UNMASK TO consola_lab;`)
-  const c6Despues = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), sondaReadOnly: sondaSiempre, store: storeLab, tablasDelRef: ['dbo.areas'], ref: 'lab' })
+  const c6Despues = await verificarConectorConsola({ ejecutar: ejecutarCon(consolaPool), ejecutarTerreno: ejecutarCon(sa), sondaReadOnly: sondaSiempre, store: storeLab, tablasDelRef: ['dbo.areas'], ref: 'lab' })
   ok(!c6Despues.ofrecible && (c6Despues.motivo ?? '').includes('UNMASK'), `CONTROL · con UNMASK concedido, (a) ya lo apaga: ${c6Despues.motivo?.slice(0, 100)}`)
   const centinela = (await ejecutarCon(consolaPool)(unmaskProbeReadSQL('dbo'))).map((r) => String(r['probe']))
   ok(centinela[0] === UNMASK_PROBE_EXPECTED, `CONTROL · y el CENTINELA discrimina: con UNMASK lee '${centinela[0]}' donde sin UNMASK leía enmascarado (no es un no-op)`)
