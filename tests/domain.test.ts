@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDomainsConfig, canManageDomain, manageableDomains } from '@vergis/capabilities'
+import { parseDomainsConfig, canManageDomain, manageableDomains, domainOfConnection } from '@vergis/capabilities'
 
 describe('domain · contrato y autorización', () => {
   it('parsea dominios y normaliza stewards a minúsculas', () => {
@@ -120,5 +120,42 @@ describe('domain · stewards por grupo (#183)', () => {
   it('un correo que CONTIENE el prefijo no se confunde con un grupo (el prefijo es de inicio)', () => {
     const d = parseDomainsConfig({ domains: [{ id: 'x', label: 'X', stewards: ['ana+group:x@gh.cl'] }] })[0]
     expect(canManageDomain(d, 'ana+group:x@gh.cl', false)).toBe(true)
+  })
+})
+
+// ── `connections`: qué Datahouses realizan el dominio (CAP-197 · D1) ─────────────────────────────
+
+describe('domains · connections (CAP-197)', () => {
+  it('se parsea y se deduplica, conservando el orden de aparición', () => {
+    const d = parseDomainsConfig({ domains: [{ id: 'fin', label: 'Finanzas', connections: ['finanzas', 'cartera', 'finanzas'] }] })[0]
+    expect(d.connections).toEqual(['finanzas', 'cartera'])
+  })
+
+  it('sin declararlas, el campo no existe: nada se infiere', () => {
+    expect(parseDomainsConfig({ domains: [{ id: 'fin', label: 'Finanzas' }] })[0].connections).toBeUndefined()
+  })
+
+  it('⚠ una conexión reclamada por DOS dominios es fatal, nombrando a los dos', () => {
+    // REFUTARÍA el silencio: no hay respuesta correcta que elegir sola cuando dos dominios se pelean
+    // una conexión — igual que un `id` duplicado, es un error del archivo.
+    expect(() =>
+      parseDomainsConfig({
+        domains: [
+          { id: 'fin', label: 'Finanzas', connections: ['comun'] },
+          { id: 'ven', label: 'Ventas', connections: ['comun'] },
+        ],
+      }),
+    ).toThrow(/la conexión 'comun' ya fue reclamada por el dominio 'fin'/)
+  })
+
+  it('una entrada con forma inválida rompe el archivo en vez de quedar muerta en silencio', () => {
+    expect(() => parseDomainsConfig({ domains: [{ id: 'x', label: 'X', connections: ['con espacio'] }] })).toThrow(/entrada inválida/)
+    expect(() => parseDomainsConfig({ domains: [{ id: 'x', label: 'X', connections: 'finanzas' }] })).toThrow(/debe ser una lista/)
+  })
+
+  it('`domainOfConnection` es el índice invertido, y no adivina por parecido de nombre', () => {
+    const ds = parseDomainsConfig({ domains: [{ id: 'fin', label: 'Finanzas', connections: ['wh_finanzas'] }] })
+    expect(domainOfConnection(ds, 'wh_finanzas')?.id).toBe('fin')
+    expect(domainOfConnection(ds, 'finanzas')).toBeNull()
   })
 })

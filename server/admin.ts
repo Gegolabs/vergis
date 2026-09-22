@@ -251,6 +251,28 @@ export interface IdentityClaimsAdmin {
   unresolvedIdentities(emails: string[]): Promise<string[]>
 }
 
+/**
+ * Lo que `/admin` necesita del Datadoc — la forma MÍNIMA, no el objeto entero.
+ *
+ * Se declara acá y no se importa de `./datadoc` a propósito: la administración no tiene por qué saber
+ * cómo se mide un warehouse, y un test de esta pantalla no tiene por qué construir un generador. Lo
+ * que `createDatadoc` devuelve satisface esta forma sin conversión.
+ */
+export interface DatadocOps {
+  estado(): Promise<{
+    build: { dir: string; generadoEn: string } | null
+    conexiones: { ref: string; database: string | null; server: string | null; ok: boolean; medidoEn: string | null; ms: number | null; objetos: number | null; error?: string }[]
+    rancio: { razon: string; desde: string } | null
+    enCurso: boolean
+    schedule: string
+    timezone: string
+    conteos: 'abiertas' | 'off'
+    avisos: string[]
+  }>
+  generar(alcance?: 'all' | string): Promise<{ ok: boolean; build?: string; fallidas: string[]; ms: number; motivo?: string }>
+  ajustes(input: { schedule?: string; timezone?: string; conteos?: string }, by: string): Promise<{ schedule: string; timezone: string; conteos: 'abiertas' | 'off' }>
+}
+
 export interface AdminDeps {
   entities: MasterDataEntity[]
   mdStore: MasterDataStore
@@ -338,6 +360,12 @@ export interface AdminDeps {
    *  dominios que el usuario gestiona. Lee SOLO la proyección — nunca OneLake en el request path.
    *  Opcional: sin él (instancia sin vigilante) el dashboard queda idéntico a como estaba. */
   intakeWatch?: (domainIds: string[]) => Promise<{ vigilados: number; enAlerta: number; sinMedir: number }>
+  /**
+   * El Datadoc del nodo (`VERGIS_DATADOC`, CAP-197): estado, disparo manual y ajustes. Opcional —
+   * sin la dep, ni la sección ni la entrada del menú lateral existen (la ruta cae al 404 de siempre),
+   * que es la superficie de una instancia que no encendió la capacidad.
+   */
+  datadoc?: DatadocOps
   /** Settings de plataforma (título del catálogo, etc.). Opcional. */
   settingStore?: PlatformSettingStore
   /** Identidad del consumidor desde las cabeceras del gate. */
@@ -427,6 +455,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     else if (path.startsWith('/admin/groups')) { scope = 'config'; active = 'groups' }
     else if (path.startsWith('/admin/sources')) { scope = 'config'; active = 'sources' }
     else if (path.startsWith('/admin/identidades')) { scope = 'config'; active = 'identidades' }
+    else if (path.startsWith('/admin/datadoc')) { scope = 'config'; active = 'datadoc' }
     else if (dmActive) active = dmActive[2] ? `dom:${dmActive[1]}/${dmActive[2]}` : `dom:${dmActive[1]}`
     else {
       const emActive = path.match(/^\/admin\/e\/([a-z][a-z0-9_]*)/)
@@ -635,6 +664,37 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         await deps.settingStore.setSetting('index_title', val, email)
         deps.audit({ type: 'platform-setting', key: 'index_title', value: val, by: email })
         redirect(res, '/admin/plataforma')
+        return true
+      }
+      // ── DATADOC (CAP-197) — gestión de PLATAFORMA: estado, disparo manual y ajustes ────────
+      // La generación escribe en VERGIS_OUT (sustrato compartido): su POST ya pasó por el gate de
+      // `mutacionSinControl` del router, que responde 409 nombrando al activo en un nodo standby.
+      if (deps.datadoc && path === '/admin/datadoc' && req.method === 'GET') {
+        if (!isAdmin) return denyPlatform()
+        send(res, 200, await datadocPage(deps, nav, token, url.searchParams.get('msg') ?? undefined))
+        return true
+      }
+      if (deps.datadoc && path === '/admin/datadoc/generar' && req.method === 'POST') {
+        if (!isAdmin) return denyPlatform()
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        const conexion = (f['conexion'] ?? '').trim()
+        const alcance = conexion || 'all'
+        deps.audit({ type: 'datadoc-generate', scope: alcance, by: email })
+        // El disparo NO se espera: medir ocho almacenes puede tardar más que cualquier request
+        // razonable. La página dice «en curso» y el propio generador escribe `datadoc-done` al
+        // terminar — el request ya respondió y no puede hacerlo por él.
+        const enVuelo = (await deps.datadoc.estado()).enCurso
+        void deps.datadoc.generar(alcance).catch((e) => console.error(`[admin] datadoc: la generación falló: ${errMsg(e)}`))
+        redirect(res, `/admin/datadoc?msg=${encodeURIComponent(enVuelo ? 'Ya había una generación en curso: no se arrancó otra.' : `Generación iniciada (${alcance === 'all' ? 'todas las conexiones' : alcance}).`)}`)
+        return true
+      }
+      if (deps.datadoc && path === '/admin/datadoc/ajustes' && req.method === 'POST') {
+        if (!isAdmin) return denyPlatform()
+        const f = await readForm(req)
+        requireCsrf(f, token)
+        const r = await deps.datadoc.ajustes({ schedule: f['schedule'] ?? '', timezone: f['timezone'] ?? '', conteos: f['conteos'] ?? '' }, email)
+        redirect(res, `/admin/datadoc?msg=${encodeURIComponent(`Ajustes guardados: schedule ${r.schedule} · conteos ${r.conteos}.`)}`)
         return true
       }
       // Grupos de Mira
@@ -1015,6 +1075,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
     if (deps.groupStore) s += lvl('/admin/groups', 'Grupos de Mira', active === 'groups')
     if (deps.sourceRegistry) s += lvl('/admin/sources', 'Fuentes', active === 'sources')
     if (deps.identityClaims) s += lvl('/admin/identidades', 'Mapa de identidad', active === 'identidades')
+    if (deps.datadoc) s += lvl('/admin/datadoc', 'Datadoc', active === 'datadoc')
   } else {
     s += lvl('/admin', 'Inicio', active === 'home')
     if (manageable.length) {
@@ -1217,6 +1278,88 @@ function maestraPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): string {
 
 
 /** Gestión de PLATAFORMA: Usuarios y Roles · Grupos · Settings (una entrada que despliega todo). */
+/**
+ * `/admin/datadoc` — el estado del catálogo del esquema y sus dos actos (generar, ajustar).
+ *
+ * Es la pantalla del OPERADOR de la plataforma, no de la instancia: schedule y política de conteos
+ * son perillas que se mueven desde acá y sobreviven a un restart en el store de settings, y no
+ * declaraciones en un YAML. Lo que sí es declaración —quién escribe, qué significa— vive en los
+ * archivos de la instancia y se recarga en caliente.
+ */
+async function datadocPage(deps: AdminDeps, nav: Chrome, token: string, msg?: string): Promise<string> {
+  const d = deps.datadoc!
+  const e = await d.estado()
+  const fecha = (iso: string | null): string => {
+    if (!iso) return '—'
+    const t = Date.parse(iso)
+    if (Number.isNaN(t)) return '—'
+    try {
+      return new Date(t).toLocaleString('es-CL', { timeZone: e.timezone, dateStyle: 'short', timeStyle: 'short' })
+    } catch {
+      return new Date(t).toISOString()
+    }
+  }
+  const filas = e.conexiones
+    .map(
+      (c) => `<tr${c.ok ? '' : ' class="warn"'}><td><code>${escapeHtml(c.ref)}</code></td><td><code>${escapeHtml(c.database ?? '—')}</code></td><td>${
+        c.ok ? '✓ medida' : `<b>✗ ${escapeHtml(c.error ?? 'no medida')}</b>`
+      }</td><td>${escapeHtml(fecha(c.medidoEn))}</td><td>${c.ms == null ? '—' : `${c.ms} ms`}</td><td>${c.objetos ?? '—'}</td><td><form method="post" action="/admin/datadoc/generar" class="row"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="conexion" value="${escapeHtml(
+        c.ref,
+      )}"><button class="add">Regenerar solo ésta</button></form></td></tr>`,
+    )
+    .join('\n')
+
+  const rancio = e.rancio
+    ? `<p class="msg err"><b>Catálogo marcado rancio</b> (${escapeHtml(e.rancio.razon)}, ${escapeHtml(
+        fecha(e.rancio.desde),
+      )}): el gobierno cambió después de la última medición. Los conteos de filas se retiraron del sitio publicado y vuelven con la próxima generación.</p>`
+    : ''
+  const avisos = e.avisos.length
+    ? `<details><summary>${e.avisos.length} aviso(s) de la última generación</summary><ul>${e.avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join('')}</ul></details>`
+    : ''
+
+  return adminPage(
+    deps,
+    nav,
+    'Datadoc',
+    `${msg ? `<p class="msg">${escapeHtml(msg)}</p>` : ''}${rancio}
+<p class="sub">El catálogo del esquema de datos de esta plataforma: qué existe en cada conexión, qué significa, quién lo escribe, quién lo lee y bajo qué gobierno. <b>Se genera, no se escribe.</b> Toda consulta que emite es de solo lectura.</p>
+<h2>Sitio publicado</h2>
+<p>${
+      e.build
+        ? `Build <code>${escapeHtml(e.build.dir)}</code>, generado el <b>${escapeHtml(fecha(e.build.generadoEn))}</b> — <a href="/datadoc/" target="_blank">abrir el Datadoc</a>.`
+        : '<b>Todavía no se ha generado ninguna vez.</b> La ruta <code>/datadoc/</code> responde una página que lo dice.'
+    }${e.enCurso ? ' · <b>Hay una generación en curso.</b>' : ''}</p>
+<form method="post" action="/admin/datadoc/generar" class="row">
+  <input type="hidden" name="_csrf" value="${token}">
+  <button class="add">Generar (todas las conexiones)</button>
+</form>
+<p class="sub">Mientras una generación esté en curso, un segundo clic no arranca otra.</p>
+<h2>Sello de frescura, por conexión</h2>
+<div class="scrollx"><table><thead><tr><th>Conexión</th><th>Base de datos</th><th>Estado</th><th>Medida</th><th>Duración</th><th>Objetos</th><th></th></tr></thead><tbody>
+${filas || '<tr><td colspan="7"><i>Sin conexiones declaradas.</i></td></tr>'}
+</tbody></table></div>
+<p class="sub">Una conexión que no responde conserva su medición anterior y el sitio la marca como no medida, con el motivo. Nunca desaparece del catálogo: desaparecer afirmaría que no existe.</p>
+${avisos}
+<h2>Ajustes</h2>
+<form method="post" action="/admin/datadoc/ajustes" class="grid">
+  <input type="hidden" name="_csrf" value="${token}">
+  <label class="fld"><span>Generación programada</span>
+    <input name="schedule" value="${escapeHtml(e.schedule)}" placeholder="off · daily@06:00 · weekly:monday@06:00"></label>
+  <label class="fld"><span>Zona horaria (IANA)</span>
+    <input name="timezone" value="${escapeHtml(e.timezone)}" placeholder="America/Santiago"></label>
+  <label class="fld"><span>Conteos de filas</span>
+    <select name="conteos">
+      <option value="abiertas"${e.conteos === 'abiertas' ? ' selected' : ''}>Solo donde la autorización por fila no filtra</option>
+      <option value="off"${e.conteos === 'off' ? ' selected' : ''}>Ninguno</option>
+    </select></label>
+  <button class="add">Guardar</button>
+</form>
+<p class="sub"><b>Sobre los conteos:</b> un <code>COUNT(*)</code> sobre una tabla gobernada es información que la autorización por fila protege. El catálogo <b>no pide</b> el conteo de una tabla cuyo predicado filtra, ni de una cuyo gobierno no pudo determinar — con <i>Ninguno</i> no pide ninguno en absoluto. La protección es no preguntar, no confiar en que la respuesta venga filtrada.</p>
+<p class="sub">Un valor de schedule que no se entienda queda en <code>off</code>: no se adivina una cadencia.</p>`,
+  )
+}
+
 async function platformPage(deps: AdminDeps, nav: Chrome, token: string, msg?: string): Promise<string> {
   const curTitle = deps.settingStore ? (await deps.settingStore.getSetting('index_title')) ?? '' : ''
   const n = deps.settingStore ? await leerNotasSettings(deps.settingStore) : null

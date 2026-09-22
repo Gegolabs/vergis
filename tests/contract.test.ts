@@ -499,3 +499,55 @@ describe('contrato · delta entre versiones (issue #139 · Nivel 2)', () => {
     rmSync(journalDir, { recursive: true, force: true })
   })
 })
+
+// ── El Datadoc en el contrato (CAP-197) ─────────────────────────────────────────────────────────
+
+describe('contrato · datadoc', () => {
+  it('sin el proveedor cableado, la sección es `null`: el nodo dice «no la cableé», no la finge', () => {
+    expect(registry().snapshot().datadoc).toBeNull()
+  })
+
+  it('con la capacidad encendida y sin generar nunca, `current: null` — distinto de «apagada»', () => {
+    const snap = registry({
+      datadoc: () => ({ enabled: true, current: null, conexiones: [{ ref: 'finanzas', ok: false, medidoEn: null, error: 'nunca medida' }], enCurso: false, schedule: 'off', conteos: 'abiertas', rancio: null }),
+    }).snapshot()
+    expect(snap.datadoc).toMatchObject({ enabled: true, current: null })
+    expect(snap.datadoc!.conexiones[0]).toEqual({ ref: 'finanzas', ok: false, medidoEn: null, error: 'nunca medida' })
+  })
+
+  it('publica el build servido, el sello por conexión, el schedule y la marca de rancio', () => {
+    const snap = registry({
+      datadoc: () => ({
+        enabled: true,
+        current: { build: 'build-2026-09-21T12-00-00-000Z', generadoEn: '2026-09-21T12:00:00.000Z' },
+        conexiones: [
+          { ref: 'finanzas', ok: true, medidoEn: '2026-09-21T12:00:00.000Z' },
+          { ref: 'ventas', ok: false, medidoEn: null, error: 'ETIMEDOUT' },
+        ],
+        enCurso: true,
+        schedule: 'daily@06:00',
+        conteos: 'abiertas',
+        rancio: { razon: 'watch:policies', desde: '2026-09-21T13:00:00.000Z' },
+      }),
+    }).snapshot()
+    expect(snap.datadoc).toMatchObject({
+      current: { build: 'build-2026-09-21T12-00-00-000Z' },
+      enCurso: true,
+      schedule: 'daily@06:00',
+      rancio: { razon: 'watch:policies' },
+    })
+    expect(snap.datadoc!.conexiones.find((c) => c.ref === 'ventas')!.error).toBe('ETIMEDOUT')
+  })
+
+  it('un proveedor que lanza cuesta la SECCIÓN, jamás la consulta entera del contrato', () => {
+    // El contrato es observabilidad: un sello ilegible no puede convertirse en un 500 que deja al
+    // operador sin ver nada de lo demás.
+    const snap = registry({
+      datadoc: () => {
+        throw new Error('sello ilegible')
+      },
+    }).snapshot()
+    expect(snap.datadoc).toBeNull()
+    expect(snap.version).toBeTruthy()
+  })
+})

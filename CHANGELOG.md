@@ -61,6 +61,92 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### El nodo genera el catálogo del esquema de datos: el Datadoc (`CAP-197`, issue #304)
+
+**Opt-in por `VERGIS_DATADOC=1`.** Sin la env, la superficie del nodo es **exactamente** la de
+0.32.0: ninguna ruta nueva, ningún lazo, ningún prefijo reservado, ninguna sección en `/admin` ni en
+`GET /contrato`. Con la env y un motor que no es `fabric`, el arranque **falla nombrando las dos** —
+la introspección que el catálogo necesita es `INFORMATION_SCHEMA` + `sys.*` de un SQL endpoint, y
+degradar en silencio dejaría un botón que no puede funcionar.
+
+**Qué hace.** Mide cada conexión de `VERGIS_CONNECTIONS` en modo estrictamente de solo lectura
+—qué objetos existen, su forma, su gobierno y su linaje vista→base, que sale de `sys` y no de un
+regex sobre la definición—, la cruza con las specs de los PI (quién lee), el registro de fuentes
+(de dónde viene y cada cuánto cambia) y dos declaraciones nuevas de instancia, y emite un sitio
+estático multi-página con URL estable por entidad. Se sirve en `/datadoc/` por el **mismo**
+`resolveStatic` de `CAP-195`: misma contención de ruta, misma lista blanca de tipos, misma
+autorización (la del catálogo).
+
+**Frontera con `CAP-195`.** Aquélla sirve lo que la **instancia** declara; ésta sirve lo que el
+**nodo produce**. Por eso el Datadoc es una colección propia del nodo y no una entrada de
+`VERGIS_STATIC`: el directorio de salida es estado del Producto bajo `VERGIS_OUT`, y si lo declarara
+la instancia se rompería el día que ese layout cambie, sin que el Producto pueda avisar. Mientras la
+capacidad está encendida, el prefijo `datadoc` queda reservado y una colección de instancia con ese
+nombre se omite con aviso.
+
+**Los conteos de filas, que es donde esto podía filtrar.** Un `COUNT(*)` sobre una tabla gobernada
+**es** información que la RLS protege. La regla es no preguntar: el `COUNT_BIG` se emite solo sobre
+tablas sin política o con política demostradamente allow-all, y a una filtrada o indeterminada **no
+se le emite la consulta**. La protección no depende de que la respuesta venga filtrada — si el
+Service Principal del nodo estuviera exento del predicado, algo **no verificado** en Fabric, llegaría
+completa.
+
+⚠ **La clasificación es por la forma COMPLETA de la definición, jamás por substring.** Medido contra
+el compilador (`packages/policy/src/fabric.ts`): el literal `SELECT 1 AS vergis_allowed` se emite en
+**las dos** ramas — la allow-all sin `WHERE` y la filtrada con él. Clasificar por substring marcaría
+toda tabla con RLS real como abierta y publicaría su conteo. El test que lo mide usa el fixture del
+propio compilador y falla si sale `abierta`.
+
+**El build rancio no publica conteos.** El Producto no aplica las políticas —las aplica la
+instancia—, así que una tabla puede pasar de abierta a gobernada sin que el nodo se entere y el build
+cacheado seguiría publicando el número que calculó cuando todavía era legítimo. Por eso
+`reloadGovernance` marca el catálogo como rancio y **lo vuelve a dibujar sin conteos**, desde los
+modelos ya medidos y sin tocar la red; la página lo declara y la marca se retira con la próxima
+generación.
+
+**Esquemas por LISTA BLANCA** (`dbo` por defecto), no por lista negra. Medido: `wh_finanzas` trae un
+esquema `queryinsights` con seis vistas —el historial de consultas de Fabric— que un
+`NOT IN ('sys','INFORMATION_SCHEMA')` deja pasar y el catálogo publicaría como entidades.
+
+**Degradación honesta.** Una conexión que no responde conserva su medición anterior y el sitio la
+marca «NO medida en esta corrida», con la fecha vieja y el motivo, en la portada, en su dominio y en
+cada una de sus entidades. Una conexión declarada y nunca medida aparece igual en el sello: su
+ausencia se leería como «no existe». Un sub-error —`sys.security_policies` denegada— no invalida la
+conexión: se declara, y todas sus tablas quedan `indeterminada`, por lo tanto sin conteos.
+
+**Nunca se inventa.** Sin `VERGIS_WRITERS`, «escritor no declarado». Sin `VERGIS_SEMANTICA`, «sin
+descripción». Sin `domains[].connections`, la conexión se presenta como **dominio técnico** rotulado
+por su `database_ref` — no se infiere por parecido de nombre. La clasificación de una entidad sale de
+hechos medidos (es vista / tiene lector, escritor vigente o política / nada de lo anterior); las
+convenciones de nombre de una instancia no entran al motor y se expresan con `clase:` por entidad.
+
+**Envs y superficie nuevas:**
+
+| Qué | Dónde |
+|--|--|
+| `VERGIS_DATADOC=1` | Enciende la capacidad. Exige `VERGIS_ENGINE=fabric` |
+| `VERGIS_WRITERS` | `writers: [{ id, conexion, tipo, estado, disparo, tablas[], proceso?, lee?, notas? }]`. En `RELOADABLE_SLICES` |
+| `VERGIS_SEMANTICA` | `semantica: { portada?, seguridad?, conexiones: [{ conexion, intro?, joins?, entidades? }] }`. En `RELOADABLE_SLICES`. **Texto plano**: se escapa todo y solo se admite el acento grave |
+| `domains[].connections` | Qué conexiones realizan el dominio. Una conexión pertenece a lo sumo a un dominio (dos que la reclamen es error fatal del archivo) |
+| `GET /datadoc/` | El sitio. Sin build todavía, una página del nodo que dice «aún no generado» en vez de un 404 pelado |
+| `/admin/datadoc` | Estado (build servido, sello por conexión, avisos), **Generar** (todo o una conexión, con CSRF, single-flight, 409 sin control) y ajustes (schedule y política de conteos, en el store de settings) |
+| lazo `datadoc` | Cadencia de chequeo de 5 min; se arma solo con el plano de control. La generación escribe en `VERGIS_OUT`, que es sustrato compartido |
+| `GET /contrato` | Sección `datadoc` con el build vigente, el sello por conexión, el schedule y la marca de rancio |
+
+**Caché en disco:** `modelo/<ref>.json` por conexión, `sello.json`, `build-<ts>/` inmutables y
+`current` como symlink relativo que se mueve con `rename(2)`. La atomicidad de ese swap se **mide**:
+un lector en bucle sobre `realpathSync(current)` durante 200 publicaciones no ve un solo `ENOENT`.
+Se conservan los dos últimos builds, y la poda nunca toca nada fuera de `build-*` ni el que `current`
+está sirviendo.
+
+**Lo que NO hace:** no cambia `resolveStatic`, `parseStaticConfig` ni `RUTAS_DEL_NODO`; no cachea el
+sitio en memoria; no agrega la entrada al menú del avatar (eso lo declara la instancia con
+`VERGIS_MENU`); y no genera en un nodo sin el plano de control aunque el disparo llegue por el lazo.
+
+Ejemplos de los dos YAML: `examples/instance/writers.yaml` y `examples/instance/semantica.yaml`.
+
 ## 0.32.0 — 2026-09-21
 
 ### El guard de escritura concurrente del store mira el CONTENIDO, y un store degradado sale en `/healthz`
