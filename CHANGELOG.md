@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.33.1 — 2026-09-22
 
-### El gate de la Consola no puede ver el gobierno bajo el principal de consola (issue #340)
+### El gate de la Consola no puede ver el gobierno bajo el principal de consola (issue #340, PR #341)
 
 **Qué pasaba.** La condición (b) del gate —«toda tabla base tiene `SECURITY POLICY`»— preguntaba
 bajo el **principal de consola**, que por diseño es el de menos permisos. `sys.security_policies`
