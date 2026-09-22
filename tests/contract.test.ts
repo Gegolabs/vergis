@@ -551,3 +551,46 @@ describe('contrato · datadoc', () => {
     expect(snap.version).toBeTruthy()
   })
 })
+
+// ── CONSOLA SQL (#306) ───────────────────────────────────────────────────────────────────────────
+describe('contrato · sección `consola`', () => {
+  it('sin proveedor cableado, la sección es `null`: el proceso lo dice, no lo finge', () => {
+    expect(registry().snapshot().consola).toBeNull()
+  })
+
+  it('apagada, la sección es SOLO `{enabled:false}` — superficie cero incluye el contrato', () => {
+    const snap = registry({ consola: () => ({ enabled: false }) }).snapshot()
+    expect(snap.consola).toEqual({ enabled: false })
+  })
+
+  it('encendida, publica límites y el veredicto POR CONECTOR con su motivo', () => {
+    const snap = registry({
+      consola: () => ({
+        enabled: true,
+        motor: 'fabric',
+        scopeGroup: 'consola-sql',
+        limites: { timeoutMs: 60_000, maxRows: 5_000, maxConcurrentes: 1 },
+        auditLog: { path: '/governance/consola-audit.log', exists: true },
+        conectores: {
+          finanzas: { ofrecible: true, verificadoEn: 'T' },
+          personas: { ofrecible: false, motivo: 'sin sub-perfil `consola`' },
+          crossdocking: { ofrecible: false, motivo: '2 tabla(s) sin SECURITY POLICY: `dbo.stg_oc`' },
+        },
+      }),
+    }).snapshot()
+    expect(snap.consola?.limites?.maxConcurrentes).toBe(1)
+    expect(snap.consola?.conectores?.['crossdocking']?.motivo).toContain('dbo.stg_oc')
+    // El operador tiene que poder leer POR QUÉ sin entrar a los logs del contenedor.
+    expect(Object.values(snap.consola?.conectores ?? {}).filter((c) => !c.ofrecible).every((c) => c.motivo)).toBe(true)
+  })
+
+  it('un proveedor que lanza cuesta la sección, jamás la consulta del contrato', () => {
+    const snap = registry({
+      consola: () => {
+        throw new Error('gate a medio construir')
+      },
+    }).snapshot()
+    expect(snap.consola).toBeNull()
+    expect(snap.engine).toBe('fabric')
+  })
+})

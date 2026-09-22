@@ -1,6 +1,6 @@
 export * from './types'
 export type { ProtoBotlet, LetInvocation, LetResponse } from './proto-botlet'
-export { AppendOnlyLog, canonical } from './log'
+export { AppendOnlyLog, canonical, verifyChainLines } from './log'
 export type { AppendOnlyLogOptions } from './log'
 export { withResultCache } from './result-cache'
 export type { CachedCapability, ResultCacheOptions } from './result-cache'

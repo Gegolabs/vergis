@@ -543,3 +543,206 @@ export async function verifyFabricServability(opts: {
   }
   return { state, usedRefs, refErrors, inherited, viewLineage }
 }
+
+// ═══ CONSOLA SQL (#306) · gate de OFRECIBILIDAD por Conector ═════════════════════════════════════
+//
+// El gate del PI es POR TABLA (`sql-tables.ts` extrae las tablas del spec y les exige política). La
+// Consola no puede hacer eso: recibe SQL libre, y extraer sus tablas exige un parser — que es
+// justamente lo que este diseño rechaza como garantía. Así que la unidad de decisión honesta es **el
+// Conector entero**, y se ofrece solo si las cuatro condiciones se MIDEN bien bajo su principal de
+// consola. Cualquier medición que no se pueda hacer (`uninstrumented`) es un NO: un instrumento que
+// no puede medir jamás se colapsa con «midió y salió bien» (Norma 7, corolario de instrumentos).
+
+/**
+ * Permisos de base que un principal de consola puede tener. Cualquier otro ⇒ no se ofrece.
+ *
+ * MEDIDO, y por eso no es la lista que el diseño escribió. Un `GRANT SELECT` + `GRANT VIEW
+ * DEFINITION` a secas deja a `sys.fn_my_permissions(NULL,'DATABASE')` devolviendo además
+ * `VIEW ANY COLUMN ENCRYPTION KEY DEFINITION`, `VIEW ANY COLUMN MASTER KEY DEFINITION`,
+ * `VIEW SECURITY DEFINITION` y `VIEW PERFORMANCE DEFINITION` — implícitos que el motor concede
+ * solos (SQL Server 2022, arnés `lab:proof`). Con la lista literal del diseño, NINGÚN principal de
+ * consola del mundo habría pasado (a): el gate habría quedado en un fail-closed permanente que se
+ * lee como «esto no funciona» y termina en que alguien afloje la condición equivocada.
+ *
+ * Por qué se acepta `VIEW *` como familia y no una a una: toda permiso `VIEW …` de T-SQL es LECTURA
+ * de metadatos — no existe uno que escriba. Aceptar la familia no afloja el fail-closed (un permiso
+ * de escritura NUNCA empieza con `VIEW `) y no deja que la lista envejezca con cada versión del
+ * motor. Cualquier otro permiso fuera del conjunto explícito sigue apagando el Conector.
+ */
+export const CONSOLA_PERMISOS_PERMITIDOS = new Set(['CONNECT', 'SELECT', 'SHOWPLAN'])
+
+/** ¿Este permiso es compatible con «solo lectura»? Ver la nota de `CONSOLA_PERMISOS_PERMITIDOS`. */
+export function permisoDeSoloLectura(permiso: string): boolean {
+  return CONSOLA_PERMISOS_PERMITIDOS.has(permiso) || permiso.startsWith('VIEW ')
+}
+
+/** (a) Permisos EFECTIVOS del principal en la base. La lista blanca decide; no se interpreta el rol. */
+export const FN_MY_PERMISSIONS_SQL = `SELECT permission_name FROM sys.fn_my_permissions(NULL, 'DATABASE')`
+
+/**
+ * (b) Tablas BASE de la base, todos los schemas salvo los del sistema.
+ *
+ * Solo tablas base, y es deliberado: una vista sin política cae por SU BASE, que sí aparece acá. Su
+ * límite, dicho: una vista sobre una base de OTRA base de datos no se ve desde acá — el linaje
+ * cross-database no se resuelve (`SYS_VIEW_LINEAGE_SQL` exige `referenced_id IS NOT NULL`), así que
+ * ese caso queda fuera de la medición y no se supone cubierto.
+ */
+export const SYS_TABLES_SQL =
+  `SELECT s.name AS sch, t.name AS tbl FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id ` +
+  `WHERE s.name NOT IN ('sys', 'INFORMATION_SCHEMA')`
+
+/** Qué dijo la sonda de `@read_only` — y «no se pudo medir» es un estado propio, no un veredicto. */
+export type ReadOnlyHonrado = 'honra' | 'no-honra' | 'indeterminado'
+
+/** Veredicto por Conector. `motivo` es lo que se publica en `/contrato` para que nadie adivine. */
+export interface ConsolaConectorEstado {
+  ofrecible: boolean
+  motivo?: string
+  verificadoEn: string
+  /** Lo MEDIDO, aunque no sea lo que decidió: `/contrato` lo publica para el operador. */
+  medido: {
+    permisos?: string[]
+    tablasSinPolitica?: string[]
+    unmask?: UnmaskCapability
+    readOnly?: ReadOnlyHonrado
+    /** ¿El policy store declara reglas de columna en tablas de este Conector? */
+    columnRules?: boolean
+  }
+}
+
+export interface ConsolaGateInput {
+  /** Ejecuta una consulta de sistema BAJO EL PRINCIPAL DE CONSOLA de este Conector. */
+  ejecutar: (sqlText: string) => Promise<Record<string, unknown>[]>
+  /**
+   * (d) Sonda de `@read_only`, en el MISMO batch que un `SELECT` y con una clave que SÍ gobierna.
+   *
+   * El hueco que esto cierra —hallado en la segunda mirada del diseño— es que sondear con una clave
+   * propia en un batch aparte no es el ataque: el ataque re-setea las claves REALES dentro del mismo
+   * batch de su consulta. Que los dos modos difieran es conjetura; el refutador es correr la sonda de
+   * ambas formas contra un warehouse de QA.
+   */
+  sondaReadOnly: () => Promise<ReadOnlyHonrado>
+  /** Policy store vivo (la misma referencia que usa el gate de PIs). */
+  store: Map<string, PolicyDecl>
+  /** Tablas del store que pertenecen a ESTE Conector (`schema.tabla`), según los PIs descubiertos. */
+  tablasDelRef: string[]
+  ref: string
+  ahora?: () => string
+}
+
+/**
+ * Decide si un Conector se ofrece en la Consola. **Puro**: todo lo que toca la red entra por
+ * `ejecutar`/`sondaReadOnly`, así que la decisión se testea con un ejecutor falso.
+ *
+ * Orden de los motivos: (a) permiso de escritura → (b) tabla sin política → P-7 (reglas de columna,
+ * ver abajo) → (c) herencia de `UNMASK` → (d) `read_only`. El primero que falla es el que se publica;
+ * los demás aparecerán en la próxima verificación si siguen ahí.
+ *
+ * **P-7 y (c) son problemas DISTINTOS y el orden lo refleja.** (c) es la herencia de `UNMASK`: que el
+ * principal de consola pueda desenmascarar, y está resuelta por doctrina (el `GRANT` nombra al
+ * principal de serving, medido el 2026-09-21). P-7 es otra cosa: bajo SQL libre, un `WHERE` sobre una
+ * columna enmascarada se evalúa contra el valor REAL, así que se infiere sin verlo — MEDIDO en el
+ * arnés T-SQL (C3, con control positivo, de premisa y negativo). Ninguna doctrina de `UNMASK` lo
+ * toca. Por eso, mientras P-7 no se relaje, **un Conector con reglas de columna no se ofrece, punto**:
+ * es la única lectura consistente con «no ofrecer con advertencia», y relajarlo es un cambio de
+ * código con decisión del dueño del producto, no un flag ni un env.
+ */
+export async function verificarConectorConsola(input: ConsolaGateInput): Promise<ConsolaConectorEstado> {
+  const verificadoEn = (input.ahora ?? (() => new Date().toISOString()))()
+  const medido: ConsolaConectorEstado['medido'] = {}
+  const no = (motivo: string): ConsolaConectorEstado => ({ ofrecible: false, motivo, verificadoEn, medido })
+
+  // ── (a) ¿puede escribir? ──────────────────────────────────────────────────────────────────────
+  let permisos: string[]
+  try {
+    const rows = await input.ejecutar(FN_MY_PERMISSIONS_SQL)
+    permisos = rows.map((r) => String(r['permission_name'] ?? '').toUpperCase()).filter(Boolean)
+  } catch (e) {
+    return no(`no se pudieron medir los permisos del principal de consola (${errorCorto(e)}): sin medición no se ofrece.`)
+  }
+  medido.permisos = permisos
+  if (permisos.length === 0) {
+    return no('`sys.fn_my_permissions` no devolvió permiso alguno: el instrumento no midió, y sin medición no se ofrece.')
+  }
+  const ofensores = permisos.filter((p) => !permisoDeSoloLectura(p))
+  if (ofensores.length > 0) {
+    return no(`principal con permiso ${ofensores.map((p) => `\`${p}\``).join(', ')} (la Consola exige solo lectura).`)
+  }
+
+  // ── (b) ¿toda tabla base tiene política nativa? ────────────────────────────────────────────────
+  let tablas: string[]
+  let protegidas: Set<string>
+  try {
+    const [t, p] = await Promise.all([input.ejecutar(SYS_TABLES_SQL), input.ejecutar(SYS_SECURITY_POLICIES_SQL)])
+    tablas = t.map((r) => `${String(r['sch'])}.${String(r['tbl'])}`)
+    protegidas = new Set(p.map((r) => `${String(r['sch'])}.${String(r['tbl'])}`))
+  } catch (e) {
+    return no(`no se pudo listar el gobierno de las tablas (${errorCorto(e)}): sin medición no se ofrece.`)
+  }
+  // El centinela de #238 es INSTRUMENTO, no dato: exigirle política sería pedirle gobierno a la regla.
+  const sinPolitica = tablas.filter((t) => !protegidas.has(t) && !t.endsWith(`.${UNMASK_PROBE_TABLE_NAME}`)).sort()
+  medido.tablasSinPolitica = sinPolitica
+  if (sinPolitica.length > 0) {
+    const muestra = sinPolitica.slice(0, 5).map((t) => `\`${t}\``).join(', ')
+    return no(
+      `${sinPolitica.length} tabla(s) sin SECURITY POLICY: ${muestra}${sinPolitica.length > 5 ? ', …' : ''} ` +
+        '(una tabla sin política devuelve TODAS sus filas: el motor no niega por omisión).',
+    )
+  }
+
+  // ── P-7 · reglas de columna ⇒ no se ofrece (inferencia por predicado, C3) ─────────────────────
+  const conReglas = input.tablasDelRef.filter((t) => {
+    const pol = input.store.get(t)
+    return pol ? columnRules(pol).length > 0 : false
+  })
+  medido.columnRules = conReglas.length > 0
+
+  // ── (c) herencia de `UNMASK` — se mide SIEMPRE que haya reglas de columna, aunque P-7 ya decida ─
+  // Se mide igual porque es la condición que vuelve a ser la operativa el día que P-7 se relaje, y
+  // porque un `capable` es información que el operador necesita ver en `/contrato`.
+  if (conReglas.length > 0) {
+    medido.unmask = await medirUnmask(input, conReglas)
+    return no(
+      `reglas de columna en ${conReglas.map((t) => `\`${t}\``).join(', ')}: bajo SQL libre el predicado ` +
+        'se evalúa contra el valor REAL (medido: C3), así que una columna enmascarada se infiere sin verse. ' +
+        'Fail-closed por diseño (P-7): no se ofrece con advertencia — una advertencia sobre una fuga es una fuga con cartel.',
+    )
+  }
+
+  // ── (d) ¿el motor honra `@read_only`? ─────────────────────────────────────────────────────────
+  const readOnly = await input.sondaReadOnly().catch((): ReadOnlyHonrado => 'indeterminado')
+  medido.readOnly = readOnly
+  if (readOnly === 'no-honra') {
+    return no('el motor NO honra `@read_only` en `sp_set_session_context`: el texto del usuario podría reescribir sus propios claims dentro del batch.')
+  }
+  if (readOnly === 'indeterminado') {
+    return no('no se pudo medir si el motor honra `@read_only`: sin esa medición el plano de fila no está garantizado.')
+  }
+
+  return { ofrecible: true, verificadoEn, medido }
+}
+
+/** Centinela de #238 leído BAJO EL PRINCIPAL DE CONSOLA. Sin centinela ⇒ `uninstrumented`. */
+async function medirUnmask(input: ConsolaGateInput, tablasConReglas: string[]): Promise<UnmaskCapability> {
+  const schemas = [...new Set(tablasConReglas.map((t) => (t.includes('.') ? t.slice(0, t.lastIndexOf('.')) : 'dbo')))]
+  try {
+    const presentes = new Set((await input.ejecutar(UNMASK_PROBE_SCHEMAS_SQL)).map((r) => String(r['sch'])))
+    const conCentinela = schemas.filter((s) => presentes.has(s))
+    if (conCentinela.length === 0) return 'uninstrumented'
+    const valores = await Promise.all(
+      conCentinela.map(async (s) => {
+        const rows = await input.ejecutar(unmaskProbeReadSQL(s))
+        return rows.length > 0 ? String(rows[0]!['probe'] ?? '') : ''
+      }),
+    )
+    return valores.every((v) => v === UNMASK_PROBE_EXPECTED) ? 'capable' : 'incapable'
+  } catch {
+    // Una lectura que falla NO es «incapable»: eso sería inventar un veredicto sobre un instrumento
+    // que no contestó. Es la confesión de que no se midió — y con P-7 vigente igual no se ofrece.
+    return 'uninstrumented'
+  }
+}
+
+function errorCorto(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)).split('\n')[0].slice(0, 120)
+}

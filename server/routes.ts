@@ -14,6 +14,7 @@ import type { Report } from './discovery'
 import type { AdminHandler } from './admin'
 import type { PiConfigHandler } from './pi-config'
 import type { MirandaHandler } from './miranda'
+import type { ConsolaHandler } from './consola'
 import type { NotasHandler } from './notas'
 import { omitirPorLets, omitirPorNodo, type StaticCollection } from './static-config'
 import { resolveStatic } from './static-serve'
@@ -37,6 +38,9 @@ export interface RouteDeps {
   /** Handler de Miranda (cluster 077) o null si el flag `MIRANDA_ENABLED` está apagado (default).
    * null ⇒ `/miranda*` cae al 404 normal: con el flag apagado la superficie es idéntica a hoy. */
   getMiranda?: () => MirandaHandler | null
+  /** Handler de la CONSOLA SQL (#306) o null con el flag `VERGIS_CONSOLA_ENABLED` apagado (default).
+   *  null ⇒ `/consola*` cae al 404 normal: con el flag apagado la superficie es idéntica a hoy. */
+  getConsola?: () => ConsolaHandler | null
   /** Handler de la CAPA DE NOTAS (impresiones, anotaciones, comentarios, compartición) o null si el
    *  store no abrió: sin él, sus rutas caen al 404 normal y el resto del serving sigue intacto. */
   getNotas?: () => NotasHandler | null
@@ -248,6 +252,23 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
           if (!handled) fail(res, 404, 'Ruta no encontrada')
         })
         .catch((e) => fail(res, 500, `Error en Miranda: ${errMsg(e)}`))
+      return
+    }
+    // CONSOLA SQL (#306) — gateada por scope DENTRO del handler, junto a Miranda y por la misma razón:
+    // es superficie de gestión, y va antes del gate `ready` porque su 503 por Conector no verificado
+    // es justo lo que hay que poder leer cuando el nodo todavía no terminó de verificar. Con el flag
+    // apagado `getConsola` es null → `/consola*` cae al slug-lookup → 404 de siempre.
+    const consola = deps.getConsola?.() ?? null
+    if (consola && (url === '/consola' || url.startsWith('/consola/'))) {
+      // Ejecutar ESCRIBE el log de auditoría en el volumen compartido: dos nodos escribiendo
+      // `consola-audit.log` es W-01. Un nodo en standby no ejecuta.
+      if (mutacionSinControl(req, res)) return
+      consola
+        .tryHandle(req, res)
+        .then((handled) => {
+          if (!handled) fail(res, 404, 'Ruta no encontrada')
+        })
+        .catch((e) => fail(res, 500, `Error en la Consola SQL: ${errMsg(e)}`))
       return
     }
     // CAPA DE NOTAS — `/impresiones*` y `/<slug>/{imprimir,notas,comentarios}`. Va DESPUÉS del gate

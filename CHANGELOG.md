@@ -147,6 +147,58 @@ sitio en memoria; no agrega la entrada al menú del avatar (eso lo declara la in
 
 Ejemplos de los dos YAML: `examples/instance/writers.yaml` y `examples/instance/semantica.yaml`.
 
+### Consola SQL: T-SQL libre sobre un Conector, acotado por la misma RLS que un PI
+
+**Qué trae (#306, `CAP-198`):** una superficie de Ingeniería —`GET /consola`, tras el flag
+`VERGIS_CONSOLA_ENABLED` y un scope de grupo— donde se elige un Conector registrado, se escribe T-SQL
+y se ve el resultset **viendo exactamente las filas que un PI le mostraría a esa persona**. Ejecuta
+bajo un **principal de consola propio de cada Conector** (sub-perfil `consola` de
+`VERGIS_CONNECTIONS`), con los claims en `SESSION_CONTEXT` marcado `@read_only = 1` y una **conexión
+dedicada que se cierra**; jamás bajo el Service Principal del serving, que es Admin de los workspaces
+—bajo él un `SELECT` ad-hoc es bypass completo—. Toda ejecución deja entrada en un log append-only
+propio, con el actor del **gate** y los nombres de los claims, nunca sus valores.
+
+**Ninguna garantía vive en un parser.** Lo que garantiza que no se escriba son los permisos del
+principal, y el nodo los **mide** por Conector al arrancar y tras cada recarga de conexiones,
+fail-closed: un Conector se ofrece solo si (a) su principal no puede escribir, (b) toda tabla base
+tiene política nativa, (c) no puede desenmascarar y (d) el motor honra `@read_only`. Cualquier
+medición que no se pueda hacer apaga el Conector, y `GET /contrato` publica el veredicto **con su
+motivo, por Conector**.
+
+**Un Conector con reglas de columna NO se ofrece, y está medido por qué:** bajo SQL libre el predicado
+se evalúa contra el **valor real**, así que una columna enmascarada se infiere sin verse nunca
+(`WHERE rut LIKE '33.%'`, `BETWEEN`, `ORDER BY`; arnés `lab:proof` sección C3, con control de premisa,
+positivo y negativo). Es un límite del DDM que ninguna doctrina de `UNMASK` toca. No se ofrece «con
+advertencia»: una advertencia sobre una fuga es una fuga con cartel.
+
+**Límites:** `VERGIS_CONSOLA_MAX_ROWS` (5000, corte por streaming — nunca envolviendo el SQL),
+`VERGIS_CONSOLA_TIMEOUT_MS` (60 s), una consulta en vuelo por identidad, y
+`VERGIS_CONSOLA_MAX_CONCURRENTES` con default **1: una consulta a la vez en el nodo**, porque la
+Consola compite por la misma capacidad que está sirviendo los PIs. Export CSV · JSON · XLSX
+**client-side** sobre lo que se vio (el XLSX es un escritor propio de ~120 líneas, sin dependencia y
+sin compresión: un ZIP `stored`, para no apoyarse en `CompressionStream` sin haberlo medido).
+
+**Solo `engine=fabric`.** ClickHouse queda fuera **por alcance, no por límite del motor**: sus claims
+viajan por el mismo canal que el usuario puede tocar, y el canal exclusivo del nodo existe pero exige
+rediseñar el transporte.
+
+**Apagada —el default— la superficie es cero:** ni rutas, ni entrada de menú, ni sección de contrato
+más allá de `{enabled:false}`.
+
+### Verificación offline de las cadenas de auditoría
+
+**Qué trae (#306 · I9):** `verifyChainLines(lines)` en `@vergis/botler` y
+`scripts/verify-audit-chain.ts`. Los logs longevos corren en modo `retain:false`, así que
+`AppendOnlyLog.verifyChain()` no tiene nada que recorrer y la cadena vive en el ARCHIVO: hasta ahora
+nadie la verificaba, ni la del admin. Un archivo ausente no es un fallo y se dice; uno ilegible sí, y
+se distingue —«no pude leer» no se colapsa con «leí y está bien»—.
+
+### `sessionContextPrelude` acepta `@read_only` (aditivo)
+
+**Qué trae (#306):** una opción `{ readOnly: true }` que emite `@read_only = 1`. El prelude del
+**serving** no cambia ni un byte con el default, y hay un test que lo afirma: lo comparten todos los
+PIs de la instancia y una superficie nueva.
+
 ## 0.32.0 — 2026-09-21
 
 ### El guard de escritura concurrente del store mira el CONTENIDO, y un store degradado sale en `/healthz`

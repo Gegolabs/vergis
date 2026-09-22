@@ -13,6 +13,16 @@ export interface SqlConnectionProfile extends CredentialSource {
   server: string
   database: string
   port?: number
+  /**
+   * Credencial ALTERNATIVA para la Consola SQL (issue #306): **el mismo Conector, otro principal**.
+   * Hereda `server`/`database`/`port` del perfil padre y solo puede cambiar quién se conecta — un
+   * `consola` que declarara otro servidor no sería este Conector, sería otro sin gate propio.
+   *
+   * Ausente ⇒ ese `database_ref` NO se ofrece en la Consola. No hay fallback al perfil padre, ni
+   * siquiera «en dev»: el SP de serving es Admin de los workspaces, así que un `SELECT` ad-hoc bajo
+   * él es bypass completo (puede apagar la `SECURITY POLICY`, leer sin máscara y escribir).
+   */
+  consola?: CredentialSource
 }
 
 interface SqlParams {

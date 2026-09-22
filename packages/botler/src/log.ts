@@ -70,6 +70,41 @@ export class AppendOnlyLog {
   }
 }
 
+/**
+ * Verificación OFFLINE de la cadena, sobre las LÍNEAS del archivo (issue #306 · I9).
+ *
+ * `verifyChain()` recorre `this.entries`, que en modo `retain:false` —el de TODO log longevo del
+ * server— está vacío: devuelve `true` sin haber verificado nada. Eso no es un bug de aquella función
+ * (su contrato dice «lo retenido»), pero sí deja sin verificador al único sitio donde la cadena
+ * importa de verdad: el archivo. Esta función es ese verificador, y es pura — se le pasan las líneas.
+ *
+ * Una línea no-JSON o vacía se SALTA (los lectores de log del server hacen lo mismo: un archivo
+ * concatenado por una rotación no es una cadena rota). Lo que rompe es un hash que no recomputa o un
+ * `prevHash` que no encadena: ahí devuelve el `seq` donde se cortó, que es lo que un operador
+ * necesita para ir a mirar.
+ */
+export function verifyChainLines(lines: string[]): { ok: boolean; rotoEn?: number; verificadas: number } {
+  let prev = GENESIS
+  let verificadas = 0
+  for (const raw of lines) {
+    const linea = raw.trim()
+    if (!linea) continue
+    let entry: LogEntry
+    try {
+      entry = JSON.parse(linea) as LogEntry
+    } catch {
+      continue
+    }
+    if (typeof entry?.hash !== 'string' || typeof entry?.prevHash !== 'string') continue
+    const { hash, ...base } = entry
+    const recomputed = createHash('sha256').update(prev + canonical(base)).digest('hex')
+    if (recomputed !== hash || entry.prevHash !== prev) return { ok: false, rotoEn: entry.seq, verificadas }
+    prev = hash
+    verificadas += 1
+  }
+  return { ok: true, verificadas }
+}
+
 /** Serialización CANÓNICA (claves ordenadas): la misma entrada siempre produce el mismo string.
  *  Exportada porque otros componentes la usan como base de claves/hashes deterministas
  *  (verificación offline de la cadena, claves de caché de resultados). */
