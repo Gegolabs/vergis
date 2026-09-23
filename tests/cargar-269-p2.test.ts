@@ -574,3 +574,64 @@ describe('#269·P2 · el router despacha `/cargar` al handler de gestión, con e
     expect(f.vistos).toEqual([])
   })
 })
+
+describe('juez P2 · P2-01/P2-02/P2-03/P2-10', () => {
+  it('P2-01 · el motivo de un rechazo por nombre dice la verdad en cada rama: ninguno · uno · varios', async () => {
+    const h = await arnes(SLOTS_HOY)
+    const rechazo = (filename: string, slotId: string, accept: string) => h.store.recordUpload({ slotId, filename, sha256: filename.padEnd(64, '0').slice(0, 64), bytes: 1, uploadedBy: 'x@ejemplo.cl', uploadedAt: iso(-10), ok: false, triggered: false, origen: 'upload', error: `El nombre '${filename}' no coincide con el patrón esperado «${accept}».` })
+    // Un Excel rechazado en productos calza con los cinco `*.xlsx` de hoy: corresponde a OTROS tipos, no a ninguno.
+    await rechazo('oc-1-distribution-bad.xlsx', 'productos', '*products-details*.xlsx')
+    const varios = (await go(h.admin, 'GET', '/cargar/productos')).body
+    expect(varios).not.toContain('no corresponde a ningún archivo')
+    expect(varios).toContain('Este archivo corresponde a otro tipo de archivo («Facturas», «Inventario», «Despachos», «Clasificación», «Presupuesto»), no a este.')
+    // Uno solo: lo nombra.
+    const h1 = await arnes(SLOTS_DISJUNTOS)
+    await h1.store.recordUpload({ slotId: 'productos', filename: 'oc-1-distributions-details.xlsx', sha256: 'd'.repeat(64), bytes: 1, uploadedBy: 'x@ejemplo.cl', uploadedAt: iso(-10), ok: false, triggered: false, origen: 'upload', error: "El nombre 'oc-1-distributions-details.xlsx' no coincide con el patrón esperado «*products-details*.xlsx»." })
+    expect((await go(h1.admin, 'GET', '/cargar/productos')).body).toContain('Este archivo corresponde a «OC · distribución por local», no a este tipo de archivo.')
+    // Ninguno: la frase de §4.2.
+    await h1.store.recordUpload({ slotId: 'productos', filename: 'x.csv', sha256: 'e'.repeat(64), bytes: 1, uploadedBy: 'x@ejemplo.cl', uploadedAt: iso(-9), ok: false, triggered: false, origen: 'upload', error: "El nombre 'x.csv' no coincide con el patrón esperado «*products-details*.xlsx»." })
+    expect((await go(h1.admin, 'GET', '/cargar/productos')).body).toContain('Este nombre no corresponde a ningún archivo que puedas subir.')
+  })
+
+  it('P2-01 · un tipo elegido que no calza: el mensaje no dice «ningún archivo» si calza con otros', async () => {
+    const h = await arnes(SLOTS_HOY)
+    const r = await subir(h.admin, '/cargar', [{ nombre: 'Listado EasyDoc VH.xlsx' }], { destino_0: 'productos' })
+    expect(loc(r)).toContain('&t=error')
+    expect(loc(r)).not.toContain('ningún archivo')
+    expect(loc(r)).toContain('corresponde a otro tipo de archivo')
+  })
+
+  it('P2-02 · tras «Retirar», la fila no dice «Recibido» ni vuelve a ofrecer Retirar mientras el vigilante no escribe', async () => {
+    const h = await arnes(SLOTS_DISJUNTOS, { proyeccion: true })
+    await subir(h.admin, '/cargar/productos', [{ nombre: 'oc-8-products-details.xlsx' }])
+    const [carga] = await h.store.listUploads('productos', 1)
+    // Proyección VIEJA: el archivo sigue «en el landing» para la página.
+    const vieja = new Set(h.landing.get('productos'))
+    const body = new URLSearchParams({ _csrf: await token(h.admin), carga: String(carga!.id) }).toString()
+    await go(h.admin, 'POST', '/cargar/productos/retirar', body, 'application/x-www-form-urlencoded')
+    h.landing.set('productos', vieja)
+    const p = (await go(h.admin, 'GET', '/cargar/productos/cargas')).body
+    expect(p).not.toContain('Empieza a cargarse')
+    expect(p).not.toContain('>Recibido</span>')
+    expect(p).not.toContain('Retirar este archivo')
+    expect(p).toContain('">Retirando</span>')
+    expect(p).toContain('Lo retiraste; no se va a cargar.')
+  })
+
+  it('P2-10 · retirar con el id de una carga que ya no es la última de ese nombre no retira nada', async () => {
+    const h = await arnes(SLOTS_DISJUNTOS)
+    await subir(h.admin, '/cargar/productos', [{ nombre: 'oc-9-products-details.xlsx', bytes: 'v1' }])
+    await subir(h.admin, '/cargar/productos', [{ nombre: 'oc-9-products-details.xlsx', bytes: 'v2' }])
+    const cargas = await h.store.listUploads('productos', 5)
+    const vieja = cargas[cargas.length - 1]!
+    const body = new URLSearchParams({ _csrf: await token(h.admin), carga: String(vieja.id) }).toString()
+    const r = await go(h.admin, 'POST', '/cargar/productos/retirar', body, 'application/x-www-form-urlencoded')
+    expect(loc(r)).toContain('Ese archivo ya no se puede retirar.')
+    expect(h.retirados).toEqual([])
+  })
+
+  it('P2-03 · los ids que chocan con subrutas de /cargar se acusan al parsear', () => {
+    for (const id of ['revisar', 'tarjetas'])
+      expect(() => parseIntakeConfig({ slots: [{ id, target: { ...ts, path: 'Files/a' } }] })).toThrow(new RegExp(`'${id}' está reservado`))
+  })
+})
