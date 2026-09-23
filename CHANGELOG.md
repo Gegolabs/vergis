@@ -61,12 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.35.0 — 2026-09-23
 
-*Contenido previsto para el corte **0.35.0** (hito P1 · «Verdad» del diseño de la experiencia de carga,
-lab A.R.B.O.L. `work/269`). El corte —`package.json`, tag y filas `CAP-NN`— es de la custodia.*
-
-### El estado de cada carga dice la verdad: solo lo declarado y lo registrado, y avanza hasta un final
+### El estado de cada carga dice la verdad: solo lo declarado y lo registrado, y avanza hasta un final (PR #351)
 
 **El hueco.** Medido sobre las 141 cargas aceptadas de la primera instancia (arnés de replay contra su
 registro, 79 logs y los listados reales), **70 mostraban un estado falso**, por seis mecanismos:
@@ -81,7 +78,7 @@ registro, 79 logs y los listados reales), **70 mostraban un estado falso**, por 
 A eso se suman dos defectos de lectura: el lector cortaba el nombre en « - » (`20260921 - Recepción….xlsx`
 se leía `20260921`) y el resolvedor ignoraba la corrida que ya estaba en curso cuando se subió el archivo.
 
-**Qué trae.**
+**Qué trae (`CAP-202`, `CAP-203`, `CAP-204`):**
 
 - **Resolvedor por construcción** (`resolverEstadoDeCarga`, puro): el estado es solo lo que el job
   declaró de ESE archivo (buscado por su nombre conocido, no por el corte del lector) más los actos
