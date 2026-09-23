@@ -169,7 +169,7 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(res.body).not.toContain('x'.repeat(301))
   })
 
-  it('Otras cargas: un slot huérfano muestra su última corrida con motivo de falla (intakeStatus)', async () => {
+  it('Otros archivos del dominio: el tipo sin entidad se enlaza a su página, sin formulario (#269·V13)', async () => {
     const SLOTS = parseIntakeConfig({
       slots: [{
         id: 'saldos', label: 'Antigüedad de saldos', domain: 'cartera', maxBytes: 1024,
@@ -193,14 +193,16 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     })
     const res = mockRes()
     await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
-    expect(res.body).toContain('Otras cargas')
-    expect(res.body).toContain('Última corrida:')
-    expect(res.body).toContain('✕ Falló')
-    expect(res.body).toContain('SystemExit: mezcla de semanas')
+    // #269·V13 · Frescura sin formularios ni corridas por archivo: el tipo sin entidad se ENLAZA a su
+    // página (ahí se sube y se ve cómo va); el detalle de sus corridas vive en la vista técnica.
+    expect(res.body).toContain('Otros archivos del dominio')
+    expect(res.body).toContain('href="/cargar/')
+    expect(res.body).not.toContain('type="file"')
+    expect(res.body).not.toContain('SystemExit: mezcla de semanas')
   })
 
   // Issue #55: el LOG de la última conversión visible en Frescura — reconfirmación sin Fabric.
-  it('Frescura: el slot muestra el log de la última conversión (escapado); sin log no hay sección', async () => {
+  it('Frescura: sin logs crudos aunque el tipo tenga log (#269·V13)', async () => {
     const SLOTS = parseIntakeConfig({
       slots: [
         { id: 'saldos', label: 'Saldos', domain: 'cartera', maxBytes: 1024, target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' }, trigger: { processRef: 'P1' } },
@@ -223,9 +225,9 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     })
     const res = mockRes()
     await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
-    expect(res.body).toContain('Log de la última conversión')
-    expect(res.body).toContain('7626 filas &lt;raw&gt;') // contenido visible y ESCAPADO
-    expect(res.body.split('Log de la última conversión')).toHaveLength(2) // solo el slot que tiene log
+    // #269·V13 · sin logs crudos en Frescura: el log vive en la vista técnica (Cargas).
+    expect(res.body).not.toContain('Log de la última conversión')
+    expect(res.body).not.toContain('7626 filas')
   })
 
   it('Frescura: un intakeLog que falla no rompe la página (sin sección, render igual)', async () => {
@@ -252,7 +254,7 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(res.body).not.toContain('Log de la última conversión')
   })
 
-  it('Otras cargas: si el motor no responde, el slot lo dice en vez de callar', async () => {
+  it('Otros archivos del dominio: un motor caído no rompe Frescura (ya no lo consulta por tipo)', async () => {
     const SLOTS = parseIntakeConfig({
       slots: [{
         id: 'saldos', label: 'Antigüedad de saldos', domain: 'cartera', maxBytes: 1024,
@@ -275,7 +277,9 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     })
     const res = mockRes()
     await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
-    expect(res.body).toContain('No se pudo consultar el estado de la conversión')
+    // #269·V13 · Frescura ya no consulta el motor por tipo de archivo: un motor caído no la afecta.
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('href="/cargar/saldos"')
   })
 
   // Issue #99: desde la última corrida de cada entidad (y de cada slot huérfano) se llega a su log.
@@ -297,7 +301,7 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     expect(res.body).toContain('Ver log')
   })
 
-  it('#99 · el slot huérfano también enlaza el log de su última corrida', async () => {
+  it('#99 → #269·V13 · el tipo sin entidad enlaza su página, no un log', async () => {
     const SLOTS = parseIntakeConfig({
       slots: [{ id: 'saldos', label: 'Saldos', domain: 'cartera', maxBytes: 1024, target: { workspaceId: 'WS', lakehouseId: 'LH', path: 'Files/intake/saldos' }, trigger: { processRef: 'P1' } }],
     })
@@ -317,7 +321,9 @@ describe('admin · Fuentes (plataforma) + Frescura (dominio)', () => {
     })
     const res = mockRes()
     await a.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), res as unknown as ServerResponse)
-    expect(res.body).toContain('corrida?slot=saldos&amp;started=2026-07-09T09%3A00%3A00Z')
+    // #269·V13 · el log por tipo de archivo vive en la vista técnica; Frescura enlaza la página del archivo.
+    expect(res.body).not.toContain('corrida?slot=saldos')
+    expect(res.body).toContain('href="/cargar/saldos"')
   })
 
   it('#99 · SIN runLogs, Frescura no contiene ningún enlace a /corrida (regresión cero)', async () => {

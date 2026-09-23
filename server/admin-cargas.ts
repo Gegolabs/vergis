@@ -26,6 +26,7 @@ import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, 
 import type { IntakeIntentoRow } from '../packages/capabilities/src/governance-store'
 import { nombreSinSello } from '../packages/capabilities/src/intake-observability'
 import { slotProcessedDir } from '../packages/capabilities/src/intake'
+import { chip as chipHtml, type Tono } from './ui'
 
 /** Evento de carga del audit log (type=intake). */
 export interface IntakeUploadEvent {
@@ -203,8 +204,8 @@ function edad(minutes: number): string {
   const h = Math.floor(m / 60)
   return h < 48 ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${Math.floor(h / 24)}d ${h % 24}h`
 }
-/** Amarillo del aviso que no es error: el mismo de la marca de contenido duplicado del timeline. */
-const AVISO = 'color:var(--yellow,#d97706)'
+/** Amarillo del aviso que no es error (#269·§5: el token `--warn`, antes un `--yellow` sin definir). */
+const AVISO = 'color:var(--warn)'
 
 // ─── Vigilancia del intake (#161/#162) ──────────────────────────────────────
 
@@ -282,20 +283,6 @@ export function avisoContratoLogs(slot: IntakeSlot, v: SlotVigilancia | undefine
   return `<p class="msg err">⚠ Este slot no cumple el contrato <code>_logs/</code>: las últimas ${n} corridas terminadas no dejaron log correlacionable en <code>${escapeHtml(dir)}</code>. Sin log por corrida no hay causa por archivo: el desenlace de cada carga queda en «sin informe» y el usuario que subió no recibe motivo. Corregir el job para que escriba su log al terminar (<code>docs/contrato-ingesta-logs.md</code>).</p>`
 }
 
-/** Badge por desenlace (#162·§3.4). Familia visual de `badge(RunStatus)`: verde listo, rojo falla,
- *  amarillo lo que quedó a medias. */
-const DESENLACE_BADGE: Record<CargaDesenlace, string> = {
-  procesada: '<b style="color:var(--accent)">✓ Cargado</b>',
-  saltada: `<b style="${AVISO}">⏸ No se cargó</b>`,
-  fallida: '<b style="color:var(--err)">✕ No se pudo cargar</b>',
-  'sin-informe': `<b style="${AVISO}">⚠ Sin informe</b>`,
-  // Legado (< 0.35.0): la edad dejó de ser un estado (#269·§3.1); solo se lee lo ya escrito.
-  varada: `<b style="${AVISO}">⚠ Varada</b>`,
-  retirada: '<b class="sub">Retirado</b>',
-  reemplazada: '<b class="sub">Reemplazado</b>',
-  deshecha: '<b class="sub">Deshecho</b>',
-}
-
 /** Texto propio de la plataforma cuando NO hay motivo del job: describe el estado, jamás la causa. */
 const SIN_INFORME_TEXTO = 'No sabemos qué pasó con este archivo: el proceso de carga no lo informó.'
 
@@ -309,6 +296,12 @@ export interface ContextoEstado {
   aviso?: string | null
   /** Título legible de un intento (la guía de su código, o su motivo): el «primer intento». */
   tituloDeIntento?: (i: IntakeIntentoRow) => string
+  /** #269·P2 · minutos que lleva esperando sin estado y la edad máxima del tipo: «Lleva … esperando». */
+  esperaMin?: number
+  edadMaximaMin?: number
+  /** #269·P2 · cómo se escribe una fecha. Default: UTC rotulado (vista técnica); la página de carga
+   *  pasa `<time>` para la zona del navegador. Devuelve HTML. */
+  fecha?: (iso: string | undefined) => string
 }
 
 /**
@@ -323,51 +316,89 @@ export function lineaDeAviso(ctx: { equipoAvisado?: boolean; contacto?: string }
   return null
 }
 
-/** Fecha corta de la consola técnica (UTC rotulado; la zona del navegador es de P2). */
+/** Fecha corta de la consola técnica (UTC rotulado). */
 const fechaCorta = (iso: string | undefined): string => (iso ? when(iso) : '')
 
+/** El estado de UNA carga como lo ve una persona (#269·§4.2): tono, etiqueta del chip, frase (HTML) y
+ *  si se le ofrece «Retirar este archivo». */
+export interface EstadoVisible {
+  tono: Tono
+  etiqueta: string
+  frase: string
+  retirable: boolean
+}
+
+/** Edad en minutos, dicha para una persona («3 horas», «2 días»). */
+function edadLegible(min: number): string {
+  const m = Math.max(0, Math.floor(min))
+  if (m < 60) return `${m} minuto${m === 1 ? '' : 's'}`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h} hora${h === 1 ? '' : 's'}`
+  const d = Math.floor(h / 24)
+  return `${d} días`
+}
+
 /**
- * El CHIP y la FRASE de una carga (#269·§4.2): qué estado tiene, dicho sin jerga, y lo que le sigue a
- * ese estado. Lo usa la columna Estado de la consola y lo reusa la página del archivo (P2).
- * Nada de esto adivina: cada frase sale de un estado que el resolvedor escribió con su evidencia, y
- * la línea de aviso solo si es cierta.
+ * El ESTADO VISIBLE de una carga (#269·§4.2, la tabla «Cada carga, por estado»): un solo origen de
+ * textos para la página del archivo y la consola técnica. Nada de esto adivina: cada frase sale de un
+ * estado que el resolvedor escribió con su evidencia, y la línea de aviso solo si es cierta. El bloque
+ * de la guía (título, qué pasó, qué hacer) y el motivo del proceso los dibuja quien llama.
  */
-export function chipDeCarga(h: IntakeUploadEvent, ctx: ContextoEstado = {}, guia?: GuiaResuelta | null): { chip: string; frase: string } {
+export function estadoVisible(h: IntakeUploadEvent, ctx: ContextoEstado = {}, guia?: GuiaResuelta | null): EstadoVisible {
+  const f = ctx.fecha ?? ((x: string | undefined) => escapeHtml(fechaCorta(x)))
   const aviso = ctx.aviso ? ` ${escapeHtml(ctx.aviso)}` : ''
   const espera = ctx.enLanding ? ' Mientras tanto, este archivo sigue en espera y se vuelve a intentar solo.' : ''
-  if (!h.ok) return { chip: '<b style="color:var(--err)">✕ No se recibió</b>', frase: escapeHtml(motivoDeRechazo(h.error)) }
+  const e = (tono: Tono, etiqueta: string, frase: string, retirable = false): EstadoVisible => ({ tono, etiqueta, frase, retirable })
+  if (!h.ok) return e('error', '✕ No se recibió', escapeHtml(motivoDeRechazo(h.error)))
   const final = h.desenlaceFinal === true
-  if ((!h.desenlace || !final) && ctx.enCurso) return { chip: '<b>⏳ Cargando</b>', frase: 'Se está cargando.' }
+  if ((!h.desenlace || !final) && ctx.enCurso) return e('curso', '⏳ Cargando', 'Se está cargando.')
+  const operador = (): EstadoVisible => e('atencion', '⚠ Problema de la plataforma', `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}`)
   switch (h.desenlace) {
-    case undefined:
-      return { chip: '<b>Recibido</b>', frase: 'Lo recibimos. Empieza a cargarse en unos minutos.' }
+    case undefined: {
+      const lleva = ctx.esperaMin != null && ctx.edadMaximaMin != null && ctx.esperaMin > ctx.edadMaximaMin ? ` Lleva ${edadLegible(ctx.esperaMin)} esperando.` : ''
+      return e('espera', 'Recibido', `Lo recibimos. Empieza a cargarse en unos minutos.${lleva}`, ctx.enLanding !== false)
+    }
     case 'procesada': {
       const primero = (h.intentos ?? []).find((i) => i.origen === 'declaracion' && i.resultado !== 'procesada')
-      const cuando = h.desenlaceRunStartedAt ? ` el ${fechaCorta(h.desenlaceRunStartedAt)}` : ''
+      const cuandoIso = h.desenlaceRunStartedAt ?? h.desenlaceAt
+      const cuando = cuandoIso ? ` el ${f(cuandoIso)}` : ''
       const intento = primero && ctx.tituloDeIntento ? ` En el primer intento: ${escapeHtml(ctx.tituloDeIntento(primero))}.` : ''
-      return { chip: DESENLACE_BADGE.procesada, frase: `Los datos quedaron en la plataforma${cuando}.${intento}` }
+      return e('ok', '✓ Cargado', `Los datos quedaron en la plataforma${cuando}.${intento}`)
     }
     case 'fallida':
-      if (guia?.actor === 'operador') return { chip: `<b style="${AVISO}">⚠ Problema de la plataforma</b>`, frase: `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}` }
-      if (guia) return { chip: '<b style="color:var(--err)">✕ Hay que corregir algo</b>', frase: espera.trim() }
-      return { chip: DESENLACE_BADGE.fallida, frase: `El proceso de carga lo rechazó con este mensaje:${espera}` }
+      if (guia?.actor === 'operador') return operador()
+      if (guia?.actor === 'nadie') return e('espera', '⏸ En espera', '')
+      if (guia) return e('error', '✕ Hay que corregir algo', espera.trim(), ctx.enLanding === true)
+      return e('error', '✕ No se pudo cargar', `El proceso de carga lo rechazó con este mensaje:${espera}`, ctx.enLanding === true)
     case 'saltada':
-      if (guia?.actor === 'operador') return { chip: `<b style="${AVISO}">⚠ Problema de la plataforma</b>`, frase: `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}` }
-      if (guia?.familia === 'volumen-anomalo') return { chip: `<b style="${AVISO}">⚠ Detenido por precaución</b>`, frase: '' }
-      if (guia?.actor === 'nadie') return { chip: '<b>⏸ En espera</b>', frase: '' }
-      if (guia) return { chip: `<b style="${AVISO}">⏸ No se cargó</b>`, frase: espera.trim() }
-      return { chip: DESENLACE_BADGE.saltada, frase: `El proceso de carga no lo cargó y no dijo por qué.${ctx.enLanding ? ' Sigue en espera y se volverá a intentar.' : ''}${aviso}` }
+      if (guia?.actor === 'operador') return operador()
+      if (guia?.familia === 'volumen-anomalo') return e('atencion', '⚠ Detenido por precaución', '', ctx.enLanding === true)
+      if (guia?.actor === 'nadie') return e('espera', '⏸ En espera', '')
+      if (guia) return e('atencion', '⏸ No se cargó', espera.trim(), ctx.enLanding === true)
+      return e('atencion', '⏸ No se cargó', `El proceso de carga no lo cargó y no dijo por qué.${ctx.enLanding ? ' Sigue en espera y se volverá a intentar.' : ''}${aviso}`)
     case 'sin-informe':
-      return { chip: DESENLACE_BADGE['sin-informe'], frase: `${SIN_INFORME_TEXTO}${aviso}` }
+      return e('atencion', '⚠ Sin informe', `${SIN_INFORME_TEXTO}${aviso}`)
     case 'retirada':
-      return { chip: DESENLACE_BADGE.retirada, frase: `Se retiró${h.actoAt ? ` el ${fechaCorta(h.actoAt)}` : ''}; no se cargó.` }
+      return e('espera', 'Retirado', `Se retiró${h.actoAt ? ` el ${f(h.actoAt)}` : ''}; no se cargó.`)
     case 'reemplazada':
-      return { chip: DESENLACE_BADGE.reemplazada, frase: `Lo reemplazó la carga${h.actoAt ? ` de ${fechaCorta(h.actoAt)}` : ''} con el mismo nombre; esta versión no se cargó.` }
+      return e('espera', 'Reemplazado', `Lo reemplazó la carga${h.actoAt ? ` de ${f(h.actoAt)}` : ''} con el mismo nombre; esta versión no se cargó.`)
     case 'deshecha':
-      return { chip: DESENLACE_BADGE.deshecha, frase: `Se cargó${h.desenlaceRunStartedAt ? ` el ${fechaCorta(h.desenlaceRunStartedAt)}` : ''} y se deshizo${h.actoAt ? ` el ${fechaCorta(h.actoAt)}` : ''}.` }
+      return e('espera', 'Deshecho', `Se cargó${h.desenlaceRunStartedAt ? ` el ${f(h.desenlaceRunStartedAt)}` : ''} y se deshizo${h.actoAt ? ` el ${f(h.actoAt)}` : ''}.`)
+    case 'varada':
+      // Legado (< 0.35.0): la edad dejó de ser un estado (#269·§3.1); solo se lee lo ya escrito.
+      return e('atencion', '⚠ En espera', 'Lleva mucho tiempo esperando a que el proceso de carga lo tome.', ctx.enLanding === true)
     default:
-      return { chip: DESENLACE_BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace)), frase: '' }
+      return e('espera', String(h.desenlace), '')
   }
+}
+
+/**
+ * El CHIP y la FRASE de una carga (#269·§4.2), ya en HTML: lo que usa la columna Estado de la consola
+ * técnica. Sale de `estadoVisible`, el mismo origen de textos que la página del archivo.
+ */
+export function chipDeCarga(h: IntakeUploadEvent, ctx: ContextoEstado = {}, guia?: GuiaResuelta | null): { chip: string; frase: string } {
+  const v = estadoVisible(h, ctx, guia)
+  return { chip: chipHtml(v.tono, v.etiqueta), frase: v.frase }
 }
 
 /**
@@ -375,9 +406,12 @@ export function chipDeCarga(h: IntakeUploadEvent, ctx: ContextoEstado = {}, guia
  * del operador («no coincide con el patrón esperado «X»»); acá se dice lo mismo sin jerga. Un motivo
  * que no se reconoce se muestra tal cual — ya es texto humano (la validación de metadata lo es).
  */
-export function motivoDeRechazo(error: string | undefined): string {
+export function motivoDeRechazo(error: string | undefined, ctx?: { otroTipo?: string | null }): string {
   if (!error) return 'No se recibió (el motivo no quedó registrado).'
   const patron = /no coincide con el patrón esperado «(.+)»/.exec(error)
+  // #269·§4.2 · con contexto (la página del archivo): si el nombre corresponde a OTRO tipo, se dice
+  // cuál; si no corresponde a ninguno, la frase de la tabla. Sin contexto, lo que se sabe.
+  if (patron && ctx) return ctx.otroTipo ? `Este archivo corresponde a «${ctx.otroTipo}», no a este tipo de archivo.` : 'Este nombre no corresponde a ningún archivo que puedas subir.'
   if (patron) return `El nombre no calza con el que espera este tipo de archivo («${patron[1]}»).`
   const tam = /\((\d+) bytes\) excede el máximo del slot \((\d+) bytes\)/.exec(error)
   if (tam) return `Pesa ${(Number(tam[1]) / 1048576).toFixed(1)} MB y el máximo es ${Math.round(Number(tam[2]) / 1048576)} MB.`
@@ -604,7 +638,7 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
       const desenlace = conDesenlace ? `<td>${desenlaceCelda(h, runs, runLogHrefOf, guiaDe?.(h) ?? null, ctxDe?.(h) ?? {})}</td>` : ''
       items.push({
         ts: h.ts,
-        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td>${desenlace}<td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : (conDesenlace ? '' : `<b style="color:var(--err)">rechazada</b>${h.error ? `<div class="sub">${escapeHtml(motivoDeRechazo(h.error))}</div>` : ''}`)}${accion ? ` ${accion}` : ''}</td>`,
+        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="${AVISO}">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td>${desenlace}<td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : (conDesenlace ? '' : `<b style="color:var(--err)">rechazada</b>${h.error ? `<div class="sub">${escapeHtml(motivoDeRechazo(h.error))}</div>` : ''}`)}${accion ? ` ${accion}` : ''}</td>`,
       })
     }
   }
@@ -653,7 +687,7 @@ export function textoDeClave(c: ClaveAccion): string {
     case 'no-compensable':
       return `la clave «${c.clave}» NO se puede vaciar desde acá: el convertidor de esta instancia no declara soporte de reversión (revert_delete) — la clave no se toca`
     case 'pisada':
-      return `sin efecto: la clave «${c.clave}» fue pisada por una carga posterior («${baseName(c.vigente)}», ${when(c.vigenteAt)}) — para deshacerla, revertí esa carga primero`
+      return `sin efecto: la clave «${c.clave}» fue pisada por una carga posterior («${baseName(c.vigente)}», ${when(c.vigenteAt)}) — para deshacerla, deshaz esa carga primero`
     case 'sin-clave':
       return `«${c.revertido}» está archivado sin clave: no se puede derivar compensación — no se toca`
   }
@@ -675,10 +709,10 @@ export function revertPlanBody(domainId: string, domainLabel: string, slot: Inta
   const landing = plan.landing.length ? `<li>${escapeHtml(TEXTO_LANDING)}</li>` : ''
   const ref: Record<string, string> = plan.uploadId != null ? { upload: String(plan.uploadId) } : { archivo: plan.claves[0]?.revertido ?? '' }
   const form = plan.ejecutable
-    ? postForm(action, token, { slot: slot.id, accion: 'revert-exec', hash: plan.hash, ...ref }, 'Revertir esta carga',
+    ? postForm(action, token, { slot: slot.id, accion: 'revert-exec', hash: plan.hash, ...ref }, 'Deshacer esta carga',
         'Esta acción modifica el dato del warehouse según el plan de arriba. ¿Confirmar?')
     : `<p class="sub">Nada que revertir: ninguna acción de este plan tiene efecto sobre el dato.</p>`
-  return `${back}${avisoHtml}<h2>Revertir «${escapeHtml(plan.filename)}»</h2>
+  return `${back}${avisoHtml}<h2>Deshacer «${escapeHtml(plan.filename)}»</h2>
     <p class="sub">Slot <code>${escapeHtml(slot.id)}</code> · contenido <code>${escapeHtml(plan.sha256.slice(0, 12))}…</code>${plan.uploadId != null ? ` · carga #${plan.uploadId}` : ''}</p>
     <p><b>Qué va a pasar:</b></p>
     <ul>${filas}${landing}</ul>
@@ -789,7 +823,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
   // #63 · el botón por CARGA. Solo con id + sha + carga aceptada: sin identidad verificable no se
   // ofrece revertir (fail-closed) — para esas queda el camino por archivo desde Procesados.
   const revertFormOf = (s: IntakeSlot) => (h: IntakeUploadEvent): string =>
-    h.id != null && h.sha256 && h.ok ? postForm(action, token, { slot: s.id, accion: 'revert-plan', upload: String(h.id) }, 'Revertir esta carga') : ''
+    h.id != null && h.sha256 && h.ok ? postForm(action, token, { slot: s.id, accion: 'revert-plan', upload: String(h.id) }, 'Deshacer esta carga') : ''
   const seccion = ((sc: SlotCargas): string => {
     const s = sc.slot
     const lastDone = lastCompletedStart(sc.runs)
@@ -891,7 +925,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
 
     // Los sidecars `<archivo>.meta.json` (issue #76) son metadata, no archivos de datos: no se listan.
     const landingRows = sc.landing === 'error'
-      ? `<tr><td colspan="4" class="sub">No se pudo listar el landing (reintentá refrescando).</td></tr>`
+      ? `<tr><td colspan="4" class="sub">No se pudo listar el landing (vuelve a cargar la página).</td></tr>`
       : sc.landing.filter((e) => !e.isDirectory && !isSidecarName(e.path)).map((e) => {
           // #269·V6 · un slot cuyo proceso NO archiva (`processed: false`) deja su archivo en el landing
           // a propósito: es el VIGENTE, no un residuo ni un varado.
@@ -912,7 +946,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     const archivedRows = sc.archived === 'error'
       ? `<tr><td colspan="4" class="sub">No se pudo listar el archivo de procesados.</td></tr>`
       : sc.archived.filter((e) => !e.isDirectory && !isSidecarName(e.path)).slice(0, 60).map((e) =>
-          `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert-plan', archivo: e.path }, 'Revertir')}</td></tr>`,
+          `<tr><td>${escapeHtml(e.path.replace(/^.*_processed\//, ''))}</td><td>${kb(e.size)}</td><td>${when(e.lastModified)}</td><td>${postForm(action, token, { slot: s.id, accion: 'restore', archivo: e.path }, 'Reactivar', `Copiar «${baseName(e.path)}» de vuelta al landing para re-procesarlo. ¿Continuar?`)} ${postForm(action, token, { slot: s.id, accion: 'revert-plan', archivo: e.path }, 'Deshacer')}</td></tr>`,
         ).join('') || `<tr><td colspan="4" class="sub">Sin procesados archivados todavía.</td></tr>`
 
     // #162 · la columna DESENLACE aparece cuando hay alguno resuelto (sin ellos: tabla intacta).
@@ -928,7 +962,6 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     ${vigilante}${avisoLogs}${coherencia}${cobertura}${señal}
     <p><b>Última conversión:</b> ${estado} ${rerun ? `<span style="margin-left:12px">${rerun}</span>` : ''}</p>
     ${logHtml}
-    <h3 class="sub">Subir archivos</h3>
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th>${thDesenlace}<th></th></tr></thead>
@@ -940,10 +973,10 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Procesado</th><th></th></tr></thead><tbody>${archivedRows}</tbody></table>`}`
   })(activo)
 
-  const guia = `<details class="guia"><summary>¿Cómo funciona el ciclo de una carga? (y cómo revertirla)</summary>
-    <p class="sub">Subís archivos → aterrizan en el <b>landing</b> → la conversión corre (automática al subir, o con «Correr conversión de nuevo») → el resultado queda en «Actividad» con su log. Los pipelines procesan por clave (semana, OC): <b>retirar</b> un archivo del landing y re-correr revierte lo que ese archivo aportó; <b>reactivar</b> uno del histórico lo vuelve a materializar. Un archivo marcado <b style="color:var(--err)">⚠ residuo</b> quedó de una corrida anterior y se re-procesará — retiralo si no corresponde.</p>
-    <p class="sub"><b>«Revertir esta carga»</b> (en cada carga de «Actividad», y por archivo en el histórico) deshace lo que esa carga materializó, clave por clave: primero muestra el <b>plan derivado</b> —qué clave vuelve a su versión anterior, cuál queda vacía, cuál no se toca porque una carga posterior la pisó— y recién con tu confirmación lo ejecuta. Nunca toca claves ajenas a la carga.</p>
-  </details>`
+  const guia = `<details class="guia"><summary>¿Cómo funciona el ciclo de una carga?</summary>
+    <p class="sub">Cuando alguien sube un archivo, queda en el landing y se dispara la conversión. Cada corrida declara en su log qué hizo con cada archivo: lo cargó, lo dejó en espera o lo rechazó. Lo cargado se archiva en «Procesados». Lo rechazado o en espera sigue en el landing y se reintenta en cada corrida del mismo proceso. <b>Retirar</b> saca un archivo del landing a <code>_retirado/</code> sin tocar datos; es el único camino que la plataforma reconoce para sacar un archivo sin cargarlo. <b>Reactivar</b> devuelve al landing una copia archivada. <b>Deshacer esta carga</b> revierte, clave por clave, lo que una carga dejó en el warehouse, y antes muestra el plan. Un archivo marcado ⚠ residuo es anterior a la última corrida completada y se volverá a procesar: retíralo si no corresponde.</p>
+  </details>
+`
   const pestañas = pestañasCasillas(domainId, slots, activo.slot.id)
   const enlace = slots.length > 1
     ? `<p class="sub">Cada casilla tiene su propia dirección: la de esta es <code>${escapeHtml(cargasHref(domainId, activo.slot.id))}</code> — se puede enlazar a quien deba usarla.</p>`

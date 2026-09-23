@@ -279,7 +279,8 @@ describe('#279 · página de Frescura: el steward lee la razón, no un botón qu
   it('el feedback del POST dice la verdad de por qué no se programó, y que se deshabilitó el residuo', async () => {
     const h = await admin([SLOT], { action: 'vigilar', desiredSeconds: 604_800, disabledSchedule: true })
     const get = mockRes()
-    await h.tryHandle(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD), get as unknown as ServerResponse)
+    // #269·V13 · Frescura ya no trae formularios de subida: el token (por identidad) sale de la puerta.
+    await h.tryHandle(mockReq('GET', '/cargar', STEWARD), get as unknown as ServerResponse)
     const token = get.body.match(/name="_csrf" value="([0-9a-f]+)"/)![1]
     const res = mockRes()
     await h.tryHandle(
