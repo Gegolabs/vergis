@@ -120,6 +120,8 @@ Frescura y la consola de Cargas, con vocabulario de operador, la celda de estado
   (estricto por dentro: una clave desconocida, un régimen inválido, `acumula` sin `clave` o un `requiere`
   a un slot inexistente se acusan al cargar) y `ayuda:` en un campo de `meta`. 0.35.1 las tolera (no las
   usa): el rollback no exige quitarlas (medido).
+- **Ids de slot reservados:** `revisar` y `tarjetas` (subrutas de `/cargar`) se acusan al cargar el
+  archivo de intake. Los ids vigentes de la primera instancia no chocan (medido).
 - **`cargar` pasa a ser ruta del nodo:** una colección estática de instancia con `path: cargar` deja de
   cargar (se acusa al arrancar, como las demás rutas reservadas).
 - **Cero variables de entorno nuevas y sin migración del store.** El rollback a 0.35.1 procede tal cual;
