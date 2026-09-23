@@ -234,7 +234,7 @@ async function adminArnes(slots: IntakeSlot[], auditLog: Record<string, unknown>
   return {
     store,
     subir: async (slotId: string, filename: string) => {
-      const token = (await go(req('GET', '/admin/dominio/d/cargas'))).body.match(/name="_csrf" value="([0-9a-f]+)"/)![1]!
+      const token = (await go(req('GET', '/cargar'))).body.match(/name="_csrf" value="([0-9a-f]+)"/)![1]!
       const B = 'b0351'
       const body = Buffer.concat([
         Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="_csrf"\r\n\r\n${token}\r\n`),

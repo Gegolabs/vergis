@@ -220,7 +220,9 @@ export function createRequestHandler(deps: RouteDeps): RequestListener {
     }
     // ADMINISTRACIÓN — gateada por rol DENTRO del handler. Va antes del gate `ready` (no sirve dato gobernado).
     const admin = deps.getAdmin()
-    if (admin && (url === '/admin' || url.startsWith('/admin/'))) {
+    // #269·P2 · la puerta `/cargar` es superficie de gestión (sube archivos) con el MISMO gate de rol
+    // que la administración; la atiende el mismo handler.
+    if (admin && (url === '/admin' || url.startsWith('/admin/') || url === '/cargar' || url.startsWith('/cargar/'))) {
       // La administración es la superficie de escritura gobernada (incluida la ingesta de archivos):
       // sin control, su mutación se rechaza ANTES de que el handler toque el store.
       if (mutacionSinControl(req, res)) return

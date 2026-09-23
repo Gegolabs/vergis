@@ -83,7 +83,7 @@ export interface StaticCollectionState extends StaticCollection {
  * identidad y nunca llega al nodo: una colección llamada `oauth2` no rompería el login, pero
  * declararla es una confusión que conviene atajar donde se escribe, no donde se depura.
  */
-export const RUTAS_DEL_NODO: readonly string[] = ['healthz', 'contrato', 'admin', 'oauth2', 'config', 'miranda', 'impresiones']
+export const RUTAS_DEL_NODO: readonly string[] = ['healthz', 'contrato', 'admin', 'cargar', 'oauth2', 'config', 'miranda', 'impresiones']
 
 /** Un prefijo público admisible: minúsculas, dígitos y guiones, empezando por alfanumérico. */
 const PREFIJO_VALIDO = /^[a-z0-9][a-z0-9-]*$/

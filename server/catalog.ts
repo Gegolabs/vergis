@@ -4,7 +4,7 @@
  * administración (ver `avatarMenu`/`AVATAR_CSS` en `ui.ts`).
  */
 import { escapeHtml } from '@vergis/capabilities'
-import { AVATAR_CSS } from './ui'
+import { AVATAR_CSS, TOKENS_CSS } from './ui'
 import { VERGIS_VERSION } from '../packages/capabilities/src/version'
 
 export interface CatalogItem {
@@ -35,7 +35,7 @@ function govLine(it: CatalogItem): string {
 export function indexHtml(
   items: CatalogItem[],
   title: string,
-  opts: { logoUrl?: string; avatar?: string } = {},
+  opts: { logoUrl?: string; avatar?: string; cargar?: boolean } = {},
 ): string {
   const lis = items.map((r) => `<li><a href="/${encodeURIComponent(r.slug)}"><div class="pi-id"><span class="c">${escapeHtml(r.code)}</span> ${escapeHtml(r.name)}</div>${govLine(r)}</a></li>`).join('')
   const logo = opts.logoUrl ? `<img class="logo" src="${opts.logoUrl}" alt="">` : ''
@@ -47,17 +47,17 @@ export function indexHtml(
   // Theme oscuro (default, gruvbox) / blanco — vía CSS vars + data-theme; el toggle vive en el avatar.
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)}</title><style>
-:root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374}
-html[data-theme="blanco"]{--bg:#ffffff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8}
+${TOKENS_CSS}
 body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:40px;transition:background .15s,color .15s;min-height:100vh;box-sizing:border-box;display:flex;flex-direction:column}
 .head{display:flex;gap:14px;align-items:center;margin-bottom:18px}.head .logo{width:40px;height:40px;border-radius:50%;flex:none}h1{font-size:20px;margin:0;font-weight:700;flex:1}
 ul{list-style:none;padding:0;max-width:680px}li a{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:13px 16px;margin:8px 0;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--fg);text-decoration:none}
 li a:hover{border-color:var(--accent)}.c{font-family:ui-monospace,Menlo,monospace;color:var(--accent);font-weight:700}.f{margin-top:auto;padding-top:24px;color:var(--muted);font-size:11px;opacity:.7}
 .f a{color:var(--muted);text-decoration:none}.f a:hover{color:var(--accent);text-decoration:underline}
+.head .cargar{margin-right:56px;font-size:13px;font-weight:600;color:var(--accent);text-decoration:none;border:1px solid var(--border);border-radius:8px;padding:7px 12px}.head .cargar:hover{border-color:var(--accent)}
 .pi-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gov{flex:none;text-align:right;font-size:11px;color:var(--muted);line-height:1.5;white-space:nowrap}.gov .gk{text-transform:uppercase;letter-spacing:.04em;font-size:9px;opacity:.7}.gov .na{font-style:italic;opacity:.7}.gov .ginfo{cursor:help;opacity:.6;margin-left:2px}
 ${AVATAR_CSS}</style></head>
-<body>${avatar}<div class="head">${logo}<h1>${escapeHtml(title)}</h1></div><ul>${lis}</ul><div class="f">Powered by Vergis${version}</div>
+<body>${avatar}<div class="head">${logo}<h1>${escapeHtml(title)}</h1>${opts.cargar ? '<a class="cargar" href="/cargar">Cargar archivos</a>' : ''}</div><ul>${lis}</ul><div class="f">Powered by Vergis${version}</div>
 <script>
 (function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();
 </script></body></html>`

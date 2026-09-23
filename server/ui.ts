@@ -23,9 +23,38 @@ export const AVATAR_CSS = `
 .avmenu .sep{border-top:1px solid var(--border);margin:4px 0}
 .avmenu .avlbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 11px 2px}`
 
+/**
+ * Los TOKENS de color de Mira (#269·§5), un solo origen para toda superficie SSR: el catálogo los
+ * importa en vez de duplicarlos. Los siete de siempre más los de estado: `--ok`/`--warn`/`--info`/
+ * `--wait` y sus fondos. `--warn` reemplaza al `var(--yellow,#d97706)` que se usaba sin definir.
+ */
+export const TOKENS_CSS = `:root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374;--err:#fb4934;--ok:#b8bb26;--warn:#fabd2f;--info:#83a598;--wait:#a89984;--ok-bg:rgba(184,187,38,.14);--warn-bg:rgba(250,189,47,.14);--err-bg:rgba(251,73,52,.14);--info-bg:rgba(131,165,152,.16)}
+html[data-theme="blanco"]{--bg:#fff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8;--err:#dc2626;--ok:#15803d;--warn:#b45309;--info:#1d4ed8;--wait:#64748b;--ok-bg:#dcfce7;--warn-bg:#fef3c7;--err-bg:#fee2e2;--info-bg:#dbeafe}`
+
+/** CSS de los componentes compartidos de estado (#269·§5): chip, aviso, ficha, zona de subida, fila
+ *  de carga, pasos y plegado. Vive en `PAGE_CSS`, así que toda página con `page`/`shellNav` lo tiene. */
+export const COMPONENTES_CSS = `
+.chip{display:inline-block;font-size:12px;font-weight:700;padding:2px 9px;border-radius:10px;white-space:nowrap}
+.chip.t-ok{color:var(--ok);background:var(--ok-bg)}.chip.t-curso{color:var(--info);background:var(--info-bg)}.chip.t-espera{color:var(--wait);background:var(--border)}
+.chip.t-atencion{color:var(--warn);background:var(--warn-bg)}.chip.t-error{color:var(--err);background:var(--err-bg)}
+.aviso{padding:10px 13px;border-radius:8px;font-size:14px;margin:10px 0;border:1px solid var(--border)}
+.aviso.t-ok{color:var(--ok);background:var(--ok-bg);border-color:var(--ok)}.aviso.t-atencion{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
+.aviso.t-error{color:var(--err);background:var(--err-bg);border-color:var(--err)}.aviso.t-curso{color:var(--info);background:var(--info-bg);border-color:var(--info)}
+.ficha{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:6px 16px;margin:10px 0}
+.ficha dt{font-weight:700;font-size:13px;margin-top:10px}.ficha dd{margin:3px 0 8px;font-size:14px}
+.zona{border:2px dashed var(--border);border-radius:12px;padding:18px;margin:12px 0;background:var(--card)}.zona.sobre{border-color:var(--accent)}
+.zona .zt{font-weight:700}.zona input[type=file]{max-width:100%}
+.rev{list-style:none;padding:0;margin:10px 0}.rev li{padding:8px 0;border-top:1px solid var(--border);font-size:14px}
+.fila{padding:11px 0;border-top:1px solid var(--border)}.fila .ft{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.fila .fn{font-weight:600;word-break:break-all}
+.fila .fr{font-size:14px;margin-top:4px}.fila .fx{margin-top:6px}
+ol.pasos{margin:4px 0 4px 20px;padding:0;font-size:14px}
+details.plegado summary{cursor:pointer;color:var(--muted);font-size:13px}
+.tarjetas{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.tarjetas li{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 16px}.tarjetas .tt{font-weight:700}
+@media (max-width:640px){body{padding:16px}body.adm{display:block}.side{width:auto;border-right:none;border-bottom:1px solid var(--border)}.main{padding:16px}}`
+
 export const PAGE_CSS = `
-:root{--bg:#1d2021;--fg:#ebdbb2;--card:#3c3836;--border:#504945;--accent:#b8bb26;--muted:#928374;--err:#fb4934}
-html[data-theme="blanco"]{--bg:#fff;--fg:#1f2937;--card:#f8fafc;--border:#e2e8f0;--accent:#2563eb;--muted:#94a3b8;--err:#dc2626}
+${TOKENS_CSS}
 body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:40px;max-width:920px}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
@@ -69,7 +98,7 @@ body.adm{display:flex;padding:0;max-width:none;min-height:100vh}
 .tabs{display:flex;flex-wrap:wrap;gap:4px;margin:18px 0 4px;border-bottom:1px solid var(--border)}
 .tabs a,.tabs b{display:inline-block;padding:9px 15px;font-size:13px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;margin-bottom:-1px}
 .tabs a{color:var(--muted)}.tabs a:hover{color:var(--accent);background:var(--card);text-decoration:none}
-.tabs b.on{background:var(--card);border-color:var(--border);color:var(--fg);font-weight:700}${AVATAR_CSS}`
+.tabs b.on{background:var(--card);border-color:var(--border);color:var(--fg);font-weight:700}${AVATAR_CSS}${COMPONENTES_CSS}`
 
 /** Shell de página SSR con tema oscuro/blanco persistido. */
 export function page(brand: string, title: string, body: string): string {
@@ -121,6 +150,9 @@ export function avatarMenu(opts: {
   /** Secciones declaradas por la instancia (`VERGIS_MENU`). Vacío o ausente ⇒ el menú de siempre. */
   sections?: MenuSection[]
   signoutRd?: string
+  /** #269·§5.1 · ¿La identidad puede subir archivos (gestiona un dominio con tipos de archivo)? Agrega
+   *  «Cargar archivos» debajo de «Catálogo de PIs». Ausente ⇒ el menú de siempre. */
+  hasCargas?: boolean
 }): string {
   const { email, isAdmin, hasDomains } = opts
   const local = email.split('@')[0] || '?'
@@ -129,6 +161,7 @@ export function avatarMenu(opts: {
   const rd = encodeURIComponent(opts.signoutRd ?? '/admin')
   let m = `<div class="avhead">${escapeHtml(email || '(anónima)')}${isAdmin ? '<span class="avrole">admin</span>' : ''}</div>`
   m += it('/', 'Catálogo de PIs')
+  if (opts.hasCargas) m += it('/cargar', 'Cargar archivos')
   m += `<div class="sep"></div>`
   m += it('/admin/perfil', 'Perfil')
   // «Mis impresiones» es universal: la capacidad de anotar existió meses con cero uso porque nadie
@@ -157,6 +190,65 @@ export function avatarMenu(opts: {
   const closeJs = `<script>(function(){var d=document.querySelector('details.avm');if(!d)return;document.addEventListener('click',function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener('keydown',function(e){if(e.key==='Escape')d.open=false})})()</script>`
   return `<details class="avm"><summary class="av" title="${escapeHtml(email)}">${escapeHtml(initials)}</summary><div class="avmenu">${m}</div></details>${closeJs}`
 }
+
+// ─── Componentes compartidos de estado (#269·§5) ───────────────────────────────
+// Presentacionales y puros: reciben texto ya decidido (y ya escapado donde se dice `html`) y lo
+// dibujan con los tokens. Qué estado tiene una carga y qué frase le corresponde lo decide quien llama.
+
+/** Los cinco tonos de un estado: listo · en curso · en espera · requiere atención · error. */
+export type Tono = 'ok' | 'curso' | 'espera' | 'atencion' | 'error'
+
+/** Chip de estado. `texto` es texto plano (se escapa). */
+export const chip = (tono: Tono, texto: string): string => `<span class="chip t-${tono}">${escapeHtml(texto)}</span>`
+
+/** Aviso en bloque (resultado de una acción, advertencia). `html` ya viene escapado. */
+export const aviso = (tono: Tono, html: string): string => `<div class="aviso t-${tono}" role="status">${html}</div>`
+
+/** Lista numerada de pasos (texto plano, se escapa cada uno). */
+export const pasos = (lista: string[]): string => (lista.length ? `<ol class="pasos">${lista.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ol>` : '')
+
+/** Bloque plegado. `html` ya viene escapado. */
+export const plegado = (titulo: string, html: string, id?: string): string =>
+  `<details class="plegado"${id ? ` id="${escapeHtml(id)}"` : ''}><summary>${escapeHtml(titulo)}</summary>${html}</details>`
+
+/** Ficha: preguntas con su respuesta. Un bloque sin respuesta no se dibuja. `html` ya escapado. */
+export function ficha(bloques: { pregunta: string; html: string | null | undefined }[]): string {
+  const b = bloques.filter((x) => x.html)
+  return b.length ? `<dl class="ficha">${b.map((x) => `<dt>${escapeHtml(x.pregunta)}</dt><dd>${x.html}</dd>`).join('')}</dl>` : ''
+}
+
+/** Una fila de carga: nombre, chip, frase y lo que venga debajo (guía, historia, acción). */
+export const filaCarga = (o: { nombre: string; chipHtml: string; cuandoHtml?: string; fraseHtml?: string; extraHtml?: string }): string =>
+  `<div class="fila"><div class="ft">${o.chipHtml}<span class="fn">${escapeHtml(o.nombre)}</span>${o.cuandoHtml ? `<span class="sub">${o.cuandoHtml}</span>` : ''}</div>${o.fraseHtml ? `<div class="fr">${o.fraseHtml}</div>` : ''}${o.extraHtml ? `<div class="fx">${o.extraHtml}</div>` : ''}</div>`
+
+/**
+ * La zona de subida: arrastrar o elegir, con la línea del máximo. `camposHtml` son los datos que el
+ * tipo pide (ya escapados); `ocultos` los campos ocultos del formulario. Sin JS es un formulario normal.
+ */
+export function zonaSubida(o: { action: string; token: string; maxMb: number; ocultos?: Record<string, string>; camposHtml?: string; id: string }): string {
+  const hid = Object.entries(o.ocultos ?? {}).map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('')
+  return `<form class="zona" id="${escapeHtml(o.id)}" method="post" action="${escapeHtml(o.action)}" enctype="multipart/form-data">
+<input type="hidden" name="_csrf" value="${escapeHtml(o.token)}">${hid}
+<div class="zt">Arrastra aquí el archivo o elígelo desde tu computador</div>
+<div class="sub">Puedes subir varios a la vez (máximo ${escapeHtml(String(o.maxMb))} MB cada uno).</div>
+<p><input type="file" name="file" multiple required></p>
+<ul class="rev" hidden></ul>
+${o.camposHtml ?? ''}
+<p><button class="add" type="submit">Subir</button></p>
+</form>`
+}
+
+/** Fecha en la zona del navegador: el server escribe UTC rotulado; `FECHAS_LOCALES_JS` la reescribe. */
+export function fecha(iso: string | undefined): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ''
+  const d = new Date(t).toISOString()
+  return `<time datetime="${escapeHtml(d)}">${escapeHtml(`${d.slice(0, 10)} ${d.slice(11, 16)} UTC`)}</time>`
+}
+
+/** Reescribe cada `<time datetime>` en la zona del navegador (`es-CL`). Sin JS queda el UTC rotulado. */
+export const FECHAS_LOCALES_JS = `(function(){try{var f=new Intl.DateTimeFormat('es-CL',{dateStyle:'medium',timeStyle:'short'});window.__fechas=function(r){[].forEach.call((r||document).querySelectorAll('time[datetime]'),function(t){var d=new Date(t.getAttribute('datetime'));if(!isNaN(d))t.textContent=f.format(d)})};window.__fechas()}catch(e){}})()`
 
 export class CsrfError extends Error {}
 

@@ -549,7 +549,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
       error: 'mira/spec-invalid',
       code: 'render-empty',
       path: 'delivery.render',
-      message: 'delivery.render es una lista vacía → página en blanco. Omití `render` (Mira usa html por defecto) o incluí { format: html, target: web }.',
+      message: 'delivery.render es una lista vacía → página en blanco. Omite `render` (Mira usa html por defecto) o incluye { format: html, target: web }.',
       remediation: 'Quitar `render` o declarar al menos { format: html, target: web }.',
     })
   }

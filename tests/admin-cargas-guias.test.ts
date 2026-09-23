@@ -99,18 +99,19 @@ function celdaPre346(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRu
   // #269 · la celda SIN guía con el vocabulario de 0.35.0 (chip + frase del estado, §4.2 de work/269):
   // el control negativo de #346 sigue siendo el mismo —sin código la celda no cambia por las guías—,
   // contra la referencia vigente.
-  const AVISO = 'color:var(--yellow,#d97706)'
+  // #269·P2 · el chip es el componente compartido (`ui.chip`, tokens de estado).
   const BADGE: Record<string, string> = {
-    procesada: '<b style="color:var(--accent)">✓ Cargado</b>',
-    saltada: `<b style="${AVISO}">⏸ No se cargó</b>`,
-    fallida: '<b style="color:var(--err)">✕ No se pudo cargar</b>',
-    'sin-informe': `<b style="${AVISO}">⚠ Sin informe</b>`,
-    varada: `<b style="${AVISO}">⚠ Varada</b>`,
+    procesada: '<span class="chip t-ok">✓ Cargado</span>',
+    saltada: '<span class="chip t-atencion">⏸ No se cargó</span>',
+    fallida: '<span class="chip t-error">✕ No se pudo cargar</span>',
+    'sin-informe': '<span class="chip t-atencion">⚠ Sin informe</span>',
+    varada: '<span class="chip t-atencion">⚠ En espera</span>',
   }
   const FRASE: Record<string, string> = {
     fallida: 'El proceso de carga lo rechazó con este mensaje:',
     saltada: 'El proceso de carga no lo cargó y no dijo por qué.',
     'sin-informe': 'No sabemos qué pasó con este archivo: el proceso de carga no lo informó.',
+    varada: 'Lleva mucho tiempo esperando a que el proceso de carga lo tome.',
   }
   if (!h.desenlace) return ''
   const badge = BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace))
@@ -229,7 +230,8 @@ describe('#346·H3 · correo a quien subió', () => {
     const iDetalle = n.lines.findIndex((l) => l.startsWith('Detalle técnico: '))
     expect(iDetalle).toBeGreaterThan(n.lines.indexOf('Qué hacer:'))
     expect(n.lines[iDetalle]).toContain('Pedir el maestro actualizado')
-    expect(n.links.map((l) => l.url)).toContain(`https://mira.example.com${erroresHref('comercial', 'oc_crossdocking_maestro')}`)
+    // #269·§5.1 · los problemas frecuentes viven en la página del archivo.
+    expect(n.links.map((l) => l.url)).toContain('https://mira.example.com/cargar/oc_crossdocking_maestro#problemas')
     expect(n.data).toMatchObject({ codigo: 'catalogo-incompleto/maestro-tiendas', actor: 'usuario' })
   })
 
@@ -314,8 +316,8 @@ function mockReq(url: string, user: string): IncomingMessage {
   r.url = url; r.method = 'GET'; r.headers = { 'x-test-user': user }
   return r
 }
-interface MockRes { statusCode: number; body: string; writeHead(c: number): MockRes; end(chunk?: string): void }
-const mockRes = (): MockRes => ({ statusCode: 0, body: '', writeHead(c) { this.statusCode = c; return this }, end(chunk) { if (chunk) this.body += chunk } })
+interface MockRes { statusCode: number; headers: Record<string, string>; body: string; writeHead(c: number, h?: Record<string, string>): MockRes; end(chunk?: string): void }
+const mockRes = (): MockRes => ({ statusCode: 0, headers: {}, body: '', writeHead(c, h) { this.statusCode = c; Object.assign(this.headers, h ?? {}); return this }, end(chunk) { if (chunk) this.body += chunk } })
 
 describe('#346·H3 · ruta /admin/dominio/<id>/errores/<slot>', () => {
   let conGuias: AdminHandler
@@ -348,11 +350,14 @@ describe('#346·H3 · ruta /admin/dominio/<id>/errores/<slot>', () => {
     return res
   }
 
-  it('el steward del dominio la ve, con la guía y su frecuencia', async () => {
+  it('la ruta de siempre redirige a «Problemas frecuentes» de la página del archivo, que lista la guía', async () => {
     const r = await go(conGuias, erroresHref('comercial', 'oc_crossdocking_maestro'), STEWARD)
-    expect(r.statusCode).toBe(200)
-    expect(r.body).toContain('Errores frecuentes · Maestro de tiendas')
-    expect(r.body).toContain('ocurrió 14 veces en 90 días')
+    expect(r.statusCode).toBe(303)
+    expect(r.headers['location']).toBe('/cargar/oc_crossdocking_maestro#problemas')
+    const p = await go(conGuias, '/cargar/oc_crossdocking_maestro', STEWARD)
+    expect(p.statusCode).toBe(200)
+    expect(p.body).toContain('Problemas frecuentes y cómo resolverlos')
+    expect(p.body).toContain('El maestro de tiendas tiene que venir completo')
   })
 
   it('quien no gestiona el dominio recibe el MISMO 403 que en Cargas', async () => {

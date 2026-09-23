@@ -149,7 +149,8 @@ describe('intake-resolver · criterio 1 · el caso real que originó #162', () =
     expect(texto).not.toContain('Files/')
     expect(texto).not.toContain('_logs')
     expect(n.data['uploadedBy']).toBe(UPLOADER)
-    expect(n.links).toEqual([{ label: 'Ver mis cargas', url: `${PUBLIC_URL}/admin/dominio/cartera/cargas` }])
+    // #269·§5.1 · el correo lleva a la página del archivo, no a la vista técnica.
+    expect(n.links).toEqual([{ label: 'Ver cómo va este archivo', url: `${PUBLIC_URL}/cargar/saldos` }])
   })
 })
 

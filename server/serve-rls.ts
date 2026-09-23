@@ -294,6 +294,14 @@ const contract = createContractRegistry({
   // recargable, el catálogo de Lets (que gana el desempate de prefijo) y el disco. Un `dir` declarado
   // que no está no impide arrancar — y sin esta sección esa degradación no la vería nadie hasta el
   // 404 del usuario, que es exactamente el camino que esta capacidad existe para cerrar.
+  // #269·V12 · los flujos de aviso y cuántos destinos tiene cada uno AHORA (sin direcciones). Closure
+  // sobre los arreglos VIVOS que la recarga repuebla in-place: se leen en el GET, ya inicializados.
+  avisos: () => [
+    { flujo: 'alerts', destinos: alertSinks.length },
+    { flujo: 'reports', destinos: reportSinks.length },
+    { flujo: 'cargas-usuario', destinos: cargasSinks.length },
+    { flujo: 'cargas-operador', destinos: operadorSinks.length },
+  ],
   staticCollections: () => {
     const slugs = new Set(discover().map((r) => r.slug))
     return estadoDeColecciones(INSTANCE_CFG.staticCollections).map((c) => ({ ...c, shadowedByLet: slugs.has(c.path) }))
@@ -1240,14 +1248,14 @@ const INDEX_LOGO = (() => {
 })()
 
 type GovByCode = Map<string, { owner: string; collaborators: string[]; defaultCollaborators: string[] }>
-const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCode): string =>
+const indexHtml = (reports: Report[], title: string, avatar = '', gov?: GovByCode, cargar = false): string =>
   renderCatalog(
     reports.map((r) => {
       const g = gov?.get(r.code)
       return { code: r.code, slug: r.slug, name: r.name, owner: g?.owner ?? '', collaborators: g?.collaborators ?? [], defaultCollaborators: g?.defaultCollaborators ?? [] }
     }),
     title,
-    { logoUrl: INDEX_LOGO || undefined, avatar },
+    { logoUrl: INDEX_LOGO || undefined, avatar, cargar },
   )
 
 // ¿Esta identidad ve la entrada «Miranda» en el menú del avatar? UNA sola definición para las TRES
@@ -1279,23 +1287,29 @@ const renderIndexPage = async (visible: Report[], identity: IdentityContext): Pr
   const emailLc = (identity.user ?? '').toLowerCase()
   const isAdmin = governance ? await governance.isAdmin(emailLc) : false
   let hasDomains = isAdmin
+  // #269·§5.1 · «Cargar archivos» (avatar y cabecera): quien gestiona al menos un dominio con tipos de
+  // archivo declarados. Misma autorización que la puerta (`canMng` de admin.ts).
+  let hasCargas = isAdmin && intakeSlotsCfg.length > 0
   if (!hasDomains && governance && domainsCfg.length) {
     const ug = await governance.groupsOf(emailLc)
     // Las dos vías de grupo son unión (#183): el default-steward-group abre todos los dominios; un
     // `group:<id>` en los `stewards:` de un dominio abre ese. Los mismos grupos alimentan a las dos.
-    hasDomains = ug.some((g) => stewardGroups.includes(g)) || manageableDomains(domainsCfg, emailLc, false, ug).length > 0
+    const todos = ug.some((g) => stewardGroups.includes(g))
+    const propios = manageableDomains(domainsCfg, emailLc, false, ug)
+    hasDomains = todos || propios.length > 0
+    hasCargas = intakeSlotsCfg.some((sl) => todos || propios.some((d) => d.id === (sl.domain ?? '')))
   }
   // Entrada «Miranda» en el menú: solo si el flag está ON y la identidad tiene el scope (admin o grupo).
   const hasMiranda = await hasMirandaFor(emailLc, isAdmin)
   const hasConsola = await hasConsolaFor(emailLc, isAdmin)
-  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasMiranda, hasConsola, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+  const avatar = avatarMenu({ email: emailLc, isAdmin, hasDomains, hasCargas, hasMiranda, hasConsola, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
   const govByCode: GovByCode = new Map()
   if (governance) {
     const groups = await governance.listGroups()
     const glabel = new Map(groups.map((g) => [g.id, g.label]))
     await Promise.all(visible.map(async (r) => { govByCode.set(r.code, await piGovSummary(r.code, glabel)) }))
   }
-  return indexHtml(visible, idxTitle, avatar, govByCode)
+  return indexHtml(visible, idxTitle, avatar, govByCode, hasCargas)
 }
 const canOpenPi = (report: Report, identity: IdentityContext): Promise<boolean> =>
   piAclEnabled && governance ? piManagementRole(report.code, identity.user).then(canOpen) : Promise.resolve(true)
@@ -1349,7 +1363,7 @@ const server = createServer(
         // con su propio cálculo es exactamente la causa raíz que ese issue cerró.
         const hasMiranda = await hasMirandaFor(email, isAdmin)
         const hasConsola = await hasConsolaFor(email, isAdmin)
-        return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, hasConsola, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+        return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasCargas: isAdmin && intakeSlotsCfg.length > 0, hasMiranda, hasConsola, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
       },
       brand: INDEX_TITLE,
     }),
@@ -1499,7 +1513,7 @@ try {
     avatarFor: async (email) => {
       const isAdmin = governance ? await governance.isAdmin(email) : false
       const hasMiranda = await hasMirandaFor(email, isAdmin)
-      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
+      return avatarMenu({ email, isAdmin, hasDomains: isAdmin, hasCargas: isAdmin && intakeSlotsCfg.length > 0, hasMiranda, sections: INSTANCE_CFG.menuSections, signoutRd: SIGNOUT_RD || '/' })
     },
     audit: (e) => console.log(`[vergis-notas] ${JSON.stringify(e)}`),
     secret: CSRF_SECRET,
@@ -1959,7 +1973,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
                   .listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, 1)
                   .then((rs) => rs[0] && (rs[0].status === 'InProgress' || rs[0].status === 'NotStarted'))
                   .catch(() => false)
-                if (enCurso) throw new Error('Hay una conversión en curso — esperá a que termine antes de revertir.')
+                if (enCurso) throw new Error('Hay una conversión en curso — espera a que termine antes de revertir.')
               }
               const out = await executeRevertPlan(revertDeps, slot, planHash, refDeRevert(ref), by)
               if (!out.ok) return out
@@ -2103,6 +2117,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Se cablea con `fabricWiring.watch`, que existe con el SP del intake resuelto — el motor NO es
     // requisito: sin `engine` la parte de corridas se omite y la del landing vigila igual.
     const intakeWatchMs = Number(contract.env('VERGIS_INTAKE_WATCH_MS') ?? DEFAULT_INTAKE_WATCH_MS)
+    // #269·P2 · el tick focalizado tras una subida o un retiro (D3). Sin vigilante, no hay nada que acelerar.
+    let acelerarCarga: ((slotId: string) => void) | undefined
     if (fabricWiring.watch && intakeWatchMs > 0) {
       const watch = fabricWiring.watch
       const deps: IntakeLoopDeps = {
@@ -2135,9 +2151,13 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         guias: () => intakeGuiasCfg,
         domains: domainsCfg,
         log: (l) => console.log(`[vergis-rls] ${l}`),
+        // #269·P2 · el tick focalizado corre fuera del registro de lazos: pregunta él mismo si este nodo
+        // tiene el plano de control (un standby no escribe).
+        hasControl: () => plane.hasControl(),
       }
       if (fabricWiring.engine) deps.runs = watch.runs
       const loop = createIntakeLoop(deps, { publicUrl: INSTANCE_CFG.publicUrl, pollMs: intakeWatchMs })
+      acelerarCarga = (slotId) => loop.acelerar(slotId)
       // LAZO 4 · vigilancia de cargas. CONSUME archivos del landing: dos nodos vigilando el mismo slot
       // procesarían dos veces la misma carga. Declarado; lo arma el control.
       loops.register({ name: 'vigilancia-de-cargas', everyMs: intakeWatchMs, firstDelayMs: 20_000, tick: () => loop.tick() })
@@ -2320,6 +2340,17 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       intakeUploads: govStore,
       // #269·V12 · la consola dice «Le avisamos al equipo» solo si HOY hay un destino del operador.
       hayDestinoOperador: () => operadorSinks.length > 0,
+      // #269·P2 · la puerta `/cargar`: el tick focalizado tras subir o retirar, y la PROYECCIÓN del
+      // vigilante (landing y corridas de su última observación) para el estado vivo — el request path
+      // de la puerta no lista OneLake ni consulta el motor.
+      acelerarCarga,
+      intakeProyeccion: fabricWiring.watch && intakeWatchMs > 0
+        ? async (slot: IntakeSlot) => {
+            const snap = (await govStore.listSlotSnapshots()).find((x) => x.slotId === slot.id)
+            if (!snap || snap.observedAt == null) return null
+            return { landing: snap.landing.filter((e) => !e.isDirectory).map((e) => e.path.replace(/^.*\//, '')), runs: snap.runs, observedAt: snap.observedAt }
+          }
+        : undefined,
       // MAPA DE IDENTIDAD (#159): el store de gobierno ES la superficie administrable, y la recarga
       // en caliente se dispara desde la propia pantalla — sin esto, corregir una entrada exigiría el
       // SIGHUP, o sea el acto que interrumpe el servicio, que es justo lo que el issue vino a matar.
@@ -2812,6 +2843,7 @@ if (config.consola.enabled) {
           email,
           isAdmin,
           hasDomains: isAdmin,
+          hasCargas: isAdmin && intakeSlotsCfg.length > 0,
           hasMiranda: await hasMirandaFor(email, isAdmin),
           hasConsola: true, // ya pasó el scope para llegar acá
           sections: INSTANCE_CFG.menuSections,
