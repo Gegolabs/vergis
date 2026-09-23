@@ -22,7 +22,7 @@
  * página recibe el veredicto ya tomado (`SlotCargas.vigilancia`) y lo dibuja. Todos los campos nuevos
  * son OPCIONALES: una instancia sin vigilante renderiza exactamente la página de antes.
  */
-import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace } from '@vergis/capabilities'
+import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace, type DesenlaceParams, type DesenlaceCodigoConteo, type GuiaDecl, type GuiaResuelta, LINEA_ACTOR, resolverGuia, familiaDe, guiasDelSlot } from '@vergis/capabilities'
 
 /** Evento de carga del audit log (type=intake). */
 export interface IntakeUploadEvent {
@@ -44,6 +44,10 @@ export interface IntakeUploadEvent {
   desenlaceMotivo?: string
   /** #162 · `startedAt` de la corrida que cubrió la carga: ancla del enlace a esa corrida. */
   desenlaceRunStartedAt?: string
+  /** #346 · código estable que el job declaró (sufijo `⟦…⟧`). Ausente = sin código: la celda es la de siempre. */
+  desenlaceCodigo?: string
+  /** #346 · datos del caso que la guía interpola. */
+  desenlaceParams?: DesenlaceParams
 }
 
 /**
@@ -103,6 +107,12 @@ export interface CargasOps {
    * veredicto ya medido por el lazo, no para medir en el request path.
    */
   vigilancia?(slot: IntakeSlot): Promise<SlotVigilancia | null>
+  /**
+   * #346 · conteo por código de los desenlaces declarados por el job (`fallida`/`saltada`) del slot,
+   * subidos desde `desdeIso`. Alimenta la señal de cobertura y el orden de «Errores frecuentes».
+   * Ausente = la instancia no la cablea: ni señal ni orden por frecuencia (la página lista igual).
+   */
+  codigos?(slot: IntakeSlot, desdeIso: string): Promise<DesenlaceCodigoConteo[]>
   /** Deriva el plan de compensación SIN mutar nada: qué le pasa a cada clave de la carga. */
   revertPlan?(slot: IntakeSlot, ref: { uploadId?: number; archivedPath?: string }): Promise<RevertPlan>
   /** Ejecuta el plan CONFIRMADO. `ok:false` = el estado del slot cambió: devuelve el plan fresco. */
@@ -125,6 +135,12 @@ export interface SlotCargas {
   /** #161: lo que el vigilante sabe del slot. Ausente = instancia sin vigilante cableado ⇒ la página
    *  es la de siempre, sin banner ni marcas de varado (regresión cero por construcción). */
   vigilancia?: SlotVigilancia
+  /** #346 · catálogo de guías de la instancia (lista viva). Ausente = la instancia no cableó guías:
+   *  la celda Desenlace y el encabezado del slot son los de siempre (regresión cero por construcción).
+   *  Presente (aunque vacío) = las guías genéricas del Producto aplican a todo desenlace con código. */
+  guias?: readonly GuiaDecl[]
+  /** #346 · conteo por código de los últimos 30 días (señal de cobertura del operador). */
+  codigos30?: DesenlaceCodigoConteo[]
 }
 
 // ─── Helpers de render (locales: sin ciclo con admin.ts) ────────────────────
@@ -255,26 +271,120 @@ const DESENLACE_BADGE: Record<CargaDesenlace, string> = {
 /** Texto propio de la plataforma cuando NO hay motivo del job: describe el estado, jamás la causa. */
 const SIN_INFORME_TEXTO = 'el proceso terminó sin reportar la causa'
 
+/** Largo desde el que la celda SIN guía recorta el motivo (el recorte de siempre, #162). */
+const MOTIVO_RECORTE = 300
+
 /**
- * La celda DESENLACE de una carga (#162·§6.2).
+ * El plegado «Detalle técnico» (#346): el motivo COMPLETO del job —sin recorte, escapado y redactado—
+ * y, si lo hubo, el código. El texto técnico no se borra ni se acorta: pasa a segundo plano.
+ */
+function detalleTecnico(motivo: string | undefined, codigo?: string): string {
+  if (!motivo && !codigo) return ''
+  const m = motivo ? `<div class="sub" style="white-space:pre-wrap">${escapeHtml(redactSecrets(motivo))}</div>` : ''
+  const c = codigo ? `<div class="sub">código: <code>${escapeHtml(codigo)}</code></div>` : ''
+  return `<details class="guia"><summary class="sub">Detalle técnico</summary>${m}${c}</details>`
+}
+
+/** Clase visual de la línea de actor: el operador en rojo sobrio (la falla es de la plataforma, no
+ *  del archivo), el usuario en amarillo de aviso, «nadie» en gris. */
+const ESTILO_ACTOR: Record<GuiaResuelta['actor'], string> = {
+  usuario: AVISO,
+  operador: 'color:var(--err)',
+  nadie: '',
+}
+
+/**
+ * La celda DESENLACE de una carga (#162·§6.2 · #346).
  *
  * El motivo lo escribe un job de terreno: es texto no confiable que termina en HTML. Va escapado
  * (`escapeHtml`) y redactado (`redactSecrets`) — un log puede traer una cadena de conexión, y el
  * operador no tiene por qué recibirla en pantalla para leer «ancho inesperado: 28 columnas».
  *
+ * **Con guía (#346)** — el job declaró un código y la guía se resolvió —: insignia, la línea de ACTOR
+ * (quién tiene que moverse), el título y el qué pasó de la guía, el qué hacer numerado, y el motivo
+ * técnico COMPLETO plegado en «Detalle técnico» con el código. La guía también es texto no confiable
+ * (la escribe la instancia y la interpolan datos del job): va escapada igual.
+ *
+ * **Sin guía** — sin código, o un código de familia desconocida —: la celda de siempre (insignia +
+ * motivo recortado a 300). La única diferencia aditiva: si el recorte se comió algo, el motivo
+ * completo queda a un clic en «Detalle técnico». En el caso que originó #346 lo que el recorte se
+ * comía era justo lo accionable («Pedir el maestro actualizado», pasado el carácter 300 de 508).
+ *
  * El enlace a la corrida solo aparece si el `desenlace_run_started_at` calza con una corrida del
  * historial que se está mostrando: se enlaza una corrida que existe, no una que se supone.
  */
-export function desenlaceCelda(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRun?: (r: RunRecord) => string | null): string {
+export function desenlaceCelda(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRun?: (r: RunRecord) => string | null, guia?: GuiaResuelta | null): string {
   if (!h.desenlace) return ''
   const badge = DESENLACE_BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace))
-  const crudo = h.desenlaceMotivo ?? (h.desenlace === 'sin-informe' ? SIN_INFORME_TEXTO : '')
-  const recortado = crudo.length > 300 ? crudo.slice(0, 300) + '…' : crudo
-  const motivo = recortado ? `<div class="sub">${escapeHtml(redactSecrets(recortado))}</div>` : ''
   const corrida = h.desenlaceRunStartedAt && runs !== 'error' ? runs.find((r) => r.startedAt === h.desenlaceRunStartedAt) : undefined
   const href = corrida ? hrefDeRun?.(corrida) ?? null : null
   const link = href ? `<div><a class="sub" href="${escapeHtml(href)}">Ver corrida</a></div>` : ''
-  return `${badge}${motivo}${link}`
+  if (guia) {
+    const t = (x: string): string => escapeHtml(redactSecrets(x))
+    const estilo = ESTILO_ACTOR[guia.actor]
+    const actor = `<div class="sub"${estilo ? ` style="${estilo}"` : ''}><b>${escapeHtml(LINEA_ACTOR[guia.actor])}</b></div>`
+    const pasos = `<ol class="sub" style="margin:4px 0 4px 18px;padding:0">${guia.queHacer.map((p) => `<li>${t(p)}</li>`).join('')}</ol>`
+    return `${badge}${actor}<div><b>${t(guia.titulo)}</b></div><div class="sub">${t(guia.quePaso)}</div>${pasos}${detalleTecnico(h.desenlaceMotivo, guia.codigo)}${link}`
+  }
+  const crudo = h.desenlaceMotivo ?? (h.desenlace === 'sin-informe' ? SIN_INFORME_TEXTO : '')
+  const recortado = crudo.length > MOTIVO_RECORTE ? crudo.slice(0, MOTIVO_RECORTE) + '…' : crudo
+  const motivo = recortado ? `<div class="sub">${escapeHtml(redactSecrets(recortado))}</div>` : ''
+  const detalle = h.desenlaceMotivo && h.desenlaceMotivo.length > MOTIVO_RECORTE ? detalleTecnico(h.desenlaceMotivo) : ''
+  return `${badge}${motivo}${detalle}${link}`
+}
+
+/**
+ * La guía de UNA carga (#346), o `null` si no corresponde: solo `fallida`/`saltada` (los desenlaces
+ * que el job declara por archivo) con un código cuya familia existe, y solo si la instancia cableó el
+ * catálogo. `sin-informe` y `varada` no tienen declaración del job: no hay código que resolver.
+ */
+export function guiaDeCarga(slot: IntakeSlot, h: IntakeUploadEvent, catalogo: readonly GuiaDecl[] | undefined): GuiaResuelta | null {
+  if (!catalogo || !h.desenlaceCodigo) return null
+  if (h.desenlace !== 'fallida' && h.desenlace !== 'saltada') return null
+  return resolverGuia(slot, h.desenlaceCodigo, h.desenlaceParams, catalogo, h.filename)
+}
+
+/** URL de la página «Errores frecuentes» de UNA casilla (#346). Misma raíz y mismo gate que Cargas. */
+export const erroresHref = (domainId: string, slotId: string): string =>
+  `/admin/dominio/${encodeURIComponent(domainId)}/errores/${encodeURIComponent(slotId)}`
+
+/**
+ * La SEÑAL DE COBERTURA del operador (#346): de los desenlaces declarados por el job en los últimos
+ * 30 días, cuántos llegaron sin código, cuántos con código pero sin guía redactada por la instancia
+ * (cayeron a la genérica del Producto) y cuántos con un código de familia desconocida (se mostraron
+ * como sin código). Nombra los códigos: así la lista de errores frecuentes se completa con datos.
+ * Silenciosa cuando no hay nada que reportar o cuando la instancia no cablea el conteo.
+ */
+export function coberturaGuias(slot: IntakeSlot, conteos: DesenlaceCodigoConteo[] | undefined, catalogo: readonly GuiaDecl[] | undefined): string {
+  if (!conteos || !catalogo) return ''
+  let sinCodigo = 0
+  const genericos: string[] = []
+  const desconocidos: string[] = []
+  let nGen = 0
+  let nDesc = 0
+  for (const c of conteos) {
+    if (c.codigo == null) {
+      sinCodigo += c.n
+      continue
+    }
+    if (!familiaDe(c.codigo, catalogo)) {
+      nDesc += c.n
+      desconocidos.push(c.codigo)
+      continue
+    }
+    const g = resolverGuia(slot, c.codigo, undefined, catalogo)
+    if (g && !g.deInstancia) {
+      nGen += c.n
+      genericos.push(c.codigo)
+    }
+  }
+  if (!sinCodigo && !nGen && !nDesc) return ''
+  const cods = (xs: string[]): string => xs.map((x) => `<code>${escapeHtml(x)}</code>`).join(', ')
+  const partes: string[] = []
+  if (sinCodigo) partes.push(`${sinCodigo} sin código (el job no lo declaró)`)
+  if (nGen) partes.push(`${nGen} con código sin guía de la instancia — usaron la genérica: ${cods(genericos)}`)
+  if (nDesc) partes.push(`${nDesc} con código de familia desconocida — se mostraron sin guía: ${cods(desconocidos)}`)
+  return `<p class="sub">📘 Guías de carga · últimos 30 días: ${partes.join(' · ')}.</p>`
 }
 
 /** ¿Alguna carga del historial trae desenlace? Decide si la Actividad muestra la columna: sin
@@ -340,7 +450,7 @@ export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
  * `conDesenlace` (issue #162) agrega la columna DESENLACE — la decide `hayDesenlace(history)`: con el
  * registro sin resolver todavía, la tabla conserva sus cuatro columnas exactas de siempre.
  */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string, conDesenlace = false): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string, conDesenlace = false, guiaDe?: (h: IntakeUploadEvent) => GuiaResuelta | null): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   // La columna extra va ANTES de la de acciones (que cierra la tabla). Vacía en las filas que no son
   // cargas: el desenlace es de la carga — una corrida no tiene uno, y fingirlo sería inventar dato.
@@ -349,7 +459,7 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
     for (const h of history) {
       // #63 · «Revertir esta carga» vive en la fila de la carga: es su unidad, no el archivo suelto.
       const accion = revertFormOf?.(h) ?? ''
-      const desenlace = conDesenlace ? `<td>${desenlaceCelda(h, runs, runLogHrefOf)}</td>` : ''
+      const desenlace = conDesenlace ? `<td>${desenlaceCelda(h, runs, runLogHrefOf, guiaDe?.(h) ?? null)}</td>` : ''
       items.push({
         ts: h.ts,
         html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td>${desenlace}<td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}${accion ? ` ${accion}` : ''}</td>`,
@@ -575,15 +685,19 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     const thDesenlace = conDesenlace ? '<th>Desenlace</th>' : ''
     const colsActividad = conDesenlace ? 5 : 4
 
-    return `<h2>${escapeHtml(s.label)} <span class="sub c">${escapeHtml(s.id)}</span></h2>
-    ${vigilante}${avisoLogs}${coherencia}
+    // #346 · con catálogo de guías cableado: enlace a «Errores frecuentes» y señal de cobertura.
+    const errores = sc.guias ? ` <a class="sub" href="${escapeHtml(erroresHref(domainId, s.id))}">Errores frecuentes</a>` : ''
+    const cobertura = coberturaGuias(s, sc.codigos30, sc.guias)
+
+    return `<h2>${escapeHtml(s.label)} <span class="sub c">${escapeHtml(s.id)}</span>${errores}</h2>
+    ${vigilante}${avisoLogs}${coherencia}${cobertura}
     <p><b>Última conversión:</b> ${estado} ${rerun ? `<span style="margin-left:12px">${rerun}</span>` : ''}</p>
     ${logHtml}
     <h3 class="sub">Subir archivos</h3>
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th>${thDesenlace}<th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s), conDesenlace).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="${colsActividad}" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s), conDesenlace, sc.guias ? (h) => guiaDeCarga(s, h, sc.guias) : undefined).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="${colsActividad}" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
     <h3 class="sub">Landing (por procesar)</h3>
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
     <h3 class="sub">Procesados (archivo histórico)</h3>
@@ -599,4 +713,51 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     ? `<p class="sub">Cada casilla tiene su propia dirección: la de esta es <code>${escapeHtml(cargasHref(domainId, activo.slot.id))}</code> — se puede enlazar a quien deba usarla.</p>`
     : ''
   return `${back}<p class="sub">Operación de cargas del dominio: historial, estado y log de cada conversión, y el ciclo completo del landing (retirar / reactivar / re-correr).</p>${guia}${pestañas}${enlace}${seccion}`
+}
+
+/**
+ * La página «ERRORES FRECUENTES» de UNA casilla (#346): las guías que aplican al slot, ordenadas por
+ * cuántas veces apareció su código en el registro en los últimos 90 días, cada una con su actor,
+ * título, qué pasó y qué hacer. Se puede consultar ANTES de que algo falle.
+ *
+ * Qué se lista: las guías de la instancia que aplican al slot (aunque su código no haya ocurrido) y
+ * las guías —de la instancia o genéricas del Producto— de todo código que SÍ ocurrió. Las genéricas del
+ * Producto que nunca ocurrieron en el slot no se listan: trece guías abstractas no ayudan a nadie.
+ * Varios códigos que caen en la misma guía suman su frecuencia (`GuiaResuelta.clave`).
+ *
+ * `conteos` ausente o `'error'`: sin orden por frecuencia (se dice), la lista va en orden declarado.
+ */
+export function erroresFrecuentesBody(domainId: string, domainLabel: string, slot: IntakeSlot, catalogo: readonly GuiaDecl[], conteos: DesenlaceCodigoConteo[] | 'error' | undefined): string {
+  const back = `<p class="sub"><a href="${escapeHtml(cargasHref(domainId, slot.id))}">← ${escapeHtml(domainLabel)} · ${escapeHtml(slot.label)}</a></p>`
+  const porClave = new Map<string, { guia: GuiaResuelta; n: number; orden: number; codigos: string[] }>()
+  let orden = 0
+  const sumar = (codigo: string, n: number): void => {
+    const g = resolverGuia(slot, codigo, undefined, catalogo, undefined, '…')
+    if (!g) return
+    const prev = porClave.get(g.clave)
+    if (prev) {
+      prev.n += n
+      if (!prev.codigos.includes(codigo)) prev.codigos.push(codigo)
+    } else porClave.set(g.clave, { guia: g, n, orden: orden++, codigos: [codigo] })
+  }
+  for (const c of guiasDelSlot(slot, catalogo)) sumar(c, 0)
+  if (conteos && conteos !== 'error') for (const c of conteos) if (c.codigo) sumar(c.codigo, c.n)
+  const items = [...porClave.values()].sort((a, b) => b.n - a.n || a.orden - b.orden)
+  const nota = conteos === undefined || conteos === 'error'
+    ? '<p class="sub">No se pudo contar cuántas veces ocurrió cada error: la lista va en el orden en que la instancia declaró sus guías.</p>'
+    : '<p class="sub">Ordenadas por cuántas veces ocurrieron en esta casilla en los últimos 90 días.</p>'
+  const t = (x: string): string => escapeHtml(x)
+  const cuerpo = items.length
+    ? items.map(({ guia, n }) => {
+        const estilo = ESTILO_ACTOR[guia.actor]
+        const veces = conteos && conteos !== 'error' ? `<span class="sub"> · ${n === 0 ? 'no ha ocurrido en 90 días' : n === 1 ? 'ocurrió 1 vez en 90 días' : `ocurrió ${n} veces en 90 días`}</span>` : ''
+        return `<li style="margin-bottom:12px"><div><b>${t(guia.titulo)}</b>${veces}</div><div class="sub"${estilo ? ` style="${estilo}"` : ''}>${escapeHtml(LINEA_ACTOR[guia.actor])}</div><div class="sub">${t(guia.quePaso)}</div><ol class="sub" style="margin:4px 0 4px 18px;padding:0">${guia.queHacer.map((p) => `<li>${t(p)}</li>`).join('')}</ol></li>`
+      }).join('')
+    : ''
+  const lista = items.length
+    ? `<ul style="list-style:none;padding:0">${cuerpo}</ul>`
+    : '<p class="sub">Esta casilla todavía no tiene guías: ni la instancia declaró guías para ella ni ha ocurrido un error con código.</p>'
+  return `${back}<h2>Errores frecuentes · ${escapeHtml(slot.label)}</h2>
+    <p class="sub">Qué significa cada rechazo de esta carga y qué hacer. Si tu archivo no entra, el detalle de ese caso aparece en <a href="${escapeHtml(cargasHref(domainId, slot.id))}">Cargas</a>, en la columna Desenlace.</p>
+    ${nota}${lista}`
 }

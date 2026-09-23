@@ -179,8 +179,17 @@ export type FileOutcome = {
   /** Basename tal como el job lo nombró (si escribió un path, se toma el basename). */
   file: string
   outcome: 'procesado' | 'saltado' | 'fallido'
-  /** Motivo textual del job. Ausente si el job no lo declaró — la ausencia se dice, no se rellena. */
+  /** Motivo textual del job. Ausente si el job no lo declaró — la ausencia se dice, no se rellena.
+   *  Cuando la línea trae el sufijo estructurado `⟦…⟧` (#346) y calza, el motivo va SIN el sufijo. */
   motivo?: string
+  /** Código estable del desenlace (#346): `familia` o `familia/especifico`. Solo en `saltado`/
+   *  `fallido`, y solo si el sufijo calzó entero. La familia NO se valida acá: el lector no conoce el
+   *  catálogo de la instancia — un código de familia desconocida se persiste y lo trata quien muestra. */
+  codigo?: string
+  /** Datos del caso que acompañan al código (#346). Un valor PELADO con comas es una lista
+   *  (`faltan=58,88` ⇒ `['58','88']`); un valor ENTRECOMILLADO es siempre un escalar, aunque traiga
+   *  comas (`vigente="Control, v2.xlsx"`). Ausente si el sufijo no trae ninguno. */
+  params?: Record<string, string | string[]>
 }
 
 /** Marcador ↔ palabra: el par tiene que calzar. Un `✔ fallido:` no es del contrato, es ruido. */
@@ -226,6 +235,51 @@ function cortaMotivo(resto: string): { corte: number; largo: number } {
 }
 
 /**
+ * SUFIJO ESTRUCTURADO de la línea de desenlace (#346) — el código estable y los datos del caso:
+ *
+ *     [intake] ✖ fallido: <archivo> — <motivo técnico> ⟦<codigo> <clave>=<valor> …⟧
+ *
+ * Va AL FINAL de la línea, tras un espacio, entre U+27E6/U+27E7. Por qué al final y no dentro del
+ * marcador (`✖ fallido[COD]:`): el lector anterior a #346 no reconocería esa línea y el desenlace
+ * ENTERO desaparecería si el job se despliega antes que el Producto; al final, el lector viejo lo deja
+ * como texto dentro del motivo — degrada a texto visible, no a pérdida.
+ *
+ * Se extrae ANCLADO AL FINAL y ANTES de cortar archivo↔motivo: así una raya `—` dentro de un valor
+ * entrecomillado no puede ganarle el corte al separador canónico (el corte ocurre sobre lo que queda).
+ *
+ * Todo o nada: si el sufijo no calza la gramática COMPLETA (comillas sin cerrar, `⟦` sin cerrar,
+ * código con mayúscula, valor pelado con espacio), NO existe — la línea se lee como antes de #346 y el
+ * texto queda dentro del motivo, sin código. Es la regla rectora del contrato aplicada al sufijo: un
+ * código a medias sería un desenlace adivinado.
+ */
+const CODIGO_SRC = '[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)?'
+const PARAM_SRC = '[a-z][a-z0-9_]*=(?:"[^"⟧]*"|[^\\s"⟧]+)'
+const SUFIJO_RE = new RegExp(`\\s⟦(${CODIGO_SRC})((?:\\s+${PARAM_SRC})*)\\s*⟧\\s*$`)
+const PARAM_RE = /([a-z][a-z0-9_]*)=(?:"([^"⟧]*)"|([^\s"⟧]+))/g
+/** Gramática de un código de desenlace (#346), exportada para quien valida catálogos de guías. */
+export const DESENLACE_CODIGO_RE = new RegExp(`^${CODIGO_SRC}$`)
+
+/** Separa el sufijo `⟦…⟧` del resto. `null` si no hay sufijo que calce (la línea queda como está).
+ *  Una clave repetida dentro del sufijo: gana la ÚLTIMA — la misma regla que dos líneas del mismo
+ *  archivo, y por la misma razón (el escritor declara su valor final). */
+export function extraerSufijoDesenlace(resto: string): { resto: string; codigo: string; params?: Record<string, string | string[]> } | null {
+  const m = SUFIJO_RE.exec(resto)
+  if (!m) return null
+  const params: Record<string, string | string[]> = {}
+  for (const p of (m[2] ?? '').matchAll(PARAM_RE)) {
+    const clave = p[1]!
+    if (p[2] !== undefined) params[clave] = p[2]
+    else {
+      const crudo = p[3]!
+      params[clave] = crudo.includes(',') ? crudo.split(',').map((x) => x.trim()).filter(Boolean) : crudo
+    }
+  }
+  const out: { resto: string; codigo: string; params?: Record<string, string | string[]> } = { resto: resto.slice(0, m.index).trimEnd(), codigo: m[1]! }
+  if (Object.keys(params).length) out.params = params
+  return out
+}
+
+/**
  * Desenlaces por archivo declarados en el texto de un log de corrida — PURO, sin IO.
  *
  * Reglas, todas por el mismo principio: una línea que no calza la gramática NO EXISTE (jamás se
@@ -254,12 +308,20 @@ export function parseRunFileOutcomes(logText: string): FileOutcome[] {
     const [, marcador, palabra, resto] = m as unknown as string[]
     const outcome = OUTCOME_POR_MARCADOR[marcador!]
     if (!outcome || outcome !== palabra) continue
-    const { corte, largo } = cortaMotivo(resto!)
-    const file = (corte >= 0 ? resto!.slice(0, corte) : resto!).trim().replace(/^.*[/\\]/, '')
+    // #346 · el sufijo se extrae PRIMERO y solo en `saltado`/`fallido` (en `procesado` no es parte de
+    // la gramática: esa línea se lee exactamente como antes).
+    const sufijo = outcome !== 'procesado' ? extraerSufijoDesenlace(resto!) : null
+    const cuerpo = sufijo ? sufijo.resto : resto!
+    const { corte, largo } = cortaMotivo(cuerpo)
+    const file = (corte >= 0 ? cuerpo.slice(0, corte) : cuerpo).trim().replace(/^.*[/\\]/, '')
     if (!file) continue
-    const motivo = corte >= 0 ? resto!.slice(corte + largo).trim() : ''
+    const motivo = corte >= 0 ? cuerpo.slice(corte + largo).trim() : ''
     const fo: FileOutcome = { file, outcome }
     if (motivo && outcome !== 'procesado') fo.motivo = motivo
+    if (sufijo) {
+      fo.codigo = sufijo.codigo
+      if (sufijo.params) fo.params = sufijo.params
+    }
     if (!porArchivo.has(file)) orden.push(file)
     porArchivo.set(file, fo)
   }

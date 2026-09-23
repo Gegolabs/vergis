@@ -182,8 +182,23 @@ export type { Publisher, PublisherTarget, PublishTargetResult, ReplicaCountResul
 export { parseDomainsConfig, canManageDomain, manageableDomains, domainOfConnection, stewardGroupId, STEWARD_GROUP_PREFIX } from './domain'
 export type { DomainDecl } from './domain'
 export { parseIntakeConfig, matchSlot, slotsQueAceptan, validateUpload, validateMeta, validateRut, buildSidecar, sidecarName, isSidecarName, globToRegExp, slotMaxBytes, slotLogPath, DEFAULT_INGEST_LOG, deriveMetaFromFilename, tokenFromFilename, filenamePatternToRegExp, metaEsDerivada, slotRunLogsDir } from './intake'
-export { RUN_LOG_DIR_DEFAULT, RUN_LOG_RETENTION, runLogFileName, parseRunLogTimestamp, resolveRunLog, contarCorridasSinLog, redactSecrets, parseRunFileOutcomes } from './run-logs'
+export { RUN_LOG_DIR_DEFAULT, RUN_LOG_RETENTION, runLogFileName, parseRunLogTimestamp, resolveRunLog, contarCorridasSinLog, redactSecrets, parseRunFileOutcomes, extraerSufijoDesenlace, DESENLACE_CODIGO_RE } from './run-logs'
 export type { RunLogResolution, FileOutcome } from './run-logs'
+export {
+  FAMILIAS_PRODUCTO,
+  GUIA_ACTORES,
+  LINEA_ACTOR,
+  DATO_NO_INFORMADO,
+  familiaDe,
+  familiaDeCodigo,
+  parseIntakeGuias,
+  parseIntakeGuiasConfig,
+  formatoLista,
+  interpolarGuia,
+  resolverGuia,
+  guiasDelSlot,
+} from './intake-guias'
+export type { GuiaActor, GuiaParams, GuiaTexto, FamiliaDesenlace, GuiaDecl, GuiaNivel, GuiaResuelta } from './intake-guias'
 export { expectedInLanding, classifySlot, intakeAlerts, parseIntakeWatchState, INTAKE_WATCH_STATE_KEY, DEFAULT_MAX_AGE_MINUTES, DEFAULT_MAX_RUN_MINUTES, DEFAULT_INTAKE_WATCH_MS, SIN_MEDIDA_TICKS } from './intake-observability'
 export type { SlotObservation, MedidaCalidad, SlotAlertReason, SlotWatchState, SlotAlert, SlotClassification, SlotWatchConfig, SlotProjection, SlotWatchInput, ArchivoVarado, CargaRegistrada, RetiroRegistrado } from './intake-observability'
 export type { IntakeSlot, IntakeMetaField, IntakeMetaOption, IntakeCatalog, IntakeMetaType, IntakeFromFilename, IntakeTarget, IntakeTrigger, ValidateResult, ValidateMetaResult, DeriveResult } from './intake'
@@ -219,7 +234,7 @@ export type { PiRole, PiVisibility, PrincipalType, PiGrant, EffectiveRoleArgs } 
 export type { SourceRow, ProcessRow, EngineRef, ProcessLogsRef, SourceRegistryStore } from './governance-store'
 export type { MirandaStore, MirandaSession, MirandaMessage, MirandaArtifact } from './governance-store'
 export type { IntakeUploadStore, IntakeUploadRow } from './governance-store'
-export type { IntakeDesenlaceStore, CargaDesenlace, CargaDesenlaceInput } from './governance-store'
+export type { IntakeDesenlaceStore, CargaDesenlace, CargaDesenlaceInput, IntakeGuiaStatsStore, DesenlaceCodigoConteo, DesenlaceParams } from './governance-store'
 export type { IntakeWatchStore, SlotWatchSnapshot } from './governance-store'
 export type { IntakeRevertStore, IntakeRevertRow } from './governance-store'
 export type { IngestionRunStore, IngestionRunSnapshot, ProcessObservation } from './governance-store'

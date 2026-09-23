@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { parseIntakeConfig } from '@vergis/capabilities'
+import { parseIntakeConfig, parseIntakeGuiasConfig } from '@vergis/capabilities'
 
 export interface ConfigFinding {
   level: 'error' | 'warn'
@@ -101,7 +101,15 @@ export function checkDeploymentConfig(env: NodeJS.ProcessEnv = process.env): Con
   const intakeRaw = (env['VERGIS_INTAKE'] ?? '').trim()
   if (intakeRaw && existsSync(resolve(intakeRaw))) {
     try {
-      parseIntakeConfig(parseYaml(readFileSync(resolve(intakeRaw), 'utf8')))
+      const doc = parseYaml(readFileSync(resolve(intakeRaw), 'utf8'))
+      parseIntakeConfig(doc)
+      // #346 · el bloque `guias:` vive en el mismo archivo y se valida contra sus slots: una guía mal
+      // declarada se acusa aquí, ruidosa, en vez de quedar sin catálogo en silencio.
+      try {
+        parseIntakeGuiasConfig(doc)
+      } catch (e) {
+        findings.push({ level: 'error', env: 'VERGIS_INTAKE', message: `guías de carga mal declaradas: ${e instanceof Error ? e.message : String(e)}` })
+      }
     } catch (e) {
       findings.push({ level: 'error', env: 'VERGIS_INTAKE', message: `slots de ingesta mal declarados: ${e instanceof Error ? e.message : String(e)}` })
     }
