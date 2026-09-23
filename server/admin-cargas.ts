@@ -302,6 +302,9 @@ export interface ContextoEstado {
   /** #269·P2 · cómo se escribe una fecha. Default: UTC rotulado (vista técnica); la página de carga
    *  pasa `<time>` para la zona del navegador. Devuelve HTML. */
   fecha?: (iso: string | undefined) => string
+  /** #269·P2 (juez P2-02) · la persona pidió «Retirar» esta carga y el vigilante todavía no lo
+   *  resolvió: el archivo ya salió del landing, así que no se promete que «empieza a cargarse». */
+  retiroPedido?: boolean
 }
 
 /**
@@ -351,6 +354,7 @@ export function estadoVisible(h: IntakeUploadEvent, ctx: ContextoEstado = {}, gu
   const e = (tono: Tono, etiqueta: string, frase: string, retirable = false): EstadoVisible => ({ tono, etiqueta, frase, retirable })
   if (!h.ok) return e('error', '✕ No se recibió', escapeHtml(motivoDeRechazo(h.error)))
   const final = h.desenlaceFinal === true
+  if (ctx.retiroPedido && !final) return e('espera', 'Retirando', 'Lo retiraste; no se va a cargar.')
   if ((!h.desenlace || !final) && ctx.enCurso) return e('curso', '⏳ Cargando', 'Se está cargando.')
   const operador = (): EstadoVisible => e('atencion', '⚠ Problema de la plataforma', `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}`)
   switch (h.desenlace) {
@@ -406,12 +410,18 @@ export function chipDeCarga(h: IntakeUploadEvent, ctx: ContextoEstado = {}, guia
  * del operador («no coincide con el patrón esperado «X»»); acá se dice lo mismo sin jerga. Un motivo
  * que no se reconoce se muestra tal cual — ya es texto humano (la validación de metadata lo es).
  */
-export function motivoDeRechazo(error: string | undefined, ctx?: { otroTipo?: string | null }): string {
+export function motivoDeRechazo(error: string | undefined, ctx?: { otrosTipos: string[] }): string {
   if (!error) return 'No se recibió (el motivo no quedó registrado).'
   const patron = /no coincide con el patrón esperado «(.+)»/.exec(error)
-  // #269·§4.2 · con contexto (la página del archivo): si el nombre corresponde a OTRO tipo, se dice
-  // cuál; si no corresponde a ninguno, la frase de la tabla. Sin contexto, lo que se sabe.
-  if (patron && ctx) return ctx.otroTipo ? `Este archivo corresponde a «${ctx.otroTipo}», no a este tipo de archivo.` : 'Este nombre no corresponde a ningún archivo que puedas subir.'
+  // #269·§4.2 · con contexto (los OTROS tipos del usuario cuyo patrón calza con el nombre), la verdad en
+  // cada rama (juez P2 · P2-01): ninguno → la frase de la tabla; uno → cuál; varios → cuáles. Decir
+  // «ningún archivo» de un nombre que calza con cinco tipos sería falso. Sin contexto, lo que se sabe.
+  if (patron && ctx) {
+    const o = ctx.otrosTipos
+    if (!o.length) return 'Este nombre no corresponde a ningún archivo que puedas subir.'
+    if (o.length === 1) return `Este archivo corresponde a «${o[0]}», no a este tipo de archivo.`
+    return `Este archivo corresponde a otro tipo de archivo (${o.map((x) => `«${x}»`).join(', ')}), no a este.`
+  }
   if (patron) return `El nombre no calza con el que espera este tipo de archivo («${patron[1]}»).`
   const tam = /\((\d+) bytes\) excede el máximo del slot \((\d+) bytes\)/.exec(error)
   if (tam) return `Pesa ${(Number(tam[1]) / 1048576).toFixed(1)} MB y el máximo es ${Math.round(Number(tam[2]) / 1048576)} MB.`

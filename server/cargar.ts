@@ -41,7 +41,7 @@ import {
   type DesenlaceCodigoConteo,
   type GuiaResuelta,
 } from '@vergis/capabilities'
-import { nombreCanonico, slotsQueCalzan, describirPatron } from '../packages/capabilities/src/intake'
+import { nombreCanonico, slotsQueCalzan, describirPatron, IDS_RESERVADOS_DE_LA_PUERTA } from '../packages/capabilities/src/intake'
 import { readMultipart } from './multipart'
 import { shellNav, send, redirect, readForm, requireCsrf, chip, aviso, ficha, filaCarga, pasos, plegado, zonaSubida, fecha, FECHAS_LOCALES_JS } from './ui'
 import { estadoVisible, guiaDeCarga, historiaDeIntentos, lineaDeAviso, motivoDeRechazo, cargasHref, type ContextoEstado, type IntakeUploadEvent } from './admin-cargas'
@@ -350,6 +350,20 @@ async function cargasDe(deps: AdminDeps, slot: IntakeSlot, limite = 30): Promise
   })
 }
 
+/**
+ * #269·P2 (juez P2-02) · Retiros PEDIDOS desde la puerta que el vigilante todavía no resolvió, por carga.
+ * El estado lo sigue escribiendo solo el vigilante (un solo escritor); esto es lo que la página sabe
+ * porque ella misma ejecutó el acto, para no decir «Recibido» de un archivo que ya sacó. Memoria de
+ * proceso, por handler: tras un reinicio, la fila vuelve a lo que diga el registro hasta la vuelta del
+ * vigilante (≤ un tick). Se purga al leer una carga ya final.
+ */
+const retirosPedidos = new WeakMap<AdminDeps, Map<number, string>>()
+const pedidosDe = (deps: AdminDeps): Map<number, string> => {
+  let m = retirosPedidos.get(deps)
+  if (!m) retirosPedidos.set(deps, (m = new Map()))
+  return m
+}
+
 /** Margen hacia atrás para decir «Cargando» (P27) — el mismo de la consola técnica. */
 const CORRIDA_EN_CURSO_MS = 30 * 60_000
 
@@ -365,8 +379,13 @@ function contextoDe(deps: AdminDeps, slot: IntakeSlot, proy: ProyeccionTipo | nu
     if (i.motivo) return i.motivo.length > 120 ? i.motivo.slice(0, 120) + '…' : i.motivo
     return 'no se informó el motivo'
   }
+  const pedidos = pedidosDe(deps)
   return (h) => {
     const c: ContextoEstado = { aviso: avisoLinea, tituloDeIntento, fecha }
+    if (h.id != null && pedidos.has(h.id)) {
+      if (h.desenlaceFinal === true) pedidos.delete(h.id)
+      else c.retiroPedido = true
+    }
     if (enLanding) c.enLanding = enLanding.has(h.filename)
     const subida = Date.parse(h.ts)
     if (enCurso.some((r) => Date.parse(r.startedAt) >= subida - CORRIDA_EN_CURSO_MS && nowMs - Date.parse(r.startedAt) <= DEFAULT_MAX_RUN_MINUTES * 60_000)) c.enCurso = true
@@ -389,9 +408,9 @@ function bloqueGuia(g: GuiaResuelta): string {
 export function renderCarga(slot: IntakeSlot, tipos: IntakeSlot[], h: IntakeUploadEvent, ctx: ContextoEstado, guia: GuiaResuelta | null, retirarHref: string | null): string {
   let rechazo: IntakeUploadEvent = h
   if (!h.ok && h.error && /no coincide con el patrón esperado/.test(h.error)) {
-    // El rechazo por nombre dicho sin jerga: si corresponde a OTRO tipo, cuál; si no, que a ninguno.
+    // El rechazo por nombre dicho sin jerga y con la verdad de cada rama: ningún otro tipo, uno, varios.
     const otros = slotsQueCalzan(tipos, h.filename).filter((s) => s.id !== slot.id)
-    rechazo = { ...h, error: motivoDeRechazo(h.error, { otroTipo: otros.length === 1 ? otros[0]!.label : null }) }
+    rechazo = { ...h, error: motivoDeRechazo(h.error, { otrosTipos: otros.map((s) => s.label) }) }
   }
   const v = estadoVisible(rechazo, ctx, guia)
   const extra: string[] = []
@@ -729,8 +748,9 @@ export async function atenderCargar(c: CargarContexto, req: IncomingMessage, res
   const [, id, sub] = m
   const method = req.method ?? 'GET'
 
-  // ── Revisión antes de subir (JSON) ──
-  if (id === 'revisar' && !sub && method === 'POST') {
+  // ── Revisión antes de subir (JSON) ── (`revisar` y `tarjetas` son ids de slot reservados al parsear)
+  const [REVISAR, TARJETAS] = IDS_RESERVADOS_DE_LA_PUERTA
+  if (id === REVISAR && !sub && method === 'POST') {
     const f = await readForm(req)
     requireCsrf(f, c.token)
     let archivos: { nombre: string; bytes: number; sha?: string }[] = []
@@ -745,7 +765,7 @@ export async function atenderCargar(c: CargarContexto, req: IncomingMessage, res
     return true
   }
   // ── Fragmento de las tarjetas (estado vivo de /cargar) ──
-  if (id === 'tarjetas' && !sub && method === 'GET') {
+  if (id === TARJETAS && !sub && method === 'GET') {
     const t = await tarjetasHtml(c)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-hay-no-finales': t.vivo ? '1' : '0' })
     res.end(t.html)
@@ -789,8 +809,12 @@ export async function atenderCargar(c: CargarContexto, req: IncomingMessage, res
       const f = await readForm(req)
       requireCsrf(f, c.token)
       const idc = Number(f['carga'])
-      const h = (await cargasDe(c.deps, slot)).find((x) => x.id === idc)
-      if (!h || !h.ok || !c.deps.cargas || h.desenlaceFinal === true) {
+      const todas = await cargasDe(c.deps, slot)
+      const h = todas.find((x) => x.id === idc)
+      // Juez P2-10 · solo la carga MÁS RECIENTE de ese nombre puede tener su archivo en espera: con el id
+      // de una anterior se retiraría el archivo actual y la auditoría citaría la carga equivocada.
+      const ultima = h ? todas.find((x) => x.ok && x.filename === h.filename) : undefined
+      if (!h || !h.ok || !c.deps.cargas || h.desenlaceFinal === true || ultima !== h || pedidosDe(c.deps).has(h.id!)) {
         volverA(hrefTipo(slot), 'Ese archivo ya no se puede retirar.', 'error')
         return true
       }
@@ -800,6 +824,7 @@ export async function atenderCargar(c: CargarContexto, req: IncomingMessage, res
         volverA(hrefTipo(slot), `No se pudo retirar «${h.filename}». Vuelve a intentarlo en unos minutos.`, 'error')
         return true
       }
+      pedidosDe(c.deps).set(h.id!, new Date().toISOString())
       c.deps.audit({ type: 'intake-retire', slot: slot.id, domain: slot.domain ?? '', filename: h.filename, by: c.email, uploadId: h.id })
       c.deps.acelerarCarga?.(slot.id)
       volverA(hrefTipo(slot), `Retiraste «${h.filename}»; no se va a cargar.`, 'ok')
@@ -842,11 +867,14 @@ export async function subir(c: CargarContexto, req: IncomingMessage, res: Server
   const r = await recibir(c.deps, c.tipos, lote, fields, c.email)
   if (!r.ok) {
     const otros = r.slot ? slotsQueCalzan(c.tipos, r.filename).filter((x) => x.id !== r.slot!.id) : []
-    const texto = r.reason === 'accept' && /no coincide con el patrón esperado/.test(r.error) ? motivoDeRechazo(r.error, { otroTipo: otros.length === 1 ? otros[0]!.label : null }) : r.error
+    const texto = r.reason === 'accept' && /no coincide con el patrón esperado/.test(r.error) ? motivoDeRechazo(r.error, { otrosTipos: otros.map((x) => x.label) }) : r.error
     volverA(origen, `«${r.filename}»: ${texto}`, 'error')
     return true
   }
   const tocados = [...new Set(lote.map((u) => u.slot))]
-  volverA(tocados.length === 1 ? hrefTipo(tocados[0]!) : '/cargar', mensajeTrasSubir(r), 'ok')
+  // Juez P2-04 · si un archivo se enrutó a un tipo distinto de la página (o el lote fue a varios), el
+  // mensaje lo nombra: sin la revisión en el navegador, es la única vez que la persona se entera.
+  const desvios = lote.filter((u) => (pagina ? u.slot.id !== pagina.id : tocados.length > 1)).map((u) => `«${u.filename}» fue a «${u.slot.label}».`)
+  volverA(tocados.length === 1 ? hrefTipo(tocados[0]!) : '/cargar', [mensajeTrasSubir(r), ...desvios].join(' '), 'ok')
   return true
 }

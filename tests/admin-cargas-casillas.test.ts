@@ -176,6 +176,8 @@ describe('consola de Cargas · navegación por casilla (#178)', () => {
     const loc = res.headers['location']!
     expect(loc).toContain('/cargar/oc_crossdocking_distribuciones?msg=')
     expect(loc).toContain('&t=ok')
+    // Juez P2-04 · el mensaje nombra el desvío (sin la revisión del navegador, es la única señal).
+    expect(decodeURIComponent(loc)).toContain('«oc-17473580-distributions-details-11-08-2026.xlsx» fue a «OC Crossdocking · Distribuciones».')
     expect(puts).toEqual(['oc-17473580-distributions-details-11-08-2026.xlsx'])
   })
 

@@ -244,6 +244,13 @@ export interface IntakeSlot {
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
+
+/**
+ * #269·P2 (juez P2-03) · Ids de slot RESERVADOS: son subrutas de la puerta `/cargar/<id>` que no son un
+ * tipo de archivo. Un slot con uno de estos ids perdería su página o su subida en silencio; se acusa al
+ * parsear, como las rutas reservadas del nodo.
+ */
+export const IDS_RESERVADOS_DE_LA_PUERTA: readonly string[] = ['revisar', 'tarjetas']
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 
 /**
@@ -332,6 +339,8 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
   const id = String(o['id'] ?? '')
   if (!SLUG_RE.test(id)) throw new Error(`intake: slot #${i} con id inválido '${id}' (esperado [a-z][a-z0-9_]*).`)
   if (seen.has(id)) throw new Error(`intake: id de slot duplicado '${id}'.`)
+  if (IDS_RESERVADOS_DE_LA_PUERTA.includes(id))
+    throw new Error(`intake: el id de slot '${id}' está reservado (es una ruta de la puerta /cargar: ${IDS_RESERVADOS_DE_LA_PUERTA.join(', ')}); usa otro id.`)
   seen.add(id)
   const target = parseTarget(o['target'], id)
   const out: IntakeSlot = { id, label: String(o['label'] ?? id), target }
