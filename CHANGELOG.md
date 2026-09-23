@@ -61,6 +61,43 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+*Contenido previsto para el corte **0.35.1** (corrección sin capacidad nueva de 0.35.0; frente arbol,
+lab A.R.B.O.L. `work/269`). El corte es de la custodia.*
+
+### 0.35.0 en producción: la puerta rechazaba todo, «CONTRADICE» sobre un landing sano y «VARADO» sobre archivos en espera
+
+**Lo que se vio** (instancia A.R.B.O.L., 2026-09-23, leído en producción y reproducido con el código de
+0.35.0): la puerta rechazaba **toda** subida —cinco casillas de la instancia todavía declaran
+`accept: "*.xlsx"`, así que cada Excel calzaba con dos o más tipos y la garantía de disjunción, que era
+incondicional, lo rechazaba (dos rechazos reales antes del rollback)—; una casilla sin corridas
+conservadas por el motor mostraba «CONTRADICE» porque se esperaban en el landing archivos «sin
+informe», que justamente salieron de él; y archivos declarados ✖ por su corrida, que esperan en el
+landing a reintentarse, salían «⚠ VARADO … sin que ninguna corrida lo tomara».
+
+**Qué cambia.**
+
+- **La subida a una casilla elegida acepta SIEMPRE un nombre que calce con esa casilla**, aunque calce
+  también con otras (decisión D-222 del lab): el usuario ya dijo a cuál va y el patrón lo confirma. Que
+  calce con otras es un defecto de la configuración, no del archivo: queda en la auditoría
+  (`tambienCalza`), en la señal de contrato de la consola («los patrones de estas casillas se pisan: …»)
+  y en el log, que dice la transición en los dos sentidos. El rechazo por ambigüedad queda solo para la
+  puerta sin casilla (`/cargar`, que llega con la próxima versión), donde el nombre es lo único que
+  decide el destino. Por construcción, ninguna configuración de instancia vuelve la subida más estricta
+  que en 0.34.0. Medido con el `slots.yaml` de la instancia y sus 150 subidas reales: 0.35.0 aceptaba 0;
+  0.35.1 acepta 131, exactamente las que acepta 0.34.0 (las 19 restantes no calzan con el patrón de su
+  propia casilla).
+- **Solo se espera en el landing** una carga sin estado o declarada ✖/⚠: `sin-informe` nunca implica
+  que el archivo siga ahí.
+- **«Varado» no es un archivo en espera** (su carga declarada ✖/⚠ por una corrida) **ni el vigente**
+  de un slot con `target.processed: false` — tampoco en la alerta al operador.
+- La misma corrida guardada con y sin designador de zona (`…6685436` / `…6685436Z`) se lee como una.
+
+**Qué exige al operador:** nada nuevo — sin migración, sin variables de entorno, sin claves nuevas. El
+rollback a 0.35.0 es posible (mismo esquema); a 0.34.0 vale la nota de 0.35.0: quitar antes el flujo
+`cargas-operador` de `VERGIS_NOTIFY`, que 0.34.0 rechaza al arrancar.
+
 ## 0.35.0 — 2026-09-23
 
 ### El estado de cada carga dice la verdad: solo lo declarado y lo registrado, y avanza hasta un final (PR #351)

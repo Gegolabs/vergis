@@ -302,7 +302,9 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
   const out: IntakeSlot = { id, label: String(o['label'] ?? id), target }
   if (o['description'] != null) out.description = String(o['description'])
   if (o['domain'] != null) out.domain = String(o['domain'])
-  if (o['accept'] != null) out.accept = String(o['accept'])
+  // #269·0.35.1 (juez m1) · el patrón se lleva a NFC igual que el nombre al subir: un `accept` escrito
+  // en forma descompuesta no calzaría con ningún nombre canonizado (0.34.0 lo aceptaba).
+  if (o['accept'] != null) out.accept = String(o['accept']).normalize('NFC')
   if (o['maxBytes'] != null) {
     const n = Number(o['maxBytes'])
     if (!Number.isInteger(n) || n <= 0) throw new Error(`intake: '${id}'.maxBytes debe ser un entero positivo.`)
@@ -560,6 +562,28 @@ export function slotsQueCalzan(slots: IntakeSlot[], filename: string): IntakeSlo
   const name = nombreCanonico(filename).trim()
   if (!name) return []
   return slots.filter((s) => !!s.accept && globToRegExp(s.accept).test(name))
+}
+
+/** Firma de los patrones declarados (#269·0.35.1): una medida de disjunción vale solo para la
+ *  configuración con la que se tomó. */
+export const firmaDePatrones = (slots: IntakeSlot[]): string => JSON.stringify(slots.map((s) => [s.id, s.accept ?? null]))
+
+/**
+ * Pares de tipos cuyos patrones SE PISAN con certeza (#269·0.35.1): el testigo mínimo de uno (cada
+ * `*` vacío, cada `?` una letra) calza con el patrón del otro. Es condición SUFICIENTE, no necesaria
+ * —dos patrones «contiene» pueden intersecarse sin que su testigo lo muestre—, y por eso se combina
+ * con la medida sobre los nombres reales. Cinco slots con `*.xlsx` se pisan todos entre sí.
+ */
+export function patronesQueSePisan(slots: IntakeSlot[]): [string, string][] {
+  const con = slots.filter((s) => !!s.accept)
+  const testigo = (glob: string): string => glob.replace(/\*/g, '').replace(/\?/g, 'x')
+  const out: [string, string][] = []
+  for (let i = 0; i < con.length; i++)
+    for (let j = i + 1; j < con.length; j++) {
+      const a = con[i]!, b = con[j]!
+      if (globToRegExp(b.accept!).test(testigo(a.accept!)) || globToRegExp(a.accept!).test(testigo(b.accept!))) out.push([a.id, b.id])
+    }
+  return out
 }
 
 /**

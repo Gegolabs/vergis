@@ -20,7 +20,7 @@ import { declaracionDeArchivo } from '../packages/capabilities/src/run-logs'
 import { nombreCanonico, slotProcessedDir, slotsQueCalzan, nombresAmbiguos } from '../packages/capabilities/src/intake'
 import { leerRetiro } from '../packages/capabilities/src/intake-observability'
 import { createIntakeLoop, resolverEstadoDeCarga, type CorridaConLog, type IntakeLoopDeps, type RetiroDeCarga } from '../server/intake-loop'
-import { createAdmin, validarEnLaPuerta, avisoDeDuplicado, type AdminHandler } from '../server/admin'
+import { createAdmin, validarEnLaPuerta, enrutarPorNombre, avisoDeDuplicado, type AdminHandler } from '../server/admin'
 import { chipDeCarga, motivoDeRechazo, señalDeContrato, type CargasOps, type IntakeUploadEvent } from '../server/admin-cargas'
 import type { Notification } from '../server/notify'
 import { parseNotifyConfig } from '../server/notify'
@@ -306,12 +306,14 @@ describe('#269·§4.1 · la puerta: NFC, disjunción y el nombre que ya se recib
     const nfd = 'Antigüedad de saldos clientes W1.xlsx'
     expect(nfd).not.toBe(nfd.normalize('NFC'))
     expect(validarEnLaPuerta([SALDOS], SALDOS, nfd, 10).ok).toBe(false) // control: sin normalizar, rechaza
-    expect(validarEnLaPuerta([SALDOS], SALDOS, nombreCanonico(nfd), 10)).toEqual({ ok: true })
+    expect(validarEnLaPuerta([SALDOS], SALDOS, nombreCanonico(nfd), 10)).toMatchObject({ ok: true })
   })
 
-  it('un nombre que calza con DOS tipos no aterriza, aunque calce con el de la tarjeta', () => {
+  it('con casilla elegida, un nombre que calza con DOS tipos entra en la elegida y se señala; sin casilla, es ambiguo', () => {
     const v = validarEnLaPuerta([PROD, DIST], PROD, 'oc-1-products-details-01-01-2026.xlsx', 10)
-    expect(v).toMatchObject({ ok: false, reason: 'ambiguo' })
+    expect(v).toMatchObject({ ok: true })
+    expect(v.ok && v.tambienCalza.map((s) => s.id)).toEqual(['dist'])
+    expect(enrutarPorNombre([PROD, DIST], 'oc-1-products-details-01-01-2026.xlsx')).toMatchObject({ kind: 'ambiguo' })
     expect(slotsQueCalzan([PROD, DIST], 'oc-1-distributions-details.xlsx').map((s) => s.id)).toEqual(['dist'])
     expect(nombresAmbiguos([PROD, DIST], ['oc-1-products-details.xlsx', 'oc-1-distributions-details.xlsx'])).toEqual([{ nombre: 'oc-1-products-details.xlsx', slots: ['prod', 'dist'] }])
   })
@@ -464,7 +466,7 @@ describe('#269·V12 · aviso al operador y al usuario, en el lazo', () => {
     await a.loop.tick()
     const raw = await a.store.getSetting('intake.disjuncion')
     expect(JSON.parse(raw!).ambiguos).toEqual([{ nombre: 'ventas mensual.xlsx', slots: ['ventas', 'otro'] }])
-    expect(a.logLines.some((l) => l.includes('calzan con 2+ tipos'))).toBe(true)
+    expect(a.logLines.some((l) => l.includes('los patrones de estas casillas se pisan'))).toBe(true)
   })
 })
 

@@ -911,19 +911,32 @@ export function dupLabel(row: Pick<IntakeUploadRow, 'filename' | 'uploadedAt' | 
 const SHA_RE = /^[0-9a-f]{64}$/
 
 /**
- * La PUERTA (#269·§4.1, D12): la validación de siempre del slot MÁS la garantía de disjunción. Un
- * nombre que calza con dos o más tipos de archivo NO aterriza, cualquiera sea la configuración: no se
- * puede saber a cuál va, y dejarlo entrar es exactamente el «archivo en el tipo equivocado» que el
- * invariante existe para volver imposible. La garantía vive acá y no en la recarga: la recarga es
- * síncrona y la disjunción que importa es sobre nombres reales, no entre patrones.
+ * La subida a una CASILLA ELEGIDA por el usuario (#269·0.35.1, D-222 del lab): la validación de
+ * siempre del slot, y nada más. **Un nombre que calza con la casilla elegida se acepta SIEMPRE**,
+ * aunque calce también con otras: el usuario ya dijo a cuál va, y su patrón lo confirma. Que calce con
+ * otras es un defecto de la CONFIGURACIÓN, no del archivo: se devuelve (`tambienCalza`) para señalarlo
+ * al operador, jamás para rechazar. Por construcción, ninguna configuración de instancia puede volver
+ * esta puerta más estricta que la de 0.34.0 (en 0.35.0 lo hizo: con cinco casillas en `*.xlsx`
+ * rechazaba toda subida — INC-09).
+ *
+ * El rechazo por ambigüedad existe solo donde no hay casilla elegida (`enrutarPorNombre`, la puerta
+ * general `/cargar` de P2): ahí el nombre es lo único que decide el destino.
  */
-export function validarEnLaPuerta(slots: IntakeSlot[], slot: IntakeSlot, filename: string, size: number): { ok: true } | { ok: false; error: string; reason?: 'accept' | 'ambiguo' } {
+export function validarEnLaPuerta(slots: IntakeSlot[], slot: IntakeSlot, filename: string, size: number): { ok: true; tambienCalza: IntakeSlot[] } | { ok: false; error: string; reason?: 'accept' } {
   const v = validateUpload(slot, filename, size)
   if (!v.ok) return v.reason ? { ok: false, error: v.error, reason: v.reason } : { ok: false, error: v.error }
+  return { ok: true, tambienCalza: slotsQueCalzan(slots, filename).filter((s) => s.id !== slot.id) }
+}
+
+/**
+ * La puerta SIN casilla (#269·§4.1, D12; la usa `/cargar` de P2): el nombre decide el destino. Con
+ * exactamente un tipo que calza, ese; con ninguno, `ninguno`; con dos o más, `ambiguo` — no se puede
+ * saber a cuál va, y adivinar es el «archivo en el tipo equivocado» que el invariante vuelve imposible.
+ */
+export function enrutarPorNombre(slots: IntakeSlot[], filename: string): { kind: 'uno'; slot: IntakeSlot } | { kind: 'ninguno' } | { kind: 'ambiguo'; slots: IntakeSlot[] } {
   const calzan = slotsQueCalzan(slots, filename)
-  if (calzan.length >= 2)
-    return { ok: false, reason: 'ambiguo', error: `Este nombre calza con más de un tipo de archivo (${calzan.map((s) => `«${s.label}»`).join(', ')}): no se puede saber a cuál va, así que no se recibió. Hay que corregir los patrones de esos tipos.` }
-  return { ok: true }
+  if (calzan.length === 1) return { kind: 'uno', slot: calzan[0]! }
+  return calzan.length === 0 ? { kind: 'ninguno' } : { kind: 'ambiguo', slots: calzan }
 }
 
 /**
@@ -1087,8 +1100,10 @@ async function handleIntake(
     deps.intakeUploads ? await deps.intakeUploads.recordUpload(row).catch(() => undefined) : undefined
   // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
   // dejar la semana a medio cargar). El SJD failure-safe espera el set consistente, no archivos sueltos.
+  const tambienCalza: Record<string, string[]> = {}
   for (const [i, u] of uploads.entries()) {
     const v = validarEnLaPuerta(deps.intakeSlots ?? [], slot, u.filename, u.bytes.length)
+    if (v.ok && v.tambienCalza.length) tambienCalza[u.filename] = v.tambienCalza.map((s) => s.id)
     if (!v.ok && v.reason === 'accept') {
       // #269·§4.1 · un nombre que ya se RECIBIÓ antes y hoy no calza con ningún tipo (la carga 27): se
       // dice que ese archivo cambió de nombre, en vez del rechazo genérico que no explica nada.
@@ -1154,7 +1169,9 @@ async function handleIntake(
     const sidecar = hasMeta ? buildSidecar(slot.id, m.values, by, uploadedAt, m.verify) : undefined
     await deps.intake.put(slot.target, u.filename, u.bytes, sidecar)
     await registrar(uploadRow(i, true, { uploadedAt, triggered: willTrigger, ...(previa ? { dupOfId: previa.id } : {}) }))
-    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}) })
+    // #269·0.35.1 · aceptado en la casilla elegida aunque también calce con otras: queda en la auditoría
+    // (la señal de contrato de la consola lo mide sobre el registro en la próxima vuelta del lazo).
+    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}), ...(tambienCalza[u.filename] ? { tambienCalza: tambienCalza[u.filename] } : {}) })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
   const aviso = duplicados.length ? ` ⚠ ${duplicados.join(' ')}` : ''
