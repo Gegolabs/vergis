@@ -154,6 +154,34 @@ export interface IntakeMetaField {
   /** Convención de nombre que resuelve este campo sin preguntárselo al usuario (issue #95). Presente =
    *  el formulario NO lo pide y el valor sale del nombre; ausente = comportamiento de #76 (formulario). */
   fromFilename?: IntakeFromFilename
+  /** #269·§4.4 · texto de ayuda que la página de carga muestra junto al campo («0 es la línea base…»). */
+  ayuda?: string
+}
+
+/**
+ * #269·§4.4 · La FICHA de un tipo de archivo: lo que quien sube necesita saber antes de subir (qué
+ * es, de dónde se saca, cómo se llama, qué pasa con lo que ya estaba, qué va junto y qué subir antes).
+ * La declara la instancia —el dato no existe en ningún otro lado— y el Producto solo la dibuja: sin
+ * un campo, su bloque no se dibuja (nunca se rellena con un texto del Producto que la instancia no
+ * validó).
+ */
+export interface IntakeFicha {
+  /** De dónde se saca el archivo («Portal B2B de Sodimac»). */
+  origen?: string
+  /** Cómo tiene que llamarse, en palabras. Ausente = `describirPatron(accept)`. */
+  nombre?: string
+  /** Un nombre real de ejemplo. */
+  ejemplo?: string
+  /** Qué pasa con lo que ya estaba: `acumula` (por clave), `reemplaza` (la lista entera), `version`. */
+  regimen?: 'acumula' | 'reemplaza' | 'version'
+  /** La clave con la que acumula («la OC»). Obligatoria con `acumula`. */
+  clave?: string
+  /** Qué tiene que venir junto. */
+  juego?: string
+  /** Qué subir antes: otro tipo de archivo del mismo archivo de intake, con el porqué. */
+  requiere?: { slot: string; motivo: string }[]
+  /** Cuándo lo toma el proceso, para un tipo que no se carga en el momento. */
+  cadencia?: string
 }
 
 export interface IntakeSlot {
@@ -211,6 +239,8 @@ export interface IntakeSlot {
    * declarar el suyo. Ausente = la línea «Avísale a …» no se dibuja, y la consola técnica lo señala.
    */
   contacto?: string
+  /** #269·§4.4 · la ficha del tipo de archivo (opcional; parser estricto dentro del bloque). */
+  ficha?: IntakeFicha
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
@@ -230,13 +260,18 @@ export function parseIntakeConfig(doc: unknown): IntakeSlot[] {
   const catalogs = parseCatalogs((doc as Record<string, unknown>)['catalogs'])
   const contacto = parseContacto((doc as Record<string, unknown>)['contacto'], 'intake: contacto')
   const seen = new Set<string>()
-  return raw.map((s, i) => {
+  const out = raw.map((s, i) => {
     const slot = parseSlot(s, i, seen, catalogs)
     // #269·V12 · el contacto de la raíz viaja EN cada slot: así llega a todo consumidor (lazo,
     // consola, correo) sin que la forma del resultado de este parser cambie para nadie.
     if (slot.contacto == null && contacto != null) slot.contacto = contacto
     return slot
   })
+  // #269·§4.4 · un `requiere` que nombra un slot inexistente se acusa al parsear: la ficha diría
+  // «sube antes X» apuntando a nada.
+  for (const s of out) for (const r of s.ficha?.requiere ?? [])
+    if (!seen.has(r.slot)) throw new Error(`intake: '${s.id}'.ficha.requiere: el slot '${r.slot}' no existe.`)
+  return out
 }
 
 /** `contacto` (#269·V12): una dirección de correo. Otra cosa se acusa al parsear — un contacto que
@@ -341,6 +376,56 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
   if (o['watch'] !== undefined) out.watch = parseWatch(o['watch'], id, out.trigger != null)
   if (o['contrato_desde'] != null) out.contratoDesde = parseContratoDesde(o['contrato_desde'], id)
   if (o['contacto'] != null) out.contacto = parseContacto(o['contacto'], `intake: '${id}'.contacto`)
+  if (o['ficha'] !== undefined) out.ficha = parseFicha(o['ficha'], id)
+  return out
+}
+
+/** Claves admitidas dentro del bloque `ficha` (#269·§4.4). El bloque nace ESTRICTO, como `watch`. */
+const FICHA_KEYS = new Set(['origen', 'nombre', 'ejemplo', 'regimen', 'clave', 'juego', 'requiere', 'cadencia'])
+const REGIMENES = new Set(['acumula', 'reemplaza', 'version'])
+
+/**
+ * Valida el bloque `ficha:` de un slot (#269·§4.4). Fail-closed: una clave desconocida, un texto
+ * vacío, un régimen fuera de `acumula | reemplaza | version`, `acumula` sin `clave` o un `requiere`
+ * mal formado **lanzan** — el chequeo de arranque lo acusa y el hot-reload conserva los slots
+ * vigentes. Que el slot de un `requiere` exista se verifica después, con todos los slots leídos
+ * (`parseIntakeConfig`).
+ */
+export function parseFicha(raw: unknown, slotId: string): IntakeFicha {
+  const where = `intake: '${slotId}'.ficha`
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`${where} debe ser un mapa (${[...FICHA_KEYS].join(', ')}).`)
+  const o = raw as Record<string, unknown>
+  for (const k of Object.keys(o)) if (!FICHA_KEYS.has(k)) throw new Error(`${where}: clave desconocida '${k}' (esperadas: ${[...FICHA_KEYS].join(', ')}).`)
+  const texto = (k: string): string | undefined => {
+    if (o[k] == null) return undefined
+    const v = typeof o[k] === 'string' ? (o[k] as string).trim() : ''
+    if (!v) throw new Error(`${where}.${k} debe ser un texto no vacío.`)
+    return v.normalize('NFC')
+  }
+  const out: IntakeFicha = {}
+  for (const k of ['origen', 'nombre', 'ejemplo', 'clave', 'juego', 'cadencia'] as const) {
+    const v = texto(k)
+    if (v != null) out[k] = v
+  }
+  if (o['regimen'] != null) {
+    const r = String(o['regimen'])
+    if (!REGIMENES.has(r)) throw new Error(`${where}.regimen inválido '${r}' (acumula | reemplaza | version).`)
+    out.regimen = r as IntakeFicha['regimen']
+  }
+  if (out.regimen === 'acumula' && !out.clave) throw new Error(`${where}: 'regimen: acumula' requiere 'clave' (qué carga cada archivo, p.ej. «la OC»).`)
+  if (o['requiere'] != null) {
+    if (!Array.isArray(o['requiere']) || !o['requiere'].length) throw new Error(`${where}.requiere debe ser una lista no vacía de { slot, motivo }.`)
+    out.requiere = o['requiere'].map((x, i) => {
+      const r = (x ?? {}) as Record<string, unknown>
+      for (const k of Object.keys(r)) if (k !== 'slot' && k !== 'motivo') throw new Error(`${where}.requiere #${i}: clave desconocida '${k}' (esperadas: slot, motivo).`)
+      const slot = String(r['slot'] ?? '')
+      const motivo = typeof r['motivo'] === 'string' ? r['motivo'].trim() : ''
+      if (!SLUG_RE.test(slot)) throw new Error(`${where}.requiere #${i}: 'slot' inválido '${slot}'.`)
+      if (slot === slotId) throw new Error(`${where}.requiere #${i}: un tipo de archivo no puede requerirse a sí mismo.`)
+      if (!motivo) throw new Error(`${where}.requiere #${i}: falta 'motivo'.`)
+      return { slot, motivo }
+    })
+  }
   return out
 }
 
@@ -449,6 +534,11 @@ function parseMeta(raw: unknown, slotId: string, catalogs: Map<string, IntakeCat
       if (ref) throw new Error(`${where}: 'options_ref' solo aplica a type enum.`)
     }
     if (o['from_filename'] != null) field.fromFilename = parseFromFilename(o['from_filename'], slotId, id)
+    if (o['ayuda'] != null) {
+      const a = typeof o['ayuda'] === 'string' ? o['ayuda'].trim() : ''
+      if (!a) throw new Error(`${where}.ayuda debe ser un texto no vacío.`)
+      field.ayuda = a
+    }
     return field
   })
 }
@@ -610,6 +700,35 @@ export const slotMaxBytes = (slot: IntakeSlot): number => slot.maxBytes ?? DEFAU
 export function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
   return new RegExp(`^${escaped}$`, 'i')
+}
+
+const EXT_LEGIBLE: Record<string, string> = { xlsx: 'un Excel', xls: 'un Excel', xlsm: 'un Excel', csv: 'un CSV', txt: 'un texto', json: 'un JSON', pdf: 'un PDF', xml: 'un XML', zip: 'un ZIP' }
+
+/**
+ * #269·§4.4 · El patrón de nombre dicho en palabras, para la ficha que no declara `ficha.nombre`.
+ * `*x*` → «tiene que contener «x»»; `x*` → «tiene que empezar con «x»»; `*x` → «tiene que terminar
+ * en «x»»; la extensión → «y ser un Excel (.xlsx)». Lo que no cae en esas formas se muestra tal cual,
+ * con qué significa cada comodín. Nunca afirma más de lo que el patrón exige: la comparación ignora
+ * mayúsculas y lo dice.
+ */
+export function describirPatron(accept: string | undefined): string {
+  if (!accept) return 'Puede llamarse como sea.'
+  const g = accept.normalize('NFC')
+  const ext = /\.([A-Za-z0-9]{2,5})$/.exec(g)
+  const cuerpo = ext ? g.slice(0, -ext[0].length) : g
+  const tipo = ext ? `${EXT_LEGIBLE[ext[1]!.toLowerCase()] ?? 'un archivo'} (.${ext[1]!.toLowerCase()})` : null
+  const q = cuerpo.includes('?') ? ' («?» es una letra cualquiera)' : ''
+  const fin = (base: string): string => `${base}${tipo ? `${base ? ' y' : 'Tiene que'} ser ${tipo}` : ''}.`
+  const lit = (x: string): boolean => !/[*]/.test(x)
+  let base: string
+  if (cuerpo === '' || cuerpo === '*') base = ''
+  else if (lit(cuerpo)) base = `Tiene que llamarse «${cuerpo}»${q}`
+  else if (/^\*[^*]+\*$/.test(cuerpo)) base = `El nombre tiene que contener «${cuerpo.slice(1, -1)}»${q}`
+  else if (/^[^*]+\*$/.test(cuerpo)) base = `El nombre tiene que empezar con «${cuerpo.slice(0, -1).trimEnd()}»${q}`
+  else if (/^\*[^*]+$/.test(cuerpo)) base = `El nombre tiene que terminar en «${cuerpo.slice(1).trimStart()}»${q}`
+  else base = `El nombre tiene que calzar con «${cuerpo}» («*» es cualquier texto${cuerpo.includes('?') ? ', «?» una letra cualquiera' : ''})`
+  if (!base && !tipo) return 'Puede llamarse como sea.'
+  return `${fin(base)} No importan las mayúsculas.`
 }
 
 /** El primer slot cuyo `accept` matchea el nombre. Un slot sin `accept` acepta cualquier nombre. */
