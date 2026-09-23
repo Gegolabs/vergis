@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest'
+
+// i2 (juez 0.35.1): la corrida con/sin «Z» discrimina en la zona del contenedor (UTC); se fija acá
+// para que el control también discrimine en cualquier máquina. El Producto no depende de la zona.
+process.env.TZ = 'UTC'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
@@ -10,14 +14,15 @@ import {
   parseIntakeConfig,
   expectedInLanding,
   classifySlot,
+  globToRegExp,
   type IntakeSlot,
   type OneLakeEntry,
   type OneLakeListing,
   type RunRecord,
 } from '@vergis/capabilities'
-import { firmaDePatrones, patronesQueSePisan } from '../packages/capabilities/src/intake'
-import { createAdmin, validarEnLaPuerta, type AdminHandler } from '../server/admin'
-import { createIntakeLoop, garantiaDeDisjuncion, intakeWatchConfig, slotVigilanciaDeProyeccion, type IntakeLoopDeps, type MedidaDisjuncion } from '../server/intake-loop'
+import { firmaDePatrones } from '../packages/capabilities/src/intake'
+import { createAdmin, validarEnLaPuerta, enrutarPorNombre, type AdminHandler } from '../server/admin'
+import { createIntakeLoop, intakeWatchConfig, slotVigilanciaDeProyeccion, type IntakeLoopDeps, type MedidaDisjuncion } from '../server/intake-loop'
 import type { CargasOps } from '../server/admin-cargas'
 
 /**
@@ -39,53 +44,88 @@ const HOY = parseIntakeConfig({ slots: [
 ] })
 const DISJUNTA = parseIntakeConfig({ slots: [base('prod', '*products-details*.xlsx'), base('dist', '*distributions-details*.xlsx'), base('pres', 'Presupuesto*.xlsx')] })
 
-describe('0.35.1 · 1 · la puerta nunca bloquea por una configuración de instancia', () => {
-  it('los patrones de hoy se pisan (cinco `*.xlsx`): la garantía se desactiva, aunque haya medida sin ambiguos', () => {
-    expect(patronesQueSePisan(HOY).length).toBeGreaterThan(0)
-    const medida: MedidaDisjuncion = { medidoAt: 'x', firma: firmaDePatrones(HOY), nombres: 0, ambiguos: [] }
-    expect(garantiaDeDisjuncion(HOY, medida)).toBe(false)
-  })
-
-  it('con la configuración de hoy, cada subida entra en la casilla elegida (como 0.34.0)', () => {
+describe('0.35.1 · 1 · la subida con casilla acepta todo nombre que calce con su casilla (D-222)', () => {
+  it('con la configuración de hoy (cinco `*.xlsx`), cada subida entra en la casilla elegida', () => {
     const subidas: [string, string][] = [['prod', 'oc-1-products-details-01-01-2026.xlsx'], ['dist', 'oc-1-distributions-details-01-01-2026.xlsx'], ['inv', '20260101 - Recepción Vivero.xlsx'], ['pres', 'Presupuesto comercial 2026.xlsx'], ['fact', 'Listado X VH.xlsx']]
-    const garantia = garantiaDeDisjuncion(HOY, null)
-    for (const [id, n] of subidas) expect(validarEnLaPuerta(HOY, HOY.find((s) => s.id === id)!, n, 10, garantia)).toEqual({ ok: true })
+    for (const [id, n] of subidas) expect(validarEnLaPuerta(HOY, HOY.find((s) => s.id === id)!, n, 10)).toMatchObject({ ok: true })
   })
 
-  it('control negativo: la puerta de 0.35.0 (garantía incondicional) rechazaba esas mismas subidas', () => {
-    expect(validarEnLaPuerta(HOY, HOY.find((s) => s.id === 'dist')!, 'oc-1-distributions-details-01-01-2026.xlsx', 10, true)).toMatchObject({ ok: false, reason: 'ambiguo' })
+  it('el caso del juez: config VÁLIDA `*Listado*.xlsx` + `*VH*.xlsx` y registro vacío — los Listado VH se aceptan en la casilla elegida y se señalan', () => {
+    const CFG = parseIntakeConfig({ slots: [base('listado', '*Listado*.xlsx'), base('vh', '*VH*.xlsx')] })
+    for (const n of ['Listado EasyDoc VH.xlsx', 'Listado SAP VH.xlsx', 'Listado EasyDoc COVH.xlsx']) {
+      const v = validarEnLaPuerta(CFG, CFG[0]!, n, 10)
+      expect(v).toMatchObject({ ok: true })
+      expect(v.ok && v.tambienCalza.map((s) => s.id)).toEqual(['vh'])
+      // Donde no hay casilla elegida (la puerta de P2), ese nombre sí es ambiguo: no se adivina.
+      expect(enrutarPorNombre(CFG, n)).toMatchObject({ kind: 'ambiguo' })
+    }
   })
 
-  it('con patrones disjuntos Y medida limpia de esa misma configuración, un nombre ambiguo se rechaza', () => {
-    const medida: MedidaDisjuncion = { medidoAt: 'x', firma: firmaDePatrones(DISJUNTA), nombres: 3, ambiguos: [] }
-    expect(patronesQueSePisan(DISJUNTA)).toEqual([])
-    expect(garantiaDeDisjuncion(DISJUNTA, medida)).toBe(true)
-    const v = validarEnLaPuerta(DISJUNTA, DISJUNTA[0]!, 'oc-1-products-details distributions-details.xlsx', 10, true)
-    expect(v).toMatchObject({ ok: false, reason: 'ambiguo' })
-    // Una medida de OTRA configuración (o ninguna, tras una recarga) no vale: no hay garantía.
-    expect(garantiaDeDisjuncion(DISJUNTA, { ...medida, firma: 'otra' })).toBe(false)
-    expect(garantiaDeDisjuncion(DISJUNTA, null)).toBe(false)
+  it('el caso del juez de punta a punta: tras una vuelta del lazo con el registro vacío, la subida a «listado» entra', async () => {
+    const CFG = parseIntakeConfig({ slots: [base('listado', '*Listado*.xlsx'), base('vh', '*VH*.xlsx')] })
+    const audit: Record<string, unknown>[] = []
+    const h = await adminArnes(CFG, audit)
+    const deps: IntakeLoopDeps = {
+      slots: () => CFG, landing: async (): Promise<OneLakeListing> => ({ kind: 'ok', entries: [] }), store: h.store,
+      domains: [{ id: 'd', label: 'D' }], log: () => {}, now: () => Date.parse('2026-09-23T12:00:00Z'),
+    }
+    await createIntakeLoop(deps, { publicUrl: 'https://x', pollMs: 600_000 }).tick() // medida limpia: registro vacío
+    for (const n of ['Listado EasyDoc VH.xlsx', 'Listado SAP VH.xlsx', 'Listado EasyDoc COVH.xlsx']) {
+      const res = await h.subir('listado', n)
+      expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Recibimos 1 archivo(s).')
+    }
   })
 
-  it('de punta a punta: con los patrones de hoy la subida real entra (en 0.35.0 se rechazaba)', async () => {
-    const h = await adminArnes(HOY)
+  it('PROPIEDAD, por construcción: para cualquier configuración, todo nombre que calce con el patrón de su casilla se acepta', () => {
+    // Barrido: todas las combinaciones de hasta 3 casillas sobre un alfabeto de patrones que se cruzan
+    // de todas las formas («contiene», prefijo, sufijo, comodín puro, iguales), contra nombres que
+    // calzan con uno, varios o todos.
+    const PATRONES = ['*.xlsx', '*Listado*.xlsx', '*VH*.xlsx', 'Listado*', '*details*.xlsx', '*products-details*.xlsx', 'Presupuesto*.xlsx', '*', 'Antig?edad de saldos *.xlsx', '*Tiendas*.xlsx']
+    const NOMBRES = ['Listado EasyDoc VH.xlsx', 'Listado SAP COVH.xlsx', 'oc-1-products-details-01-01-2026.xlsx', 'oc-1-distributions-details.xlsx', 'Presupuesto comercial 2026.xlsx', 'Antigüedad de saldos X.xlsx', 'Tiendas por zona.xlsx', 'Libro1.xlsx', 'x.csv']
+    let comprobados = 0
+    for (const a of PATRONES) for (const b of PATRONES) for (const c of PATRONES) {
+      const cfg = parseIntakeConfig({ slots: [base('a', a), base('b', b), base('c', c)] })
+      for (const slot of cfg) for (const n of NOMBRES) {
+        const calza = globToRegExp(slot.accept!).test(n)
+        const v = validarEnLaPuerta(cfg, slot, n, 10)
+        expect(v.ok).toBe(calza) // acepta exactamente lo que calza con SU casilla, nunca menos
+        comprobados++
+      }
+    }
+    expect(comprobados).toBe(PATRONES.length ** 3 * 3 * NOMBRES.length)
+  })
+
+  it('de punta a punta: la subida real entra y la auditoría registra con qué otras casillas calza', async () => {
+    const audit: Record<string, unknown>[] = []
+    const h = await adminArnes(HOY, audit)
     const res = await h.subir('dist', 'oc-1-distributions-details-01-01-2026.xlsx')
     expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Recibimos 1 archivo(s).')
     expect((await h.store.listUploads('dist', 5))[0]).toMatchObject({ ok: true })
+    expect(audit.find((e) => e['type'] === 'intake')?.['tambienCalza']).toEqual(['fact', 'inv', 'desp', 'clas', 'pres'])
   })
 
-  it('el lazo persiste la medida con su firma y los pares que se pisan, y lo dice en el log', async () => {
+  it('el lazo mide la señal, la re-mide cuando crece el registro y dice las transiciones en los dos sentidos', async () => {
     const store = await SqliteGovernanceStore.open(null, {})
     const log: string[] = []
+    let slots = parseIntakeConfig({ slots: [base('listado', '*Listado*.xlsx'), base('pres', 'Presupuesto*.xlsx')] })
     const deps: IntakeLoopDeps = {
-      slots: () => HOY, landing: async (): Promise<OneLakeListing> => ({ kind: 'ok', entries: [] }), store,
+      slots: () => slots, landing: async (): Promise<OneLakeListing> => ({ kind: 'ok', entries: [] }), store,
       domains: [{ id: 'd', label: 'D' }], log: (l) => void log.push(l), now: () => Date.parse('2026-09-23T12:00:00Z'),
     }
-    await createIntakeLoop(deps, { publicUrl: 'https://x', pollMs: 600_000 }).tick()
+    const loop = createIntakeLoop(deps, { publicUrl: 'https://x', pollMs: 600_000 })
+    await loop.tick()
+    expect(log.some((l) => l.includes('se pisan'))).toBe(false)
+    // Un nombre nuevo en el registro que calza con los dos (sin recarga): la señal lo recoge.
+    await store.recordUpload({ slotId: 'listado', filename: 'Presupuesto Listado.xlsx', sha256: 'a'.repeat(64), bytes: 1, uploadedAt: '2026-09-23T11:00:00Z', ok: true, triggered: false, origen: 'upload' })
+    await loop.tick()
+    expect(log.filter((l) => l.includes('los patrones de estas casillas se pisan'))).toHaveLength(1)
     const m = JSON.parse((await store.getSetting('intake.disjuncion'))!) as MedidaDisjuncion
-    expect(m.firma).toBe(firmaDePatrones(HOY))
-    expect(m.pisan).toContainEqual(['fact', 'inv'])
-    expect(log.some((l) => l.includes('los patrones de estas casillas se pisan') && l.includes('prod / fact'))).toBe(true)
+    expect(m.ambiguos).toEqual([{ nombre: 'Presupuesto Listado.xlsx', slots: ['listado', 'pres'] }])
+    // Se corrige el patrón (recarga): la transición inversa también se dice (m1).
+    slots = parseIntakeConfig({ slots: [base('listado', 'Listado*.xlsx'), base('pres', 'Presupuesto*.xlsx')] })
+    await loop.tick()
+    expect(log.some((l) => l.includes('ya no se pisan'))).toBe(true)
+    expect(firmaDePatrones(slots)).toBe(JSON.parse((await store.getSetting('intake.disjuncion'))!).firma)
   })
 })
 
@@ -161,12 +201,16 @@ describe('0.35.1 · 4 · la misma corrida con y sin «Z» es UNA', () => {
   })
 })
 
-async function adminArnes(slots: IntakeSlot[]) {
+async function adminArnes(slots: IntakeSlot[], auditLog: Record<string, unknown>[] = []) {
   const STEWARD = 'steward@ejemplo.cl'
   const ENT = parseMasterDataConfig({ entities: [{ id: 'e', label: 'E', domain: 'd', columns: [{ name: 'k', label: 'K', type: 'string', pk: true }] }] })
   const store = await SqliteGovernanceStore.open(null, {})
   const cargas: CargasOps = { history: async () => [], runs: async () => [], log: async () => null, landing: async () => [], archived: async () => [], rerun: async () => {}, retire: async () => {}, restore: async () => {} }
+  const store2 = store
   const admin: AdminHandler = createAdmin({
+    // Solo para el control contra 0e64e85 (esa versión leía la medida para decidir la garantía);
+    // 0.35.1 ya no tiene esta dependencia y la ignora.
+    ...({ disjuncion: async () => { const r = await store2.getSetting('intake.disjuncion'); return r ? JSON.parse(r) : null } } as object),
     cargas,
     entities: ENT,
     mdStore: await SqliteMasterDataStore.open(null, ENT),
@@ -175,9 +219,8 @@ async function adminArnes(slots: IntakeSlot[]) {
     intakeSlots: slots,
     intake: { put: async () => {} },
     intakeUploads: store,
-    disjuncion: async () => null,
     identityOf: (h) => ({ user: (h as Record<string, string>)['x-test-user'] }),
-    audit: () => {},
+    audit: (e) => void auditLog.push(e as unknown as Record<string, unknown>),
     secret: 'test-secret',
   })
   const res = () => ({ statusCode: 0, headers: {} as Record<string, string>, body: '', writeHead(c: number, h?: Record<string, string>) { this.statusCode = c; Object.assign(this.headers, h ?? {}); return this }, end(c?: string) { if (c) this.body += c } })

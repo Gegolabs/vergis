@@ -260,26 +260,29 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
   }
 
   /**
-   * #269·§4.1 · La SEÑAL de disjunción posterior a cada recarga: cuántos nombres del registro calzan
-   * con dos o más tipos. La garantía vive en la puerta (el nombre ambiguo no aterriza); esto le dice al
-   * operador que la configuración recién cargada tiene patrones que se pisan sobre nombres reales.
-   * Se mide solo cuando cambian los patrones (su firma), no en cada vuelta.
+   * #269·§4.1 · La SEÑAL de disjunción: qué pares de casillas tienen patrones que se pisan y qué
+   * nombres del registro calzan con dos o más tipos. Es SEÑAL al operador, nunca una compuerta: la
+   * subida a una casilla elegida acepta todo nombre que calce con ella (D-222 del lab, 0.35.1). Se
+   * vuelve a medir cuando cambian los patrones (recarga) o crece el registro (un nombre nuevo puede ser
+   * el primero ambiguo), y el log dice las TRANSICIONES en los dos sentidos (juez 0.35.1 · m1).
    */
   let firmaDisjuncion: string | null = null
+  let cruceAnterior: boolean | null = null
   async function medirDisjuncion(slots: IntakeSlot[], nowIso: string): Promise<void> {
-    const firma = firmaDePatrones(slots)
-    if (firma === firmaDisjuncion) return
     try {
       const nombres: string[] = []
       for (const s of slots) for (const u of await deps.store.listUploads(s.id, RESOLVER_HISTORIA)) if (u.ok && u.origen === 'upload') nombres.push(u.filename)
+      const firma = `${firmaDePatrones(slots)}#${nombres.length}`
+      if (firma === firmaDisjuncion) return
       const ambiguos = nombresAmbiguos(slots, nombres)
       const pisan = patronesQueSePisan(slots)
-      const medida: MedidaDisjuncion = { medidoAt: nowIso, firma, nombres: new Set(nombres).size, ambiguos, pisan }
+      const medida: MedidaDisjuncion = { medidoAt: nowIso, firma: firmaDePatrones(slots), nombres: new Set(nombres).size, ambiguos, pisan }
       await deps.store.setSetting(INTAKE_DISJUNCION_KEY, JSON.stringify(medida), 'intake-watch')
-      // 0.35.1 · una configuración que no es disjunta DESACTIVA la garantía de la puerta (degrada a
-      // 0.34.0: la subida va a la casilla elegida). Se dice al recargar, con las casillas que se pisan.
-      if (!garantiaDeDisjuncion(slots, medida))
-        deps.log(`intake-loop: los patrones de estas casillas se pisan: ${[...pisan.map(([a, b]) => `${a} / ${b}`), ...ambiguos.slice(0, 3).map((a) => `«${a.nombre}» (${a.slots.join(', ')})`)].slice(0, 8).join('; ')}${pisan.length + ambiguos.length > 8 ? '; …' : ''} — la puerta NO garantiza el destino por nombre y acepta en la casilla elegida (como 0.34.0) hasta que la configuración sea disjunta`)
+      const cruce = pisan.length > 0 || ambiguos.length > 0
+      if (cruce && cruceAnterior !== true)
+        deps.log(`intake-loop: los patrones de estas casillas se pisan: ${[...pisan.map(([x, y]) => `${x} / ${y}`), ...ambiguos.slice(0, 3).map((x) => `«${x.nombre}» (${x.slots.join(', ')})`)].slice(0, 8).join('; ')}${pisan.length + ambiguos.length > 8 ? '; …' : ''} — la subida con casilla acepta igual (el usuario eligió); la puerta sin casilla no podrá enrutar esos nombres`)
+      else if (!cruce && cruceAnterior === true) deps.log('intake-loop: los patrones de las casillas ya no se pisan: cada nombre del registro calza con un solo tipo')
+      cruceAnterior = cruce
       firmaDisjuncion = firma
     } catch (e) {
       deps.log(`intake-loop: no se pudo medir la disjunción de los tipos de archivo — ${msg(e)}`)
@@ -764,18 +767,6 @@ export interface MedidaDisjuncion {
   nombres: number
   ambiguos: { nombre: string; slots: string[] }[]
   pisan?: [string, string][]
-}
-
-/**
- * ¿La puerta puede GARANTIZAR la disjunción con ESTA configuración? (#269·0.35.1). Solo si sus
- * patrones no se pisan con certeza y la última medida —tomada con esta misma configuración— no
- * encontró ningún nombre real que calce con 2+ tipos. En cualquier otro caso (patrones que se pisan,
- * nombres ambiguos, o todavía sin medida tras una recarga) la garantía se DESACTIVA y la puerta se
- * comporta como en 0.34.0: una configuración de instancia nunca vuelve la puerta un «rechazo todo».
- */
-export function garantiaDeDisjuncion(slots: IntakeSlot[], medida: MedidaDisjuncion | null): boolean {
-  if (patronesQueSePisan(slots).length) return false
-  return !!medida && medida.firma === firmaDePatrones(slots) && medida.ambiguos.length === 0
 }
 
 /** Lee la medida persistida; ilegible = `null` (la consola no afirma nada que no pueda leer). */

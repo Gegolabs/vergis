@@ -78,13 +78,14 @@ landing a reintentarse, salían «⚠ VARADO … sin que ninguna corrida lo toma
 
 **Qué cambia.**
 
-- **La puerta nunca bloquea por una configuración de instancia.** La garantía de disjunción se aplica
-  **solo** si los patrones de la instancia no se pisan y la última medida del lazo —tomada con esa
-  misma configuración— no encontró nombres reales que calcen con dos o más tipos. En cualquier otro
-  caso (patrones que se pisan, nombres ambiguos, o todavía sin medida tras una recarga) la puerta se
-  comporta como en 0.34.0: el archivo va a la casilla elegida. El operador lo ve en la señal de
-  contrato de la consola («los patrones de estas casillas se pisan: …») y en una línea de log al
-  recargar. Medido con el `slots.yaml` de la instancia y sus 150 subidas reales: 0.35.0 aceptaba 0;
+- **La subida a una casilla elegida acepta SIEMPRE un nombre que calce con esa casilla**, aunque calce
+  también con otras (decisión D-222 del lab): el usuario ya dijo a cuál va y el patrón lo confirma. Que
+  calce con otras es un defecto de la configuración, no del archivo: queda en la auditoría
+  (`tambienCalza`), en la señal de contrato de la consola («los patrones de estas casillas se pisan: …»)
+  y en el log, que dice la transición en los dos sentidos. El rechazo por ambigüedad queda solo para la
+  puerta sin casilla (`/cargar`, que llega con la próxima versión), donde el nombre es lo único que
+  decide el destino. Por construcción, ninguna configuración de instancia vuelve la subida más estricta
+  que en 0.34.0. Medido con el `slots.yaml` de la instancia y sus 150 subidas reales: 0.35.0 aceptaba 0;
   0.35.1 acepta 131, exactamente las que acepta 0.34.0 (las 19 restantes no calzan con el patrón de su
   propia casilla).
 - **Solo se espera en el landing** una carga sin estado o declarada ✖/⚠: `sin-informe` nunca implica
