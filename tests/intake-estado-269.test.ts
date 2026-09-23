@@ -464,7 +464,7 @@ describe('#269·V12 · aviso al operador y al usuario, en el lazo', () => {
     await a.loop.tick()
     const raw = await a.store.getSetting('intake.disjuncion')
     expect(JSON.parse(raw!).ambiguos).toEqual([{ nombre: 'ventas mensual.xlsx', slots: ['ventas', 'otro'] }])
-    expect(a.logLines.some((l) => l.includes('calzan con 2+ tipos'))).toBe(true)
+    expect(a.logLines.some((l) => l.includes('los patrones de estas casillas se pisan'))).toBe(true)
   })
 })
 

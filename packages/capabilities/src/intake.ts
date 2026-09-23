@@ -562,6 +562,28 @@ export function slotsQueCalzan(slots: IntakeSlot[], filename: string): IntakeSlo
   return slots.filter((s) => !!s.accept && globToRegExp(s.accept).test(name))
 }
 
+/** Firma de los patrones declarados (#269·0.35.1): una medida de disjunción vale solo para la
+ *  configuración con la que se tomó. */
+export const firmaDePatrones = (slots: IntakeSlot[]): string => JSON.stringify(slots.map((s) => [s.id, s.accept ?? null]))
+
+/**
+ * Pares de tipos cuyos patrones SE PISAN con certeza (#269·0.35.1): el testigo mínimo de uno (cada
+ * `*` vacío, cada `?` una letra) calza con el patrón del otro. Es condición SUFICIENTE, no necesaria
+ * —dos patrones «contiene» pueden intersecarse sin que su testigo lo muestre—, y por eso se combina
+ * con la medida sobre los nombres reales. Cinco slots con `*.xlsx` se pisan todos entre sí.
+ */
+export function patronesQueSePisan(slots: IntakeSlot[]): [string, string][] {
+  const con = slots.filter((s) => !!s.accept)
+  const testigo = (glob: string): string => glob.replace(/\*/g, '').replace(/\?/g, 'x')
+  const out: [string, string][] = []
+  for (let i = 0; i < con.length; i++)
+    for (let j = i + 1; j < con.length; j++) {
+      const a = con[i]!, b = con[j]!
+      if (globToRegExp(b.accept!).test(testigo(a.accept!)) || globToRegExp(a.accept!).test(testigo(b.accept!))) out.push([a.id, b.id])
+    }
+  return out
+}
+
 /**
  * Nombres del registro que calzan con DOS o más tipos (#269·§4.1): la señal posterior a cada recarga.
  * La disjunción entre PATRONES no es alcanzable con patrones «contiene»; la que importa es sobre los
