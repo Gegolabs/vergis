@@ -22,7 +22,10 @@
  * página recibe el veredicto ya tomado (`SlotCargas.vigilancia`) y lo dibuja. Todos los campos nuevos
  * son OPCIONALES: una instancia sin vigilante renderiza exactamente la página de antes.
  */
-import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace, type DesenlaceParams, type DesenlaceCodigoConteo, type GuiaDecl, type GuiaResuelta, LINEA_ACTOR, resolverGuia, familiaDe, guiasDelSlot } from '@vergis/capabilities'
+import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace, type DesenlaceParams, type DesenlaceCodigoConteo, type GuiaDecl, type GuiaResuelta, LINEA_ACTOR, resolverGuia, familiaDe, guiasDelSlot, DEFAULT_MAX_RUN_MINUTES } from '@vergis/capabilities'
+import type { IntakeIntentoRow } from '../packages/capabilities/src/governance-store'
+import { nombreSinSello } from '../packages/capabilities/src/intake-observability'
+import { slotProcessedDir } from '../packages/capabilities/src/intake'
 
 /** Evento de carga del audit log (type=intake). */
 export interface IntakeUploadEvent {
@@ -48,6 +51,16 @@ export interface IntakeUploadEvent {
   desenlaceCodigo?: string
   /** #346 · datos del caso que la guía interpola. */
   desenlaceParams?: DesenlaceParams
+  /** #269·V7 · el motivo del RECHAZO en la puerta (solo `ok: false`). */
+  error?: string
+  /** #269·D1 · el estado es final. Ausente = lo escribió la versión anterior (o no hay estado). */
+  desenlaceFinal?: boolean
+  /** #269·D1 · lo que cada corrida declaró de esta carga, en orden. */
+  intentos?: IntakeIntentoRow[]
+  /** #269·§4.2 · instante del acto que cerró la carga (retiro, re-subida, deshacer). */
+  actoAt?: string
+  /** Instante en que la plataforma escribió el estado. */
+  desenlaceAt?: string
 }
 
 /**
@@ -72,6 +85,8 @@ export interface SlotVigilancia {
   /** #162·§5 · corridas TERMINADAS consecutivas sin log correlacionable en `_logs/`. Alimenta el
    *  aviso de incumplimiento del contrato; ausente = la instancia no mide esto. */
   corridasSinLog?: number
+  /** #269·§4.1 · nombres del registro que calzan con este tipo Y con otro (medido tras la recarga). */
+  ambiguos?: { nombre: string; slots: string[] }[]
 }
 
 /**
@@ -113,6 +128,9 @@ export interface CargasOps {
    * Ausente = la instancia no la cablea: ni señal ni orden por frecuencia (la página lista igual).
    */
   codigos?(slot: IntakeSlot, desdeIso: string): Promise<DesenlaceCodigoConteo[]>
+  /** #269·V6 · lo que las corridas declararon de las cargas de ESTE slot desde `desdeIso` (del registro
+   *  de intentos, sin leer logs): cada corrida dice qué tomó de este tipo. */
+  intentos?(slot: IntakeSlot, desdeIso: string): Promise<(IntakeIntentoRow & { filename: string })[]>
   /** Deriva el plan de compensación SIN mutar nada: qué le pasa a cada clave de la carga. */
   revertPlan?(slot: IntakeSlot, ref: { uploadId?: number; archivedPath?: string }): Promise<RevertPlan>
   /** Ejecuta el plan CONFIRMADO. `ok:false` = el estado del slot cambió: devuelve el plan fresco. */
@@ -141,6 +159,10 @@ export interface SlotCargas {
   guias?: readonly GuiaDecl[]
   /** #346 · conteo por código de los últimos 30 días (señal de cobertura del operador). */
   codigos30?: DesenlaceCodigoConteo[]
+  /** #269·V6 · intentos del slot por corrida (qué tomó cada una). Ausente = no se cablea: sin línea. */
+  intentosDeCorridas?: (IntakeIntentoRow & { filename: string })[]
+  /** #269·V12 · ¿hay un destino suscrito a `cargas-operador`? Decide la línea de aviso. */
+  hayDestinoOperador?: boolean
 }
 
 // ─── Helpers de render (locales: sin ciclo con admin.ts) ────────────────────
@@ -261,15 +283,104 @@ export function avisoContratoLogs(slot: IntakeSlot, v: SlotVigilancia | undefine
 /** Badge por desenlace (#162·§3.4). Familia visual de `badge(RunStatus)`: verde listo, rojo falla,
  *  amarillo lo que quedó a medias. */
 const DESENLACE_BADGE: Record<CargaDesenlace, string> = {
-  procesada: '<b style="color:var(--accent)">✓ Procesada</b>',
-  saltada: `<b style="${AVISO}">⚠ Saltada</b>`,
-  fallida: '<b style="color:var(--err)">✕ Falló</b>',
-  'sin-informe': '<b style="color:var(--err)">✕ Sin informe</b>',
+  procesada: '<b style="color:var(--accent)">✓ Cargado</b>',
+  saltada: `<b style="${AVISO}">⏸ No se cargó</b>`,
+  fallida: '<b style="color:var(--err)">✕ No se pudo cargar</b>',
+  'sin-informe': `<b style="${AVISO}">⚠ Sin informe</b>`,
+  // Legado (< 0.35.0): la edad dejó de ser un estado (#269·§3.1); solo se lee lo ya escrito.
   varada: `<b style="${AVISO}">⚠ Varada</b>`,
+  retirada: '<b class="sub">Retirado</b>',
+  reemplazada: '<b class="sub">Reemplazado</b>',
+  deshecha: '<b class="sub">Deshecho</b>',
 }
 
 /** Texto propio de la plataforma cuando NO hay motivo del job: describe el estado, jamás la causa. */
-const SIN_INFORME_TEXTO = 'el proceso terminó sin reportar la causa'
+const SIN_INFORME_TEXTO = 'No sabemos qué pasó con este archivo: el proceso de carga no lo informó.'
+
+/** Contexto de la celda de estado de una carga (#269·§4.2) que la fila sola no sabe. */
+export interface ContextoEstado {
+  /** El archivo sigue en el landing (se reintenta solo). Ausente = no se sabe: no se afirma. */
+  enLanding?: boolean
+  /** Hay una corrida en curso que arrancó con el archivo ya subido (o lo estaba cuando se subió). */
+  enCurso?: boolean
+  /** La línea de aviso ya decidida (`lineaDeAviso`): «Le avisamos…», «Avísale a…» o nada. */
+  aviso?: string | null
+  /** Título legible de un intento (la guía de su código, o su motivo): el «primer intento». */
+  tituloDeIntento?: (i: IntakeIntentoRow) => string
+}
+
+/**
+ * #269·V12 · La LÍNEA DE AVISO: qué pasa del lado de la plataforma cuando el problema no es del
+ * archivo. Dice la verdad o no se dibuja — «Le avisamos al equipo» solo si hay un destino suscrito al
+ * flujo `cargas-operador`; si no, a quién avisar (`contacto`); sin ninguno de los dos, nada (antes la
+ * frase salía sin condición y nadie recibía ningún aviso: P15).
+ */
+export function lineaDeAviso(ctx: { equipoAvisado?: boolean; contacto?: string }): string | null {
+  if (ctx.equipoAvisado) return 'Le avisamos al equipo de la plataforma.'
+  if (ctx.contacto) return `Avísale a ${ctx.contacto}.`
+  return null
+}
+
+/** Fecha corta de la consola técnica (UTC rotulado; la zona del navegador es de P2). */
+const fechaCorta = (iso: string | undefined): string => (iso ? when(iso) : '')
+
+/**
+ * El CHIP y la FRASE de una carga (#269·§4.2): qué estado tiene, dicho sin jerga, y lo que le sigue a
+ * ese estado. Lo usa la columna Estado de la consola y lo reusa la página del archivo (P2).
+ * Nada de esto adivina: cada frase sale de un estado que el resolvedor escribió con su evidencia, y
+ * la línea de aviso solo si es cierta.
+ */
+export function chipDeCarga(h: IntakeUploadEvent, ctx: ContextoEstado = {}, guia?: GuiaResuelta | null): { chip: string; frase: string } {
+  const aviso = ctx.aviso ? ` ${escapeHtml(ctx.aviso)}` : ''
+  const espera = ctx.enLanding ? ' Mientras tanto, este archivo sigue en espera y se vuelve a intentar solo.' : ''
+  if (!h.ok) return { chip: '<b style="color:var(--err)">✕ No se recibió</b>', frase: escapeHtml(motivoDeRechazo(h.error)) }
+  const final = h.desenlaceFinal === true
+  if ((!h.desenlace || !final) && ctx.enCurso) return { chip: '<b>⏳ Cargando</b>', frase: 'Se está cargando.' }
+  switch (h.desenlace) {
+    case undefined:
+      return { chip: '<b>Recibido</b>', frase: 'Lo recibimos. Empieza a cargarse en unos minutos.' }
+    case 'procesada': {
+      const primero = (h.intentos ?? []).find((i) => i.origen === 'declaracion' && i.resultado !== 'procesada')
+      const cuando = h.desenlaceRunStartedAt ? ` el ${fechaCorta(h.desenlaceRunStartedAt)}` : ''
+      const intento = primero && ctx.tituloDeIntento ? ` En el primer intento: ${escapeHtml(ctx.tituloDeIntento(primero))}.` : ''
+      return { chip: DESENLACE_BADGE.procesada, frase: `Los datos quedaron en la plataforma${cuando}.${intento}` }
+    }
+    case 'fallida':
+      if (guia?.actor === 'operador') return { chip: `<b style="${AVISO}">⚠ Problema de la plataforma</b>`, frase: `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}` }
+      if (guia) return { chip: '<b style="color:var(--err)">✕ Hay que corregir algo</b>', frase: espera.trim() }
+      return { chip: DESENLACE_BADGE.fallida, frase: `El proceso de carga lo rechazó con este mensaje:${espera}` }
+    case 'saltada':
+      if (guia?.actor === 'operador') return { chip: `<b style="${AVISO}">⚠ Problema de la plataforma</b>`, frase: `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}` }
+      if (guia?.familia === 'volumen-anomalo') return { chip: `<b style="${AVISO}">⚠ Detenido por precaución</b>`, frase: '' }
+      if (guia?.actor === 'nadie') return { chip: '<b>⏸ En espera</b>', frase: '' }
+      if (guia) return { chip: `<b style="${AVISO}">⏸ No se cargó</b>`, frase: espera.trim() }
+      return { chip: DESENLACE_BADGE.saltada, frase: `El proceso de carga no lo cargó y no dijo por qué.${ctx.enLanding ? ' Sigue en espera y se volverá a intentar.' : ''}${aviso}` }
+    case 'sin-informe':
+      return { chip: DESENLACE_BADGE['sin-informe'], frase: `${SIN_INFORME_TEXTO}${aviso}` }
+    case 'retirada':
+      return { chip: DESENLACE_BADGE.retirada, frase: `Se retiró${h.actoAt ? ` el ${fechaCorta(h.actoAt)}` : ''}; no se cargó.` }
+    case 'reemplazada':
+      return { chip: DESENLACE_BADGE.reemplazada, frase: `Lo reemplazó la carga${h.actoAt ? ` de ${fechaCorta(h.actoAt)}` : ''} con el mismo nombre; esta versión no se cargó.` }
+    case 'deshecha':
+      return { chip: DESENLACE_BADGE.deshecha, frase: `Se cargó${h.desenlaceRunStartedAt ? ` el ${fechaCorta(h.desenlaceRunStartedAt)}` : ''} y se deshizo${h.actoAt ? ` el ${fechaCorta(h.actoAt)}` : ''}.` }
+    default:
+      return { chip: DESENLACE_BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace)), frase: '' }
+  }
+}
+
+/**
+ * El motivo de un RECHAZO en la puerta, dicho para quien subió (#269·V7). El texto de la validación es
+ * del operador («no coincide con el patrón esperado «X»»); acá se dice lo mismo sin jerga. Un motivo
+ * que no se reconoce se muestra tal cual — ya es texto humano (la validación de metadata lo es).
+ */
+export function motivoDeRechazo(error: string | undefined): string {
+  if (!error) return 'No se recibió (el motivo no quedó registrado).'
+  const patron = /no coincide con el patrón esperado «(.+)»/.exec(error)
+  if (patron) return `El nombre no calza con el que espera este tipo de archivo («${patron[1]}»).`
+  const tam = /\((\d+) bytes\) excede el máximo del slot \((\d+) bytes\)/.exec(error)
+  if (tam) return `Pesa ${(Number(tam[1]) / 1048576).toFixed(1)} MB y el máximo es ${Math.round(Number(tam[2]) / 1048576)} MB.`
+  return error
+}
 
 /** Largo desde el que la celda SIN guía recorta el motivo (el recorte de siempre, #162). */
 const MOTIVO_RECORTE = 300
@@ -313,9 +424,19 @@ const ESTILO_ACTOR: Record<GuiaResuelta['actor'], string> = {
  * El enlace a la corrida solo aparece si el `desenlace_run_started_at` calza con una corrida del
  * historial que se está mostrando: se enlaza una corrida que existe, no una que se supone.
  */
-export function desenlaceCelda(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRun?: (r: RunRecord) => string | null, guia?: GuiaResuelta | null): string {
-  if (!h.desenlace) return ''
-  const badge = DESENLACE_BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace))
+export function desenlaceCelda(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRun?: (r: RunRecord) => string | null, guia?: GuiaResuelta | null, ctx: ContextoEstado = {}): string {
+  if (!h.ok) {
+    const c = chipDeCarga(h, ctx)
+    return `${c.chip}<div class="sub">${c.frase}</div>`
+  }
+  // #269·V10 · sin estado todavía («Recibido») o con una corrida en curso («Cargando»): la celda ya no
+  // queda vacía durante los minutos en que la carga todavía no tiene resultado.
+  if (!h.desenlace || (ctx.enCurso && h.desenlaceFinal !== true)) {
+    const c = chipDeCarga(h, ctx, guia)
+    return `${c.chip}<div class="sub">${c.frase}</div>`
+  }
+  const estado = chipDeCarga(h, ctx, guia)
+  const badge = estado.chip
   const corrida = h.desenlaceRunStartedAt && runs !== 'error' ? runs.find((r) => r.startedAt === h.desenlaceRunStartedAt) : undefined
   const href = corrida ? hrefDeRun?.(corrida) ?? null : null
   const link = href ? `<div><a class="sub" href="${escapeHtml(href)}">Ver corrida</a></div>` : ''
@@ -324,13 +445,27 @@ export function desenlaceCelda(h: IntakeUploadEvent, runs: RunRecord[] | 'error'
     const estilo = ESTILO_ACTOR[guia.actor]
     const actor = `<div class="sub"${estilo ? ` style="${estilo}"` : ''}><b>${escapeHtml(LINEA_ACTOR[guia.actor])}</b></div>`
     const pasos = `<ol class="sub" style="margin:4px 0 4px 18px;padding:0">${guia.queHacer.map((p) => `<li>${t(p)}</li>`).join('')}</ol>`
-    return `${badge}${actor}<div><b>${t(guia.titulo)}</b></div><div class="sub">${t(guia.quePaso)}</div>${pasos}${detalleTecnico(h.desenlaceMotivo, guia.codigo)}${link}`
+    const frase = estado.frase ? `<div class="sub">${estado.frase}</div>` : ''
+    return `${badge}${actor}<div><b>${t(guia.titulo)}</b></div><div class="sub">${t(guia.quePaso)}</div>${pasos}${frase}${detalleTecnico(h.desenlaceMotivo, guia.codigo)}${historiaDeIntentos(h, ctx)}${link}`
   }
-  const crudo = h.desenlaceMotivo ?? (h.desenlace === 'sin-informe' ? SIN_INFORME_TEXTO : '')
+  const frase = estado.frase ? `<div class="sub">${estado.frase}</div>` : ''
+  const crudo = h.desenlaceMotivo ?? ''
   const recortado = crudo.length > MOTIVO_RECORTE ? crudo.slice(0, MOTIVO_RECORTE) + '…' : crudo
   const motivo = recortado ? `<div class="sub">${escapeHtml(redactSecrets(recortado))}</div>` : ''
   const detalle = h.desenlaceMotivo && h.desenlaceMotivo.length > MOTIVO_RECORTE ? detalleTecnico(h.desenlaceMotivo) : ''
-  return `${badge}${motivo}${detalle}${link}`
+  return `${badge}${frase}${motivo}${detalle}${historiaDeIntentos(h, ctx)}${link}`
+}
+
+/** «Ver lo que pasó» (#269·§4.2): una línea por intento, sin motivo técnico, plegada. Solo si hay más
+ *  de lo que el estado ya dice (dos intentos o más, o un acto sobre un intento). */
+export function historiaDeIntentos(h: IntakeUploadEvent, ctx: ContextoEstado = {}): string {
+  const intentos = (h.intentos ?? []).filter((i) => i.origen === 'declaracion')
+  const acto = h.desenlace === 'retirada' || h.desenlace === 'reemplazada' || h.desenlace === 'deshecha'
+  if (intentos.length < 2 && !(acto && intentos.length)) return ''
+  const linea = (i: IntakeIntentoRow): string =>
+    `<li>${escapeHtml(fechaCorta(i.runStartedAt ?? i.observadoAt))} · ${i.resultado === 'procesada' ? 'se cargó' : `no se cargó${ctx.tituloDeIntento ? `: ${escapeHtml(ctx.tituloDeIntento(i))}` : ''}`}</li>`
+  const cierre = h.desenlace === 'retirada' ? `<li>${escapeHtml(fechaCorta(h.actoAt))} · se retiró</li>` : h.desenlace === 'reemplazada' ? `<li>${escapeHtml(fechaCorta(h.actoAt))} · lo reemplazó otra carga</li>` : h.desenlace === 'deshecha' ? `<li>${escapeHtml(fechaCorta(h.actoAt))} · se deshizo</li>` : ''
+  return `<details class="guia"><summary class="sub">Ver lo que pasó</summary><ul class="sub" style="margin:4px 0 4px 18px;padding:0">${intentos.map(linea).join('')}${cierre}</ul></details>`
 }
 
 /**
@@ -389,8 +524,13 @@ export function coberturaGuias(slot: IntakeSlot, conteos: DesenlaceCodigoConteo[
 
 /** ¿Alguna carga del historial trae desenlace? Decide si la Actividad muestra la columna: sin
  *  desenlaces la tabla es la de siempre, con las mismas columnas y los mismos colspan. */
-export function hayDesenlace(history: IntakeUploadEvent[] | 'error'): boolean {
-  return history !== 'error' && history.some((h) => !!h.desenlace)
+export function hayDesenlace(history: IntakeUploadEvent[] | 'error', conVigilante = false): boolean {
+  if (history === 'error') return false
+  // #269·V10 · con el vigilante corriendo, toda carga tiene estado que mostrar —«Recibido» también es
+  // un estado—, así que la columna aparece con cualquier carga. SIN vigilante nadie resuelve estados:
+  // decir «Recibido · empieza a cargarse en unos minutos» sería una promesa sin nadie detrás, y la
+  // página es la de siempre (la columna solo con algún estado ya escrito).
+  return conVigilante ? history.length > 0 : history.some((h) => !!h.desenlace)
 }
 
 /** Inicio de la última corrida COMPLETADA (frontera del residuo, #57). */
@@ -450,7 +590,7 @@ export const LOG_ANEJO_TITULAR = 'El job murió sin alcanzar a escribir su log'
  * `conDesenlace` (issue #162) agrega la columna DESENLACE — la decide `hayDesenlace(history)`: con el
  * registro sin resolver todavía, la tabla conserva sus cuatro columnas exactas de siempre.
  */
-export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string, conDesenlace = false, guiaDe?: (h: IntakeUploadEvent) => GuiaResuelta | null): { ts: string; html: string }[] {
+export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord[] | 'error', limit = 30, diagnostico?: string | null, sinCambios?: boolean, runLogHrefOf?: (r: RunRecord) => string | null, reverts?: IntakeRevertRow[], revertFormOf?: (h: IntakeUploadEvent) => string, conDesenlace = false, guiaDe?: (h: IntakeUploadEvent) => GuiaResuelta | null, ctxDe?: (h: IntakeUploadEvent) => ContextoEstado, tomoDe?: (r: RunRecord) => string): { ts: string; html: string }[] {
   const items: { ts: string; html: string }[] = []
   // La columna extra va ANTES de la de acciones (que cierra la tabla). Vacía en las filas que no son
   // cargas: el desenlace es de la carga — una corrida no tiene uno, y fingirlo sería inventar dato.
@@ -459,10 +599,10 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
     for (const h of history) {
       // #63 · «Revertir esta carga» vive en la fila de la carga: es su unidad, no el archivo suelto.
       const accion = revertFormOf?.(h) ?? ''
-      const desenlace = conDesenlace ? `<td>${desenlaceCelda(h, runs, runLogHrefOf, guiaDe?.(h) ?? null)}</td>` : ''
+      const desenlace = conDesenlace ? `<td>${desenlaceCelda(h, runs, runLogHrefOf, guiaDe?.(h) ?? null, ctxDe?.(h) ?? {})}</td>` : ''
       items.push({
         ts: h.ts,
-        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td>${desenlace}<td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : '<b style="color:var(--err)">rechazada</b>'}${accion ? ` ${accion}` : ''}</td>`,
+        html: `<td>${when(h.ts)}</td><td>📤 Carga</td><td>${escapeHtml(h.filename)} <span class="sub">· ${kb(h.bytes)} · ${escapeHtml(h.by)}</span>${h.dupOf ? `<div class="sub" style="color:var(--yellow,#d97706)">⚠ contenido idéntico a ${escapeHtml(h.dupOf)} — re-procesarlo no cambia el dato</div>` : ''}</td>${desenlace}<td>${h.ok ? (h.triggered ? '<span class="sub">disparó conversión</span>' : '<span class="sub">recibido (land-only)</span>') : (conDesenlace ? '' : `<b style="color:var(--err)">rechazada</b>${h.error ? `<div class="sub">${escapeHtml(motivoDeRechazo(h.error))}</div>` : ''}`)}${accion ? ` ${accion}` : ''}</td>`,
       })
     }
   }
@@ -480,15 +620,17 @@ export function timeline(history: IntakeUploadEvent[] | 'error', runs: RunRecord
       // El log pertenece a la ÚLTIMA conversión: el diagnóstico solo puede rotularse sobre runs[0].
       const diag = i === 0 && r.status === 'Failed' && diagnostico ? diagnostico : null
       const delta = i === 0 && r.status === 'Completed' && sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''
+      // #269·V6 · el estado genérico del MOTOR (`state=[dead]`) va PLEGADO: en un proceso compartido
+      // por varios tipos de archivo, esa línea suelta se leía como la falla de ESTE tipo.
       const generico = r.error ? escapeHtml(r.error.length > 240 ? r.error.slice(0, 240) + '…' : r.error) : ''
-      const motivo = diag
-        ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${generico ? `<div class="sub">${generico}</div>` : ''}`
-        : generico ? `<div class="sub" style="color:var(--err)">${generico}</div>` : ''
+      const motor = generico ? `<details class="guia"><summary class="sub">Estado del motor</summary><div class="sub">${generico}</div></details>` : ''
+      const motivo = diag ? `<div style="color:var(--err)">${escapeHtml(diag)}</div>${motor}` : motor
+      const tomo = tomoDe?.(r) ?? ''
       const href = runLogHrefOf?.(r) ?? null
       const verLog = href ? ` <a class="sub" href="${escapeHtml(href)}">Ver log</a>` : ''
       items.push({
         ts: r.startedAt,
-        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${verLog}${motivo}</td>${vacia}<td></td>`,
+        html: `<td>${when(r.startedAt)}</td><td>⚙️ Conversión</td><td>${badge(r.status)}${delta}${dur(r) ? ` <span class="sub">· ${dur(r)}</span>` : ''}${verLog}${tomo}${motivo}</td>${vacia}<td></td>`,
       })
     }
   }
@@ -539,6 +681,49 @@ export function revertPlanBody(domainId: string, domainLabel: string, slot: Inta
     <p><b>Qué va a pasar:</b></p>
     <ul>${filas}${landing}</ul>
     ${form}`
+}
+
+/** Margen hacia atrás para decir «Cargando»: una corrida en curso que arrancó poco antes de la subida
+ *  también puede estar tomando el archivo (#269·P27). */
+const CORRIDA_EN_CURSO_MS = 30 * 60_000
+
+/** «Vigente: «archivo», recibido el …» (#269·§4.2) para un slot cuyo proceso no archiva. */
+function vigenteLinea(landing: OneLakeEntry[] | 'error'): string {
+  if (landing === 'error') return ''
+  const datos = landing.filter((e) => !e.isDirectory && !isSidecarName(e.path)).sort((a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified))
+  const v = datos[0]
+  return v ? `<p class="sub">Vigente: «${escapeHtml(baseName(v.path))}», recibido el ${when(v.lastModified)}.</p>` : ''
+}
+
+/**
+ * La SEÑAL DE CONTRATO del slot (#269·§3.1, V12, §4.1): lo que la plataforma sabe que no calza con el
+ * contrato, dicho en la vista técnica — nunca en la del usuario. Cuatro hechos, cada uno de su fuente:
+ *  · cargas que salieron del landing sin declaración ni retiro («sin informe», sin corrida);
+ *  · cargas declaradas «no cargadas» cuya copia está igual en lo procesado (P30: gana la declaración);
+ *  · falta `contacto` y no hay destino `cargas-operador`: el usuario no sabe a quién avisar;
+ *  · nombres del registro que calzan con este tipo Y con otro (medido tras la última recarga).
+ */
+export function señalDeContrato(slot: IntakeSlot, sc: Pick<SlotCargas, 'history' | 'archived' | 'vigilancia'>, enLanding: Set<string> | null, hayDestinoOperador: boolean): string {
+  const partes: string[] = []
+  const hist = sc.history === 'error' ? [] : sc.history
+  const fuera = hist.filter((h) => h.ok && h.desenlace === 'sin-informe' && h.desenlaceFinal === false && !h.desenlaceRunStartedAt)
+  if (fuera.length)
+    partes.push(`${fuera.length === 1 ? 'Una carga salió' : `${fuera.length} cargas salieron`} del landing sin que el proceso las declarara ni pasaran por <code>_retirado/</code> (salió fuera de contrato): ${fuera.map((h) => `<b>${escapeHtml(h.filename)}</b>`).join(', ')}.`)
+  if (sc.archived !== 'error' && enLanding) {
+    const archivados = sc.archived.filter((e) => !e.isDirectory && !isSidecarName(e.path))
+    const contra = hist.filter((h) => h.ok && (h.desenlace === 'saltada' || h.desenlace === 'fallida') && !enLanding.has(h.filename) &&
+      archivados.some((e) => nombreSinSello(baseName(e.path)) === h.filename && Date.parse(e.lastModified) >= Date.parse(h.ts) - 5_000))
+    if (contra.length)
+      partes.push(`El proceso archivó ${contra.length === 1 ? 'un archivo que declaró' : `${contra.length} archivos que declaró`} no cargado${contra.length === 1 ? '' : 's'}: ${contra.map((h) => `<b>${escapeHtml(h.filename)}</b>`).join(', ')}. Manda lo declarado; revisar el proceso.`)
+  }
+  if (!slot.contacto && !hayDestinoOperador)
+    partes.push('Falta declarar <code>contacto</code>: los usuarios no saben a quién avisar cuando la plataforma no sabe qué pasó con su archivo.')
+  const amb = sc.vigilancia?.ambiguos ?? []
+  if (amb.length)
+    partes.push(`${amb.length === 1 ? 'Un nombre' : `${amb.length} nombres`} del registro calza${amb.length === 1 ? '' : 'n'} con este tipo y con otro: ${amb.slice(0, 5).map((a) => `«${escapeHtml(a.nombre)}» (${a.slots.map((x) => `<code>${escapeHtml(x)}</code>`).join(', ')})`).join('; ')}${amb.length > 5 ? '; …' : ''}. La puerta los rechaza; revisar los patrones.`)
+  if (!partes.length) return ''
+  // Aviso, no error: nada de esto rompe la página ni la carga — es lo que el operador tiene que corregir.
+  return `<div class="sub" style="${AVISO}"><b>⚠ Señal de contrato</b><ul style="margin:4px 0 0 18px;padding:0">${partes.map((p) => `<li>${p}</li>`).join('')}</ul></div>`
 }
 
 const csrf = (token: string): string => `<input type="hidden" name="_csrf" value="${token}">`
@@ -648,7 +833,50 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     const verLogLast = last && hrefDeRun?.(last) ? ` <a class="sub" href="${escapeHtml(hrefDeRun(last)!)}">Ver log</a>` : ''
     const estado = last
       ? `${badge(last.status)}${sinCambios ? ' <span class="sub">· sin cambios en el dato</span>' : ''} ${when(last.startedAt)}${dur(last) ? ` <span class="sub">· ${dur(last)}</span>` : ''}${verLogLast}${motivoLast}`
-      : sc.runs === 'error' ? '<span class="sub">motor no respondió</span>' : '<span class="sub">sin corridas</span>'
+      : sc.runs === 'error'
+        ? '<span class="sub">motor no respondió</span>'
+        // #269·V5 · «sin corridas» con cargas procesadas se leía como «nunca corrió»: el motor poda.
+        : s.trigger ? '<span class="sub">sin corridas: el motor no conserva corridas de este proceso con más de unas semanas</span>' : '<span class="sub">sin corridas</span>'
+
+    // ── #269 · lo que la columna Estado necesita saber de cada carga, y lo que dice la señal de contrato ──
+    const enLanding = sc.landing !== 'error' ? new Set(sc.landing.filter((e) => !e.isDirectory && !isSidecarName(e.path)).map((e) => baseName(e.path))) : null
+    const enCurso = sc.runs !== 'error' ? sc.runs.filter((r) => r.status === 'InProgress' || r.status === 'NotStarted') : []
+    const aviso = lineaDeAviso({ ...(sc.hayDestinoOperador ? { equipoAvisado: true } : {}), ...(s.contacto ? { contacto: s.contacto } : {}) })
+    const tituloDeIntento = (i: IntakeIntentoRow): string => {
+      const g = i.codigo && sc.guias ? resolverGuia(s, i.codigo, i.params, sc.guias) : null
+      if (g) return g.titulo
+      if (i.motivo) return i.motivo.length > 120 ? i.motivo.slice(0, 120) + '…' : i.motivo
+      return 'sin motivo declarado'
+    }
+    const ctxDe = (h: IntakeUploadEvent): ContextoEstado => {
+      const c: ContextoEstado = { aviso, tituloDeIntento }
+      if (enLanding) c.enLanding = enLanding.has(h.filename)
+      const subida = Date.parse(h.ts)
+      // Una corrida en curso que arrancó con el archivo ya subido, o que ya corría cuando se subió
+      // (#269·P27: la 190 la tomó una corrida que arrancó 15 s antes).
+      // i3 (juez P1) · el mismo criterio que el resolvedor: una no terminada más vieja que el umbral de
+      // corrida colgada no está tomando nada.
+      const ahora = Date.now()
+      if (enCurso.some((r) => Date.parse(r.startedAt) >= subida - CORRIDA_EN_CURSO_MS && ahora - Date.parse(r.startedAt) <= DEFAULT_MAX_RUN_MINUTES * 60_000)) c.enCurso = true
+      return c
+    }
+    const intentosPorCorrida = new Map<string, { procesada: number; saltada: number; fallida: number }>()
+    for (const i of sc.intentosDeCorridas ?? []) {
+      if (!i.runStartedAt) continue
+      const x = intentosPorCorrida.get(i.runStartedAt) ?? { procesada: 0, saltada: 0, fallida: 0 }
+      if (i.resultado === 'procesada' || i.resultado === 'saltada' || i.resultado === 'fallida') x[i.resultado]++
+      intentosPorCorrida.set(i.runStartedAt, x)
+    }
+    const tomoDe = sc.intentosDeCorridas ? (r: RunRecord): string => {
+      const x = intentosPorCorrida.get(r.startedAt)
+      if (!x) return ''
+      const n = x.procesada + x.saltada + x.fallida
+      const partes = [x.procesada ? `✔ ${x.procesada}` : '', x.saltada ? `⚠ ${x.saltada}` : '', x.fallida ? `✖ ${x.fallida}` : ''].filter(Boolean)
+      return `<div class="sub">tomó ${n} archivo${n === 1 ? '' : 's'} de este tipo: ${partes.join(' · ')}</div>`
+    } : undefined
+    // Sin vigilante no hay estados que contrastar con el contrato: la página es la de siempre.
+    const señal = sc.vigilancia ? señalDeContrato(s, sc, enLanding, sc.hayDestinoOperador === true) : ''
+    const vigente = slotProcessedDir(s) == null
 
     const rerun = s.trigger ? postForm(action, token, { slot: s.id, accion: 'rerun' }, 'Correr conversión de nuevo', 'La conversión re-procesará TODOS los archivos del landing. ¿Continuar?') : ''
 
@@ -660,14 +888,16 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     const landingRows = sc.landing === 'error'
       ? `<tr><td colspan="4" class="sub">No se pudo listar el landing (reintentá refrescando).</td></tr>`
       : sc.landing.filter((e) => !e.isDirectory && !isSidecarName(e.path)).map((e) => {
-          const residuo = esResiduo(e, lastDone)
+          // #269·V6 · un slot cuyo proceso NO archiva (`processed: false`) deja su archivo en el landing
+          // a propósito: es el VIGENTE, no un residuo ni un varado.
+          const residuo = !vigente && esResiduo(e, lastDone)
           // #161 · VARADO: nadie lo ha tomado a tiempo. Hermano del RESIDUO y distinto de él —
           // residuo es «anterior a la última corrida completada», varado es «excedió su edad
           // máxima» —, así que se marca aparte y en el amarillo de los avisos, no en el rojo del
           // residuo. La edad viene de la clasificación (`ArchivoVarado.ageMinutes`): acá no se
           // computa ninguna, y por eso la marca es fiel a lo que el vigilante midió aunque su
           // última medida no sea de este instante (lo dice su banner).
-          const varado = varadoDe(baseName(e.path))
+          const varado = vigente ? undefined : varadoDe(baseName(e.path))
           const marcaVarado = varado
             ? ` <b style="${AVISO}">⚠ VARADO</b><div class="sub" style="${AVISO}">hace ${edad(varado.ageMinutes)} en el landing sin que ninguna corrida lo tomara${medidaVieja ? ' (según la última medida buena del vigilante)' : ''}</div>`
             : ''
@@ -681,7 +911,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
         ).join('') || `<tr><td colspan="4" class="sub">Sin procesados archivados todavía.</td></tr>`
 
     // #162 · la columna DESENLACE aparece cuando hay alguno resuelto (sin ellos: tabla intacta).
-    const conDesenlace = hayDesenlace(sc.history)
+    const conDesenlace = hayDesenlace(sc.history, sc.vigilancia !== undefined)
     const thDesenlace = conDesenlace ? '<th>Desenlace</th>' : ''
     const colsActividad = conDesenlace ? 5 : 4
 
@@ -690,18 +920,19 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
     const cobertura = coberturaGuias(s, sc.codigos30, sc.guias)
 
     return `<h2>${escapeHtml(s.label)} <span class="sub c">${escapeHtml(s.id)}</span>${errores}</h2>
-    ${vigilante}${avisoLogs}${coherencia}${cobertura}
+    ${vigilante}${avisoLogs}${coherencia}${cobertura}${señal}
     <p><b>Última conversión:</b> ${estado} ${rerun ? `<span style="margin-left:12px">${rerun}</span>` : ''}</p>
     ${logHtml}
     <h3 class="sub">Subir archivos</h3>
     ${uploadFormOf(s)}
     <h3 class="sub">Actividad</h3>
     <table><thead><tr><th>Cuándo</th><th>Evento</th><th>Detalle</th>${thDesenlace}<th></th></tr></thead>
-    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s), conDesenlace, sc.guias ? (h) => guiaDeCarga(s, h, sc.guias) : undefined).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="${colsActividad}" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
-    <h3 class="sub">Landing (por procesar)</h3>
+    <tbody>${timeline(sc.history, sc.runs, 30, titular, sinCambios, hrefDeRun, sc.reverts, revertFormOf(s), conDesenlace, sc.guias ? (h) => guiaDeCarga(s, h, sc.guias) : undefined, ctxDe, tomoDe).map((i) => `<tr>${i.html}</tr>`).join('') || `<tr><td colspan="${colsActividad}" class="sub">Sin actividad registrada.</td></tr>`}</tbody></table>
+    <h3 class="sub">${vigente ? 'Vigente (el proceso lo lee del landing: no archiva)' : 'Landing (por procesar)'}</h3>
+    ${vigente ? vigenteLinea(sc.landing) : ''}
     <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Recibido</th><th></th></tr></thead><tbody>${landingRows}</tbody></table>
-    <h3 class="sub">Procesados (archivo histórico)</h3>
-    <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Procesado</th><th></th></tr></thead><tbody>${archivedRows}</tbody></table>`
+    ${vigente ? '' : `<h3 class="sub">Procesados (archivo histórico)</h3>
+    <table><thead><tr><th>Archivo</th><th>Tamaño</th><th>Procesado</th><th></th></tr></thead><tbody>${archivedRows}</tbody></table>`}`
   })(activo)
 
   const guia = `<details class="guia"><summary>¿Cómo funciona el ciclo de una carga? (y cómo revertirla)</summary>

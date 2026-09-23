@@ -169,7 +169,7 @@ import {
 } from '@vergis/capabilities'
 import { createAdmin, dupLabel, type AdminHandler, type IntakeRunner, type JobsPublishOps, type JobTemplateBundle, type RunLogsOps } from './admin'
 import { createFreshnessLoop } from './freshness-loop'
-import { createIntakeLoop, slotVigilanciaDeProyeccion, summarizeIntakeWatch, type IntakeLoopDeps } from './intake-loop'
+import { createIntakeLoop, slotVigilanciaDeProyeccion, summarizeIntakeWatch, parseMedidaDisjuncion, INTAKE_DISJUNCION_KEY, type IntakeLoopDeps } from './intake-loop'
 import { createSinks, fanout, forEvent, type Notification, type ReportSchedule } from './notify'
 import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
@@ -189,6 +189,9 @@ import { createDatadoc, type Datadoc } from './datadoc'
 import { paginaSinBuild } from './datadoc-render'
 import type { EjecutarSql } from './datadoc-introspect'
 import { VERGIS_VERSION } from '../packages/capabilities/src/version'
+// #269 · capacidades nuevas, importadas de su módulo (el barril no es parte del territorio del cambio).
+import { leerRetiro } from '../packages/capabilities/src/intake-observability'
+import { slotProcessedDir } from '../packages/capabilities/src/intake'
 import { createBackgroundLoops } from './control-loops'
 import { createContractJournal } from './contract-delta'
 import { avatarMenu, csrfFactory } from './ui'
@@ -1603,6 +1606,9 @@ const reportSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'reports'))
 /** Destinos del aviso a quien SUBIÓ un archivo (#162·§6.3). Sin ninguno suscrito, el resolver del
  *  lazo persiste y muestra el desenlace igual: el registro no depende del canal. */
 const cargasSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'cargas-usuario'))
+/** #269·V12 · Destinos del aviso al OPERADOR por carga. Sin ninguno, el aviso al usuario no dice «le
+ *  avisamos al equipo» (dice a quién avisar, o nada): la frase sale solo si es cierta. */
+const operadorSinks = createSinks(forEvent(INSTANCE_CFG.notify, 'cargas-operador'))
 /** ¿La instancia tiene bloque de gobierno? Gatea el reporte — y su invariante se RE-verifica en cada
  *  recarga del slice notify (D5 de #138·2): `report:` no puede aparecer donde no hay qué reportar. */
 const HAS_GOV_BLOCK = !!(process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length)
@@ -1695,6 +1701,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         landing: (slot: IntakeSlot) => Promise<OneLakeListing>
         runs: (slot: IntakeSlot) => Promise<RunRecord[]>
         retiros: (slot: IntakeSlot) => Promise<RetiroRegistrado[]>
+        archivados: (slot: IntakeSlot) => Promise<OneLakeEntry[]>
         runLogs: { list: (slot: IntakeSlot) => Promise<OneLakeEntry[]>; read: (slot: IntakeSlot, path: string) => Promise<string | null> }
       }
     } => {
@@ -1758,7 +1765,10 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           try {
             await migrarCargasDesdeAuditLog()
             if (await govStore.intakeBackfillDone(slot.id)) return
-            const entries = await reader.list(slot.target, `${parentDir(slot.target.path)}/_processed`, { recursive: true })
+            // #269·V11 · el directorio de procesados que el slot DECLARA (o la convención); un slot cuyo
+            // proceso no archiva (`processed: false`) no tiene histórico que indexar.
+            const dirProcesados = slotProcessedDir(slot)
+            const entries = dirProcesados ? await reader.list(slot.target, dirProcesados, { recursive: true }) : []
             let files = 0
             let errores = 0
             for (const e of entries) {
@@ -1804,18 +1814,24 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           // respaldo que la propia acción escribe: `_retirado/<epochMs>-<archivo>` (verificado en la
           // op `retire` de la consola). El prefijo ES el instante del retiro; sin él no se puede fechar
           // el respaldo contra la carga, así que la entrada se descarta en vez de inventarle una fecha.
+          // #269·§3.4 · las TRES formas del nombre en `_retirado/` (Retirar, Revertir y el rename a mano
+          // con la gramática): antes solo se entendía la primera y la W30 retirada por INC-06 seguía
+          // «saltada». El instante es el PRIMER sello — un rename conserva el mtime del original.
           retiros: async (slot: IntakeSlot): Promise<RetiroRegistrado[]> => {
             const listado = await reader.listOrAbsent(slot.target, `${parentDir(slot.target.path)}/_retirado`)
             if (listado.kind === 'absent') return []
             const out: RetiroRegistrado[] = []
             for (const e of listado.entries) {
-              if (e.isDirectory) continue
-              const base = e.path.replace(/^.*\//, '')
-              const m = /^(\d{10,})-(.+)$/.exec(base)
-              if (!m) continue
-              out.push({ filename: m[2]!, at: new Date(Number(m[1])).toISOString() })
+              const r = leerRetiro(e)
+              if (r) out.push(r)
             }
             return out
+          },
+          // #269·§3.1 · lo archivado del slot, insumo del puente histórico (solo lo pide el lazo cuando
+          // una carga pendiente es anterior a `contrato_desde`).
+          archivados: (slot: IntakeSlot) => {
+            const dir = slotProcessedDir(slot)
+            return dir ? reader.list(slot.target, dir, { recursive: true }) : Promise.resolve([])
           },
           // Logs POR CORRIDA del slot (#99), insumo del RESOLVER (#162): de ahí sale el motivo que el
           // job declaró por archivo. `slotRunLogsDir` es null con `log: false`, que es una DECLARACIÓN
@@ -1857,6 +1873,16 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               for (const r of rows.filter((x) => x.origen === 'upload').slice(0, limit)) {
                 // El `id` es el ancla de «Revertir esta carga» (#63): sin él la fila no ofrece el botón.
                 const ev: IntakeUploadEvent = { id: r.id, ts: r.uploadedAt, filename: r.filename, bytes: r.bytes, by: r.uploadedBy ?? '', ok: r.ok, triggered: r.triggered, sha256: r.sha256 }
+                // #269·V7 · el motivo del RECHAZO en la puerta: la historia lo tenía y no lo copiaba.
+                if (!r.ok && r.error != null) ev.error = r.error
+                if (r.desenlaceFinal != null) ev.desenlaceFinal = r.desenlaceFinal
+                if (r.actoAt != null) ev.actoAt = r.actoAt
+                if (r.desenlaceAt != null) ev.desenlaceAt = r.desenlaceAt
+                // #269·D1 · la historia de intentos de la carga (lo que cada corrida declaró de ella).
+                if (r.ok && r.desenlace != null) {
+                  const intentos = await govStore.listIntentos(r.id).catch(() => [])
+                  if (intentos.length) ev.intentos = intentos
+                }
                 // Desenlace resuelto por el lazo (#162): la columna de la Actividad lo lee de acá.
                 // Se copia TAL CUAL — el motivo ausente se queda ausente: la celda dice que el job no
                 // lo declaró, y rellenarlo en el camino sería fabricar la causa que #162 evita.
@@ -1898,7 +1924,14 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               return { text, lastModified }
             },
             landing: (slot) => reader.list(slot.target, slot.target.path),
-            archived: (slot) => reader.list(slot.target, `${parentDir(slot.target.path)}/_processed`, { recursive: true }),
+            // #269·V11 · el directorio que el slot declara; `processed: false` = no archiva (lista vacía,
+            // y la consola dice «Vigente» en vez de «sin procesados»).
+            archived: (slot) => {
+              const dir = slotProcessedDir(slot)
+              return dir ? reader.list(slot.target, dir, { recursive: true }) : Promise.resolve([])
+            },
+            // #269·V6 · qué tomó cada corrida de ESTE slot, desde el registro de intentos (sin leer logs).
+            intentos: (slot, desdeIso) => govStore.listIntentosDeSlot(slot.id, desdeIso),
             rerun: async (slot) => {
               if (!slot.trigger) throw new Error('El slot no dispara conversión (land-only).')
               await jobs.runNow(slot.trigger, slot.target)
@@ -1941,6 +1974,15 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
                 resumen: out.result.resumen,
                 landingRetirado: out.result.landingRetirado,
               })
+              // #269·§3.2 · «Deshacer» sobre una carga CARGADA la lleva a `deshecha` (acto, final). Sobre
+              // una no cargada, la reversión que retiró el landing la cierra como `retirada`: eso lo
+              // resuelve el lazo, que lee las reversiones como retiros de SU carga.
+              if (out.result.uploadId != null) {
+                const fila = (await govStore.listUploads(slot.id, 1000)).find((r) => r.id === out.result.uploadId)
+                if (fila?.desenlace === 'procesada' && fila.desenlaceFinal === true)
+                  await govStore.avanzarEstado(fila.id, { estado: 'deshecha', final: true, actoAt: new Date().toISOString(), ...(fila.desenlaceRunStartedAt ? { runStartedAt: fila.desenlaceRunStartedAt } : {}) }).catch((e) =>
+                    console.error(`[vergis-rls] la carga ${fila.id} se revirtió pero no se pudo marcar deshecha: ${e instanceof Error ? e.message : String(e)}`))
+              }
               return out
             },
           } satisfies CargasOps
@@ -2070,8 +2112,13 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // subir. Solo las cargas VIVIDAS y aceptadas: una rechazada nunca aterrizó, y una fila `retro`
         // es un archivo ya archivado en `_processed/` que el indexado retroactivo dedujo.
         uploads: async (slotId) =>
-          (await govStore.listUploads(slotId, 200)).filter((r) => r.origen === 'upload' && r.ok).map((r) => ({ filename: r.filename, uploadedAt: r.uploadedAt, ok: r.ok })),
+          (await govStore.listUploads(slotId, 200))
+            .filter((r) => r.origen === 'upload' && r.ok)
+            // #269·V5 · una carga en estado final ya no se espera en el landing.
+            .map((r) => ({ filename: r.filename, uploadedAt: r.uploadedAt, ok: r.ok, ...(r.desenlaceFinal ? { final: true } : {}) })),
         retiros: watch.retiros,
+        archivados: watch.archivados,
+        reverts: async (slotId) => (await govStore.listReverts(slotId, 500)).map((r) => ({ filename: r.filename, at: r.at, landingRetirado: r.landingRetirado, ...(r.uploadId != null ? { uploadId: r.uploadId } : {}) })),
         runLogs: watch.runLogs,
         store: govStore,
         // Fan-out INCONDICIONAL al arreglo VIVO de destinos, igual que el lazo de frescura: un destino
@@ -2080,6 +2127,10 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // Aviso a QUIEN SUBIÓ (#162): otro flujo, otros destinos, mismo puerto. Arreglo VIVO también.
         // El destinatario individual lo resuelve el sink de email sustituyendo `$uploader`.
         notifyUploader: (n: Notification) => fanout(cargasSinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
+        // #269·V12 · aviso al OPERADOR por carga; y la pregunta que decide si el aviso al usuario puede
+        // decir «le avisamos al equipo» — se hace sobre el arreglo VIVO, en el momento del aviso.
+        notifyOperador: (n: Notification) => fanout(operadorSinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
+        hayDestinoOperador: () => operadorSinks.length > 0,
         // #346 · el catálogo VIVO de guías: el correo usa la guía del código que el job declaró.
         guias: () => intakeGuiasCfg,
         domains: domainsCfg,
@@ -2184,13 +2235,20 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
                   .then((raw) => parseIntakeWatchState(raw))
                   .catch(() => ({}) as Record<string, SlotAlertReason>),
               ])
-              return slotVigilanciaDeProyeccion(
+              const v = slotVigilanciaDeProyeccion(
                 slot,
                 snapshots.find((s) => s.slotId === slot.id),
                 intakeWatchMs,
                 Date.now(),
                 razones[slot.id],
               )
+              // #269·§4.1 · la señal de disjunción que el lazo midió tras la última recarga: solo los
+              // nombres que tocan a ESTE slot. Ilegible = sin señal (no se afirma lo que no se lee).
+              if (v) {
+                const d = parseMedidaDisjuncion(await govStore.getSetting(INTAKE_DISJUNCION_KEY).catch(() => null))
+                if (d) v.ambiguos = d.ambiguos.filter((a) => a.slots.includes(slot.id))
+              }
+              return v
             },
           }
         : fabricWiring.cargas
@@ -2241,6 +2299,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       cargas: cargasOps,
       // Registro de cargas (issue #62): dedup por contenido, pre-check y el indexado retroactivo.
       intakeUploads: govStore,
+      // #269·V12 · la consola dice «Le avisamos al equipo» solo si HOY hay un destino del operador.
+      hayDestinoOperador: () => operadorSinks.length > 0,
       // MAPA DE IDENTIDAD (#159): el store de gobierno ES la superficie administrable, y la recarga
       // en caliente se dispara desde la propia pantalla — sin esto, corregir una entrada exigiría el
       // SIGHUP, o sea el acto que interrumpe el servicio, que es justo lo que el issue vino a matar.
@@ -3204,12 +3264,14 @@ function reloadInstanceSlices(reason: string): void {
       const nextAlerts = createSinks(forEvent(next, 'alerts'))
       const nextReports = createSinks(forEvent(next, 'reports'))
       const nextCargas = createSinks(forEvent(next, 'cargas-usuario'))
+      const nextOperador = createSinks(forEvent(next, 'cargas-operador'))
       alertSinks.splice(0, alertSinks.length, ...nextAlerts)
       reportSinks.splice(0, reportSinks.length, ...nextReports)
       cargasSinks.splice(0, cargasSinks.length, ...nextCargas)
+      operadorSinks.splice(0, operadorSinks.length, ...nextOperador)
       liveReportSchedule = next.report ?? null
       console.log(
-        `[hot-reload] avisos (${reason}): ${alertSinks.length} destino(s) de alerta · ${reportSinks.length} de reporte · ${cargasSinks.length} de cargas-usuario · ` +
+        `[hot-reload] avisos (${reason}): ${alertSinks.length} destino(s) de alerta · ${reportSinks.length} de reporte · ${cargasSinks.length} de cargas-usuario · ${operadorSinks.length} de cargas-operador · ` +
           `reporte ${liveReportSchedule ? `${liveReportSchedule.every} a las ${liveReportSchedule.at}` : 'apagado'}`,
       )
       contract.record({ reason, ok: true }, [{ source: 'notify', path: NOTIFY_PATH }])

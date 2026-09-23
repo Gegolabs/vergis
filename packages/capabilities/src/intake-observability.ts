@@ -238,13 +238,69 @@ export interface CargaRegistrada {
   uploadedAt: string
   /** false = subida rechazada: nunca aterrizó, así que no se espera en el landing. */
   ok: boolean
+  /**
+   * #269·V5 · la carga ya está en un estado FINAL (cargada, retirada, reemplazada, deshecha): su
+   * archivo ya no se espera en el landing, con o sin corrida `Completed` que haga de corte. Sin esto,
+   * un proceso cuyo motor ya no conserva corridas «esperaba» para siempre archivos cargados hace
+   * semanas, y la consola gritaba CONTRADICE sobre un landing sano.
+   */
+  final?: boolean
 }
 
-/** Un retiro manual del landing (evento `intake-retire` del audit log, verificado `admin.ts:1927`). */
+/**
+ * Un RETIRO del landing (#269·§3.4): el archivo salió sin cargarse por un camino que la plataforma
+ * reconoce. Es un ACTO que cierra la carga — «retirada» es un estado final.
+ */
 export interface RetiroRegistrado {
   filename: string
-  /** ISO del evento. */
+  /** ISO del retiro: el PRIMER sello del nombre en `_retirado/` (el mtime no sirve: un rename lo
+   *  conserva del original), o el instante registrado de la reversión. */
   at: string
+  /** Cómo se retiró: «Retirar» de la consola, «Revertir» (#63) o un rename a mano con la gramática. */
+  via?: 'retirar' | 'revertir' | 'rename'
+  /** La reversión nombra su carga por id: un retiro con `uploadId` cierra SOLO esa carga. */
+  uploadId?: number
+}
+
+/** Sellos y etiquetas que un retiro (o un archivado) antepone al nombre: `<epoch>-`, `revertido-`,
+ *  `retirado-`, repetibles (`<e1>-retirado-<e2>-<archivo>`). */
+const PREFIJO_SELLO = /^(\d{10,13}|revertido|retirado)-/
+
+/** El nombre original de un archivo retirado o archivado, sin sus sellos ni etiquetas (#269·§3.4). */
+export function nombreSinSello(basename: string): string {
+  let x = String(basename ?? '')
+  while (PREFIJO_SELLO.test(x)) x = x.replace(PREFIJO_SELLO, '')
+  return x
+}
+
+/** Epoch ms del PRIMER sello del nombre (13 dígitos), o `null` si el nombre no lo trae. */
+export function selloDelNombre(basename: string): number | null {
+  const m = /^(\d{13})-/.exec(String(basename ?? ''))
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * Lee UNA entrada de `_retirado/` con la gramática del contrato `_logs/` §5 (#269·§3.4) — PURA.
+ *
+ *   `<epoch ms>-<archivo>`                         Retirar (consola)
+ *   `<epoch ms>-revertido-<archivo>`               Revertir (#63)
+ *   `<epoch ms>-retirado-[<epoch ms>-]<archivo>`   rename a mano con la gramática
+ *
+ * El instante del retiro es el PRIMER sello; sin sello de 13 dígitos se usa el `lastModified` de la
+ * entrada (un nombre sin sello no es de la gramática, pero su archivo SÍ salió del landing a
+ * `_retirado/`, que es el camino declarado). `null` = la entrada no es un archivo o no se puede fechar.
+ */
+export function leerRetiro(entry: { path: string; isDirectory?: boolean; lastModified?: string }): RetiroRegistrado | null {
+  if (!entry || entry.isDirectory) return null
+  const base = String(entry.path ?? '').replace(/^.*\//, '')
+  const filename = nombreSinSello(base)
+  if (!filename) return null
+  const sello = selloDelNombre(base)
+  const at = sello ?? Date.parse(entry.lastModified ?? '')
+  if (!Number.isFinite(at)) return null
+  const tras = base.replace(/^\d{10,13}-/, '')
+  const via: RetiroRegistrado['via'] = tras.startsWith('revertido-') ? 'revertir' : tras.startsWith('retirado-') ? 'rename' : 'retirar'
+  return { filename, at: new Date(at).toISOString(), via }
 }
 
 /**
@@ -281,6 +337,8 @@ export function expectedInLanding(
   const ultimaPorNombre = new Map<string, number>()
   for (const u of uploads ?? []) {
     if (!u?.ok) continue
+    // #269·V5 · una carga en estado final ya no se espera en el landing, haya corte o no.
+    if (u.final) continue
     const name = baseName(u.filename)
     if (!name) continue
     const at = Date.parse(u.uploadedAt)

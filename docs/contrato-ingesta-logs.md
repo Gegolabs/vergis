@@ -162,7 +162,13 @@ partir de texto libre. En detalle:
 
 - Prefijos de canal adicionales se descartan; el par marcador↔palabra tiene que calzar; la palabra va
   en minúsculas exactas. Un `✔ fallido: x` no es del contrato: es ruido y se ignora entero.
-- El corte archivo↔motivo es en la **primera** raya, así que el motivo puede contener más.
+- El corte archivo↔motivo es en la **primera** raya, así que el motivo puede contener más. Sin raya,
+  el guion ASCII con espacios (« - ») corta **solo si lo que queda a su izquierda termina en una
+  extensión de archivo** (`.xlsx`, `.csv`…): los nombres reales traen « - » adentro
+  (`20260921 - Recepción….xlsx`) y cortarlos en el primero inventaba el archivo `20260921` (#269·P26).
+- **El estado de una carga no depende de este corte.** El resolvedor busca la línea del archivo por el
+  **nombre conocido** de la carga (`declaracionDeArchivo`): cuerpo igual al nombre, o que empieza con
+  el nombre seguido de fin, espacio o raya.
 - Si el job escribió un path en vez del basename, se toma el basename — tolerancia del lector, no
   licencia del escritor: el contrato pide el basename.
 - Un `saltado`/`fallido` **sin** motivo sí cuenta como desenlace, con el motivo ausente: perder el
@@ -179,26 +185,46 @@ partir de texto libre. En detalle:
 
 ## 4 · ¿Qué pasa si el job no cumple? — la degradación honesta
 
-La plataforma presenta lo que hay y nombra lo que falta. Jamás promete lo que nadie escribió. La
-**resolución de desenlaces y el aviso al usuario** se construyen sobre este contrato y corren dentro
-del lazo de vigilancia del intake (`server/intake-loop.ts`, fase RESOLVER): por cada carga registrada
-sin desenlace, la plataforma correlaciona la corrida, lee su log y escribe el desenlace **una sola
-vez** en el registro de cargas — donde la consola lo muestra y desde donde sale el correo:
+La plataforma presenta lo que hay y nombra lo que falta. Jamás promete lo que nadie escribió. El
+**estado de cada carga** y el aviso al usuario se construyen sobre este contrato y corren dentro del
+lazo de vigilancia del intake (`server/intake-loop.ts`, fase RESOLVER, función pura
+`resolverEstadoDeCarga`). Desde 0.35.0 (#269) el estado es **exclusivamente** lo que el job declaró de
+ESE archivo más los actos registrados (re-subida con el mismo nombre, retiro en `_retirado/`,
+reversión): la **ausencia** de declaración nunca se convierte en un resultado.
+
+El estado **avanza hasta uno final** (cargada, retirada, reemplazada, deshecha) y guarda la historia de
+intentos: un archivo que falló y sigue en el landing se reintenta solo y puede terminar cargado, y la
+plataforma lo dice.
 
 | El job… | La plataforma resuelve | Y le dice al usuario |
 |---|---|---|
-| escribió log **con** gramática | desenlace por archivo, con su motivo | el motivo del job, textual |
-| escribió log **sin** gramática | desenlace por corrida (`Completed`/`Failed`) para los archivos que esa corrida cubrió | «la corrida falló; el job no declaró desenlace por archivo», más el titular `✖` del log si existe |
-| **murió sin escribir** el log | `sin-informe` | «el proceso terminó sin reportar la causa» — tal cual |
+| declaró el archivo `✔` | `procesada` (final) | — |
+| declaró el archivo `⚠`/`✖` | `saltada`/`fallida`, con su motivo (no final: puede avanzar) | el motivo del job, textual |
+| escribió log con gramática **que no nombra** el archivo | nada: esa corrida no lo vio | — |
+| escribió log **sin** gramática y la corrida falló | `fallida` (legado), sin motivo por archivo | «la corrida falló; el job no declaró desenlace por archivo», más el titular `✖` del log si existe |
+| **murió sin escribir** el log | `sin-informe` | «no sabemos qué pasó con este archivo» — tal cual |
+| no lo declaró y el archivo **salió del landing** por un camino que no es `_retirado/` | `sin-informe` | ídem; la consola técnica lo lista como «salió fuera de contrato» |
+| no lo declaró y el archivo **sigue en el landing** | sin estado («Recibido»); la edad es un dato, no un estado | — |
+
+Una declaración que contradice lo archivado (declarado «no cargado» y archivado igual) no se resuelve
+a favor del archivo: **gana la declaración**, y la consola técnica lo señala.
+
+**El único puente, para lo anterior al contrato.** Las corridas anteriores a que un job declarara por
+archivo nunca escribieron declaraciones. Para una carga subida **antes** de `contrato_desde` (clave del
+slot, fecha ISO en que su job empezó a declarar), y solo para ella, la copia en lo archivado cuenta
+como declaración `✔`. Sin `contrato_desde` no hay puente: sus cargas sin declaración quedan
+`sin-informe`.
 
 La distinción entre las dos últimas filas es el punto entero del contrato: **una causa declarada por
 el job y una causa que nadie declaró no se parecen**, y la plataforma no las mezcla. En particular, el
 motivo que el **motor** reporta de la corrida (`state=[dead]`, ids de instancia) **nunca** se usa para
 rellenar el desenlace de una carga: es del operador, y no describe a ningún archivo en particular.
 
-Dos casos más, por la misma disciplina: una corrida **en curso** deja la carga pendiente (su
-resultado todavía puede decidirla), y un log que la plataforma **no pudo mirar** —dependencia no
-cableada, lectura fallida— tampoco produce `sin-informe`: no medir no es un hallazgo sobre el job.
+Dos casos más, por la misma disciplina: una corrida **en curso** deja la carga como está (su
+resultado todavía puede decidirla; una `InProgress`/`NotStarted` más vieja que el umbral de corrida
+colgada ya no se cree en curso), y un log que la plataforma **no pudo mirar** —dependencia no
+cableada, lectura fallida— no deja concluir nada de la ausencia: no medir no es un hallazgo sobre el
+job.
 
 ### ¿Cómo se enciende el correo al que subió?
 
@@ -220,8 +246,14 @@ Reglas, todas verificadas en el arranque (config mala = boot roto con el nombre 
 correo que no sale en silencio): un `email-smtp` suscrito **debe** traer `$uploader` en su `to`; el
 token sin la suscripción también rompe; un `slack-webhook` suscrito se **rechaza** (un canal
 compartido no es una persona); un `webhook` genérico sí puede suscribirse y recibe `uploadedBy` en el
-JSON para que el puente externo decida. Solo se avisa de `fallida`, `sin-informe` y `varada`:
+JSON para que el puente externo decida. Solo se avisa al **entrar** a `fallida` o `sin-informe`:
 `procesada` y `saltada` se consultan en la consola, no llenan la bandeja de nadie.
+
+**Al operador, por carga (#269·V12):** el flujo `cargas-operador` recibe un aviso por cada carga que
+queda `sin-informe` o con una guía cuyo actor es el operador (deduplicado por carga). El aviso al
+usuario dice «Le avisamos al equipo de la plataforma» **solo** si hay un destino suscrito a ese flujo;
+si no, «Avísale a {contacto}» (clave `contacto:` en la raíz del archivo de intake, heredable por slot);
+sin ninguno de los dos, no dice nada — y la consola técnica señala que falta `contacto`.
 
 ## 5 · Obligaciones del job, en una lista
 
@@ -237,10 +269,20 @@ Para que un slot cumpla el contrato completo, su job debe:
    el **código** del desenlace y los **datos del caso** que su guía interpola (§2). Sin él, la
    plataforma muestra el motivo técnico como siempre; con él, muestra la guía de ese código y deja el
    motivo plegado como detalle técnico. El motivo técnico sigue siendo obligatorio igual.
-6. Archivar en `_processed/` lo que procesó, en las corridas que terminan `Completed`. *(Es el
-   contrato de ingesta ya declarado en el registro de cargas; la plataforma lo usa como control
-   positivo de que el landing drenó. **No verificado slot por slot en la instancia**: un slot que no
-   archive produce falsos «varados» y hay que ajustarlo o corregirlo.)*
+6. Archivar lo que procesó, en las corridas que terminan `Completed`, en el directorio que el slot
+   declara (`target.processed: <ruta>`; sin declarar, `<padre del landing>/_processed`). Un proceso
+   que **no** archiva (un catálogo que se lee siempre del landing) lo declara con
+   `target.processed: false`: su archivo en el landing es el vigente, no un residuo.
+7. **Sacar un archivo del landing sin procesarlo solo por `_retirado/`** (#269·§3.4), con el nombre
+   `<padre>/_retirado/<epoch ms>-[<etiqueta>-]…<archivo>`, `<etiqueta>` en `revertido`/`retirado` y
+   sellos repetibles. La plataforma reconoce las tres formas —`<ts>-<archivo>` (Retirar),
+   `<ts>-revertido-<archivo>` (Revertir) y `<ts>-retirado-[<ts>-]<archivo>` (a mano)— y toma el
+   **primer** sello como instante del retiro (un rename conserva el `mtime` del original: no sirve).
+   **Otros caminos** (`_cargado-manual-*`, `_sin-metadata/`, cualquier directorio no declarado) **no
+   cuentan como retiro**: la carga queda `sin-informe` y la consola lo lista como «salió fuera de
+   contrato».
+8. Declarar en el slot desde cuándo su job cumple el §2 (`contrato_desde`), si hay cargas anteriores
+   que el puente histórico deba cubrir.
 
 ## 6 · ¿Cómo se verifica que un slot cumple?
 
