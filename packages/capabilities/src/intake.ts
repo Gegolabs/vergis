@@ -302,7 +302,9 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
   const out: IntakeSlot = { id, label: String(o['label'] ?? id), target }
   if (o['description'] != null) out.description = String(o['description'])
   if (o['domain'] != null) out.domain = String(o['domain'])
-  if (o['accept'] != null) out.accept = String(o['accept'])
+  // #269·0.35.1 (juez m1) · el patrón se lleva a NFC igual que el nombre al subir: un `accept` escrito
+  // en forma descompuesta no calzaría con ningún nombre canonizado (0.34.0 lo aceptaba).
+  if (o['accept'] != null) out.accept = String(o['accept']).normalize('NFC')
   if (o['maxBytes'] != null) {
     const n = Number(o['maxBytes'])
     if (!Number.isInteger(n) || n <= 0) throw new Error(`intake: '${id}'.maxBytes debe ser un entero positivo.`)
