@@ -722,10 +722,10 @@ export function señalDeContrato(slot: IntakeSlot, sc: Pick<SlotCargas, 'history
     partes.push('Falta declarar <code>contacto</code>: los usuarios no saben a quién avisar cuando la plataforma no sabe qué pasó con su archivo.')
   const pisan = sc.vigilancia?.pisan ?? []
   if (pisan.length)
-    partes.push(`Los patrones de estas casillas se pisan: ${pisan.map(([a, b]) => `<code>${escapeHtml(a)}</code> / <code>${escapeHtml(b)}</code>`).join('; ')}. Mientras se pisen, la puerta no garantiza el destino por nombre: acepta el archivo en la casilla que el usuario eligió (como antes de 0.35.0).`)
+    partes.push(`Los patrones de estas casillas se pisan: ${pisan.map(([a, b]) => `<code>${escapeHtml(a)}</code> / <code>${escapeHtml(b)}</code>`).join('; ')}. La subida con casilla acepta igual (el usuario eligió y el patrón de su casilla calza); lo que se pierde es poder enrutar por nombre.`)
   const amb = sc.vigilancia?.ambiguos ?? []
   if (amb.length)
-    partes.push(`${amb.length === 1 ? 'Un nombre' : `${amb.length} nombres`} del registro calza${amb.length === 1 ? '' : 'n'} con este tipo y con otro: ${amb.slice(0, 5).map((a) => `«${escapeHtml(a.nombre)}» (${a.slots.map((x) => `<code>${escapeHtml(x)}</code>`).join(', ')})`).join('; ')}${amb.length > 5 ? '; …' : ''}. Mientras existan, la puerta no garantiza el destino por nombre; revisar los patrones.`)
+    partes.push(`${amb.length === 1 ? 'Un nombre' : `${amb.length} nombres`} del registro calza${amb.length === 1 ? '' : 'n'} con este tipo y con otro: ${amb.slice(0, 5).map((a) => `«${escapeHtml(a.nombre)}» (${a.slots.map((x) => `<code>${escapeHtml(x)}</code>`).join(', ')})`).join('; ')}${amb.length > 5 ? '; …' : ''}. Se aceptan en la casilla elegida; revisar los patrones.`)
   if (!partes.length) return ''
   // Aviso, no error: nada de esto rompe la página ni la carga — es lo que el operador tiene que corregir.
   return `<div class="sub" style="${AVISO}"><b>⚠ Señal de contrato</b><ul style="margin:4px 0 0 18px;padding:0">${partes.map((p) => `<li>${p}</li>`).join('')}</ul></div>`
