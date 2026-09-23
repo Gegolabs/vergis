@@ -98,6 +98,7 @@ import {
   parseDomainsConfig,
   manageableDomains,
   parseIntakeConfig,
+  parseIntakeGuiasConfig,
   credentialProviderFor,
   createOneLakeIntake,
   createOneLakeReader,
@@ -145,6 +146,7 @@ import {
   type SourcesConfig,
   type DomainDecl,
   type IntakeSlot,
+  type GuiaDecl,
   type RunRecord,
   type ProcessRow,
   type SourceRow,
@@ -973,6 +975,10 @@ const domainsCfg: DomainDecl[] = [] // dominios declarados (también gatea «Ges
 // y el header dice «corte no disponible». Fail-visible: el serving nunca espera ni inventa una fecha.
 let asOfFor: ((tables: string[]) => Promise<PiAsOf>) | null = null
 const intakeSlotsCfg: IntakeSlot[] = [] // slots de ingesta declarados
+// #346 · catálogo de guías de carga: bloque `guias:` del MISMO archivo de intake, en su propia lista
+// viva (el parser de slots no cambia de forma y sus consumidores tampoco). Se recarga en el mismo punto
+// que los slots, con validate-before-swap: una guía mal declarada conserva las vigentes.
+const intakeGuiasCfg: GuiaDecl[] = []
 const parseDomainsFile = (): DomainDecl[] => {
   const p = contract.env('VERGIS_DOMAINS')
   return p ? parseDomainsConfig(parseYaml(readFileSync(resolve(p), 'utf8'))) : []
@@ -980,6 +986,10 @@ const parseDomainsFile = (): DomainDecl[] => {
 const parseIntakeFile = (): IntakeSlot[] => {
   const p = contract.env('VERGIS_INTAKE')
   return p ? parseIntakeConfig(parseYaml(readFileSync(resolve(p), 'utf8'))) : []
+}
+const parseIntakeGuiasFile = (): GuiaDecl[] => {
+  const p = contract.env('VERGIS_INTAKE')
+  return p ? parseIntakeGuiasConfig(parseYaml(readFileSync(resolve(p), 'utf8'))) : []
 }
 let stewardGroups: string[] = [] // default-steward-groups (idem)
 let piConfig: PiConfigHandler | null = null
@@ -1611,6 +1621,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     domainsCfg.splice(0, domainsCfg.length, ...INSTANCE_CFG.domains)
     const domains = domainsCfg
     intakeSlotsCfg.splice(0, intakeSlotsCfg.length, ...INSTANCE_CFG.intakeSlots)
+    intakeGuiasCfg.splice(0, intakeGuiasCfg.length, ...INSTANCE_CFG.intakeGuias)
     const intakeSlots = intakeSlotsCfg
     // Registro de fuentes de la instancia (frente B · frescura): fuentes (oferta + dominio), mapeos
     // tabla→fuente, procesos (con engine_ref al item del motor) y proceso→salidas. Declarativo: se
@@ -1852,6 +1863,10 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
                 if (r.desenlace != null) ev.desenlace = r.desenlace
                 if (r.desenlaceMotivo != null) ev.desenlaceMotivo = r.desenlaceMotivo
                 if (r.desenlaceRunStartedAt != null) ev.desenlaceRunStartedAt = r.desenlaceRunStartedAt
+                // #346 · el código y los datos del caso: la guía se resuelve al RENDERIZAR, contra el
+                // catálogo vivo (corregir una guía mejora de inmediato las cargas pasadas).
+                if (r.desenlaceCodigo != null) ev.desenlaceCodigo = r.desenlaceCodigo
+                if (r.desenlaceParams != null) ev.desenlaceParams = r.desenlaceParams
                 // `dup_of` apunta por construcción a la carga original del contenido, que es
                 // exactamente la que `findUploadBySha` resuelve (la más antigua ok=1 con ese sha).
                 if (r.dupOfId != null) {
@@ -1862,6 +1877,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
               }
               return out
             },
+            // #346 · conteo por código (señal de cobertura y orden de «Errores frecuentes»).
+            codigos: (slot, desdeIso) => govStore.contarDesenlaceCodigos(slot.id, desdeIso),
             runs: (slot, top) =>
               slot.trigger ? jobStatus.listInstances(slot.trigger.workspaceId ?? slot.target.workspaceId, slot.trigger.processRef, top) : Promise.resolve([]),
             // El log CON su mtime (issue #86): sin saber de cuándo es el archivo, el de una corrida
@@ -2063,6 +2080,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
         // Aviso a QUIEN SUBIÓ (#162): otro flujo, otros destinos, mismo puerto. Arreglo VIVO también.
         // El destinatario individual lo resuelve el sink de email sustituyendo `$uploader`.
         notifyUploader: (n: Notification) => fanout(cargasSinks, n, (l) => console.error(`[vergis-rls] ${l}`)),
+        // #346 · el catálogo VIVO de guías: el correo usa la guía del código que el job declaró.
+        guias: () => intakeGuiasCfg,
         domains: domainsCfg,
         log: (l) => console.log(`[vergis-rls] ${l}`),
       }
@@ -2214,6 +2233,8 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
       domains,
       domainStewardGroups: defaultStewardGroups,
       intakeSlots,
+      // #346 · catálogo VIVO de guías de carga (bloque `guias:` del archivo de intake).
+      intakeGuias: intakeGuiasCfg,
       intake: fabricWiring.runner,
       intakeStatus: fabricWiring.status,
       intakeLog: fabricWiring.logOf,
@@ -3135,6 +3156,7 @@ function reloadDomainGovernance(reason: string): void {
   // LANZA, así que el swap no ocurre y los dominios/slots vigentes sobreviven al archivo decapitado.
   reloadLiveList(domainsCfg, parseDomainsFile, 'dominios', reason)
   reloadLiveList(intakeSlotsCfg, parseIntakeFile, 'slots de ingesta', reason, console.log, console.error, 'slots')
+  reloadLiveList(intakeGuiasCfg, parseIntakeGuiasFile, 'guías de carga', reason, console.log, console.error, 'guías')
 }
 
 // ── Config de INSTANCIA recargable (issue #138·2) ────────────────────────────────────────────────

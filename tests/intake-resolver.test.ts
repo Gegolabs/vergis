@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SqliteGovernanceStore, runLogFileName, type IntakeSlot, type OneLakeEntry, type OneLakeListing, type RunRecord } from '@vergis/capabilities'
+import { SqliteGovernanceStore, runLogFileName, type GuiaDecl, type IntakeSlot, type OneLakeEntry, type OneLakeListing, type RunRecord } from '@vergis/capabilities'
 import { createIntakeLoop, resolveDesenlaceDeCarga, type CorridaConLog, type IntakeLoopDeps } from '../server/intake-loop'
 import { composeCargaUserNotice } from '../server/notify'
 import type { Notification } from '../server/notify'
@@ -55,7 +55,7 @@ interface Arnes {
   loop: { tick(): Promise<void> }
 }
 
-async function armar(opts: { slots?: IntakeSlot[]; conRunLogs?: boolean; conAviso?: boolean } = {}): Promise<Arnes> {
+async function armar(opts: { slots?: IntakeSlot[]; conRunLogs?: boolean; conAviso?: boolean; guias?: GuiaDecl[] } = {}): Promise<Arnes> {
   const store = await SqliteGovernanceStore.open(null, {})
   const alerts: Notification[] = []
   const avisos: Notification[] = []
@@ -91,6 +91,10 @@ async function armar(opts: { slots?: IntakeSlot[]; conRunLogs?: boolean; conAvis
       },
     }
   if (opts.conAviso !== false) deps.notifyUploader = async (n) => void avisos.push(n)
+  if (opts.guias) {
+    const g = opts.guias
+    deps.guias = () => g
+  }
 
   return { store, alerts, avisos, logs, clock, landing, runs, runLogs, loop: createIntakeLoop(deps, { publicUrl: PUBLIC_URL, pollMs: POLL_MS }) }
 }
@@ -464,5 +468,47 @@ describe('composeCargaUserNotice · lo que lee una persona', () => {
     const { domainId: _omitido, ...sinDominio } = base
     const n = composeCargaUserNotice({ ...sinDominio, desenlace: 'varada', ageMinutes: 300 })
     expect(n.links).toEqual([])
+  })
+})
+
+describe('intake-resolver · #346 · el código del job llega al registro y la guía al correo', () => {
+  const linea = '[intake] ✖ fallido: saldos.xlsx — encogimiento: 3 empresas con menos filas ⟦volumen-anomalo/semana-encogida semana=2026W38 empresas=VH,AG,CL⟧\n[job] ✖ ABORTADO: semana encogida\n'
+  const preparar = async (guias?: GuiaDecl[]): Promise<{ a: Arnes; id: number }> => {
+    const a = await armar(guias ? { guias } : {})
+    const id = await subir(a, 'saldos.xlsx', 30)
+    const started = new Date(T0 - 25 * 60_000).toISOString()
+    a.runs.records = [{ startedAt: started, status: 'Failed', endedAt: new Date(T0 - 24 * 60_000).toISOString() }]
+    a.runLogs.entries = [logDe(started)]
+    a.runLogs.textos[logDe(started).path] = linea
+    await a.loop.tick()
+    return { a, id }
+  }
+
+  it('persiste código y params, y el motivo SIN el sufijo', async () => {
+    const { a, id } = await preparar()
+    const fila = await filaDe(a, id)
+    expect(fila).toMatchObject({
+      desenlace: 'fallida',
+      desenlaceMotivo: 'encogimiento: 3 empresas con menos filas',
+      desenlaceCodigo: 'volumen-anomalo/semana-encogida',
+      desenlaceParams: { semana: '2026W38', empresas: ['VH', 'AG', 'CL'] },
+    })
+  })
+
+  it('con catálogo cableado, el correo usa la guía (genérica de la familia si la instancia no redactó una)', async () => {
+    const { a } = await preparar([])
+    const n = a.avisos[0]!
+    expect(n.title).toBe('El archivo trae muchos menos datos que lo ya cargado — «saldos.xlsx»')
+    expect(n.lines[0]).toBe('Hay que corregir el archivo.')
+    expect(n.lines.some((l) => l === 'Detalle técnico: encogimiento: 3 empresas con menos filas')).toBe(true)
+    expect(n.data).toMatchObject({ codigo: 'volumen-anomalo/semana-encogida', actor: 'usuario' })
+  })
+
+  it('sin catálogo cableado, el correo es el de siempre (motivo textual), con el código solo en data', async () => {
+    const { a } = await preparar()
+    const n = a.avisos[0]!
+    expect(n.title).toBe('Tu archivo «saldos.xlsx» no pudo procesarse')
+    expect(n.lines[0]).toBe('Motivo: encogimiento: 3 empresas con menos filas')
+    expect(n.data).toMatchObject({ codigo: 'volumen-anomalo/semana-encogida', actor: null })
   })
 })

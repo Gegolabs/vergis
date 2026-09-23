@@ -45,6 +45,7 @@ import {
   type DomainDecl,
   type GroupStore,
   type IntakeSlot,
+  type GuiaDecl,
   type IntakeTarget,
   type IntakeTrigger,
   type PlatformSettingStore,
@@ -79,7 +80,7 @@ import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requir
 import type { MenuSection } from './menu-config'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
-import { cargasBody, revertPlanBody, cargasHref, destinoAviso, type CargasOps, type SlotCargas } from './admin-cargas'
+import { cargasBody, revertPlanBody, cargasHref, destinoAviso, erroresFrecuentesBody, type CargasOps, type SlotCargas } from './admin-cargas'
 import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -283,6 +284,9 @@ export interface AdminDeps {
   domainStewardGroups?: string[]
   /** Slots de ingesta declarados (instancia). Opcional. */
   intakeSlots?: IntakeSlot[]
+  /** #346 · catálogo de guías de carga (lista viva). Ausente = la consola de Cargas es la de siempre
+   *  y la página «Errores frecuentes» no existe (404 por ruta no reconocida). */
+  intakeGuias?: readonly GuiaDecl[]
   /** Ejecutor del intake (write a OneLake + run-now). Opcional (sin él, la Ingesta no se ofrece). */
   intake?: IntakeRunner
   /** Estado de las últimas corridas de conversión de un slot (frente B · observabilidad). Opcional. */
@@ -551,6 +555,17 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           // #178 · la acción vuelve a la casilla sobre la que se ejecutó (retirar en B no aterriza en A).
           const volver = slot ? cargasHref(domain.id, slot.id) : `/admin/dominio/${domain.id}/cargas`
           redirect(res, `${volver}${slot ? '&' : '?'}msg=${encodeURIComponent(msg)}`)
+          return true
+        }
+        // #346 · «Errores frecuentes» de UNA casilla. Bajo el MISMO gate de dominio que Cargas (este
+        // bloque ya pasó `canMng`): quien gestiona las cargas del dominio la ve; nadie más.
+        if (section === 'errores' && slotId && !di[4] && deps.cargas && deps.intakeGuias && req.method === 'GET') {
+          const slot = (deps.intakeSlots ?? []).find((s) => s.id === slotId && (s.domain ?? '') === domain.id)
+          if (!slot) {
+            send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Casilla desconocida en este dominio: <code>${escapeHtml(slotId)}</code></p>`))
+            return true
+          }
+          send(res, 200, await erroresPage(deps, nav, domain, slot))
           return true
         }
         // Log de UNA corrida (issue #99): fallida O exitosa — `Completed` no garantiza el dato.
@@ -2173,6 +2188,15 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
       const v = await ops.vigilancia(slot).catch(() => null)
       if (v) data.vigilancia = v
     }
+    // #346 · guías de carga: el catálogo vivo y, si la instancia lo cablea, el conteo de 30 días para
+    // la señal de cobertura. Tolerante como los demás: sin conteo no hay señal, la página sirve igual.
+    if (deps.intakeGuias) {
+      data.guias = deps.intakeGuias
+      if (ops.codigos) {
+        const c = await ops.codigos(slot, new Date(Date.now() - 30 * 86_400_000).toISOString()).catch(() => null)
+        if (c) data.codigos30 = c
+      }
+    }
   }
   const feedback = cargaFeedback(deps, domain, msg, params.get('destino'))
   // #99 · «Ver log» por corrida, solo si la instancia cableó el acceso a los logs (sin él: cero cambio).
@@ -2180,6 +2204,15 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
     ? (s: IntakeSlot, r: RunRecord): string => `/admin/dominio/${domain.id}/corrida?slot=${encodeURIComponent(s.id)}&started=${encodeURIComponent(r.startedAt)}`
     : undefined
   return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, slots, data, token, (s) => uploadForm(domain.id, s, token, 'cargas'), runLogHrefOf))
+}
+
+/** «Errores frecuentes» de una casilla (#346): catálogo vivo + frecuencia de 90 días (tolerante). */
+async function erroresPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, slot: IntakeSlot): Promise<string> {
+  const ops = deps.cargas!
+  const conteos = ops.codigos
+    ? await ops.codigos(slot, new Date(Date.now() - 90 * 86_400_000).toISOString()).catch(() => 'error' as const)
+    : undefined
+  return adminPage(deps, nav, `${domain.label} · Errores frecuentes`, erroresFrecuentesBody(domain.id, domain.label, slot, deps.intakeGuias ?? [], conteos))
 }
 
 /**

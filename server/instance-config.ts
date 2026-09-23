@@ -22,12 +22,14 @@ import {
   parseDomainsConfig,
   parseGroupsConfig,
   parseIntakeConfig,
+  parseIntakeGuiasConfig,
   parseJobTemplatesConfig,
   parseMasterDataConfig,
   parsePiOwnersConfig,
   parseSourcesConfig,
   parseTemplateParts,
   type DomainDecl,
+  type GuiaDecl,
   type GroupSeed,
   type IntakeSlot,
   type JobTemplate,
@@ -57,6 +59,9 @@ export interface InstanceConfig {
   groupSeeds: GroupSeed[]
   domains: DomainDecl[]
   intakeSlots: IntakeSlot[]
+  /** Catálogo de guías de carga (#346): bloque raíz `guias:` del MISMO archivo `VERGIS_INTAKE`. Sin
+   *  el bloque, lista vacía — toda falla con código cae a la guía genérica de su familia. */
+  intakeGuias: GuiaDecl[]
   sourceReg: SourcesConfig | Record<string, never>
   /**
    * Plantillas de publicación de jobs (`VERGIS_JOB_TEMPLATES`, issue #107 fase 2 · D3). SOLO-ARRANQUE
@@ -254,6 +259,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
   const groupSeeds = loadOne(env, 'VERGIS_GROUPS', parseGroupsConfig, readFile)
   const domains = loadOne(env, 'VERGIS_DOMAINS', parseDomainsConfig, readFile)
   const intakeSlots = loadOne(env, 'VERGIS_INTAKE', parseIntakeConfig, readFile)
+  const intakeGuias = loadOne(env, 'VERGIS_INTAKE', parseIntakeGuiasConfig, readFile)
   const jobTemplates = loadJobTemplates(env, readFile)
   // Los cinco slices recargables se cargan por la MISMA tabla que usa la recarga (arriba): el boot
   // no puede parsearlos distinto de como los parseará el watch.
@@ -283,6 +289,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
     )
   }
   if (intakeSlots) partes.push(`intake-slots ${intakeSlots.length}`)
+  if (intakeGuias?.length) partes.push(`intake-guias ${intakeGuias.length}`)
   if (entities) partes.push(`master-data ${entities.length}`)
   if (notify) partes.push(`notify ${notify.destinations.length}`)
   if (jobTemplates) partes.push(`jobs-templates ${jobTemplates.length}`)
@@ -296,6 +303,7 @@ export function loadInstanceConfig(env: EnvLike, readFile: ReadFile = defaultRea
     groupSeeds: groupSeeds ?? [],
     domains: domains ?? [],
     intakeSlots: intakeSlots ?? [],
+    intakeGuias: intakeGuias ?? [],
     sourceReg: sourceReg ?? {},
     jobTemplates: jobTemplates ?? [],
     piOwners: piOwners ?? {},

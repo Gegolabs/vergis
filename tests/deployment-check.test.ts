@@ -100,6 +100,16 @@ describe('checkDeploymentConfig', () => {
     expect(f[0].message).toMatch(/type inválido/)
   })
 
+  // Issue #346: el bloque `guias:` vive en el mismo archivo y se valida contra sus slots al arranque.
+  it('VERGIS_INTAKE con una guía mal declarada (entrada con `actor:`) → error ruidoso que nombra la guía', () => {
+    const bad = join(dir, 'slots-guia-bad.yaml')
+    writeFileSync(bad, 'slots:\n  - id: facturas\n    label: Facturas\n    target: { workspaceId: w, lakehouseId: l, path: Files/f }\nguias:\n  entradas:\n    - { codigo: falla-plataforma, actor: usuario, titulo: t, que_paso: q, que_hacer: [h] }\n')
+    const f = checkDeploymentConfig({ VERGIS_INTAKE: bad })
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatchObject({ level: 'error', env: 'VERGIS_INTAKE' })
+    expect(f[0].message).toMatch(/guías de carga mal declaradas: .*guía 'falla-plataforma': no admite 'actor'/)
+  })
+
   it('VERGIS_INTAKE bien declarado → sin hallazgos', () => {
     const good = join(dir, 'slots-ok.yaml')
     writeFileSync(good, 'slots:\n  - id: facturas\n    label: Facturas\n    target: { workspaceId: w, lakehouseId: l, path: Files/f }\n    meta:\n      - { id: empresa_rut, label: Empresa, type: rut, required: true }\n')

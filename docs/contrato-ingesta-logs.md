@@ -88,6 +88,34 @@ eso la legibilidad es obligación del escritor:
 - **Sin secretos.** La plataforma enmascara los patrones obvios al renderizar (`redactSecrets`), pero
   esa es una defensa en profundidad, no un permiso para escribirlos.
 
+### El sufijo opcional: código estable y datos del caso (issue #346)
+
+El motivo le dice al operador **qué pasó** en términos del dato; no le dice al usuario **qué hacer**.
+Para eso la línea admite, **al final**, un sufijo estructurado que declara el desenlace con un
+**código estable** y los **datos del caso**, y con eso la plataforma muestra una **guía** en lenguaje
+de usuario (título, qué pasó, qué hacer) con el motivo técnico plegado detrás:
+
+```
+[intake] ✖ fallido: <archivo> — <motivo técnico> ⟦<codigo> <clave>=<valor> <clave>=<valor>⟧
+```
+
+| Elemento | Regla |
+|---|---|
+| `⟦ … ⟧` | U+27E6 / U+27E7, al **final** de la línea, precedido de un espacio. Solo en `saltado`/`fallido`. Lo emite el helper del job, nunca texto escrito a mano |
+| `<codigo>` | `familia` o `familia/especifico`, con la gramática `^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)?$`. La familia es una de las del Producto o una declarada por la instancia en su catálogo de guías (`guias:` del archivo de intake) |
+| `<clave>=<valor>` | cero o más, separados por espacio; clave `[a-z][a-z0-9_]*`. El valor va **pelado** si no tiene espacios, `"` ni `⟧` (`faltan=58,88`), o **entre comillas dobles** si los tiene (`vigente="Control de despachos 2026-09-01.xlsx"`); dentro de las comillas no puede haber `"` ni `⟧`, y la raya `—` sí. Un valor pelado con comas es una **lista**; uno entrecomillado es siempre un escalar. Si un valor trae `"` o `⟧`, el helper los reemplaza por `'` y `]` |
+
+El sufijo **no reemplaza** al motivo: el motivo técnico sigue siendo obligatorio y sigue sujeto a sus
+reglas. **Todo o nada:** un sufijo que no calza la gramática completa (comillas sin cerrar, `⟦` sin
+cerrar, un código con mayúscula, un valor pelado con espacio) **no existe** — la línea se lee como si
+no lo tuviera y el texto queda dentro del motivo, sin código.
+
+**Por qué al final y no dentro del marcador** (`✖ fallido[COD]: …`): un lector anterior a #346 no
+reconocería esa línea y el desenlace **entero** desaparecería si el job se despliega antes que la
+plataforma. Al final, el lector viejo conserva archivo y desenlace y deja el sufijo como texto visible
+del motivo: degrada a texto, no a pérdida. Aun así, **el orden de despliegue es: primero la versión
+de la plataforma que lee el sufijo, después el job que lo emite**.
+
 ### El orden importa: las líneas de desenlace van antes del cierre
 
 La línea de cierre de un aborto (`✖ ABORTADO: …` / `✖ ERROR no controlado: …`) debe seguir siendo la
@@ -119,7 +147,13 @@ El lector es `parseRunFileOutcomes(logText)` en `packages/capabilities/src/run-l
 pura, exportada desde `@vergis/capabilities`:
 
 ```ts
-type FileOutcome = { file: string; outcome: 'procesado' | 'saltado' | 'fallido'; motivo?: string }
+type FileOutcome = {
+  file: string
+  outcome: 'procesado' | 'saltado' | 'fallido'
+  motivo?: string
+  codigo?: string                              // #346 · del sufijo ⟦…⟧
+  params?: Record<string, string | string[]>   // #346 · datos del caso
+}
 function parseRunFileOutcomes(logText: string): FileOutcome[]
 ```
 
@@ -136,6 +170,12 @@ partir de texto libre. En detalle:
 - Dos líneas para el mismo archivo: gana la **última** (un reintento dentro de la misma corrida
   declara su resultado final).
 - El motivo se devuelve **textual**; el enmascarado de secretos ocurre al renderizar.
+- **El sufijo `⟦…⟧` se extrae primero, anclado al final** de la línea, y el corte archivo↔motivo se
+  hace sobre lo que queda: una raya dentro de un valor entrecomillado no le gana el corte al
+  separador. Cuando calza, `FileOutcome` trae además `codigo` y `params`, y `motivo` va **sin** el
+  sufijo; cuando no calza, la línea se lee exactamente como antes de #346. El lector **no valida la
+  familia** contra ningún catálogo: un código de familia desconocida se persiste igual y quien lo
+  muestra lo trata como «sin código» (y lo cuenta para el operador).
 
 ## 4 · ¿Qué pasa si el job no cumple? — la degradación honesta
 
@@ -193,7 +233,11 @@ Para que un slot cumpla el contrato completo, su job debe:
 3. Emitir **una** línea de desenlace por archivo de datos encontrado en el landing, con la gramática
    de §2, **antes** de la línea de cierre.
 4. Escribir motivos legibles por el usuario que subió el archivo, en términos del dato.
-5. Archivar en `_processed/` lo que procesó, en las corridas que terminan `Completed`. *(Es el
+5. *(Opcional para el escritor, #346.)* Agregar a cada línea `saltado`/`fallido` el sufijo `⟦…⟧` con
+   el **código** del desenlace y los **datos del caso** que su guía interpola (§2). Sin él, la
+   plataforma muestra el motivo técnico como siempre; con él, muestra la guía de ese código y deja el
+   motivo plegado como detalle técnico. El motivo técnico sigue siendo obligatorio igual.
+6. Archivar en `_processed/` lo que procesó, en las corridas que terminan `Completed`. *(Es el
    contrato de ingesta ya declarado en el registro de cargas; la plataforma lo usa como control
    positivo de que el landing drenó. **No verificado slot por slot en la instancia**: un slot que no
    archive produce falsos «varados» y hay que ajustarlo o corregirlo.)*
@@ -212,6 +256,88 @@ Para que un slot cumpla el contrato completo, su job debe:
   **diseñado y aún no implementado**.)* El Producto no puede forzar al escritor; sí puede volver el
   incumplimiento visible donde el operador ya mira.
 
+## 7 · Las guías de carga: qué se le explica al usuario (issue #346)
+
+El código del sufijo (§2) declara **qué pasó**; la instancia declara **cómo se le explica**; la
+plataforma junta las dos cosas **al mostrarlas**. Se persisten el código y los datos del caso, nunca
+la redacción: corregir una guía mejora de inmediato las cargas pasadas.
+
+### ¿Qué familias trae el Producto, y quién actúa en cada una?
+
+Cada código pertenece a una **familia**, y la familia fija **quién tiene que actuar**. Ninguna guía
+cambia el actor: es el único dato que debe ser verdadero aunque el texto esté mal redactado.
+
+| Familia | Actor | Qué agrupa |
+|---|---|---|
+| `formato` | usuario | ancho, encabezados u hojas inesperados; columna requerida ausente |
+| `archivo-vacio` | usuario | sin filas de datos útiles |
+| `lectura-incompleta` | usuario | lectura degradada, hoja truncada |
+| `duplicado` | usuario | grano no único (una llave repetida) |
+| `valor-invalido` | usuario | fecha, número o identificador inválido |
+| `referencia-ausente` | usuario | el archivo nombra algo que su maestro no tiene |
+| `catalogo-incompleto` | usuario | un archivo que reemplaza un catálogo dejaría huérfanos a los ya usados |
+| `conflicto-declaracion` | usuario | el contenido contradice el nombre, la carpeta o lo declarado al subir |
+| `descuadre` | usuario | dos archivos que deben cuadrar no cuadran |
+| `volumen-anomalo` | usuario | mucho menos que lo vigente (el primer paso es del usuario; forzar la carga es del operador, y la guía lo dice) |
+| `en-espera` | nadie | falta el archivo compañero; se procesará cuando llegue |
+| `desplazado` | nadie | un archivo más reciente del mismo tipo lo reemplazó |
+| `falla-plataforma` | operador | error no controlado, warehouse inaccesible, invariante interno roto |
+
+Son **semilla, no lista cerrada**: la instancia declara familias propias con su actor obligatorio.
+
+### ¿Dónde declara la instancia sus guías?
+
+En un bloque raíz `guias:` del **mismo** archivo de intake (`VERGIS_INTAKE`), junto a `slots:`. Hereda
+la recarga en caliente del archivo, sin variable de entorno nueva:
+
+```yaml
+guias:
+  familias:                                   # opcional: familias propias
+    - familia: vigencia-vencida               # no puede repetir una del Producto
+      actor: usuario                          # obligatorio: usuario | operador | nadie
+      titulo: "El archivo es de un período que ya no se acepta"
+      que_paso: "El período {periodo} ya está cerrado."
+      que_hacer: ["Sube el archivo del período vigente."]
+  entradas:
+    - codigo: catalogo-incompleto/maestro-tiendas
+      slots: [oc_crossdocking_maestro]        # opcional: sin `slots`, aplica a todo slot
+      titulo: "El maestro de tiendas tiene que venir completo"
+      que_paso: "El que subiste trae {tiendas_archivo} tiendas y dejaría fuera {n}."
+      que_hacer:
+        - "Parte del maestro completo, no de una planilla nueva."
+        - "Súbelo completo y después vuelve a subir la distribución que había fallado."
+```
+
+| Regla | Detalle |
+|---|---|
+| Validación | Estricta: clave desconocida, familia que repite una del Producto, familia propia sin `actor`, entrada **con** `actor`, código de familia desconocida, slot inexistente, `titulo`/`que_paso` vacíos o `que_hacer` sin pasos ⇒ error nombrando la guía. Al arrancar lo acusa el chequeo de despliegue; en la recarga en caliente se **conservan las guías vigentes** |
+| Interpolación | `{clave}` toma los datos del caso; `{archivo}` y `{slot}` los pone la plataforma. Una lista se lee «58 y 88», o «58, 88, 95 y 7 más» con cinco o más elementos. Un marcador sin dato queda «(dato no informado)» y no rompe la vista |
+| Precedencia | entrada con el código exacto y el slot → entrada con el código exacto sin `slots` → entrada con el código de la familia sola (con slot, luego sin) → guía genérica de la familia (de la instancia o del Producto) → sin guía. El actor sale siempre de la familia |
+
+### ¿Qué ve el usuario, y qué pasa sin guía?
+
+- **Cargas, celda Desenlace:** la insignia, la línea de actor («Hay que corregir el archivo» · «No es
+  por tu archivo: el equipo ya fue avisado» · «No tienes que hacer nada»), el título y el qué pasó,
+  el qué hacer numerado, y un plegado «Detalle técnico» con el motivo **completo** y el código.
+- **«Errores frecuentes»** por casilla (`/admin/dominio/<id>/errores/<slot>`, enlazada desde el
+  encabezado de la casilla y desde el correo, bajo el mismo gate que Cargas): las guías de la casilla
+  ordenadas por cuántas veces ocurrió su código en 90 días. Se puede consultar antes de que algo falle.
+- **Correo a quien subió** (§4): el título es el de la guía, el cuerpo dice quién actúa y qué hacer, y
+  el motivo técnico va al final. Con actor `operador` no le pide corregir nada.
+- **Señal de cobertura** para el operador, por casilla: desenlaces de 30 días sin código, con código
+  sin guía de la instancia (usaron la genérica) y con código de familia desconocida, nombrando los
+  códigos.
+
+| Caso | Se ve |
+|---|---|
+| Sin código (job sin sufijo, o sufijo mal formado) | Como siempre: insignia y motivo recortado a 300. Si el recorte se comió algo, el motivo completo queda en «Detalle técnico» |
+| Código de familia conocida sin guía de la instancia | La guía genérica de la familia, con su actor |
+| Código de familia desconocida | Como «sin código», y se cuenta en la señal del operador |
+| `sin-informe` y `varada` | Sin cambios: no hay declaración del job, no hay código |
+
+**Lo que la plataforma NO hace:** reconocer el texto técnico con expresiones regulares para asignarle
+una guía. Una guía mal asignada fabrica una causa — peor que el texto técnico. Sin código, no hay guía.
+
 ---
 
-• *Documentación del Producto Vergis · contrato `_logs/` (#99) + gramática por archivo (#162)*
+• *Documentación del Producto Vergis · contrato `_logs/` (#99) + gramática por archivo (#162) + código y guía del desenlace (#346)*

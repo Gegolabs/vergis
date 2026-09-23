@@ -21,7 +21,10 @@ import {
   type ProcessHealth,
   type RunRecord,
   type SlotAlertReason,
+  LINEA_ACTOR,
+  type GuiaResuelta,
 } from '@vergis/capabilities'
+import { erroresHref } from './admin-cargas'
 import { sendSmtp, type MailMessage, type SmtpConnectConfig } from './smtp'
 
 export type NotificationSeverity = 'warning' | 'ok' | 'info'
@@ -594,6 +597,11 @@ export interface CargaUserNoticeContext {
   domainLabel?: string
   /** VERGIS_PUBLIC_URL normalizada (sin slash final). */
   baseUrl: string
+  /** #346 · la guía ya resuelta del código que el job declaró. Ausente = sin código o sin guía: el
+   *  aviso es el de siempre, con el motivo técnico textual. */
+  guia?: GuiaResuelta
+  /** #346 · código crudo (viaja en `data` para los puentes externos). */
+  codigo?: string
 }
 
 /** Fecha legible por una persona, en UTC explícito: `2026-08-13 11:30 UTC`. El ISO crudo es del
@@ -622,7 +630,21 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
   const lines: string[] = []
   let title: string
 
-  if (ctx.desenlace === 'fallida') {
+  // #346 · con GUÍA, el aviso habla en el idioma de quien subió: el título es el de la guía, el cuerpo
+  // dice quién tiene que actuar y qué hacer, y el motivo técnico va al final, rotulado. La guía la
+  // resolvió el llamador desde el código que el JOB declaró — acá no se reconoce ningún texto.
+  // Solo `fallida`/`saltada` pueden traer código (son los desenlaces que el job declara por archivo).
+  const guia = (ctx.desenlace === 'fallida' || ctx.desenlace === 'saltada') ? ctx.guia : undefined
+  if (guia) {
+    title = `${redactSecrets(guia.titulo)} — ${archivo}`
+    lines.push(LINEA_ACTOR[guia.actor] + '.')
+    lines.push(redactSecrets(guia.quePaso))
+    // Con actor `operador` la guía NO le pide corregir nada (lo dice su propio texto) y la plataforma
+    // tampoco agrega el «cuando lo corrijas…» del aviso sin guía: no es su archivo.
+    lines.push('Qué hacer:')
+    guia.queHacer.forEach((p, i) => lines.push(`${i + 1}. ${redactSecrets(p)}`))
+    if (motivo) lines.push(`Detalle técnico: ${motivo}`)
+  } else if (ctx.desenlace === 'fallida') {
     title = `Tu archivo ${archivo} no pudo procesarse`
     if (motivo) lines.push(`Motivo: ${motivo}`)
     else {
@@ -653,11 +675,13 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
   }
   lines.push(`Archivo recibido el ${fmtFechaUsuario(ctx.uploadedAt)} · ${ctx.slotLabel}`)
 
+  const links: NotificationLink[] = ctx.domainId != null ? [{ label: 'Ver mis cargas', url: hrefCargas(ctx.baseUrl, ctx.domainId) }] : []
+  if (guia && ctx.domainId != null) links.push({ label: 'Errores frecuentes de esta carga', url: `${ctx.baseUrl}${erroresHref(ctx.domainId, ctx.slotId)}` })
   return {
     severity: 'warning',
     title,
     lines,
-    links: ctx.domainId != null ? [{ label: 'Ver mis cargas', url: hrefCargas(ctx.baseUrl, ctx.domainId) }] : [],
+    links,
     data: {
       event: 'carga-usuario',
       // El sink de email lo sustituye en `$uploader`; el webhook genérico lo reenvía tal cual para que
@@ -666,6 +690,8 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
       desenlace: ctx.desenlace,
       filename: ctx.filename,
       motivo: ctx.motivo ?? null,
+      codigo: ctx.codigo ?? null,
+      actor: guia?.actor ?? null,
       slotId: ctx.slotId,
       uploadId: ctx.uploadId ?? null,
       domainId: ctx.domainId ?? null,
