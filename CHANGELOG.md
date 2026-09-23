@@ -61,12 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.35.1 — 2026-09-23
 
-*Contenido previsto para el corte **0.35.1** (corrección sin capacidad nueva de 0.35.0; frente arbol,
-lab A.R.B.O.L. `work/269`). El corte es de la custodia.*
-
-### 0.35.0 en producción: la puerta rechazaba todo, «CONTRADICE» sobre un landing sano y «VARADO» sobre archivos en espera
+### 0.35.0 en producción: la puerta rechazaba todo, «CONTRADICE» sobre un landing sano y «VARADO» sobre archivos en espera (PR #352)
 
 **Lo que se vio** (instancia A.R.B.O.L., 2026-09-23, leído en producción y reproducido con el código de
 0.35.0): la puerta rechazaba **toda** subida —cinco casillas de la instancia todavía declaran
