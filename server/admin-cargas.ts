@@ -22,7 +22,7 @@
  * página recibe el veredicto ya tomado (`SlotCargas.vigilancia`) y lo dibuja. Todos los campos nuevos
  * son OPCIONALES: una instancia sin vigilante renderiza exactamente la página de antes.
  */
-import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace, type DesenlaceParams, type DesenlaceCodigoConteo, type GuiaDecl, type GuiaResuelta, LINEA_ACTOR, resolverGuia, familiaDe, guiasDelSlot } from '@vergis/capabilities'
+import { escapeHtml, slotLogPath, slotRunLogsDir, isSidecarName, redactSecrets, type IntakeSlot, type RunRecord, type RunStatus, type OneLakeEntry, type ClaveAccion, type IntakeRevertRow, type RevertPlan, type RevertResult, type MedidaCalidad, type ArchivoVarado, type CargaDesenlace, type DesenlaceParams, type DesenlaceCodigoConteo, type GuiaDecl, type GuiaResuelta, LINEA_ACTOR, resolverGuia, familiaDe, guiasDelSlot, DEFAULT_MAX_RUN_MINUTES } from '@vergis/capabilities'
 import type { IntakeIntentoRow } from '../packages/capabilities/src/governance-store'
 import { nombreSinSello } from '../packages/capabilities/src/intake-observability'
 import { slotProcessedDir } from '../packages/capabilities/src/intake'
@@ -854,7 +854,10 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
       const subida = Date.parse(h.ts)
       // Una corrida en curso que arrancó con el archivo ya subido, o que ya corría cuando se subió
       // (#269·P27: la 190 la tomó una corrida que arrancó 15 s antes).
-      if (enCurso.some((r) => Date.parse(r.startedAt) >= subida - CORRIDA_EN_CURSO_MS)) c.enCurso = true
+      // i3 (juez P1) · el mismo criterio que el resolvedor: una no terminada más vieja que el umbral de
+      // corrida colgada no está tomando nada.
+      const ahora = Date.now()
+      if (enCurso.some((r) => Date.parse(r.startedAt) >= subida - CORRIDA_EN_CURSO_MS && ahora - Date.parse(r.startedAt) <= DEFAULT_MAX_RUN_MINUTES * 60_000)) c.enCurso = true
       return c
     }
     const intentosPorCorrida = new Map<string, { procesada: number; saltada: number; fallida: number }>()
