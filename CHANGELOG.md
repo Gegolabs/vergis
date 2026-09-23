@@ -61,6 +61,54 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Guías de carga: cuando un archivo no entra, el usuario lee qué pasó y qué hacer (issue #346)
+
+**El hueco.** La consola de Cargas le mostraba a quien subió un archivo el motivo **técnico** del job,
+exacto y útil para el operador, pero sin decirle qué hacer — y recortado a 300 caracteres. En el caso
+que abrió el issue (instancia A.R.B.O.L., 2026-09-22), el motivo del maestro de tiendas medía 508 y el
+recorte se comía justo lo accionable («Pedir el maestro actualizado»); el usuario reintentó unas 20
+corridas y terminó pidiendo una reunión. Y una falla del **proceso** se le presentaba con el mismo tono
+que un archivo mal armado.
+
+**Qué trae (`CAP-199`, `CAP-200`, `CAP-201`):**
+
+- **Código estable en el contrato `_logs/`.** La línea de desenlace admite un sufijo opcional al final,
+  `⟦<familia>[/<especifico>] clave=valor …⟧`, con los datos del caso (valores pelados, o entre comillas
+  si llevan espacios). El lector lo extrae anclado al final, persiste `codigo` + `params` y deja el
+  motivo **sin** el sufijo. Un sufijo que no calza entero no existe: la línea se lee como antes.
+- **13 familias del Producto con su ACTOR** (usuario · operador · nadie) y una guía genérica cada una.
+  El actor vive en la familia y ninguna guía lo cambia: es el dato que tiene que ser verdadero aunque
+  el texto esté mal redactado.
+- **Catálogo de guías de la instancia** en el bloque raíz `guias:` del **mismo** archivo de intake
+  (`VERGIS_INTAKE`): `familias` propias (actor obligatorio) y `entradas` por código, opcionalmente por
+  slot. Validado al arrancar y en la recarga en caliente, que conserva las guías vigentes si el bloque
+  viene roto. La guía se resuelve **al mostrar**: corregir una guía mejora las cargas pasadas.
+- **Lo que se ve:** la celda Desenlace muestra actor, título, qué pasó y qué hacer, con el motivo
+  técnico **completo** plegado en «Detalle técnico»; una página **«Errores frecuentes»** por casilla
+  (`/admin/dominio/<id>/errores/<slot>`, mismo gate que Cargas) ordenada por frecuencia de 90 días; el
+  correo a quien subió usa la guía (con actor `operador` no le pide corregir nada); y una **señal de
+  cobertura** por casilla para el operador (desenlaces de 30 días sin código, con la genérica, o de
+  familia desconocida).
+
+**Qué NO cambia:** sin código, la celda y el correo son los de siempre — con una sola diferencia
+aditiva: si el motivo pasaba de 300 caracteres, ahora el completo queda a un clic. `sin-informe` y
+`varada` no cambian. Los guards no se aflojan: el catálogo explica rechazos, no los evita.
+
+**Qué exige al operador:**
+
+- **Migración aditiva** del store de gobierno: dos columnas anulables en `intake_upload`
+  (`desenlace_codigo`, `desenlace_params`). Compatible hacia atrás dentro de la ventana de retención;
+  **no** sube `SCHEMA_VERSION` y **no rompe rollback**.
+- **Cero variables de entorno nuevas**, cero cambios de compose. El bloque `guias:` es opcional.
+- **Orden de despliegue:** primero esta versión, **después** los jobs que emitan el sufijo `⟦…⟧`. Un
+  job con sufijo sobre una versión anterior no pierde el desenlace, pero el sufijo se le muestra al
+  usuario como texto dentro del motivo.
+
+Contrato: [`docs/contrato-ingesta-logs.md`](docs/contrato-ingesta-logs.md) §2 («El sufijo opcional»),
+§3 y §7.
+
 ## 0.33.3 — 2026-09-22
 
 ### La sonda de `@read_only` del gate de la Consola medía nada: `batch()` no liga parámetros (issue #344, PR #345)

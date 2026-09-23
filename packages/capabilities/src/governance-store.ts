@@ -311,7 +311,15 @@ export interface IntakeUploadRow {
   desenlaceRunStartedAt?: string
   /** ISO del instante en que el resolver escribió el desenlace. */
   desenlaceAt?: string
+  /** #346 · código estable que el job declaró en el sufijo `⟦…⟧` de su línea de desenlace. Ausente =
+   *  no declaró (o el sufijo no calzó). Se persiste el HECHO; la guía se resuelve al mostrar. */
+  desenlaceCodigo?: string
+  /** #346 · datos del caso que acompañan al código. */
+  desenlaceParams?: DesenlaceParams
 }
+
+/** Datos del caso de un desenlace con código (#346): escalar, o lista si el job la declaró así. */
+export type DesenlaceParams = Record<string, string | string[]>
 
 /**
  * Desenlace de UNA carga (#162·§3.4). Lo escribe SOLO el resolver del lazo de vigilancia, y una vez
@@ -332,6 +340,9 @@ export type CargaDesenlace =
 export interface CargaDesenlaceInput {
   desenlace: CargaDesenlace
   motivo?: string
+  /** #346 · código del sufijo `⟦…⟧`, tal como lo parseó `parseRunFileOutcomes`. */
+  codigo?: string
+  params?: DesenlaceParams
   runStartedAt?: string
   at?: string
 }
@@ -372,6 +383,27 @@ export interface IntakeDesenlaceStore {
    * bueno. Lanza `Error` si el id no existe.
    */
   setUploadDesenlace(id: number, d: CargaDesenlaceInput): Promise<void>
+}
+
+/** Un conteo de desenlaces DECLARADOS por el job (`fallida`/`saltada`) de un slot, por código (#346).
+ *  `codigo: null` = el job no declaró código. */
+export interface DesenlaceCodigoConteo {
+  codigo: string | null
+  n: number
+}
+
+/**
+ * Lectura agregada de los códigos de desenlace de un slot (#346): alimenta el orden de «Errores
+ * frecuentes» y la señal de cobertura del operador. Interfaz aparte —y opcional para el wiring— por la
+ * misma razón que `IntakeDesenlaceStore`: quien solo lee el registro no tiene por qué implementarla.
+ *
+ * Cuenta solo `fallida` y `saltada`: son los desenlaces que el JOB declara por archivo, los únicos que
+ * pueden traer código. `sin-informe` y `varada` no tienen declaración del job; `procesada` no tiene
+ * nada que guiar. Contarlos como «sin código» acusaría al job de algo que el contrato no le pide.
+ */
+export interface IntakeGuiaStatsStore {
+  /** Conteo por código de las cargas del slot subidas desde `desdeIso` (inclusive). */
+  contarDesenlaceCodigos(slotId: string, desdeIso: string): Promise<DesenlaceCodigoConteo[]>
 }
 
 /**
@@ -634,6 +666,7 @@ export interface GovernanceStore
     MirandaStore,
     IntakeUploadStore,
     IntakeDesenlaceStore,
+    IntakeGuiaStatsStore,
     IntakeRevertStore,
     IngestionRunStore,
     IntakeWatchStore,
@@ -795,6 +828,10 @@ const INTAKE_UPLOAD_DDL = `CREATE TABLE IF NOT EXISTS intake_upload (
 // escrito una sola vez), y una tabla anexa obligaría a un join en la consulta más caliente del
 // timeline. Nacen NULL —«pendiente»— y las llena SOLO el resolver del lazo.
 const INTAKE_UPLOAD_DESENLACE_COLS = ['desenlace TEXT', 'desenlace_motivo TEXT', 'desenlace_run_started_at TEXT', 'desenlace_at TEXT']
+// #346 · el CÓDIGO del desenlace y los datos del caso (JSON). Aditivas y anulables: una versión
+// anterior las ignora al leer y no las escribe — el rollback dentro de la ventana sigue procediendo.
+// Se persiste el hecho (código + datos), nunca la redacción de la guía: la guía se resuelve al mostrar.
+const INTAKE_UPLOAD_CODIGO_COLS = ['desenlace_codigo TEXT', 'desenlace_params TEXT']
 // Índice de la consulta del resolver: por slot, las pendientes, más antiguas primero.
 const INTAKE_UPLOAD_IDX_DESENLACE = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sin_desenlace ON intake_upload (slot_id, desenlace, uploaded_at);`
 const INTAKE_UPLOAD_IDX_SHA = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sha ON intake_upload (slot_id, sha256);`
@@ -1064,6 +1101,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
     // tabla creada, así que el CREATE de arriba no la toca — el ALTER las agrega sin pérdida (SQLite
     // rellena con NULL, que ES el estado «pendiente»).
     ensureColumns(db, 'intake_upload', INTAKE_UPLOAD_DESENLACE_COLS)
+    ensureColumns(db, 'intake_upload', INTAKE_UPLOAD_CODIGO_COLS)
     db.run(INTAKE_UPLOAD_IDX_SHA)
     db.run(INTAKE_UPLOAD_IDX_TS)
     db.run(INTAKE_UPLOAD_IDX_DESENLACE)
@@ -1746,10 +1784,19 @@ export class SqliteGovernanceStore implements GovernanceStore {
     if (r['desenlace_motivo'] != null) row.desenlaceMotivo = String(r['desenlace_motivo'])
     if (r['desenlace_run_started_at'] != null) row.desenlaceRunStartedAt = String(r['desenlace_run_started_at'])
     if (r['desenlace_at'] != null) row.desenlaceAt = String(r['desenlace_at'])
+    if (r['desenlace_codigo'] != null) row.desenlaceCodigo = String(r['desenlace_codigo'])
+    if (r['desenlace_params'] != null) {
+      // JSON que escribió este mismo store; si no parsea es un dato corrupto: se omite (los datos del
+      // caso son complemento de la guía — la guía muestra «dato no informado» antes que romper la fila).
+      try {
+        const p = JSON.parse(String(r['desenlace_params'])) as unknown
+        if (p && typeof p === 'object' && !Array.isArray(p)) row.desenlaceParams = p as DesenlaceParams
+      } catch { /* omitido a propósito: ver arriba */ }
+    }
     return row
   }
 
-  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of, desenlace, desenlace_motivo, desenlace_run_started_at, desenlace_at`
+  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of, desenlace, desenlace_motivo, desenlace_run_started_at, desenlace_at, desenlace_codigo, desenlace_params`
 
   async recordUpload(row: Omit<IntakeUploadRow, 'id'>): Promise<number> {
     this.db.run(
@@ -1847,10 +1894,35 @@ export class SqliteGovernanceStore implements GovernanceStore {
     // columnas es el resolver del lazo, que corre serializado bajo su guard anti-solape (#161·§7/H4).
     if (previo != null) throw new GovernanceConflict(`La carga ${id} ya tiene desenlace '${String(previo)}'; un desenlace no se recalcula.`)
     this.db.run(
-      `UPDATE intake_upload SET desenlace = ?, desenlace_motivo = ?, desenlace_run_started_at = ?, desenlace_at = ? WHERE id = ?`,
-      [d.desenlace, d.motivo ?? null, d.runStartedAt ?? null, d.at || now(), id],
+      `UPDATE intake_upload SET desenlace = ?, desenlace_motivo = ?, desenlace_run_started_at = ?, desenlace_at = ?, desenlace_codigo = ?, desenlace_params = ? WHERE id = ?`,
+      [
+        d.desenlace,
+        d.motivo ?? null,
+        d.runStartedAt ?? null,
+        d.at || now(),
+        d.codigo ?? null,
+        d.params && Object.keys(d.params).length ? JSON.stringify(d.params) : null,
+        id,
+      ],
     )
     this.persist()
+  }
+
+  // ── IntakeGuiaStatsStore (códigos de desenlace por slot, issue #346) ──
+  async contarDesenlaceCodigos(slotId: string, desdeIso: string): Promise<DesenlaceCodigoConteo[]> {
+    const stmt = this.db.prepare(
+      `SELECT desenlace_codigo AS codigo, COUNT(*) AS n FROM intake_upload
+       WHERE slot_id = ? AND origen = 'upload' AND desenlace IN ('fallida','saltada') AND uploaded_at >= ?
+       GROUP BY desenlace_codigo ORDER BY n DESC, desenlace_codigo ASC`,
+    )
+    stmt.bind([slotId.trim(), desdeIso])
+    const out: DesenlaceCodigoConteo[] = []
+    while (stmt.step()) {
+      const r = stmt.getAsObject() as { codigo?: string | null; n: number }
+      out.push({ codigo: r.codigo == null ? null : String(r.codigo), n: Number(r.n) })
+    }
+    stmt.free()
+    return out
   }
 
   // ── IntakeRevertStore (registro de reversiones, issue #63) ──
