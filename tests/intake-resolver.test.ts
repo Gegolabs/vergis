@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SqliteGovernanceStore, runLogFileName, type GuiaDecl, type IntakeSlot, type OneLakeEntry, type OneLakeListing, type RunRecord } from '@vergis/capabilities'
-import { createIntakeLoop, resolveDesenlaceDeCarga, type CorridaConLog, type IntakeLoopDeps } from '../server/intake-loop'
+import { createIntakeLoop, resolverEstadoDeCarga, type CorridaConLog, type IntakeLoopDeps } from '../server/intake-loop'
 import { composeCargaUserNotice } from '../server/notify'
 import type { Notification } from '../server/notify'
 
@@ -176,7 +176,9 @@ describe('intake-resolver · criterio 2 · la distinción honesta (control)', ()
     expect(a.avisos).toHaveLength(1)
     const texto = [a.avisos[0]!.title, ...a.avisos[0]!.lines].join('\n')
     expect(a.avisos[0]!.title).toBe('Tu archivo «saldos.xlsx» no se procesó y el proceso no reportó la causa')
-    expect(texto).toContain('La conversión terminó sin informar qué pasó con tu archivo')
+    expect(texto).toContain('No sabemos qué pasó con este archivo: el proceso de carga no lo informó')
+    // #269·V12 · sin destino del operador ni `contacto`, NO se afirma que alguien fue avisado.
+    expect(texto).not.toMatch(/avisad|avisamos/i)
     expect(texto).not.toContain('state=[dead]')
     expect(texto).not.toContain('dead')
     expect(a.avisos[0]!.data['motivo']).toBeNull()
@@ -221,21 +223,25 @@ describe('intake-resolver · criterio 2 · la distinción honesta (control)', ()
 
     await expect(a.loop.tick()).resolves.toBeUndefined()
     expect((await filaDe(a, id))?.desenlace).toBeUndefined()
-    expect(a.logs.some((l) => l.includes('no se pudo resolver el desenlace') && l.includes('403'))).toBe(true)
+    expect(a.logs.some((l) => l.includes('no se pudo resolver el estado') && l.includes('403'))).toBe(true)
   })
 })
 
-describe('intake-resolver · criterio 3 · procesada sin gramática, y sin correo', () => {
-  it('carga que una corrida Completed archivó (ya no está en el landing) ⇒ procesada, sin email', async () => {
+describe('intake-resolver · criterio 3 · procesada solo por declaración (#269·F)', () => {
+  it('salir del landing tras una Completed NO es cargarse: sin declaración, la carga queda «sin informe»', async () => {
+    // El caso real (22, 23 de work/268): los archivos se APARTARON a `_sin-metadata/` sin cargarse, y la
+    // regla vieja («salió tras una Completed ⇒ procesada») los daba por cargados.
     const a = await armar()
     const id = await subir(a, 'saldos.xlsx', 30)
     a.runs.records = [{ startedAt: new Date(T0 - 25 * 60_000).toISOString(), status: 'Completed', endedAt: new Date(T0 - 24 * 60_000).toISOString() }]
-    a.landing.entries = [] // drenó: el contrato de ingesta archiva lo procesado en `_processed/`
+    a.landing.entries = [] // salió del landing — por qué camino, la plataforma no lo sabe
 
     await a.loop.tick()
 
-    expect((await filaDe(a, id))?.desenlace).toBe('procesada')
-    expect(a.avisos).toHaveLength(0)
+    const fila = await filaDe(a, id)
+    expect(fila?.desenlace).toBe('sin-informe')
+    expect(fila?.desenlaceFinal).toBe(false)
+    expect(fila?.desenlaceRunStartedAt).toBeUndefined() // ninguna corrida la declaró
   })
 
   it('`✔ procesado` declarado por el job también resuelve procesada y tampoco avisa', async () => {
@@ -263,6 +269,7 @@ describe('intake-resolver · criterio 4 · un desenlace se resuelve UNA vez', ()
     a.runLogs.entries = [logDe(started)]
     a.runLogs.textos[logDe(started).path] = '[intake] ✖ fallido: saldos.xlsx — faltan las columnas de fecha\n'
 
+    a.landing.entries = [archivo('saldos.xlsx', 30)] // sigue en espera: se reintenta solo
     await a.loop.tick()
     expect(a.avisos).toHaveLength(1)
     const lecturasPrimerTick = a.runLogs.lecturas
@@ -271,7 +278,9 @@ describe('intake-resolver · criterio 4 · un desenlace se resuelve UNA vez', ()
     await a.loop.tick()
     expect(a.avisos).toHaveLength(1)
     expect((await filaDe(a, id))?.desenlaceMotivo).toBe('faltan las columnas de fecha')
-    // Y no vuelve a abrir el log: sin cargas pendientes el resolver no paga I/O.
+    // Y no vuelve a abrir el log: el cursor `evaluadoHasta` ya pasó por esa corrida (D1: la carga
+    // sigue NO final — puede cargarse después — pero lo ya leído no se relee).
+    expect((await filaDe(a, id))?.evaluadoHasta).toBe(started)
     expect(a.runLogs.lecturas).toBe(lecturasPrimerTick)
   })
 
@@ -289,17 +298,16 @@ describe('intake-resolver · criterio 4 · un desenlace se resuelve UNA vez', ()
   })
 })
 
-describe('intake-resolver · varada y correlación', () => {
-  it('archivo que excede la edad máxima sin corrida que lo tome ⇒ varada, con su edad en el aviso', async () => {
+describe('intake-resolver · la edad no es un estado, y correlación', () => {
+  it('#269·G · un archivo viejo en el landing sin corrida que lo tome NO queda «varada»: sigue sin estado, sin correo', async () => {
     const a = await armar()
     const id = await subir(a, 'saldos.xlsx', 300)
     a.landing.entries = [archivo('saldos.xlsx', 300)]
 
     await a.loop.tick()
 
-    expect((await filaDe(a, id))?.desenlace).toBe('varada')
-    expect(a.avisos[0]!.title).toBe('Tu archivo «saldos.xlsx» sigue sin procesarse')
-    expect(a.avisos[0]!.lines.some((l) => l.includes('Lo recibimos hace 5 h'))).toBe(true)
+    expect((await filaDe(a, id))?.desenlace).toBeUndefined()
+    expect(a.avisos).toHaveLength(0)
   })
 
   it('una corrida ANTERIOR a la carga no la cubre: no pudo verla, así que no le atribuye su falla', async () => {
@@ -365,11 +373,11 @@ describe('intake-resolver · el aviso no sale si no hay a quién', () => {
   it('uploadedBy sin `@` ⇒ no se envía, se loguea, y el desenlace queda persistido igual', async () => {
     const a = await armar()
     const id = await subir(a, 'saldos.xlsx', 300, { by: '(retro: _processed)' })
-    a.landing.entries = [archivo('saldos.xlsx', 300)]
+    a.runs.records = [{ startedAt: new Date(T0 - 25 * 60_000).toISOString(), status: 'Failed', endedAt: new Date(T0 - 24 * 60_000).toISOString() }]
 
     await a.loop.tick()
 
-    expect((await filaDe(a, id))?.desenlace).toBe('varada')
+    expect((await filaDe(a, id))?.desenlace).toBe('sin-informe')
     expect(a.avisos).toHaveLength(0)
     expect(a.logs.some((l) => l.includes('sin aviso') && l.includes('no es una dirección'))).toBe(true)
   })
@@ -377,9 +385,9 @@ describe('intake-resolver · el aviso no sale si no hay a quién', () => {
   it('con la observación CAÍDA no se resuelve nada: un desenlace no se escribe sobre lo último conocido', async () => {
     const a = await armar()
     const id = await subir(a, 'saldos.xlsx', 300)
-    a.landing.entries = [archivo('saldos.xlsx', 300)]
+    a.runs.records = [{ startedAt: new Date(T0 - 250 * 60_000).toISOString(), status: 'Failed', endedAt: new Date(T0 - 249 * 60_000).toISOString() }]
     await a.loop.tick()
-    expect((await filaDe(a, id))?.desenlace).toBe('varada')
+    expect((await filaDe(a, id))?.desenlace).toBe('sin-informe')
 
     // Segunda carga con el almacenamiento CAÍDO y una corrida completada que la cubre: si la lectura
     // fallida se tratara como «landing vacío», el archivo se vería como archivado y esta carga se
@@ -400,42 +408,48 @@ describe('intake-resolver · el aviso no sale si no hay a quién', () => {
   it('sin destinos suscritos al flujo el desenlace se resuelve y se persiste igual', async () => {
     const a = await armar({ conAviso: false })
     const id = await subir(a, 'saldos.xlsx', 300)
-    a.landing.entries = [archivo('saldos.xlsx', 300)]
+    a.runs.records = [{ startedAt: new Date(T0 - 250 * 60_000).toISOString(), status: 'Failed', endedAt: new Date(T0 - 249 * 60_000).toISOString() }]
 
     await a.loop.tick()
 
-    expect((await filaDe(a, id))?.desenlace).toBe('varada')
+    expect((await filaDe(a, id))?.desenlace).toBe('sin-informe')
   })
 })
 
-describe('resolveDesenlaceDeCarga · la lógica pura', () => {
+describe('resolverEstadoDeCarga · la lógica pura (lo que sobrevive de #162)', () => {
   const carga = { filename: 'saldos.xlsx', uploadedAt: new Date(T0 - 30 * 60_000).toISOString() }
   const corrida = (status: RunRecord['status'], log: CorridaConLog['log'], texto: string | null = null): CorridaConLog => ({
     run: { startedAt: new Date(T0 - 25 * 60_000).toISOString(), status, endedAt: new Date(T0 - 24 * 60_000).toISOString(), error: 'state=[dead]' },
     log,
     texto,
   })
+  const r = (cs: CorridaConLog[], landing: OneLakeEntry[]) => resolverEstadoDeCarga(carga, cs, landing, [], [], [], { nowMs: T0 })
 
-  it('sin corridas y sin umbral de edad no concluye nada (el land-only no fabrica varados)', () => {
-    expect(resolveDesenlaceDeCarga(carga, [], [archivo('saldos.xlsx', 300)], T0)).toBeNull()
+  it('sin corridas y en el landing no concluye nada (la edad no fabrica varados)', () => {
+    expect(r([], [archivo('saldos.xlsx', 300)])).toMatchObject({ estado: null, final: false, via: 'pendiente' })
   })
 
   it('el motivo del MOTOR nunca entra en la resolución', () => {
-    const r = resolveDesenlaceDeCarga(carga, [corrida('Failed', 'sin-log')], [], T0, 120)
-    expect(r).toEqual({ desenlace: 'sin-informe', runStartedAt: new Date(T0 - 25 * 60_000).toISOString() })
-    expect(JSON.stringify(r)).not.toContain('dead')
+    const x = r([corrida('Failed', 'sin-log')], [])
+    expect(x).toMatchObject({ estado: 'sin-informe', via: 'sin-log', runStartedAt: new Date(T0 - 25 * 60_000).toISOString() })
+    expect(x.motivo).toBeUndefined()
+    expect(JSON.stringify(x)).not.toContain('dead')
   })
 
   it('el log purgado por retención también es sin-informe: el motivo ya no existe', () => {
-    expect(resolveDesenlaceDeCarga(carga, [corrida('Failed', 'purgado')], [], T0, 120)?.desenlace).toBe('sin-informe')
+    expect(r([corrida('Failed', 'purgado')], []).estado).toBe('sin-informe')
   })
 
   it('el archivo del landing se reconoce por BASENAME (el registro guarda el nombre; el listado, la ruta)', () => {
     // Mismo archivo, con la ruta completa del Lakehouse: si se comparara la cadena entera, esta carga
-    // se vería como «ya no está» y se resolvería `procesada` por una corrida que no la tocó.
-    const conRuta = [archivo('saldos.xlsx', 300)]
-    expect(resolveDesenlaceDeCarga(carga, [corrida('Completed', 'no-medido')], conRuta, T0, 120)?.desenlace).toBe('varada')
-    expect(resolveDesenlaceDeCarga(carga, [corrida('Completed', 'no-medido')], [], T0, 120)?.desenlace).toBe('procesada')
+    // se vería como «ya no está» y se resolvería «sin informe» por una salida que no ocurrió.
+    expect(r([corrida('Completed', 'sin-log')], [archivo('saldos.xlsx', 300)]).estado).toBeNull()
+    expect(r([corrida('Completed', 'sin-log')], []).estado).toBe('sin-informe')
+  })
+
+  it('un log que no se pudo MIRAR no deja concluir la ausencia: sin declaración legible, sin estado', () => {
+    expect(r([corrida('Failed', 'no-medido')], []).estado).toBeNull()
+    expect(r([corrida('Completed', 'no-medido')], []).estado).toBeNull()
   })
 })
 

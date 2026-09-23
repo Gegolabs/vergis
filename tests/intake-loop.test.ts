@@ -697,19 +697,21 @@ describe('intake-loop · `watch:` declarado por slot', () => {
       triggered: true,
       origen: 'upload',
     })
-    // Insumo suficiente para un desenlace: corrida completada DESPUÉS de la carga y archivo ya
-    // drenado del landing ⇒ `procesada` (contrato de ingesta #62/#63).
-    a.runs.records = [{ startedAt: new Date(T0 - 30 * 60_000).toISOString(), status: 'Completed' }]
+    // Insumo suficiente para un estado: el archivo ya no está en el landing y ninguna corrida lo
+    // declaró ⇒ `sin-informe` (#269·§3.2 regla 7). Sin corridas: este arnés no cablea `_logs/`, y una
+    // corrida cuyo log no se puede mirar no deja concluir la ausencia.
+    a.runs.records = []
     a.landing.listing = { kind: 'ok', entries: [] }
 
     await a.loop.tick()
-    expect(await a.store.listUploadsSinDesenlace('saldos', 10)).toHaveLength(1) // sigue sin desenlace
+    const fila = async () => (await a.store.listUploads('saldos', 10))[0]
+    expect((await fila())?.desenlace).toBeUndefined() // sigue sin estado
 
     // Control positivo del test: el MISMO insumo, sin el opt-out, sí se resuelve. Sin esta mitad, el
     // «no se resolvió» podría ser un insumo insuficiente y no el opt-out.
     slots[0] = slotDe()
     await a.loop.tick()
-    expect(await a.store.listUploadsSinDesenlace('saldos', 10)).toHaveLength(0)
+    expect((await fila())?.desenlace).toBe('sin-informe')
   })
 
   it('el slot land-only gana la señal de varados declarando `max_age_minutes` (y sin declararla no la tiene)', async () => {

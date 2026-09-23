@@ -46,6 +46,17 @@ export interface IntakeTarget {
   lakehouseId: string
   /** Ruta dentro del Lakehouse, p.ej. `Files/intake/saldos`. El pipeline lee de aquí. */
   path: string
+  /**
+   * #269·V11 · Dónde ARCHIVA el proceso lo que procesó de este slot (contrato de ingesta §5.6).
+   * Ausente = la convención de siempre, `<padre del landing>/_processed`. `false` = el proceso de
+   * este slot NO archiva (un catálogo que se reemplaza entero y se lee siempre del landing): su
+   * archivo en el landing es el vigente, no un residuo ni un varado.
+   *
+   * Existe porque la convención no calza con todos los procesos reales: uno archiva junto a su
+   * landing (`Files/intake/facturas/_processed`), otro en un directorio común a varios landings.
+   * Preguntar por el directorio equivocado devolvía 404 y la consola decía «sin procesados».
+   */
+  processed?: string | false
 }
 
 /** Disparo opcional del pipeline tras aterrizar el archivo (land-and-trigger). */
@@ -182,6 +193,24 @@ export interface IntakeSlot {
    * - mapa — umbrales propios del slot; lo no declarado cae al default del producto.
    */
   watch?: false | { maxAgeMinutes?: number; maxRunMinutes?: number }
+  /**
+   * #269·§3.1 · Desde cuándo el proceso de este slot DECLARA por archivo en su log (contrato `_logs/`
+   * §2). ISO. Es un HECHO de la instancia, no algo que el Producto deduzca: los logs se podan (el
+   * escritor conserva los últimos 60) y un ancla deducida de los logs que sobreviven se correría
+   * hacia adelante con cada poda.
+   *
+   * Ancla el ÚNICO puente del resolvedor de estado: una carga subida ANTES de esta fecha, que ninguna
+   * corrida declaró porque ninguna declaraba todavía, se da por cargada si su copia está archivada.
+   * Una carga subida desde esta fecha nunca cruza ese puente. Sin la clave NO hay puente (fail-closed):
+   * sus cargas sin declaración quedan «sin informe», que es la verdad.
+   */
+  contratoDesde?: string
+  /**
+   * #269·V12 · A quién le avisa el usuario cuando la plataforma no sabe qué pasó con su archivo.
+   * Se declara en la RAÍZ del archivo de intake (`contacto:`) y cada slot lo hereda; un slot puede
+   * declarar el suyo. Ausente = la línea «Avísale a …» no se dibuja, y la consola técnica lo señala.
+   */
+  contacto?: string
 }
 
 const SLUG_RE = /^[a-z][a-z0-9_]*$/
@@ -199,8 +228,32 @@ export function parseIntakeConfig(doc: unknown): IntakeSlot[] {
   const raw = requireRootKey(doc, 'intake', 'slots')
   if (!Array.isArray(raw)) throw new Error('intake: `slots` debe ser una lista.')
   const catalogs = parseCatalogs((doc as Record<string, unknown>)['catalogs'])
+  const contacto = parseContacto((doc as Record<string, unknown>)['contacto'], 'intake: contacto')
   const seen = new Set<string>()
-  return raw.map((s, i) => parseSlot(s, i, seen, catalogs))
+  return raw.map((s, i) => {
+    const slot = parseSlot(s, i, seen, catalogs)
+    // #269·V12 · el contacto de la raíz viaja EN cada slot: así llega a todo consumidor (lazo,
+    // consola, correo) sin que la forma del resultado de este parser cambie para nadie.
+    if (slot.contacto == null && contacto != null) slot.contacto = contacto
+    return slot
+  })
+}
+
+/** `contacto` (#269·V12): una dirección de correo. Otra cosa se acusa al parsear — un contacto que
+ *  no es una dirección se dibujaría como instrucción al usuario y no llevaría a nadie. */
+function parseContacto(raw: unknown, where: string): string | undefined {
+  if (raw == null) return undefined
+  const v = typeof raw === 'string' ? raw.trim() : ''
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(v)) throw new Error(`${where} debe ser una dirección de correo (recibido: '${String(raw)}').`)
+  return v
+}
+
+/** `contrato_desde` (#269·§3.1): fecha ISO parseable. Se acusa al parsear: un ancla ilegible
+ *  apagaría el puente en silencio (o lo abriría, que es peor). */
+function parseContratoDesde(raw: unknown, slotId: string): string {
+  const v = raw instanceof Date ? raw.toISOString() : typeof raw === 'string' ? raw.trim() : ''
+  if (!v || !Number.isFinite(Date.parse(v))) throw new Error(`intake: '${slotId}'.contrato_desde debe ser una fecha ISO (recibido: '${String(raw)}').`)
+  return new Date(Date.parse(v)).toISOString()
 }
 
 /** Valida el bloque raíz `catalogs` (issue #109) y lo indexa por id. Ausente = mapa vacío. */
@@ -284,6 +337,8 @@ function parseSlot(s: unknown, i: number, seen: Set<string>, catalogs: Map<strin
   // `!== undefined`, no `!= null`: `watch:` sin valor (null en YAML) es una declaración que no declara
   // nada — se acusa, no se cae al default en silencio.
   if (o['watch'] !== undefined) out.watch = parseWatch(o['watch'], id, out.trigger != null)
+  if (o['contrato_desde'] != null) out.contratoDesde = parseContratoDesde(o['contrato_desde'], id)
+  if (o['contacto'] != null) out.contacto = parseContacto(o['contacto'], `intake: '${id}'.contacto`)
   return out
 }
 
@@ -466,7 +521,59 @@ function parseTarget(raw: unknown, slotId: string): IntakeTarget {
   if (!/^Files\//.test(path)) {
     throw new Error(`intake: '${slotId}'.target.path debe empezar en 'Files/' (staging del Lakehouse, no 'Tables/').`)
   }
-  return { workspaceId, lakehouseId, path: path.replace(/\/+$/, '') }
+  const out: IntakeTarget = { workspaceId, lakehouseId, path: path.replace(/\/+$/, '') }
+  // #269·V11 · `processed: <ruta> | false`. Ruta dentro del MISMO lakehouse (`Files/…`), o `false`.
+  const processed = o['processed']
+  if (processed === false) out.processed = false
+  else if (processed != null) {
+    const p = typeof processed === 'string' ? processed.trim().replace(/\/+$/, '') : ''
+    if (!/^Files\//.test(p)) throw new Error(`intake: '${slotId}'.target.processed debe ser una ruta que empiece en 'Files/' o 'false'.`)
+    out.processed = p
+  }
+  return out
+}
+
+/** Directorio de lo PROCESADO de un slot (#269·V11): lo declarado, o `<padre del landing>/_processed`.
+ *  `null` = el slot declaró `processed: false` (su proceso no archiva). */
+export function slotProcessedDir(slot: IntakeSlot): string | null {
+  const d = slot.target.processed
+  if (d === false) return null
+  if (d) return d
+  const p = slot.target.path
+  return `${p.includes('/') ? p.replace(/\/[^/]*$/, '') : p}/_processed`
+}
+
+/**
+ * La forma canónica de un nombre de archivo (#269·D7): NFC. Una descarga en macOS llega a veces en
+ * forma descompuesta («u» + diéresis combinante): es la misma cadena para una persona y otra para un
+ * patrón — `Antig?edad` calza la forma NFC y no la NFD, porque `?` calza UNA unidad. Normalizar no es
+ * tolerar: es escribir la misma cadena de una sola manera antes de validar, registrar y aterrizar.
+ */
+export const nombreCanonico = (filename: string): string => String(filename ?? '').normalize('NFC')
+
+/**
+ * Los slots cuyo `accept` DECLARADO calza con el nombre (#269·§4.1, D12) — la prueba de la puerta.
+ * Un slot sin `accept` no participa: acepta cualquier nombre y nombrarlo como destino sería adivinar.
+ * El nombre se compara en su forma canónica.
+ */
+export function slotsQueCalzan(slots: IntakeSlot[], filename: string): IntakeSlot[] {
+  const name = nombreCanonico(filename).trim()
+  if (!name) return []
+  return slots.filter((s) => !!s.accept && globToRegExp(s.accept).test(name))
+}
+
+/**
+ * Nombres del registro que calzan con DOS o más tipos (#269·§4.1): la señal posterior a cada recarga.
+ * La disjunción entre PATRONES no es alcanzable con patrones «contiene»; la que importa es sobre los
+ * nombres reales, y esa se mide acá. PURA.
+ */
+export function nombresAmbiguos(slots: IntakeSlot[], nombres: string[]): { nombre: string; slots: string[] }[] {
+  const out: { nombre: string; slots: string[] }[] = []
+  for (const n of [...new Set(nombres.map((x) => nombreCanonico(x).trim()).filter(Boolean))].sort()) {
+    const calzan = slotsQueCalzan(slots, n)
+    if (calzan.length >= 2) out.push({ nombre: n, slots: calzan.map((s) => s.id) })
+  }
+  return out
 }
 
 /** El tope de tamaño efectivo de un slot. */

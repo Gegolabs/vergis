@@ -88,7 +88,10 @@ export interface GuiaResuelta {
 /** La línea de actor que la plataforma antepone a toda guía (celda de Cargas y correo). */
 export const LINEA_ACTOR: Record<GuiaActor, string> = {
   usuario: 'Hay que corregir el archivo',
-  operador: 'No es por tu archivo: el equipo ya fue avisado',
+  // #269·V12 · sin «el equipo ya fue avisado»: esa frase era una afirmación sin verificar (P15). La
+  // línea de aviso la agrega el Producto solo cuando es cierta (destino `cargas-operador` suscrito) y,
+  // si no, dice a quién avisar (`contacto`).
+  operador: 'No es por tu archivo: el proceso de carga tuvo un problema propio',
   nadie: 'No tienes que hacer nada',
 }
 
@@ -150,7 +153,7 @@ export const FAMILIAS_PRODUCTO: readonly FamiliaDesenlace[] = [
     ['No tienes que hacer nada. Si querías que rigiera este, súbelo de nuevo.']),
   f('falla-plataforma', 'operador', 'No es por tu archivo: falló el proceso de carga',
     'El proceso que carga los archivos tuvo un problema propio y se detuvo. Tu archivo no tiene la culpa.',
-    ['No lo corrijas ni lo vuelvas a subir.', 'El equipo ya fue avisado y te contará cuando esté resuelto.']),
+    ['No lo corrijas ni lo vuelvas a subir.']),
 ]
 
 const FAMILIAS_PRODUCTO_POR_NOMBRE = new Map(FAMILIAS_PRODUCTO.map((x) => [x.familia, x]))
