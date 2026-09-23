@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.34.0 — 2026-09-23
 
-### Guías de carga: cuando un archivo no entra, el usuario lee qué pasó y qué hacer (issue #346)
+### Guías de carga: cuando un archivo no entra, el usuario lee qué pasó y qué hacer (issue #346, PR #350)
 
 **El hueco.** La consola de Cargas le mostraba a quien subió un archivo el motivo **técnico** del job,
 exacto y útil para el operador, pero sin decirle qué hacer — y recortado a 300 caracteres. En el caso
@@ -102,7 +102,7 @@ aditiva: si el motivo pasaba de 300 caracteres, ahora el completo queda a un cli
   (`desenlace_codigo`, `desenlace_params`). Compatible hacia atrás dentro de la ventana de retención;
   **no** sube `SCHEMA_VERSION` y **no rompe rollback**.
 - **Cero variables de entorno nuevas**, cero cambios de compose. El bloque `guias:` es opcional.
-- **Orden de despliegue:** primero esta versión, **después** los jobs que emitan el sufijo `⟦…⟧`. Un
+- **Orden de despliegue: el Producto va antes que los SJDs.** Primero esta versión, **después** los jobs que emitan el sufijo `⟦…⟧` (en A.R.B.O.L., el H4 de TX-21 espera a que 0.34.0 esté activa). Un
   job con sufijo sobre una versión anterior no pierde el desenlace, pero el sufijo se le muestra al
   usuario como texto dentro del motivo.
 
