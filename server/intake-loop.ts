@@ -34,6 +34,7 @@
 import {
   DEFAULT_INTAKE_WATCH_MS,
   DEFAULT_MAX_AGE_MINUTES,
+  DEFAULT_MAX_RUN_MINUTES,
   INTAKE_WATCH_STATE_KEY,
   classifySlot,
   expectedInLanding,
@@ -46,7 +47,6 @@ import {
   slotRunLogsDir,
   diffAlertState,
   type CargaDesenlace,
-  type CargaDesenlaceInput,
   type DesenlaceParams,
   type IntakeDesenlaceStore,
   type GuiaDecl,
@@ -67,9 +67,17 @@ import {
   type SlotWatchInput,
   type SlotWatchSnapshot,
   type CargaRegistrada,
+  type IntakeUploadStore,
+  INTAKE_WATCH_RUN_RETENTION,
 } from '@vergis/capabilities'
+// #269 · capacidades nuevas de este corte, importadas de su módulo (mismo patrón que `version`/
+// `table-runtime`): el barril `@vergis/capabilities` no es parte del territorio de este cambio.
+import { declaracionDeArchivo } from '../packages/capabilities/src/run-logs'
+import { nombresAmbiguos } from '../packages/capabilities/src/intake'
+import { nombreSinSello, selloDelNombre } from '../packages/capabilities/src/intake-observability'
+import type { CargaEstadoInput, IntakeIntentoInput } from '../packages/capabilities/src/governance-store'
 import { diagnosticoDeFalla, type SlotVigilancia } from './admin-cargas'
-import { composeCargaUserNotice, composeIntakeAlert, composeIntakeRecovery, type IntakeAlertContext, type Notification } from './notify'
+import { composeCargaOperadorNotice, composeCargaUserNotice, composeIntakeAlert, composeIntakeRecovery, type CargaOperadorContext, type IntakeAlertContext, type Notification } from './notify'
 
 export interface IntakeLoopConfig {
   /** URL pública ya normalizada sin slash final: base de los enlaces profundos del aviso. */
@@ -93,7 +101,12 @@ export interface IntakeLoopDeps {
   /** Retiros manuales del landing. `null` = NO SE PUDO SABER; entonces el control positivo se apaga
    *  para ese slot (una predicción que no descuenta los retiros fabrica contradicciones). */
   retiros?: (slot: IntakeSlot) => Promise<RetiroRegistrado[] | null>
-  store: IntakeWatchStore & PlatformSettingStore & IntakeDesenlaceStore
+  /** #269·§3.4 · las reversiones registradas del slot (#63): la que retiró el landing cierra SU carga. */
+  reverts?: (slotId: string) => Promise<{ filename: string; at: string; landingRetirado: boolean; uploadId?: number }[]>
+  /** #269·§3.1 · lo ARCHIVADO del slot (`slotProcessedDir`), recursivo: insumo del puente histórico.
+   *  Solo se pide si alguna carga pendiente es anterior a `contrato_desde`. */
+  archivados?: (slot: IntakeSlot) => Promise<OneLakeEntry[]>
+  store: IntakeWatchStore & PlatformSettingStore & IntakeDesenlaceStore & Pick<IntakeUploadStore, 'listUploads'>
   /**
    * Logs POR CORRIDA del slot (contrato `_logs/`, #99). AUSENTE = el resolver no puede leer lo que el
    * job declaró, y entonces NO concluye nada que dependa del log: un instrumento que no está no
@@ -112,6 +125,11 @@ export interface IntakeLoopDeps {
   /** Envío del aviso a QUIEN SUBIÓ (flujo `'cargas-usuario'`, §6.3). undefined = sin destinos
    *  suscritos: el desenlace se persiste y se consulta igual — el registro no depende del canal. */
   notifyUploader?: (n: Notification) => Promise<void>
+  /** #269·V12 · aviso al OPERADOR por carga (flujo `'cargas-operador'`). Ausente = sin ese flujo. */
+  notifyOperador?: (n: Notification) => Promise<void>
+  /** #269·V12 · ¿hay HOY algún destino suscrito a `'cargas-operador'`? Decide si el aviso al usuario
+   *  puede decir «le avisamos al equipo»: la frase sale solo si es cierta. Arreglo vivo: se consulta. */
+  hayDestinoOperador?: () => boolean
   /** #346 · catálogo vivo de guías de carga. Ausente = el aviso a quien subió es el de siempre. */
   guias?: () => readonly GuiaDecl[]
   /** Dominios DECLARADOS: solo ellos tienen página, y por tanto solo ellos aportan label y enlace. */
@@ -155,7 +173,10 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       // caso que dejaría su clave huérfana en el estado persistido, para emitir el «recuperado» falso
       // más tarde, cuando algún slot vuelva a vigilarse.
       await retirarOptOut(slots)
-      if (!vigilados.length) return
+      if (!vigilados.length) {
+        await medirDisjuncion(slots, nowIso)
+        return
+      }
 
       // ── Fase 1 · observar ────────────────────────────────────────────────────────────────────
       const lote: SlotObservation[] = await Promise.all(vigilados.map((s) => observar(s)))
@@ -180,6 +201,10 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
         const obs = lote.find((o) => o.slotId === slot.id)
         if (obs) await resolverSlot(slot, obs, nowMs, logsDelTick)
       }
+
+      // #269·§4.1 · la señal de disjunción (solo cuando cambiaron los patrones): después de observar y
+      // resolver, para no demorar la medida del tick.
+      await medirDisjuncion(slots, nowIso)
 
       // ── Fase 3 · alertar ─────────────────────────────────────────────────────────────────────
       let notificadas = 0
@@ -230,6 +255,29 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       deps.log(`intake-loop: vuelta fallida — ${msg(e)}`)
     } finally {
       inFlight = false
+    }
+  }
+
+  /**
+   * #269·§4.1 · La SEÑAL de disjunción posterior a cada recarga: cuántos nombres del registro calzan
+   * con dos o más tipos. La garantía vive en la puerta (el nombre ambiguo no aterriza); esto le dice al
+   * operador que la configuración recién cargada tiene patrones que se pisan sobre nombres reales.
+   * Se mide solo cuando cambian los patrones (su firma), no en cada vuelta.
+   */
+  let firmaDisjuncion: string | null = null
+  async function medirDisjuncion(slots: IntakeSlot[], nowIso: string): Promise<void> {
+    const firma = JSON.stringify(slots.map((s) => [s.id, s.accept ?? null]))
+    if (firma === firmaDisjuncion) return
+    try {
+      const nombres: string[] = []
+      for (const s of slots) for (const u of await deps.store.listUploads(s.id, RESOLVER_HISTORIA)) if (u.ok && u.origen === 'upload') nombres.push(u.filename)
+      const ambiguos = nombresAmbiguos(slots, nombres)
+      await deps.store.setSetting(INTAKE_DISJUNCION_KEY, JSON.stringify({ medidoAt: nowIso, nombres: new Set(nombres).size, ambiguos }), 'intake-watch')
+      if (ambiguos.length)
+        deps.log(`intake-loop: ${ambiguos.length} nombre(s) del registro calzan con 2+ tipos: ${ambiguos.slice(0, 5).map((a) => `«${a.nombre}» (${a.slots.join(', ')})`).join('; ')}${ambiguos.length > 5 ? '; …' : ''}`)
+      firmaDisjuncion = firma
+    } catch (e) {
+      deps.log(`intake-loop: no se pudo medir la disjunción de los tipos de archivo — ${msg(e)}`)
     }
   }
 
@@ -349,42 +397,167 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
   }
 
   /**
-   * Fase RESOLVER de UN slot (#162·§3.4): escribe el desenlace de las cargas que todavía no lo tienen
-   * y avisa a quien las subió.
+   * Fase RESOLVER de UN slot (#162·§3.4, reescrita por #269·§3): avanza el estado de las cargas que
+   * todavía no llegaron a un estado final y avisa a quien las subió.
    *
-   * Nunca lanza hacia afuera: un slot cuyo `_logs/` no se puede listar deja sus cargas PENDIENTES —que
-   * es la verdad, no se midió— y no arrastra a los demás slots.
+   * El estado es SOLO lo que el ingestor declaró de cada archivo más los actos registrados (re-subida,
+   * retiro, reversión): `resolverEstadoDeCarga`, pura. Esta fase junta sus insumos —las corridas de la
+   * proyección (hasta 60, no solo las 10 que trae el tick), sus logs, el landing, los retiros, las
+   * re-subidas y, solo si alguna carga lo necesita, lo archivado para el puente histórico— y escribe.
    *
-   * Solo resuelve sobre observación FRESCA: si este tick no pudo medir el landing, no hay con qué
-   * afirmar «sigue ahí» ni «ya no está», y ambas son premisas de un desenlace.
+   * Nunca lanza hacia afuera: un insumo que no se pudo leer deja las cargas como estaban —que es la
+   * verdad: no se midió— y no arrastra a los demás slots. En particular, sin retiros legibles no se
+   * resuelve nada del slot: un retiro que no se ve se leería como «salió sin declaración».
    */
-  async function resolverSlot(slot: IntakeSlot, obs: SlotObservation, nowMs: number, cache: Map<string, OneLakeEntry[]>): Promise<void> {
+  async function resolverSlot(slot: IntakeSlot, obs: SlotObservation, _nowMs: number, cache: Map<string, OneLakeEntry[]>): Promise<void> {
     if (obs.error != null || obs.landing == null) return
     try {
-      const pendientes = await deps.store.listUploadsSinDesenlace(slot.id, RESOLVER_LOTE)
+      const pendientes = await deps.store.listUploadsNoFinales(slot.id, RESOLVER_LOTE)
       if (!pendientes.length) return // el caso normal: cero I/O de logs cuando no hay nada que resolver
-      const corridas = await corridasConLog(slot, obs.runs ?? [], cache.get(slot.id))
-      const maxAgeMinutes = watchConfigDe(slot)?.maxAgeMinutes
+      const retiros = await retirosDelSlot(slot)
+      if (retiros == null) {
+        deps.log(`intake-loop: '${slot.id}' sin retiros legibles — el estado de sus cargas no se evalúa en esta vuelta`)
+        return
+      }
+      const todas = await deps.store.listUploads(slot.id, RESOLVER_HISTORIA)
+      const runs = await corridasDelSlot(slot, obs)
+      // Solo se leen los logs que alguna carga pendiente todavía no consideró (cursor `evaluadoHasta`):
+      // en régimen, una vuelta lee los logs de las corridas NUEVAS, no los 60 retenidos.
+      const corridas = await corridasConLog(slot, runs.filter((r) => pendientes.some((c) => leInteresa(c, r))), cache.get(slot.id))
+      const contratoDesde = slot.contratoDesde
+      // El puente histórico solo puede aplicar a cargas subidas antes de `contrato_desde`: sin ninguna
+      // así, lo archivado no se lista (es la lectura más cara de la vuelta).
+      const necesitaPuente = contratoDesde != null && pendientes.some((c) => Date.parse(c.uploadedAt) < Date.parse(contratoDesde))
+      let archivados: OneLakeEntry[] | null = []
+      if (necesitaPuente && deps.archivados) {
+        try {
+          archivados = await deps.archivados(slot)
+        } catch (e) {
+          archivados = null
+          deps.log(`intake-loop: no se pudo listar lo archivado de '${slot.id}' — ${msg(e)}; las cargas anteriores a contrato_desde no se evalúan en esta vuelta`)
+        }
+      } else if (necesitaPuente) archivados = null
       for (const carga of pendientes) {
-        const r = resolveDesenlaceDeCarga(carga, corridas, obs.landing, nowMs, maxAgeMinutes)
-        if (!r) continue // todavía sin evidencia: se vuelve a intentar en el próximo tick
-        const input: CargaDesenlaceInput = { desenlace: r.desenlace }
-        // El motivo que se PERSISTE es el que declaró el job POR ARCHIVO. El titular de la corrida no
-        // se guarda como motivo de la carga: es de la corrida, y confundirlos le atribuiría a este
-        // archivo una causa que se afirmó de todos.
+        const preContrato = contratoDesde != null && Date.parse(carga.uploadedAt) < Date.parse(contratoDesde)
+        if (preContrato && archivados == null) continue // no pude medir el puente: no se concluye nada
+        const legado = carga.desenlace != null && carga.desenlaceFinal === undefined
+        const opts: OpcionesResolver = {}
+        if (contratoDesde != null) opts.contratoDesde = contratoDesde
+        if (!legado && carga.desenlace != null) {
+          const previo: EstadoPrevio = { estado: carga.desenlace }
+          if (carga.desenlaceMotivo != null) previo.motivo = carga.desenlaceMotivo
+          if (carga.desenlaceCodigo != null) previo.codigo = carga.desenlaceCodigo
+          if (carga.desenlaceParams != null) previo.params = carga.desenlaceParams
+          if (carga.desenlaceRunStartedAt != null) previo.runStartedAt = carga.desenlaceRunStartedAt
+          opts.previo = previo
+        }
+        if (!legado && carga.evaluadoHasta != null) opts.evaluadoHasta = carga.evaluadoHasta
+        const reemplazos = todas
+          .filter((o) => o.id !== carga.id && o.ok && o.origen === 'upload' && base(o.filename) === base(carga.filename))
+          .map((o) => ({ uploadedAt: o.uploadedAt }))
+        opts.nowMs = now()
+        const maxRun = watchConfigDe(slot)?.maxRunMinutes
+        if (maxRun != null) opts.maxEnCursoMs = maxRun * 60_000
+        const r = resolverEstadoDeCarga(carga, corridas, obs.landing, archivados ?? [], retiros, reemplazos, opts)
+        const actual = carga.desenlace ?? null
+        const intentos = r.intentos.map((i) => {
+          const x: IntakeIntentoInput = { runStartedAt: i.runStartedAt, resultado: i.resultado }
+          if (i.motivo != null) x.motivo = i.motivo
+          if (i.codigo != null) x.codigo = i.codigo
+          if (i.params != null) x.params = i.params
+          return x
+        })
+        // Sin cambio de estado (y sin valor legado que confirmar): solo el cursor y lo observado.
+        if (r.estado === actual && !legado) {
+          if (r.evaluadoHasta !== carga.evaluadoHasta || intentos.length) await deps.store.registrarEvaluacion(carga.id, r.evaluadoHasta, intentos)
+          continue
+        }
+        // Una corrida en curso (o nada nuevo) sobre un valor legado: no se confirma ni se cambia todavía.
+        if (r.enCurso && r.estado == null) continue
+        const input: CargaEstadoInput = { estado: r.estado, final: r.final, intentos }
         if (r.motivo != null) input.motivo = r.motivo
-        // #346 · el código y los datos del caso viajan con el desenlace del MISMO archivo; el motivo ya
-        // llega sin el sufijo `⟦…⟧` (lo quitó el lector), así que «Detalle técnico» no lo muestra.
         if (r.codigo != null) input.codigo = r.codigo
         if (r.params != null) input.params = r.params
         if (r.runStartedAt != null) input.runStartedAt = r.runStartedAt
-        await deps.store.setUploadDesenlace(carga.id, input)
-        deps.log(`intake-loop: '${slot.id}' carga ${carga.id} (${carga.filename}) → ${r.desenlace}`)
+        if (r.evaluadoHasta != null) input.evaluadoHasta = r.evaluadoHasta
+        if (r.actoAt != null) input.actoAt = r.actoAt
+        await deps.store.avanzarEstado(carga.id, input)
+        deps.log(`intake-loop: '${slot.id}' carga ${carga.id} (${carga.filename}) ${actual ?? '—'} → ${r.estado ?? '—'} (${r.via}${legado ? ', reevaluada' : ''})`)
+        // Un valor que escribió la versión anterior se reevalúa en silencio: avisar ahora sería mandar
+        // correos por cargas de hace semanas, y lo que cambia es la verdad del registro, no un evento.
+        if (legado || r.estado == null || r.estado === actual) continue
         await avisarUploader(slot, carga, r)
+        await avisarOperador(slot, carga, r)
       }
     } catch (e) {
-      deps.log(`intake-loop: no se pudo resolver el desenlace en '${slot.id}' — ${msg(e)}`)
+      deps.log(`intake-loop: no se pudo resolver el estado de las cargas en '${slot.id}' — ${msg(e)}`)
     }
+  }
+
+  /** Retiros del slot (#269·§3.4): `_retirado/` en sus tres formas + las reversiones que retiraron el
+   *  landing. `null` = no se pudo saber. */
+  async function retirosDelSlot(slot: IntakeSlot): Promise<RetiroDeCarga[] | null> {
+    const out: RetiroDeCarga[] = []
+    if (deps.retiros) {
+      try {
+        const rs = await deps.retiros(slot)
+        if (rs == null) return null
+        for (const r of rs) out.push({ filename: r.filename, at: r.at, via: r.via ?? 'retirar', ...(r.uploadId != null ? { uploadId: r.uploadId } : {}) })
+      } catch (e) {
+        deps.log(`intake-loop: no se pudieron leer los retiros de '${slot.id}' — ${msg(e)}`)
+        return null
+      }
+    }
+    if (deps.reverts) {
+      try {
+        for (const r of await deps.reverts(slot.id)) {
+          if (!r.landingRetirado) continue
+          const x: RetiroDeCarga = { filename: r.filename, at: r.at, via: 'revertir' }
+          if (r.uploadId != null) x.uploadId = r.uploadId
+          out.push(x)
+        }
+      } catch (e) {
+        deps.log(`intake-loop: no se pudieron leer las reversiones de '${slot.id}' — ${msg(e)}`)
+        return null
+      }
+    }
+    return out
+  }
+
+  /** Las corridas del slot para el resolvedor: la PROYECCIÓN (el lazo retiene hasta 60 por slot) unida
+   *  a las que trajo este tick. El tick trae solo las 10 más recientes: una carga cuya corrida quedó
+   *  más atrás se quedaría sin su declaración. */
+  async function corridasDelSlot(slot: IntakeSlot, obs: SlotObservation): Promise<RunRecord[]> {
+    const porInicio = new Map<string, RunRecord>()
+    try {
+      const snap = (await deps.store.listSlotSnapshots({ runsPerSlot: INTAKE_WATCH_RUN_RETENTION })).find((x) => x.slotId === slot.id)
+      for (const r of snap?.runs ?? []) porInicio.set(r.startedAt, r)
+    } catch (e) {
+      deps.log(`intake-loop: no se pudo leer la proyección de corridas de '${slot.id}' — ${msg(e)}`)
+    }
+    for (const r of obs.runs ?? []) if (r?.startedAt) porInicio.set(r.startedAt, r) // lo fresco manda
+    return [...porInicio.values()]
+  }
+
+  /** Aviso al OPERADOR (#269·V12, flujo `cargas-operador`): una notificación por carga que quedó
+   *  «sin informe» o con una guía cuyo actor es el operador. Dedup por carga, persistido. */
+  async function avisarOperador(slot: IntakeSlot, carga: IntakeUploadRow, r: EstadoResuelto): Promise<void> {
+    if (!deps.notifyOperador || carga.operadorAvisadoAt != null) return
+    const guia = r.codigo != null && deps.guias ? resolverGuia(slot, r.codigo, r.params, deps.guias(), carga.filename) : null
+    if (r.estado !== 'sin-informe' && guia?.actor !== 'operador') return
+    const ctx: CargaOperadorContext = {
+      filename: carga.filename,
+      estado: r.estado as CargaDesenlace,
+      uploadedAt: carga.uploadedAt,
+      uploadId: carga.id,
+      via: r.via,
+      ...contextoDe(slot.id),
+    }
+    if (carga.uploadedBy) ctx.uploadedBy = carga.uploadedBy
+    if (r.motivo != null) ctx.motivo = r.motivo
+    if (guia) ctx.guia = guia
+    await deps.notifyOperador(composeCargaOperadorNotice(ctx))
+    await deps.store.marcarOperadorAvisado(carga.id)
   }
 
   /** Las corridas con la resolución de SU log (#99) y su texto. Sin la dependencia de logs el kind es
@@ -413,19 +586,20 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
     return out
   }
 
-  /** Aviso a quien subió (§6.2). `procesada` y `saltada` NO notifican (anti-ruido del diseño). */
-  async function avisarUploader(slot: IntakeSlot, carga: IntakeUploadRow, r: ResolucionCarga): Promise<void> {
-    if (!deps.notifyUploader || !DESENLACES_QUE_AVISAN.includes(r.desenlace)) return
+  /** Aviso a quien subió (§6.2). Solo al ENTRAR a `fallida` o `sin-informe` (anti-ruido del diseño):
+   *  `procesada` y `saltada` no notifican, y un estado que se repite no vuelve a avisar. */
+  async function avisarUploader(slot: IntakeSlot, carga: IntakeUploadRow, r: EstadoResuelto): Promise<void> {
+    if (!deps.notifyUploader || r.estado == null || !DESENLACES_QUE_AVISAN.includes(r.estado)) return
     const quien = (carga.uploadedBy ?? '').trim()
     // Sin dirección válida no se envía y se DICE: el desenlace ya quedó persistido y consultable en la
     // consola, así que la información no se pierde — solo no sale por correo.
     if (!quien.includes('@')) {
-      deps.log(`intake-loop: carga ${carga.id} de '${slot.id}' resuelta '${r.desenlace}' sin aviso — uploadedBy '${quien}' no es una dirección`)
+      deps.log(`intake-loop: carga ${carga.id} de '${slot.id}' resuelta '${r.estado}' sin aviso — uploadedBy '${quien}' no es una dirección`)
       return
     }
     const ctx: Parameters<typeof composeCargaUserNotice>[0] = {
       filename: carga.filename,
-      desenlace: r.desenlace as Exclude<CargaDesenlace, 'procesada'>,
+      desenlace: r.estado as Exclude<CargaDesenlace, 'procesada'>,
       uploadedBy: quien,
       uploadedAt: carga.uploadedAt,
       uploadId: carga.id,
@@ -440,7 +614,10 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       const guia = deps.guias ? resolverGuia(slot, r.codigo, r.params, deps.guias(), carga.filename) : null
       if (guia) ctx.guia = guia
     }
-    if (r.ageMinutes != null) ctx.ageMinutes = r.ageMinutes
+    // #269·V12 · la línea de aviso dice la verdad: «le avisamos al equipo» solo con un destino suscrito
+    // al flujo del operador; si no, a quién avisar (`contacto`); sin ninguno de los dos, nada.
+    if (deps.notifyOperador && deps.hayDestinoOperador?.()) ctx.equipoAvisado = true
+    else if (slot.contacto) ctx.contacto = slot.contacto
     await deps.notifyUploader(composeCargaUserNotice(ctx))
   }
 
@@ -545,13 +722,34 @@ interface InsumosRegistro {
   registro?: { cargasVividas: number; ultimaCargaAt?: string }
 }
 
-/** Cargas sin desenlace que se intentan resolver por slot y por vuelta. No es una política: es el
- *  tope del lote de una vuelta — lo que no entra, entra en la siguiente. */
+/** Cargas no finales que se evalúan por slot y por vuelta. No es una política: es el tope del lote de
+ *  una vuelta — lo que no entra, entra en la siguiente. */
 const RESOLVER_LOTE = 200
+
+/** Clave de `platform_setting` con la última medida de disjunción de los tipos de archivo (#269·§4.1). */
+export const INTAKE_DISJUNCION_KEY = 'intake.disjuncion'
+
+/** La medida persistida de la disjunción: qué nombres del registro calzan con 2+ tipos. */
+export interface MedidaDisjuncion {
+  medidoAt: string
+  nombres: number
+  ambiguos: { nombre: string; slots: string[] }[]
+}
+
+/** Lee la medida persistida; ilegible = `null` (la consola no afirma nada que no pueda leer). */
+export function parseMedidaDisjuncion(raw: string | null): MedidaDisjuncion | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as MedidaDisjuncion
+    return v && typeof v.medidoAt === 'string' && Array.isArray(v.ambiguos) ? v : null
+  } catch {
+    return null
+  }
+}
 
 /** Los desenlaces que quien subió recibe por correo (§6.2). `procesada` y `saltada` NO: el archivo
  *  que entró bien no genera correo, y el omitido se consulta en la consola. */
-const DESENLACES_QUE_AVISAN: CargaDesenlace[] = ['fallida', 'sin-informe', 'varada']
+const DESENLACES_QUE_AVISAN: CargaDesenlace[] = ['fallida', 'sin-informe']
 
 /**
  * Una corrida con la resolución de SU log (#99) y el texto leído.
@@ -567,105 +765,343 @@ export interface CorridaConLog {
   texto: string | null
 }
 
-/** Lo que el resolver concluyó de UNA carga. `null` en vez de esto = todavía sin evidencia. */
-export interface ResolucionCarga {
-  desenlace: CargaDesenlace
-  /** Motivo POR ARCHIVO declarado por el job. Ausente = el job no lo declaró; jamás se rellena. */
+/** Cargas del registro que la fase lee para detectar re-subidas del mismo nombre (tope de una vuelta). */
+const RESOLVER_HISTORIA = 1000
+
+/** Margen hacia atrás al elegir qué logs leer: una corrida que ya estaba en curso cuando se subió el
+ *  archivo arrancó ANTES de la subida y puede haberlo tomado (#269·P27). Es solo un recorte de I/O —
+ *  la ventana exacta la decide `resolverEstadoDeCarga`—, y 6 h es el doble de la corrida más larga
+ *  medida en `work/268` (2,9 min) con holgura de sobra. */
+const VENTANA_EN_CURSO_MS = 6 * 3_600_000
+
+/** ¿Esta corrida todavía le puede decir algo a esta carga? Con cursor (`evaluadoHasta`), solo las que
+ *  arrancaron DESPUÉS; sin él (nunca evaluada, o un valor legado que se reevalúa entero), las que
+ *  arrancaron desde un poco antes de la subida (P27). Es un recorte de I/O, no la ventana del estado. */
+function leInteresa(c: IntakeUploadRow, r: RunRecord): boolean {
+  const ini = Date.parse(r.startedAt)
+  if (!Number.isFinite(ini)) return false
+  // Una corrida no terminada siempre interesa: puede estar tomando el archivo (P27, M2) y el cursor
+  // nunca la deja atrás (M1). Leerla cuesta nada: no tiene log todavía.
+  if (r.status === 'InProgress' || r.status === 'NotStarted') return true
+  const legado = c.desenlace != null && c.desenlaceFinal === undefined
+  if (!legado && c.evaluadoHasta) return ini > Date.parse(c.evaluadoHasta)
+  const subida = Date.parse(c.uploadedAt)
+  return !Number.isFinite(subida) || ini >= subida - VENTANA_EN_CURSO_MS
+}
+
+/** Un retiro que el resolvedor considera (#269·§3.4). Con `uploadId` (una reversión) cierra SOLO esa
+ *  carga; sin él, cierra la carga de ese nombre subida antes del retiro. */
+export interface RetiroDeCarga {
+  filename: string
+  /** ISO del retiro. */
+  at: string
+  via: 'retirar' | 'revertir' | 'rename'
+  uploadId?: number
+}
+
+/** El estado que la carga ya tenía, escrito por ESTE resolvedor en una vuelta anterior. */
+export interface EstadoPrevio {
+  estado: CargaDesenlace
   motivo?: string
-  /** #346 · código estable y datos del caso, del sufijo `⟦…⟧` de la MISMA línea que el motivo. */
   codigo?: string
   params?: DesenlaceParams
-  /** Titular de la corrida (última `✖` del log) cuando no hubo motivo por archivo. NO se persiste
-   *  como motivo de la carga: se presenta rotulado como lo que es. */
-  titular?: string
   runStartedAt?: string
-  /** Edad en el landing, solo en `varada`. */
-  ageMinutes?: number
 }
 
-/**
- * El desenlace de UNA carga a partir de las corridas que PUDIERON haberla tomado — PURA, sin I/O.
- *
- * Regla de cobertura: solo cuenta una corrida que arrancó DESPUÉS de que el archivo aterrizó. Sin
- * margen: una corrida anterior no pudo verlo, y atribuirle su resultado sería fabricar una causa.
- * [El diseño no fija margen; no dárselo es decisión de este hito. Si el reloj del motor va adelantado
- * respecto del de Vergis, una corrida que sí tomó el archivo podría quedar fuera y la carga terminaría
- * resuelta como `varada`. No verificado contra el motor vivo — misma familia que la conjetura C1.]
- *
- * Las corridas se recorren de la más ANTIGUA a la más nueva y GANA LA ÚLTIMA evidencia decisiva: si
- * una corrida falló y una posterior lo procesó, el desenlace es el de la posterior. Una corrida EN
- * CURSO detiene la resolución (devuelve `null`): su resultado todavía puede decidir, y un desenlace
- * escrito no se recalcula.
- *
- * La degradación honesta (§5 del diseño), en orden de preferencia:
- *  1. El job declaró el archivo en su log (gramática `_logs/`) ⇒ ese desenlace, con SU motivo.
- *  2. El log existe pero no nombra este archivo, y la corrida falló ⇒ `fallida` sin motivo por
- *     archivo, con el titular `✖` del log como contexto rotulado.
- *  3. El log NO existe / se purgó y la corrida falló ⇒ `sin-informe`: el proceso no reportó la causa.
- *     El `run.error` del MOTOR jamás se usa acá — si el job no la declaró, la plataforma no la
- *     inventa, y el motivo del motor (`state=[dead]`) es justamente el que el usuario no puede usar.
- *  4. Una corrida `Completed` cubrió la carga y el archivo YA NO está en el landing ⇒ `procesada`
- *     (la evidencia es que la corrida lo archivó: contrato de ingesta #62/#63).
- *  5. Nada de lo anterior y el archivo sigue en el landing excedido de edad ⇒ `varada`.
- *
- * Una corrida cuyo log NO SE PUDO MIRAR (`'no-medido'`) no aporta evidencia de falla: la carga queda
- * pendiente. Sí puede aportar la de `procesada`, que no depende del log sino del landing.
- */
-export function resolveDesenlaceDeCarga(
-  carga: { filename: string; uploadedAt: string },
-  corridas: CorridaConLog[],
-  landing: OneLakeEntry[],
-  nowMs: number,
-  maxAgeMinutes?: number,
-): ResolucionCarga | null {
-  const subido = Date.parse(carga.uploadedAt)
-  const archivo = base(carga.filename)
-  const enLanding = landing.find((e) => e && !e.isDirectory && !isSidecarName(e.path) && base(e.path) === archivo)
-  const cubren = corridas
-    .filter((c) => Number.isFinite(Date.parse(c.run.startedAt)) && (!Number.isFinite(subido) || Date.parse(c.run.startedAt) >= subido))
-    .sort((a, b) => Date.parse(a.run.startedAt) - Date.parse(b.run.startedAt))
-
-  let res: ResolucionCarga | null = null
-  let ultimaCompletada: string | undefined
-  for (const c of cubren) {
-    if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') return null
-    const declarado = c.texto ? parseRunFileOutcomes(c.texto).find((o) => o.file === archivo) : undefined
-    if (declarado) {
-      res = { desenlace: DESENLACE_POR_OUTCOME[declarado.outcome], runStartedAt: c.run.startedAt }
-      if (declarado.motivo != null) res.motivo = declarado.motivo
-      if (declarado.codigo != null) res.codigo = declarado.codigo
-      if (declarado.params != null) res.params = declarado.params
-      continue
-    }
-    if (c.run.status === 'Failed') {
-      if (c.log === 'match') {
-        res = { desenlace: 'fallida', runStartedAt: c.run.startedAt }
-        const titular = diagnosticoDeFalla(c.texto)
-        if (titular) res.titular = titular
-      } else if (c.log === 'sin-log' || c.log === 'purgado') {
-        res = { desenlace: 'sin-informe', runStartedAt: c.run.startedAt }
-      }
-      // `'no-medido'`: la plataforma no miró el log. No se concluye nada — la carga sigue pendiente.
-      continue
-    }
-    if (c.run.status === 'Completed') ultimaCompletada = c.run.startedAt
-  }
-
-  if (res) return res
-  // Sin desenlace declarado, la única evidencia de proceso que queda es que el archivo SALIÓ del
-  // landing tras una corrida completada — el contrato de ingesta dice que lo procesado se archiva.
-  if (ultimaCompletada && !enLanding) return { desenlace: 'procesada', runStartedAt: ultimaCompletada }
-  if (enLanding && maxAgeMinutes != null) {
-    const edad = (nowMs - Date.parse(enLanding.lastModified)) / 60_000
-    if (Number.isFinite(edad) && edad > maxAgeMinutes) return { desenlace: 'varada', ageMinutes: Math.round(edad) }
-  }
-  return null
+export interface OpcionesResolver {
+  /** `contrato_desde` del slot: ancla del puente histórico. Ausente = sin puente (fail-closed). */
+  contratoDesde?: string
+  /** El estado no final que la carga ya tenía. Con `evaluadoHasta`, es la evidencia de las corridas
+   *  que esta vuelta ya no relee (sus logs pueden haberse podado). */
+  previo?: EstadoPrevio
+  /** Cursor: solo cuentan las corridas que arrancaron DESPUÉS de este instante. */
+  evaluadoHasta?: string
+  /** «Ahora» (ms): decide si una corrida no terminada todavía puede estar tomando el archivo. Ausente =
+   *  toda corrida no terminada cuenta como en curso. */
+  nowMs?: number
+  /** Edad (ms) desde la que una corrida `InProgress`/`NotStarted` ya no se cree «en curso». Default:
+   *  `DEFAULT_MAX_RUN_MINUTES` — el mismo umbral con el que el vigilante la declara colgada. */
+  maxEnCursoMs?: number
 }
 
-const DESENLACE_POR_OUTCOME: Record<'procesado' | 'saltado' | 'fallido', CargaDesenlace> = {
+/** Lo que UNA corrida declaró de la carga: la fila que va a `intake_intento`. */
+export interface IntentoObservado {
+  runStartedAt: string
+  resultado: 'procesada' | 'saltada' | 'fallida'
+  motivo?: string
+  codigo?: string
+  params?: DesenlaceParams
+}
+
+/** Por qué camino se llegó al estado (la tabla «por vía» del oráculo de #269·§2.2). */
+export type ViaEstado = 'declaracion' | 'puente' | 'retiro' | 'reemplazo' | 'corrida' | 'sin-log' | 'fuera-sin-declaracion' | 'previo' | 'pendiente'
+
+/** El estado de UNA carga según `resolverEstadoDeCarga`. */
+export interface EstadoResuelto {
+  /** `null` = todavía sin estado: el archivo sigue en el landing y nadie lo declaró. */
+  estado: CargaDesenlace | null
+  final: boolean
+  via: ViaEstado
+  /** Motivo POR ARCHIVO declarado por el job. Ausente = no lo declaró; jamás se rellena. */
+  motivo?: string
+  codigo?: string
+  params?: DesenlaceParams
+  /** La corrida que decidió el estado (o, en un acto, la del último intento). */
+  runStartedAt?: string
+  /** Titular de la corrida (última `✖` del log) en una `fallida` de legado: contexto, no motivo. */
+  titular?: string
+  /** Hay una corrida en curso que puede estar tomando el archivo: la página dice «Cargando». */
+  enCurso: boolean
+  /** Declaraciones observadas en esta evaluación, en orden. */
+  intentos: IntentoObservado[]
+  /** El último intento no final antes de un acto (retiro, re-subida): «último intento» plegado. */
+  ultimoIntento?: IntentoObservado
+  /** Instante del acto (retiro o re-subida) que cerró la carga. */
+  actoAt?: string
+  /** Cursor para la próxima vuelta: la última corrida TERMINADA considerada. */
+  evaluadoHasta?: string
+  /** La declaración y lo archivado se contradicen (P30): declarado «no cargado» y archivado igual. */
+  contradiccion?: true
+  /** En el puente: la ruta de la copia archivada que se aceptó como evidencia. */
+  copia?: string
+}
+
+const RESULTADO_POR_OUTCOME: Record<'procesado' | 'saltado' | 'fallido', IntentoObservado['resultado']> = {
   procesado: 'procesada',
   saltado: 'saltada',
   fallido: 'fallida',
+}
+
+/**
+ * El ESTADO de UNA carga (#269·§3.2) — PURA, sin I/O. Su prototipo ejecutable es `v21()` del arnés
+ * del oráculo (`replay-v2.1.mts`), y el arnés con ESTA función reproduce sus 141 estados.
+ *
+ * El principio (§3.1): el estado es SOLO lo que el ingestor declaró de ESTE archivo en un log con
+ * gramática, más los actos registrados (re-subida del mismo nombre, retiro en `_retirado/`,
+ * reversión). La AUSENCIA de declaración nunca se convierte en un resultado: en el landing es «sin
+ * estado», fuera del landing es «sin informe». Por construcción quedan imposibles:
+ *  · atribuirle a un archivo la falla de una corrida que no lo nombró (A);
+ *  · inferir «cargado» de que el archivo salió del landing (F) — `_sin-metadata/` también es salir;
+ *  · inferir «varado» de una edad (G) — la edad es un dato que se muestra, no un resultado.
+ *
+ * Reglas, en orden (el orden ES la regla):
+ *  1. VENTANA. Cuentan las corridas que arrancaron después de la subida, o que estaban en curso cuando
+ *     se subió (P27: la 190 la tomó una corrida que arrancó 15 s antes). La ventana corta en el primer
+ *     retiro o re-subida posterior. Una corrida en curso sin `✔` previo: no se concluye nada todavía.
+ *  2. DECLARACIÓN de este archivo, buscada por el NOMBRE CONOCIDO (D14, P26), no por el corte del
+ *     lector. `✔` → `procesada` (final; gana la primera). `⚠`/`✖` → no finales; gana la última.
+ *  3. PUENTE histórico (§3.1): la copia archivada, SOLO para una carga subida y archivada antes del
+ *     ancla = min(`contrato_desde`, primera corrida con gramática). Sin `contrato_desde`, no hay puente.
+ *  4. ACTO: retiro → `retirada`; re-subida → `reemplazada` (finales).
+ *  5. La última declaración `⚠`/`✖` (o, con cursor, la que ya se tenía).
+ *  6. Corrida `Failed` sin log → `sin-informe`; `Failed` con log sin gramática → `fallida` (legado).
+ *  7. Fuera del landing sin nada de lo anterior → `sin-informe`. En el landing → sin estado.
+ *
+ * Un log con gramática que NO nombra el archivo no aporta evidencia: esa corrida no lo vio.
+ */
+export function resolverEstadoDeCarga(
+  carga: { id?: number; filename: string; uploadedAt: string },
+  corridas: CorridaConLog[],
+  landing: OneLakeEntry[],
+  archivados: OneLakeEntry[],
+  retiros: RetiroDeCarga[],
+  reemplazos: { uploadedAt: string }[],
+  opts: OpcionesResolver = {},
+): EstadoResuelto {
+  const t0 = Date.parse(carga.uploadedAt)
+  const nombre = base(carga.filename)
+  const intentos: IntentoObservado[] = []
+
+  // ── Actos: el primero posterior a la subida corta la ventana ─────────────────────────────────
+  let tEnd = Infinity
+  let acto: 'retirada' | 'reemplazada' | null = null
+  let actoAt: string | undefined
+  for (const r of retiros ?? []) {
+    if (r.uploadId != null ? r.uploadId !== carga.id : base(r.filename) !== nombre) continue
+    const t = Date.parse(r.at)
+    if (Number.isFinite(t) && t > t0 && t < tEnd) {
+      tEnd = t
+      acto = 'retirada'
+      actoAt = r.at
+    }
+  }
+  for (const o of reemplazos ?? []) {
+    const t = Date.parse(o.uploadedAt)
+    if (Number.isFinite(t) && t > t0 && t < tEnd) {
+      tEnd = t
+      acto = 'reemplazada'
+      actoAt = o.uploadedAt
+    }
+  }
+
+  // ── Regla 1 · la ventana ─────────────────────────────────────────────────────────────────────
+  const cursor = opts.evaluadoHasta ? Date.parse(opts.evaluadoHasta) : NaN
+  const ventana = (corridas ?? [])
+    .filter((c) => {
+      const ini = Date.parse(c.run.startedAt)
+      if (!Number.isFinite(ini) || ini >= tEnd) return false
+      if (Number.isFinite(cursor) && ini <= cursor) return false
+      if (!Number.isFinite(t0) || ini >= t0) return true
+      // Estaba en curso cuando se subió (P27): terminó después de la subida, o TODAVÍA no termina
+      // (juez P1 · M2: «estaba en curso» no exige que ya haya terminado; sin esto, una corrida viva
+      // que ya archivó el archivo lo dejaba «sin informe» y mandaba el correo antes de su ✔).
+      if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') return true
+      const fin = c.run.endedAt ? Date.parse(c.run.endedAt) : NaN
+      return Number.isFinite(fin) && fin >= t0
+    })
+    .sort((a, b) => Date.parse(a.run.startedAt) - Date.parse(b.run.startedAt))
+
+  let declarado: IntentoObservado | null = null
+  let porCorrida: Pick<EstadoResuelto, 'estado' | 'runStartedAt' | 'titular'> | null = null
+  let primeraGramatica = Infinity
+  let evaluadoHasta = opts.evaluadoHasta
+  let enCurso = false
+  // Una corrida cuyo log la plataforma NO PUDO MIRAR (dependencia ausente, lectura fallida) puede haber
+  // declarado este archivo: mientras exista en la ventana, la ausencia de declaración no concluye nada.
+  let ciego = false
+  const maxEnCurso = opts.maxEnCursoMs ?? DEFAULT_MAX_RUN_MINUTES * 60_000
+  // Juez P1 · M1 · el cursor NUNCA pasa por encima de una corrida no terminada, se la crea en curso o
+  // no: si después arranca y termina (con el mismo `startedAt`), su declaración tiene que verse.
+  let topeCursor = false
+  for (const c of ventana) {
+    if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') {
+      topeCursor = true
+      // Una corrida no terminada MÁS VIEJA que el umbral de corrida colgada no está tomando nada: el
+      // motor deja `NotStarted` que nunca arrancan (medido en el oráculo: 12 filas, una de hace 19
+      // días), y creerles bloquearía para siempre a toda carga posterior. No es evidencia ni espera —
+      // pero tampoco se salta con el cursor (arriba): solo no bloquea el veredicto.
+      if (opts.nowMs != null && opts.nowMs - Date.parse(c.run.startedAt) > maxEnCurso) continue
+      // Su resultado todavía puede decidir: nada de lo que siga se interpreta antes de que termine.
+      enCurso = true
+      break
+    }
+    const texto = c.log === 'match' ? c.texto : null
+    if (c.log === 'no-medido') ciego = true
+    const hayGramatica = !!texto && parseRunFileOutcomes(texto).length > 0
+    if (hayGramatica) primeraGramatica = Math.min(primeraGramatica, Date.parse(c.run.startedAt))
+    const d = texto ? declaracionDeArchivo(texto, nombre) : undefined
+    // El cursor no pasa por encima de un log que no se pudo mirar (la próxima vuelta lo vuelve a mirar)
+    // ni de una corrida no terminada (M1).
+    if (!ciego && !topeCursor) evaluadoHasta = c.run.startedAt
+    if (d) {
+      const i: IntentoObservado = { runStartedAt: c.run.startedAt, resultado: RESULTADO_POR_OUTCOME[d.outcome] }
+      if (d.motivo != null) i.motivo = d.motivo
+      if (d.codigo != null) i.codigo = d.codigo
+      if (d.params != null) i.params = d.params
+      intentos.push(i)
+      if (i.resultado === 'procesada') {
+        // ✔ es final y gana la PRIMERA: lo que venga después no puede des-cargar el archivo.
+        const out: EstadoResuelto = { estado: 'procesada', final: true, via: 'declaracion', runStartedAt: i.runStartedAt, enCurso: false, intentos }
+        if (declarado) out.ultimoIntento = declarado
+        return conCursor(out, c.run.startedAt)
+      }
+      declarado = i
+      continue
+    }
+    if (hayGramatica) continue // log con gramática que no lo nombra: esa corrida no lo vio
+    if (c.run.status === 'Failed' && !declarado) {
+      if (c.log === 'match' && texto != null) {
+        porCorrida = { estado: 'fallida', runStartedAt: c.run.startedAt }
+        const titular = diagnosticoDeFalla(texto)
+        if (titular) porCorrida.titular = titular
+      } else if (c.log === 'sin-log' || c.log === 'purgado') {
+        porCorrida = { estado: 'sin-informe', runStartedAt: c.run.startedAt }
+      }
+      // `'no-medido'`: la plataforma no miró el log. No se concluye nada.
+    }
+  }
+
+  const enLanding = (landing ?? []).some((e) => e && !e.isDirectory && !isSidecarName(e.path) && base(e.path) === nombre)
+  const cierre = (out: EstadoResuelto): EstadoResuelto => conCursor(out, evaluadoHasta)
+  // Mientras una corrida en curso puede tomarlo, no se concluye nada (salvo un acto: ese ya ocurrió
+  // y cierra la carga aunque la corrida siga — la ventana ya cortó antes de ella).
+  if (enCurso && !acto) return cierre({ estado: opts.previo?.estado ?? null, final: false, via: opts.previo ? 'previo' : 'pendiente', enCurso: true, intentos })
+
+  // ── Regla 3 · el puente histórico ─────────────────────────────────────────────────────────────
+  const desde = opts.contratoDesde ? Date.parse(opts.contratoDesde) : NaN
+  if (Number.isFinite(desde)) {
+    const ancla = Math.min(primeraGramatica, desde)
+    if (t0 < ancla) {
+      const copia = (archivados ?? []).find((e) => {
+        if (!e || e.isDirectory || isSidecarName(e.path)) return false
+        const b = base(e.path)
+        if (nombreSinSello(b) !== nombre) return false
+        const mtime = Date.parse(e.lastModified)
+        const ta = selloDelNombre(b) ?? mtime
+        return mtime >= t0 - MARGEN_ARCHIVADO_MS && ta < tEnd && ta < ancla
+      })
+      if (copia) return cierre({ estado: 'procesada', final: true, via: 'puente', enCurso: false, intentos, copia: copia.path })
+    }
+  }
+
+  // ── Regla 4 · el acto ───────────────────────────────────────────────────────────────────────────
+  if (acto) {
+    const out: EstadoResuelto = { estado: acto, final: true, via: acto === 'retirada' ? 'retiro' : 'reemplazo', enCurso: false, intentos }
+    if (actoAt) out.actoAt = actoAt
+    const ultimo = declarado ?? previoComoIntento(opts.previo)
+    if (ultimo) out.ultimoIntento = ultimo
+    return cierre(out)
+  }
+
+  // ── Regla 5 · la última declaración ⚠/✖ ────────────────────────────────────────────────────────
+  if (declarado) {
+    const out: EstadoResuelto = { estado: declarado.resultado, final: false, via: 'declaracion', runStartedAt: declarado.runStartedAt, enCurso, intentos }
+    if (declarado.motivo != null) out.motivo = declarado.motivo
+    if (declarado.codigo != null) out.codigo = declarado.codigo
+    if (declarado.params != null) out.params = declarado.params
+    if (enLanding || !archivadoTras(archivados, nombre, t0)) return cierre(out)
+    // P30: declarado «no cargado» y archivado igual. Gana la declaración; la consola lo señala.
+    out.contradiccion = true
+    return cierre(out)
+  }
+  const previo = opts.previo
+  if (previo && (previo.estado === 'fallida' || previo.estado === 'saltada')) return cierre(desdePrevio(previo, enCurso, intentos))
+  // «No pude mirar» no es «no hay»: sin declaración legible, nada de lo que sigue se concluye.
+  if (ciego) return cierre({ estado: previo?.estado ?? null, final: false, via: previo ? 'previo' : 'pendiente', enCurso, intentos })
+
+  // ── Regla 6 · la corrida sin declaración ─────────────────────────────────────────────────────────
+  if (porCorrida?.estado) {
+    const out: EstadoResuelto = { estado: porCorrida.estado, final: false, via: porCorrida.estado === 'sin-informe' ? 'sin-log' : 'corrida', enCurso, intentos }
+    if (porCorrida.runStartedAt) out.runStartedAt = porCorrida.runStartedAt
+    if (porCorrida.titular) out.titular = porCorrida.titular
+    return cierre(out)
+  }
+  if (previo) return cierre(desdePrevio(previo, enCurso, intentos))
+
+  // ── Regla 7 · la ausencia ──────────────────────────────────────────────────────────────────────
+  if (!enLanding) return cierre({ estado: 'sin-informe', final: false, via: 'fuera-sin-declaracion', enCurso, intentos })
+  return cierre({ estado: null, final: false, via: 'pendiente', enCurso, intentos })
+}
+
+/** Margen del puente: la copia archivada no puede ser anterior a la subida (5 s de reloj). */
+const MARGEN_ARCHIVADO_MS = 5_000
+
+function conCursor(out: EstadoResuelto, evaluadoHasta: string | undefined): EstadoResuelto {
+  if (evaluadoHasta != null) out.evaluadoHasta = evaluadoHasta
+  return out
+}
+
+function previoComoIntento(p: EstadoPrevio | undefined): IntentoObservado | undefined {
+  if (!p || (p.estado !== 'fallida' && p.estado !== 'saltada') || !p.runStartedAt) return undefined
+  const i: IntentoObservado = { runStartedAt: p.runStartedAt, resultado: p.estado }
+  if (p.motivo != null) i.motivo = p.motivo
+  if (p.codigo != null) i.codigo = p.codigo
+  if (p.params != null) i.params = p.params
+  return i
+}
+
+function desdePrevio(p: EstadoPrevio, enCurso: boolean, intentos: IntentoObservado[]): EstadoResuelto {
+  const out: EstadoResuelto = { estado: p.estado, final: false, via: 'previo', enCurso, intentos }
+  if (p.motivo != null) out.motivo = p.motivo
+  if (p.codigo != null) out.codigo = p.codigo
+  if (p.params != null) out.params = p.params
+  if (p.runStartedAt != null) out.runStartedAt = p.runStartedAt
+  return out
+}
+
+/** ¿Hay una copia archivada de este nombre escrita después de la subida? (insumo de la señal P30) */
+function archivadoTras(archivados: OneLakeEntry[], nombre: string, t0: number): boolean {
+  return (archivados ?? []).some((e) => e && !e.isDirectory && nombreSinSello(base(e.path)) === nombre && Date.parse(e.lastModified) >= t0 - MARGEN_ARCHIVADO_MS)
 }
 
 /** Basename de una ruta del Lakehouse: el registro guarda el nombre, el listado trae la ruta. */

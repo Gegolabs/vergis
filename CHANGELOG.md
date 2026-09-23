@@ -61,6 +61,80 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+*Contenido previsto para el corte **0.35.0** (hito P1 · «Verdad» del diseño de la experiencia de carga,
+lab A.R.B.O.L. `work/269`). El corte —`package.json`, tag y filas `CAP-NN`— es de la custodia.*
+
+### El estado de cada carga dice la verdad: solo lo declarado y lo registrado, y avanza hasta un final
+
+**El hueco.** Medido sobre las 141 cargas aceptadas de la primera instancia (arnés de replay contra su
+registro, 79 logs y los listados reales), **70 mostraban un estado falso**, por seis mecanismos:
+
+- **(A)** un archivo procesado terminaba «✕ Falló» porque una corrida **posterior**, que no lo nombraba, falló (11);
+- **(B)** el primer rechazo o espera se escribía como definitivo aunque el archivo se cargara después (24);
+- **(C)** un retiro no cerraba la carga: solo se entendía una de las tres formas del nombre en `_retirado/` (22);
+- **(D)** una re-subida con el mismo nombre tampoco (9);
+- **(F)** «salió del landing tras una corrida Completed» se leía como «se cargó», y los dos casos eran archivos apartados sin cargar (2);
+- **(G)** «varada» —una edad— se escribía como resultado (2).
+
+A eso se suman dos defectos de lectura: el lector cortaba el nombre en « - » (`20260921 - Recepción….xlsx`
+se leía `20260921`) y el resolvedor ignoraba la corrida que ya estaba en curso cuando se subió el archivo.
+
+**Qué trae.**
+
+- **Resolvedor por construcción** (`resolverEstadoDeCarga`, puro): el estado es solo lo que el job
+  declaró de ESE archivo (buscado por su nombre conocido, no por el corte del lector) más los actos
+  registrados — re-subida, retiro en `_retirado/` en sus tres formas, reversión, «Deshacer». La
+  ausencia de declaración nunca es un resultado: en el landing es «sin estado», fuera de él es
+  `sin-informe`. Queda **un** puente cerrado para las cargas anteriores al contrato `_logs/`, anclado a
+  `contrato_desde` (declarado por slot), nunca a los logs que sobreviven a la poda.
+- **El estado avanza hasta uno final** (`procesada`, `retirada`, `reemplazada`, `deshecha`) con
+  historia de intentos (tabla nueva `intake_intento`). Un estado final no cambia; uno intermedio cambia
+  solo con su intento registrado. Los estados nuevos se muestran en la consola.
+- **Lector (`parseRunFileOutcomes`)**: el corte ASCII « - » vale solo si su izquierda termina en una
+  extensión de archivo.
+- **Consola de Cargas**: «Recibido» y «⏳ Cargando» en vez de una celda vacía; los estados nuevos con
+  su fecha; el motivo del **rechazo en la puerta** («No se recibió» + por qué); cada corrida dice qué
+  tomó de este tipo de archivo; el `state=[dead]` del motor va plegado; «Vigente» para el slot cuyo
+  proceso no archiva; una **señal de contrato** (lo que salió del landing fuera de `_retirado/`, lo
+  declarado «no cargado» y archivado igual, la falta de `contacto`, los nombres del registro que calzan
+  con dos tipos).
+- **Aviso de duplicado veraz**: cita la carga **más reciente** con ese contenido y su estado; dice «no
+  cambia nada» solo si esa carga se cargó y ninguna posterior del mismo nombre la pisó.
+- **La puerta**: normaliza el nombre a NFC antes de validar, registrar y aterrizar; **rechaza** un
+  nombre que calza con dos o más tipos de archivo; y a un nombre que ya se recibió y hoy no calza con
+  ninguno le dice que ese archivo cambió de nombre. Tras cada recarga, el lazo mide qué nombres del
+  registro calzan con dos o más tipos y lo deja en el log y en la consola.
+- **Aviso al operador por carga**: flujo nuevo `cargas-operador` en `VERGIS_NOTIFY` (una notificación
+  por carga `sin-informe` o con guía de actor operador, deduplicada). El aviso al usuario dice «Le
+  avisamos al equipo» **solo** si hay un destino suscrito; si no, «Avísale a {contacto}»; sin ninguno,
+  nada. La línea de actor `operador` de las guías deja de afirmar «el equipo ya fue avisado».
+- **`expectedInLanding`** ya no espera archivos de cargas en estado final: un proceso cuyo motor dejó de
+  conservar corridas no vuelve a gritar «CONTRADICE» sobre cargas procesadas.
+
+**Qué exige al operador.**
+
+- **Migración aditiva** del store de gobierno: tabla nueva `intake_intento` y cuatro columnas anulables
+  en `intake_upload` (`desenlace_final`, `evaluado_hasta`, `operador_avisado_at`, `acto_at`). **No** sube
+  `SCHEMA_VERSION` y **no rompe rollback**: 0.34.0 abre y escribe el archivo migrado (medido). Lo que
+  0.34.0 escriba durante un rollback vuelve a evaluarse al volver a esta versión.
+- **Al estrenar, el lazo reevalúa en silencio** los estados que escribió la versión anterior (sin
+  correos): cada uno que cambia queda guardado como intento `registro-v1`.
+- **Cero variables de entorno nuevas.** Claves nuevas, todas opcionales y con recarga en caliente, en el
+  archivo de intake: `contacto:` (raíz, heredable por slot), `contrato_desde:` y `target.processed:
+  <ruta> | false` por slot. Sin `contrato_desde` no hay puente histórico (fail-closed: esas cargas
+  quedan `sin-informe`). Flujo nuevo opcional `cargas-operador` en `VERGIS_NOTIFY`.
+- **Orden**: esta versión antes de declarar las claves nuevas de la instancia. Una versión anterior
+  tolera las claves nuevas del archivo de intake (no las usa), **pero no el flujo `cargas-operador`**:
+  0.34.0 rechaza en el arranque un evento de `VERGIS_NOTIFY` que no conoce. En un rollback a < 0.35.0,
+  quitar ese flujo primero.
+
+**Qué NO cambia.** Los guards de los jobs, las rutas y la autorización de la consola. `varada` ya
+escrito se lee igual; esta versión no lo produce más.
+
+Contrato: [`docs/contrato-ingesta-logs.md`](docs/contrato-ingesta-logs.md) §3, §4 y §5 (puntos 6–8).
+
 ## 0.34.0 — 2026-09-23
 
 ### Guías de carga: cuando un archivo no entra, el usuario lee qué pasó y qué hacer (issue #346, PR #350)

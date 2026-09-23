@@ -80,7 +80,9 @@ import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requir
 import type { MenuSection } from './menu-config'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
 import { readMultipart } from './multipart'
-import { cargasBody, revertPlanBody, cargasHref, destinoAviso, erroresFrecuentesBody, type CargasOps, type SlotCargas } from './admin-cargas'
+import { cargasBody, revertPlanBody, cargasHref, destinoAviso, erroresFrecuentesBody, motivoDeRechazo, type CargasOps, type SlotCargas } from './admin-cargas'
+// #269 · capacidades nuevas, importadas de su módulo (el barril no es parte del territorio del cambio).
+import { nombreCanonico, slotsQueCalzan } from '../packages/capabilities/src/intake'
 import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -300,6 +302,9 @@ export interface AdminDeps {
   runLogs?: RunLogsOps
   /** Registro de cargas (issue #62): dedup por contenido + pre-check. Sin él, ambos degradan a no-op. */
   intakeUploads?: IntakeUploadStore
+  /** #269·V12 · ¿hay HOY un destino suscrito a `cargas-operador`? Decide la línea de aviso de la consola
+   *  («Le avisamos al equipo» solo si es cierto). Ausente = no hay. */
+  hayDestinoOperador?: () => boolean
   /** Dispara (fire-and-forget) el indexado retroactivo de `_processed/` del slot si aún no corrió.
    * Lo implementa el wiring: ni la subida ni el pre-check esperan por él. Opcional. */
   intakeBackfill?: (slot: IntakeSlot) => void
@@ -906,6 +911,22 @@ export function dupLabel(row: Pick<IntakeUploadRow, 'filename' | 'uploadedAt' | 
 const SHA_RE = /^[0-9a-f]{64}$/
 
 /**
+ * La PUERTA (#269·§4.1, D12): la validación de siempre del slot MÁS la garantía de disjunción. Un
+ * nombre que calza con dos o más tipos de archivo NO aterriza, cualquiera sea la configuración: no se
+ * puede saber a cuál va, y dejarlo entrar es exactamente el «archivo en el tipo equivocado» que el
+ * invariante existe para volver imposible. La garantía vive acá y no en la recarga: la recarga es
+ * síncrona y la disjunción que importa es sobre nombres reales, no entre patrones.
+ */
+export function validarEnLaPuerta(slots: IntakeSlot[], slot: IntakeSlot, filename: string, size: number): { ok: true } | { ok: false; error: string; reason?: 'accept' | 'ambiguo' } {
+  const v = validateUpload(slot, filename, size)
+  if (!v.ok) return v.reason ? { ok: false, error: v.error, reason: v.reason } : { ok: false, error: v.error }
+  const calzan = slotsQueCalzan(slots, filename)
+  if (calzan.length >= 2)
+    return { ok: false, reason: 'ambiguo', error: `Este nombre calza con más de un tipo de archivo (${calzan.map((s) => `«${s.label}»`).join(', ')}): no se puede saber a cuál va, así que no se recibió. Hay que corregir los patrones de esos tipos.` }
+  return { ok: true }
+}
+
+/**
  * Pre-check de duplicados por hash (issue #62): el browser calcula el SHA-256 de cada archivo y
  * pregunta ANTES de subir. Consultivo por contrato — sin store responde `{dups:[]}` y el form se
  * envía sin aviso previo; el server siempre recalcula el sha con sus propios bytes al recibir.
@@ -935,12 +956,88 @@ async function handlePrecheck(
   }
   deps.intakeBackfill?.(slot) // primer contacto con el slot: indexa `_processed/` en background
   const shas = [...new Set((f['shas'] ?? '').split(',').map((s) => s.trim().toLowerCase()).filter((s) => SHA_RE.test(s)))].slice(0, 50)
-  const dups: { sha256: string; filename: string; uploadedAt: string; origen: string }[] = []
+  const dups: { sha256: string; filename: string; uploadedAt: string; origen: string; aviso: string; bloquea: boolean }[] = []
+  const insumos = await insumosDeDuplicado(deps, slot)
   for (const sha of shas) {
-    const prev = await deps.intakeUploads.findUploadBySha(slot.id, sha).catch(() => null)
-    if (prev) dups.push({ sha256: sha, filename: prev.filename, uploadedAt: prev.uploadedAt, origen: prev.origen })
+    const prev = await ultimaConContenido(deps.intakeUploads, slot.id, sha)
+    if (!prev) continue
+    const a = avisoDeDuplicado(prev, insumos, Date.now())
+    dups.push({ sha256: sha, filename: prev.filename, uploadedAt: prev.uploadedAt, origen: prev.origen, aviso: a.texto, bloquea: a.pregunta })
   }
   json(200, { dups })
+}
+
+/** #269·V4 · la carga MÁS RECIENTE con ese contenido (la original puede haberse pisado o no haberse
+ *  cargado nunca). Sin la lectura nueva en el store, la original: el aviso degrada, no miente. */
+async function ultimaConContenido(store: IntakeUploadStore, slotId: string, sha: string): Promise<IntakeUploadRow | null> {
+  const f = store.findLatestUploadBySha ? store.findLatestUploadBySha.bind(store) : store.findUploadBySha.bind(store)
+  return f(slotId, sha).catch(() => null)
+}
+
+/** Lo que el aviso de duplicado necesita saber del slot, además de la carga previa. */
+interface InsumosDuplicado {
+  /** Cargas recientes del slot (para saber si la previa sigue vigente). `null` = no se pudo leer. */
+  cargas: IntakeUploadRow[] | null
+  /** Nombres en el landing. `null` = no se pudo leer a tiempo: no se afirma «en espera». */
+  landing: Set<string> | null
+}
+
+async function insumosDeDuplicado(deps: AdminDeps, slot: IntakeSlot): Promise<InsumosDuplicado> {
+  const cargas = deps.intakeUploads ? await deps.intakeUploads.listUploads(slot.id, 200).catch(() => null) : null
+  let landing: Set<string> | null = null
+  if (deps.cargas?.landing) {
+    // El pre-check tiene 3 s del lado del navegador: si el landing no responde en 2 s, no se afirma
+    // nada que dependa de él (la carga «en espera» se dice solo sabiendo que sigue ahí).
+    const lista = await Promise.race([
+      deps.cargas.landing(slot).catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 2_000)),
+    ])
+    if (lista) landing = new Set(lista.filter((e) => !e.isDirectory).map((e) => e.path.replace(/^.*\//, '')))
+  }
+  return { cargas, landing }
+}
+
+/**
+ * El AVISO de duplicado, verdadero (#269·V4). Antes citaba la carga MÁS ANTIGUA con ese contenido y
+ * afirmaba «procesado el …; re-procesarlo no cambiará el dato» sin mirar si esa carga se había
+ * cargado, si otra la había pisado después o si seguía esperando (P3: la 223). Ahora se mira la MÁS
+ * RECIENTE y su estado, y cada frase se dice solo si es cierta:
+ *  · cargada y vigente (ninguna carga posterior del mismo nombre se cargó después) → «no cambia nada»;
+ *  · cargada pero pisada, o de vigencia desconocida → solo el hecho, sin la promesa;
+ *  · en espera (sigue en el landing) → «se vuelve a intentar solo»;
+ *  · todavía cargándose → que se está cargando;
+ *  · no cargada y fuera del landing → que esa vez no se cargó, y por qué.
+ * `pregunta` = el navegador ofrece «Subir igual / No subir»; si no, solo informa.
+ */
+export function avisoDeDuplicado(prev: IntakeUploadRow, ins: InsumosDuplicado, nowMs: number): { texto: string; pregunta: boolean } {
+  const fecha = `${prev.uploadedAt.slice(0, 16).replace('T', ' ')} UTC`
+  const quien = prev.uploadedBy && prev.origen !== 'retro' ? ` (${prev.uploadedBy})` : ''
+  if (prev.origen === 'retro') return { texto: `Este mismo archivo ya se cargó el ${fecha}.`, pregunta: true }
+  const estado = prev.desenlace
+  if (estado === 'procesada') {
+    const pisada = ins.cargas == null
+      ? null
+      : ins.cargas.some((c) => c.id !== prev.id && c.ok && c.filename === prev.filename && c.desenlace === 'procesada' && Date.parse(c.uploadedAt) > Date.parse(prev.uploadedAt))
+    if (pisada === false) return { texto: `Ya se cargó este mismo archivo el ${fecha}${quien}. Subirlo de nuevo no cambia nada.`, pregunta: true }
+    return { texto: `Este mismo archivo ya se cargó el ${fecha}${quien}.`, pregunta: true }
+  }
+  const enLanding = ins.landing?.has(prev.filename.replace(/^.*[/\\]/, '')) ?? null
+  if (estado == null) {
+    const min = Math.max(0, Math.round((nowMs - Date.parse(prev.uploadedAt)) / 60_000))
+    return { texto: `Subiste este mismo archivo hace ${min} minuto${min === 1 ? '' : 's'} y todavía se está cargando.`, pregunta: true }
+  }
+  if ((estado === 'fallida' || estado === 'saltada') && enLanding === true)
+    return { texto: `Ya subiste este mismo archivo el ${fecha} y todavía está en espera: se vuelve a intentar solo. No hace falta subirlo de nuevo.`, pregunta: true }
+  const frase: Partial<Record<string, string>> = {
+    fallida: 'el proceso de carga lo rechazó',
+    saltada: 'el proceso de carga no lo cargó',
+    'sin-informe': 'el proceso de carga no informó qué pasó',
+    retirada: 'se retiró antes de cargarse',
+    reemplazada: 'lo reemplazó otra carga con el mismo nombre',
+    deshecha: 'se cargó y después se deshizo',
+    varada: 'quedó esperando sin que el proceso lo tomara',
+  }
+  return { texto: `Ya subiste este mismo archivo el ${fecha} y esa vez no se cargó: ${frase[estado] ?? estado}. Revisa eso antes de volver a subirlo.`, pregunta: true }
 }
 
 async function handleIntake(
@@ -971,7 +1068,9 @@ async function handleIntake(
     const base = enCargas ? cargasHref(domain.id, slot.id) + '&' : `/admin/dominio/${domain.id}/frescura?`
     return `${base}msg=${encodeURIComponent(msg)}${d}`
   }
-  const uploads = files.filter((f) => f.field === 'file' && f.filename)
+  // #269·D7 · el nombre se lleva a su forma canónica (NFC) ANTES de validar, registrar y aterrizar: una
+  // descarga en macOS llega a veces descompuesta y no calzaría con ningún patrón, ni siquiera con `?`.
+  const uploads = files.filter((f) => f.field === 'file' && f.filename).map((f) => ({ ...f, filename: nombreCanonico(f.filename) }))
   if (uploads.length === 0) {
     redirect(res, volver('Error: no se adjuntó ningún archivo.'))
     return
@@ -989,7 +1088,16 @@ async function handleIntake(
   // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
   // dejar la semana a medio cargar). El SJD failure-safe espera el set consistente, no archivos sueltos.
   for (const [i, u] of uploads.entries()) {
-    const v = validateUpload(slot, u.filename, u.bytes.length)
+    const v = validarEnLaPuerta(deps.intakeSlots ?? [], slot, u.filename, u.bytes.length)
+    if (!v.ok && v.reason === 'accept') {
+      // #269·§4.1 · un nombre que ya se RECIBIÓ antes y hoy no calza con ningún tipo (la carga 27): se
+      // dice que ese archivo cambió de nombre, en vez del rechazo genérico que no explica nada.
+      const previo = !slotsQueCalzan(deps.intakeSlots ?? [], u.filename).length && deps.intakeUploads?.findAcceptedUploadByFilename
+        ? await deps.intakeUploads.findAcceptedUploadByFilename(u.filename).catch(() => null)
+        : null
+      const tipoPrevio = previo ? (deps.intakeSlots ?? []).find((s) => s.id === previo.slotId) : undefined
+      if (tipoPrevio) v.error = `Este archivo se recibió antes como «${tipoPrevio.label}», pero ese archivo ahora tiene que llamarse así: «${tipoPrevio.accept ?? '(sin patrón)'}». Si es la planilla nueva, cámbiale el nombre; si es la antigua, ya no se carga.`
+    }
     if (!v.ok) {
       await registrar(uploadRow(i, false, { error: v.error }))
       deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
@@ -1033,11 +1141,15 @@ async function handleIntake(
   // no participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
   // re-procesar idéntico es legítimo (re-materialización); lo que se elimina es la sorpresa.
   // Check-then-insert POR ARCHIVO y en orden: dos idénticos del MISMO lote también se detectan.
+  // #269·V4 · el aviso cita la carga MÁS RECIENTE con ese contenido y dice solo lo que es cierto de
+  // ella; `dup_of` sigue apuntando a la ORIGINAL (es la referencia estable del registro).
+  const insumosDup = deps.intakeUploads ? await insumosDeDuplicado(deps, slot) : null
   for (const [i, u] of uploads.entries()) {
     const sha256 = shas[i]!
     const previa = deps.intakeUploads ? await deps.intakeUploads.findUploadBySha(slot.id, sha256).catch(() => null) : null
     const dupOf = previa ? dupLabel(previa) : null
-    if (dupOf) duplicados.push(`«${u.filename}» es idéntico a ${dupOf}`)
+    const ultima = previa && deps.intakeUploads ? await ultimaConContenido(deps.intakeUploads, slot.id, sha256) : null
+    if (ultima && insumosDup) duplicados.push(`«${u.filename}»: ${avisoDeDuplicado(ultima, insumosDup, Date.now()).texto}`)
     const m = metaPorArchivo[i]!
     const sidecar = hasMeta ? buildSidecar(slot.id, m.values, by, uploadedAt, m.verify) : undefined
     await deps.intake.put(slot.target, u.filename, u.bytes, sidecar)
@@ -1045,8 +1157,8 @@ async function handleIntake(
     deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}) })
   }
   if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
-  const aviso = duplicados.length ? ` ⚠ Contenido ya procesado antes: ${duplicados.join('; ')} — re-procesarlo no cambiará el dato.` : ''
-  redirect(res, volver(`${uploads.length} archivo(s) recibido(s).${aviso}${willTrigger ? ' La carga está corriendo — seguila en «Última corrida».' : ''}`))
+  const aviso = duplicados.length ? ` ⚠ ${duplicados.join(' ')}` : ''
+  redirect(res, volver(`Recibimos ${uploads.length} archivo(s).${willTrigger ? ' Ya empezó la carga: el resultado aparece en «Actividad» en unos minutos.' : ' Este archivo no se carga en el momento: lo toma el proceso en su próxima corrida.'}${aviso}`))
 }
 
 async function handleEntityWrite(
@@ -2126,8 +2238,9 @@ const PRECHECK_JS = `(function(f){
           .then(function(r){return r.json()}).then(function(j){
             var by={}; (j.dups||[]).forEach(function(d){by[d.sha256]=d});
             for(var i=0;i<shas.length;i++){var d=by[shas[i]]; if(!d)continue;
-              var cuando=String(d.uploadedAt||'').slice(0,16).replace('T',' ')+' UTC';
-              if(!confirm('«'+fs[i].name+'» es idéntico a «'+d.filename+'», procesado el '+cuando+'; re-procesarlo no cambiará el dato. ¿Continuar?'))return;
+              var msg='«'+fs[i].name+'»: '+(d.aviso||('es idéntico a «'+d.filename+'».'));
+              if(d.bloquea===false){alert(msg);continue}
+              if(!confirm(msg+' ¿Subir igual?'))return;
             }
             send();
           })
@@ -2190,6 +2303,13 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
     }
     // #346 · guías de carga: el catálogo vivo y, si la instancia lo cablea, el conteo de 30 días para
     // la señal de cobertura. Tolerante como los demás: sin conteo no hay señal, la página sirve igual.
+    // #269·V6 · qué tomó cada corrida de ESTE tipo (del registro de intentos). Tolerante como los demás.
+    if (ops.intentos) {
+      const desde = data.runs !== 'error' && data.runs.length ? data.runs[data.runs.length - 1]!.startedAt : new Date(Date.now() - 30 * 86_400_000).toISOString()
+      const xs = await ops.intentos(slot, desde).catch(() => null)
+      if (xs) data.intentosDeCorridas = xs
+    }
+    data.hayDestinoOperador = deps.hayDestinoOperador?.() === true
     if (deps.intakeGuias) {
       data.guias = deps.intakeGuias
       if (ops.codigos) {

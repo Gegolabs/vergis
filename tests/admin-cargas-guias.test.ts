@@ -96,22 +96,31 @@ const cargaMaestro = (over: Partial<IntakeUploadEvent> = {}): IntakeUploadEvent 
  * referencia del control negativo.
  */
 function celdaPre346(h: IntakeUploadEvent, runs: RunRecord[] | 'error', hrefDeRun?: (r: RunRecord) => string | null): string {
+  // #269 · la celda SIN guía con el vocabulario de 0.35.0 (chip + frase del estado, §4.2 de work/269):
+  // el control negativo de #346 sigue siendo el mismo —sin código la celda no cambia por las guías—,
+  // contra la referencia vigente.
   const AVISO = 'color:var(--yellow,#d97706)'
   const BADGE: Record<string, string> = {
-    procesada: '<b style="color:var(--accent)">✓ Procesada</b>',
-    saltada: `<b style="${AVISO}">⚠ Saltada</b>`,
-    fallida: '<b style="color:var(--err)">✕ Falló</b>',
-    'sin-informe': '<b style="color:var(--err)">✕ Sin informe</b>',
+    procesada: '<b style="color:var(--accent)">✓ Cargado</b>',
+    saltada: `<b style="${AVISO}">⏸ No se cargó</b>`,
+    fallida: '<b style="color:var(--err)">✕ No se pudo cargar</b>',
+    'sin-informe': `<b style="${AVISO}">⚠ Sin informe</b>`,
     varada: `<b style="${AVISO}">⚠ Varada</b>`,
+  }
+  const FRASE: Record<string, string> = {
+    fallida: 'El proceso de carga lo rechazó con este mensaje:',
+    saltada: 'El proceso de carga no lo cargó y no dijo por qué.',
+    'sin-informe': 'No sabemos qué pasó con este archivo: el proceso de carga no lo informó.',
   }
   if (!h.desenlace) return ''
   const badge = BADGE[h.desenlace] ?? escapeHtml(String(h.desenlace))
-  const crudo = h.desenlaceMotivo ?? (h.desenlace === 'sin-informe' ? 'el proceso terminó sin reportar la causa' : '')
+  const frase = FRASE[h.desenlace] ? `<div class="sub">${FRASE[h.desenlace]}</div>` : ''
+  const crudo = h.desenlaceMotivo ?? ''
   const recortado = crudo.length > 300 ? crudo.slice(0, 300) + '…' : crudo
   const motivo = recortado ? `<div class="sub">${escapeHtml(redactSecrets(recortado))}</div>` : ''
   const corrida = h.desenlaceRunStartedAt && runs !== 'error' ? runs.find((r) => r.startedAt === h.desenlaceRunStartedAt) : undefined
   const link = corrida && hrefDeRun?.(corrida) ? `<div><a class="sub" href="${escapeHtml(hrefDeRun(corrida)!)}">Ver corrida</a></div>` : ''
-  return `${badge}${motivo}${link}`
+  return `${badge}${frase}${motivo}${link}`
 }
 
 describe('#346·H3 · celda Desenlace CON guía', () => {
@@ -148,7 +157,11 @@ describe('#346·H3 · celda Desenlace CON guía', () => {
   it('con actor operador la línea dice que no es su archivo', () => {
     const g = guiaDeCarga(SLOT_MAESTRO, cargaMaestro({ desenlaceCodigo: 'falla-plataforma' }), CATALOGO)
     expect(g!.actor).toBe('operador')
-    expect(desenlaceCelda(cargaMaestro(), RUNS, href, g)).toContain('No es por tu archivo: el equipo ya fue avisado')
+    const celda = desenlaceCelda(cargaMaestro(), RUNS, href, g)
+    expect(celda).toContain('No es por tu archivo: el proceso de carga tuvo un problema propio')
+    // #269·V12 · sin destino del operador ni contacto, la celda NO afirma que alguien fue avisado.
+    expect(celda).not.toMatch(/avisad|avisamos/i)
+    expect(desenlaceCelda(cargaMaestro(), RUNS, href, g, { aviso: 'Avísale a arbol@ejemplo.cl.' })).toContain('Avísale a arbol@ejemplo.cl.')
   })
 })
 
@@ -223,8 +236,12 @@ describe('#346·H3 · correo a quien subió', () => {
   it('actor operador: NO le pide corregir nada', () => {
     const n = composeCargaUserNotice(con('falla-plataforma'))
     const texto = [n.title, ...n.lines].join('\n')
-    expect(n.lines[0]).toBe('No es por tu archivo: el equipo ya fue avisado.')
+    expect(n.lines[0]).toBe('No es por tu archivo: el proceso de carga tuvo un problema propio.')
     expect(texto).not.toMatch(/Cuando lo corrijas|Hay que corregir|vuelve a subir/i)
+    // #269·V12 · la línea de aviso sale solo si es cierta: sin destino ni contacto, ninguna.
+    expect(texto).not.toMatch(/avisad|avisamos|Avísale/i)
+    expect(composeCargaUserNotice({ ...con('falla-plataforma'), equipoAvisado: true }).lines).toContain('Le avisamos al equipo de la plataforma.')
+    expect(composeCargaUserNotice({ ...con('falla-plataforma'), contacto: 'arbol@ejemplo.cl' }).lines).toContain('Avísale a arbol@ejemplo.cl.')
     expect(n.data).toMatchObject({ actor: 'operador' })
   })
 

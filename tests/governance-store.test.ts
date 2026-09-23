@@ -738,30 +738,36 @@ describe('GovernanceStore · conteo del contrato `_logs/` en la proyección (#16
   })
 })
 
-describe('GovernanceStore · desenlace por carga (#162·§3.4)', () => {
-  it('listUploadsSinDesenlace: pendientes del slot, antiguas primero, sin rechazadas ni retro', async () => {
+describe('GovernanceStore · estado por carga que avanza (#162·§3.4, #269·D1)', () => {
+  it('listUploadsNoFinales: no finales del slot, antiguas primero, sin rechazadas ni retro', async () => {
     const g = await SqliteGovernanceStore.open(null, {})
     const vieja = await g.recordUpload(upload({ filename: 'vieja.xlsx', uploadedAt: '2026-08-01T10:00:00Z' }))
     const nueva = await g.recordUpload(upload({ filename: 'nueva.xlsx', sha256: SHA_B, uploadedAt: '2026-08-10T10:00:00Z' }))
     await g.recordUpload(upload({ filename: 'rechazada.xlsx', uploadedAt: '2026-08-02T10:00:00Z', ok: false, error: 'vacío' }))
     await g.recordUpload(upload({ filename: 'retro.xlsx', uploadedAt: '2026-08-03T10:00:00Z', origen: 'retro' }))
     await g.recordUpload(upload({ slotId: 'otro', filename: 'ajena.xlsx', uploadedAt: '2026-08-04T10:00:00Z' }))
-    expect((await g.listUploadsSinDesenlace('saldos')).map((r) => r.id)).toEqual([vieja, nueva])
-    // Resuelta ⇒ sale de la cola (dedup natural del resolver: no se re-notifica lo ya resuelto).
-    await g.setUploadDesenlace(vieja, { desenlace: 'procesada', at: '2026-08-13T10:00:00Z' })
-    expect((await g.listUploadsSinDesenlace('saldos')).map((r) => r.id)).toEqual([nueva])
-    expect(await g.listUploadsSinDesenlace('saldos', 0)).toEqual([])
+    expect((await g.listUploadsNoFinales('saldos')).map((r) => r.id)).toEqual([vieja, nueva])
+    // Un estado NO final sigue en la cola: el archivo puede terminar cargado (D1).
+    await g.avanzarEstado(vieja, { estado: 'fallida', final: false, at: '2026-08-13T10:00:00Z' })
+    expect((await g.listUploadsNoFinales('saldos')).map((r) => r.id)).toEqual([vieja, nueva])
+    // Un estado FINAL sale de la cola.
+    await g.avanzarEstado(vieja, { estado: 'procesada', final: true, at: '2026-08-13T11:00:00Z' })
+    expect((await g.listUploadsNoFinales('saldos')).map((r) => r.id)).toEqual([nueva])
+    expect(await g.listUploadsNoFinales('saldos', 0)).toEqual([])
     await g.close()
   })
 
-  it('setUploadDesenlace persiste desenlace + motivo textual + corrida, y listUploads lo sirve', async () => {
+  it('avanzarEstado persiste estado + motivo textual + corrida + final, y sobrevive a reabrir', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'vergis-desenlace-')), 'governance.sqlite')
     const g1 = await SqliteGovernanceStore.open(file, {})
     const id = await g1.recordUpload(upload())
-    await g1.setUploadDesenlace(id, {
-      desenlace: 'fallida',
+    await g1.avanzarEstado(id, {
+      estado: 'fallida',
+      final: false,
       motivo: 'ancho inesperado: 28 columnas (se esperaban 48)',
       runStartedAt: '2026-07-13T16:20:00Z',
+      evaluadoHasta: '2026-07-13T16:20:00Z',
+      intentos: [{ runStartedAt: '2026-07-13T16:20:00Z', resultado: 'fallida', motivo: 'ancho inesperado: 28 columnas (se esperaban 48)' }],
       at: '2026-07-13T16:30:00Z',
     })
     await g1.close()
@@ -772,22 +778,75 @@ describe('GovernanceStore · desenlace por carga (#162·§3.4)', () => {
       desenlaceMotivo: 'ancho inesperado: 28 columnas (se esperaban 48)',
       desenlaceRunStartedAt: '2026-07-13T16:20:00Z',
       desenlaceAt: '2026-07-13T16:30:00Z',
+      desenlaceFinal: false,
+      evaluadoHasta: '2026-07-13T16:20:00Z',
     })
+    expect((await g2.listIntentos(id)).map((i) => [i.runStartedAt, i.resultado, i.origen])).toEqual([['2026-07-13T16:20:00Z', 'fallida', 'declaracion']])
     await g2.close()
   })
 
-  it('CRITERIO 3 · un desenlace NO se sobrescribe: la segunda escritura lanza y el motivo original queda', async () => {
+  it('D1 · un estado FINAL no cambia (lanza), repetirlo es no-op, y la única salida es procesada → deshecha', async () => {
     const g = await SqliteGovernanceStore.open(null, {})
     const id = await g.recordUpload(upload())
-    await g.setUploadDesenlace(id, { desenlace: 'sin-informe' })
-    await expect(g.setUploadDesenlace(id, { desenlace: 'procesada', motivo: 'otro' })).rejects.toBeInstanceOf(GovernanceConflict)
-    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'sin-informe' })
-    expect((await g.listUploads('saldos', 10))[0]!.desenlaceMotivo).toBeUndefined()
-    await expect(g.setUploadDesenlace(9999, { desenlace: 'procesada' })).rejects.toThrow(/No existe la carga/)
+    await g.avanzarEstado(id, { estado: 'sin-informe', final: false })
+    // No final → avanza (el archivo apareció declarado ✔ en una corrida posterior).
+    await g.avanzarEstado(id, { estado: 'procesada', final: true, runStartedAt: '2026-08-01T10:00:00Z' })
+    await expect(g.avanzarEstado(id, { estado: 'fallida', final: false, motivo: 'otro' })).rejects.toBeInstanceOf(GovernanceConflict)
+    await expect(g.avanzarEstado(id, { estado: 'retirada', final: true })).rejects.toBeInstanceOf(GovernanceConflict)
+    await g.avanzarEstado(id, { estado: 'procesada', final: true }) // mismo final: no-op, sin lanzar
+    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'procesada', desenlaceRunStartedAt: '2026-08-01T10:00:00Z' })
+    await g.avanzarEstado(id, { estado: 'deshecha', final: true, actoAt: '2026-08-02T10:00:00Z', runStartedAt: '2026-08-01T10:00:00Z' })
+    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'deshecha', desenlaceFinal: true, actoAt: '2026-08-02T10:00:00Z' })
+    await expect(g.avanzarEstado(id, { estado: 'procesada', final: true })).rejects.toBeInstanceOf(GovernanceConflict)
+    await expect(g.avanzarEstado(9999, { estado: 'procesada', final: true })).rejects.toThrow(/No existe la carga/)
     await g.close()
   })
 
-  it('CRITERIO 4 · una db PRE-EXISTENTE sin las columnas nuevas migra sin pérdida de datos', async () => {
+  it('D1 · el valor de la versión ANTERIOR se reevalúa y, la primera vez que cambia, queda como intento registro-v1', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const id = await g.recordUpload(upload())
+    // Lo que escribía 0.34.0: el desenlace sin la marca de final (desenlace_final NULL).
+    const db = (g as unknown as { db: { run(sql: string, p?: unknown[]): void } }).db
+    db.run(`UPDATE intake_upload SET desenlace = 'fallida', desenlace_motivo = 'la corrida falló', desenlace_run_started_at = '2026-09-22T14:38:53Z', desenlace_at = '2026-09-22T15:00:00Z' WHERE id = ?`, [id])
+    const legado = (await g.listUploads('saldos', 10))[0]!
+    expect(legado.desenlace).toBe('fallida')
+    expect(legado.desenlaceFinal).toBeUndefined() // NULL ≠ false: así se reconoce el legado
+    expect((await g.listUploadsNoFinales('saldos')).map((r) => r.id)).toEqual([id])
+    await g.avanzarEstado(id, { estado: 'procesada', final: true, runStartedAt: '2026-09-23T11:40:58Z', intentos: [{ runStartedAt: '2026-09-23T11:40:58Z', resultado: 'procesada' }] })
+    const intentos = await g.listIntentos(id)
+    expect(intentos.map((i) => [i.origen, i.resultado, i.runStartedAt, i.motivo])).toEqual([
+      ['registro-v1', 'fallida', '2026-09-22T14:38:53Z', 'la corrida falló'],
+      ['declaracion', 'procesada', '2026-09-23T11:40:58Z', undefined],
+    ])
+    await g.close()
+  })
+
+  it('los intentos son idempotentes por (carga, corrida, resultado); registrarEvaluacion no toca el estado', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const id = await g.recordUpload(upload())
+    const i1 = { runStartedAt: '2026-08-01T10:00:00Z', resultado: 'fallida' as const, motivo: 'm' }
+    await g.avanzarEstado(id, { estado: 'fallida', final: false, intentos: [i1] })
+    await g.registrarEvaluacion(id, '2026-08-02T10:00:00Z', [i1, { runStartedAt: '2026-08-02T10:00:00Z', resultado: 'fallida' }])
+    await g.registrarEvaluacion(id, '2026-08-02T10:00:00Z', [i1])
+    expect((await g.listIntentos(id)).map((i) => i.runStartedAt)).toEqual(['2026-08-01T10:00:00Z', '2026-08-02T10:00:00Z'])
+    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'fallida', evaluadoHasta: '2026-08-02T10:00:00Z' })
+    expect((await g.listIntentosDeSlot('saldos', '2026-08-02T00:00:00Z')).map((i) => [i.filename, i.runStartedAt])).toEqual([['saldos VH WK28.xlsx', '2026-08-02T10:00:00Z']])
+    await g.close()
+  })
+
+  it('V4 · findLatestUploadBySha cita la MÁS RECIENTE; findAcceptedUploadByFilename busca el nombre en cualquier slot', async () => {
+    const g = await SqliteGovernanceStore.open(null, {})
+    const vieja = await g.recordUpload(upload({ filename: 'a.xlsx', uploadedAt: '2026-08-01T10:00:00Z' }))
+    const reciente = await g.recordUpload(upload({ filename: 'a (1).xlsx', uploadedAt: '2026-08-05T10:00:00Z' }))
+    await g.recordUpload(upload({ filename: 'b.xlsx', uploadedAt: '2026-08-06T10:00:00Z', ok: false }))
+    expect((await g.findUploadBySha('saldos', SHA_A))?.id).toBe(vieja)
+    expect((await g.findLatestUploadBySha('saldos', SHA_A))?.id).toBe(reciente)
+    expect((await g.findAcceptedUploadByFilename('a.xlsx'))?.id).toBe(vieja)
+    expect(await g.findAcceptedUploadByFilename('b.xlsx')).toBeNull() // rechazada: nunca se recibió
+    await g.close()
+  })
+
+  it('una db PRE-EXISTENTE sin las columnas nuevas migra sin pérdida de datos (aditiva, sin subir SCHEMA_VERSION)', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'vergis-migra-')), 'governance.sqlite')
     // Se construye a mano el esquema VIEJO (el de #62, sin las columnas de desenlace) con datos.
     const vieja = await openSqliteDb(file)
@@ -804,7 +863,7 @@ describe('GovernanceStore · desenlace por carga (#162·§3.4)', () => {
     expect(selectAll(vieja, `PRAGMA table_info(intake_upload)`).map((c) => String(c['name']))).not.toContain('desenlace')
     persistSqliteDb(vieja, file)
     vieja.close()
-    // Abrir el store migra: la fila histórica sigue entera y ya acepta desenlace.
+    // Abrir el store migra: la fila histórica sigue entera y ya acepta estado.
     const g = await SqliteGovernanceStore.open(file, {})
     const filas = await g.listUploads('saldos', 10)
     expect(filas).toHaveLength(1)
@@ -812,14 +871,14 @@ describe('GovernanceStore · desenlace por carga (#162·§3.4)', () => {
       id: 1, slotId: 'saldos', filename: 'historica.xlsx', sha256: SHA_A, bytes: 110760,
       uploadedBy: 'claudio@x.cl', uploadedAt: '2026-07-13T16:17:42Z', ok: true, triggered: true, origen: 'upload',
     })
-    expect(filas[0]!.desenlace).toBeUndefined() // NULL = pendiente, que es la verdad de una fila pre-#161
-    expect((await g.listUploadsSinDesenlace('saldos')).map((r) => r.id)).toEqual([1])
-    await g.setUploadDesenlace(1, { desenlace: 'varada' })
-    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'varada' })
+    expect(filas[0]!.desenlace).toBeUndefined() // NULL = sin estado, que es la verdad de una fila pre-#161
+    expect((await g.listUploadsNoFinales('saldos')).map((r) => r.id)).toEqual([1])
+    await g.avanzarEstado(1, { estado: 'sin-informe', final: false })
+    expect((await g.listUploads('saldos', 10))[0]).toMatchObject({ desenlace: 'sin-informe', desenlaceFinal: false })
     // Y es idempotente: reabrir no vuelve a migrar ni pierde lo escrito.
     await g.close()
     const g2 = await SqliteGovernanceStore.open(file, {})
-    expect((await g2.listUploads('saldos', 10))[0]).toMatchObject({ filename: 'historica.xlsx', desenlace: 'varada' })
+    expect((await g2.listUploads('saldos', 10))[0]).toMatchObject({ filename: 'historica.xlsx', desenlace: 'sin-informe' })
     await g2.close()
   })
 })

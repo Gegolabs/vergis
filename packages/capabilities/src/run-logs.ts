@@ -226,12 +226,25 @@ const SEP_MOTIVO = '—'
  */
 const SEP_MOTIVO_ASCII = ' - '
 
+/**
+ * Un corte ASCII solo vale si lo que queda a su izquierda TERMINA en una extensión de archivo
+ * (#269·P26). Los nombres reales de las planillas traen « - » adentro (`20260921 - Recepción y
+ * Facturación Vitro.xlsx`), y cortar en el primero convertía el archivo en `20260921`: el desenlace
+ * se atribuía a un nombre que nadie subió y la carga verdadera quedaba sin declaración. La raya
+ * canónica (U+2014) no tiene ese problema porque ningún nombre la trae; el guion ASCII sí.
+ */
+const TERMINA_EN_EXTENSION = /\.[A-Za-z0-9]{2,5}$/
+
 /** Índice y largo del separador archivo↔motivo, o `-1` si la línea no declara motivo. */
 function cortaMotivo(resto: string): { corte: number; largo: number } {
   const raya = resto.indexOf(SEP_MOTIVO)
   if (raya >= 0) return { corte: raya, largo: SEP_MOTIVO.length }
-  const ascii = resto.indexOf(SEP_MOTIVO_ASCII)
-  return ascii >= 0 ? { corte: ascii, largo: SEP_MOTIVO_ASCII.length } : { corte: -1, largo: 0 }
+  // Todos los « - » candidatos, en orden: gana el PRIMERO cuya izquierda es un nombre de archivo
+  // completo. Si ninguno lo es, la línea no declara motivo y el cuerpo entero es el archivo.
+  for (let i = resto.indexOf(SEP_MOTIVO_ASCII); i >= 0; i = resto.indexOf(SEP_MOTIVO_ASCII, i + 1)) {
+    if (TERMINA_EN_EXTENSION.test(resto.slice(0, i).trimEnd())) return { corte: i, largo: SEP_MOTIVO_ASCII.length }
+  }
+  return { corte: -1, largo: 0 }
 }
 
 /**
@@ -312,6 +325,10 @@ export function parseRunFileOutcomes(logText: string): FileOutcome[] {
     // la gramática: esa línea se lee exactamente como antes).
     const sufijo = outcome !== 'procesado' ? extraerSufijoDesenlace(resto!) : null
     const cuerpo = sufijo ? sufijo.resto : resto!
+    // #269·P26 · el corte ASCII exige que la izquierda sea un nombre de archivo completo (ver
+    // `cortaMotivo`), también en `procesado`: así `20260921 - Recepción….xlsx` queda entero y un
+    // `z.xlsx - nota` que el escritor agregó tras un ✔ sigue leyéndose `z.xlsx` (el texto se descarta:
+    // `procesado` no lleva motivo).
     const { corte, largo } = cortaMotivo(cuerpo)
     const file = (corte >= 0 ? cuerpo.slice(0, corte) : cuerpo).trim().replace(/^.*[/\\]/, '')
     if (!file) continue
@@ -326,4 +343,58 @@ export function parseRunFileOutcomes(logText: string): FileOutcome[] {
     porArchivo.set(file, fo)
   }
   return orden.map((f) => porArchivo.get(f)!)
+}
+
+/** Lo que UNA corrida declaró de UN archivo conocido (#269·§3.2 regla 2). */
+export interface DeclaracionDeArchivo {
+  outcome: FileOutcome['outcome']
+  motivo?: string
+  codigo?: string
+  params?: Record<string, string | string[]>
+}
+
+/**
+ * La declaración que un log hace de UN archivo cuyo nombre ya se conoce (el de la carga registrada) —
+ * PURA. Es la lectura que usa el resolvedor de estado (#269, D14) y la razón de que exista aparte de
+ * `parseRunFileOutcomes`: el lector general tiene que ADIVINAR dónde termina el nombre y empieza el
+ * motivo; quien pregunta por un nombre conocido no adivina nada — compara.
+ *
+ * Una línea es de este archivo si, tras el marcador `✔ procesado:` / `⚠ saltado:` / `✖ fallido:`, su
+ * cuerpo (sin el sufijo `⟦…⟧`) es el nombre, o empieza con el nombre seguido de fin, espacio o raya.
+ * Un prefijo de ruta (`Files/intake/x/<nombre>`) se tolera: el contrato dice basename, pero el escritor
+ * que pone la ruta sigue declarando el mismo archivo.
+ *
+ * Varias líneas del mismo archivo en el mismo log: gana la ÚLTIMA (misma regla que el lector general).
+ * `undefined` = el log no nombra este archivo — y eso NO es evidencia de nada sobre él (§3.2).
+ */
+export function declaracionDeArchivo(logText: string, filename: string): DeclaracionDeArchivo | undefined {
+  if (!logText || !filename) return undefined
+  const nombre = String(filename).replace(/^.*[/\\]/, '')
+  let ultima: DeclaracionDeArchivo | undefined
+  for (const raw of String(logText).split('\n')) {
+    const linea = raw.replace(/^\s*(?:\[[^\]]*\]\s*)*/, '').trim()
+    const m = OUTCOME_RE.exec(linea)
+    if (!m) continue
+    const [, marcador, palabra, resto] = m as unknown as string[]
+    const outcome = OUTCOME_POR_MARCADOR[marcador!]
+    if (!outcome || outcome !== palabra) continue
+    const sufijo = outcome !== 'procesado' ? extraerSufijoDesenlace(resto!) : null
+    const cuerpo = (sufijo ? sufijo.resto : resto!).trim()
+    const i = cuerpo.indexOf(nombre)
+    if (i < 0) continue
+    // Lo que precede al nombre tiene que ser nada o una ruta (termina en separador, sin raya).
+    const antes = cuerpo.slice(0, i)
+    if (antes && (!/[/\\]$/.test(antes) || antes.includes(SEP_MOTIVO))) continue
+    const despues = cuerpo.slice(i + nombre.length)
+    if (despues && !/^(\s|—)/.test(despues)) continue
+    const d: DeclaracionDeArchivo = { outcome }
+    const motivo = despues.replace(/^\s*(?:—|-)?\s*/, '').trim()
+    if (motivo && outcome !== 'procesado') d.motivo = motivo
+    if (sufijo) {
+      d.codigo = sufijo.codigo
+      if (sufijo.params) d.params = sufijo.params
+    }
+    ultima = d
+  }
+  return ultima
 }
