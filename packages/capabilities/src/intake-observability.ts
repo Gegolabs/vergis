@@ -223,6 +223,12 @@ export interface SlotWatchInput {
    * gratuita contra el estado normal de un slot virgen.
    */
   registro?: { cargasVividas: number; ultimaCargaAt?: string }
+  /**
+   * #269·0.35.1 · basenames EN ESPERA: su carga tiene una declaración ✖/⚠ del proceso (la corrida SÍ
+   * lo tomó y lo dejó en el landing, que lo reintenta). No son varados: «varado» dice que ninguna
+   * corrida lo tomó, y eso es falso para ellos.
+   */
+  enEspera?: string[]
 }
 
 /** Orden de severidad. Primero lo que invalida la medida: si no se puede confiar en lo que se ve,
@@ -245,6 +251,12 @@ export interface CargaRegistrada {
    * semanas, y la consola gritaba CONTRADICE sobre un landing sano.
    */
   final?: boolean
+  /**
+   * #269·0.35.1 · el estado de la carga, si tiene. Solo una carga SIN estado o declarada ✖/⚠ (que se
+   * queda en el landing reintentándose) predice su archivo: `sin-informe` es, justamente, un archivo
+   * que salió del landing sin declaración — esperarlo ahí fabricaba el «CONTRADICE» de Facturas.
+   */
+  estado?: string | null
 }
 
 /**
@@ -321,6 +333,9 @@ export function leerRetiro(entry: { path: string; isDirectory?: boolean; lastMod
  * Devuelve basenames ordenados y sin repetir. PURA: sin reloj (el «ahora» no participa — se compara
  * el registro contra sí mismo).
  */
+/** Estados que afirman que el archivo SIGUE en el landing (se reintenta solo). `varada` es legado. */
+const ESTADOS_EN_LANDING: ReadonlySet<string> = new Set(['fallida', 'saltada', 'varada'])
+
 export function expectedInLanding(
   uploads: CargaRegistrada[],
   runs: RunRecord[],
@@ -339,6 +354,7 @@ export function expectedInLanding(
     if (!u?.ok) continue
     // #269·V5 · una carga en estado final ya no se espera en el landing, haya corte o no.
     if (u.final) continue
+    if (u.estado != null && !ESTADOS_EN_LANDING.has(u.estado)) continue
     const name = baseName(u.filename)
     if (!name) continue
     const at = Date.parse(u.uploadedAt)
@@ -450,7 +466,9 @@ export function classifySlot(input: SlotWatchInput, config: SlotWatchConfig, now
   if (landing != null && config.maxAgeMinutes != null) {
     const maxAgeMs = config.maxAgeMinutes * 60_000
     const varados: ArchivoVarado[] = []
+    const enEspera = new Set(input.enEspera ?? [])
     for (const e of landing) {
+      if (enEspera.has(baseName(e.path))) continue
       const t = Date.parse(e.lastModified)
       // Sin fecha parseable no hay edad. `OneLakeEntry.lastModified` es `''` cuando el DFS no la trae
       // (verificado, `intake-onelake.ts`): inventarle una edad sería fabricar un varado.

@@ -83,6 +83,7 @@ import { readMultipart } from './multipart'
 import { cargasBody, revertPlanBody, cargasHref, destinoAviso, erroresFrecuentesBody, motivoDeRechazo, type CargasOps, type SlotCargas } from './admin-cargas'
 // #269 · capacidades nuevas, importadas de su módulo (el barril no es parte del territorio del cambio).
 import { nombreCanonico, slotsQueCalzan } from '../packages/capabilities/src/intake'
+import { garantiaDeDisjuncion, type MedidaDisjuncion } from './intake-loop'
 import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -302,6 +303,9 @@ export interface AdminDeps {
   runLogs?: RunLogsOps
   /** Registro de cargas (issue #62): dedup por contenido + pre-check. Sin él, ambos degradan a no-op. */
   intakeUploads?: IntakeUploadStore
+  /** #269·0.35.1 · la última medida de disjunción del lazo. Ausente o `null` = sin medida: la puerta no
+   *  garantiza la disjunción (acepta en la casilla elegida). */
+  disjuncion?: () => Promise<MedidaDisjuncion | null>
   /** #269·V12 · ¿hay HOY un destino suscrito a `cargas-operador`? Decide la línea de aviso de la consola
    *  («Le avisamos al equipo» solo si es cierto). Ausente = no hay. */
   hayDestinoOperador?: () => boolean
@@ -917,9 +921,13 @@ const SHA_RE = /^[0-9a-f]{64}$/
  * invariante existe para volver imposible. La garantía vive acá y no en la recarga: la recarga es
  * síncrona y la disjunción que importa es sobre nombres reales, no entre patrones.
  */
-export function validarEnLaPuerta(slots: IntakeSlot[], slot: IntakeSlot, filename: string, size: number): { ok: true } | { ok: false; error: string; reason?: 'accept' | 'ambiguo' } {
+export function validarEnLaPuerta(slots: IntakeSlot[], slot: IntakeSlot, filename: string, size: number, garantia = true): { ok: true } | { ok: false; error: string; reason?: 'accept' | 'ambiguo' } {
   const v = validateUpload(slot, filename, size)
   if (!v.ok) return v.reason ? { ok: false, error: v.error, reason: v.reason } : { ok: false, error: v.error }
+  // 0.35.1 · sin garantía (configuración de instancia que no es disjunta, o todavía sin medir) la
+  // puerta NO rechaza por ambigüedad: el archivo va a la casilla elegida, como en 0.34.0. En 0.35.0 la
+  // garantía era incondicional y, con cinco casillas en `*.xlsx`, rechazaba TODA subida.
+  if (!garantia) return { ok: true }
   const calzan = slotsQueCalzan(slots, filename)
   if (calzan.length >= 2)
     return { ok: false, reason: 'ambiguo', error: `Este nombre calza con más de un tipo de archivo (${calzan.map((s) => `«${s.label}»`).join(', ')}): no se puede saber a cuál va, así que no se recibió. Hay que corregir los patrones de esos tipos.` }
@@ -1087,8 +1095,11 @@ async function handleIntake(
     deps.intakeUploads ? await deps.intakeUploads.recordUpload(row).catch(() => undefined) : undefined
   // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
   // dejar la semana a medio cargar). El SJD failure-safe espera el set consistente, no archivos sueltos.
+  // #269·0.35.1 · ¿la configuración permite GARANTIZAR la disjunción? Si no, la puerta es la de 0.34.0.
+  const medidaDisj = deps.disjuncion ? await deps.disjuncion().catch(() => null) : null
+  const garantia = garantiaDeDisjuncion(deps.intakeSlots ?? [], medidaDisj)
   for (const [i, u] of uploads.entries()) {
-    const v = validarEnLaPuerta(deps.intakeSlots ?? [], slot, u.filename, u.bytes.length)
+    const v = validarEnLaPuerta(deps.intakeSlots ?? [], slot, u.filename, u.bytes.length, garantia)
     if (!v.ok && v.reason === 'accept') {
       // #269·§4.1 · un nombre que ya se RECIBIÓ antes y hoy no calza con ningún tipo (la carga 27): se
       // dice que ese archivo cambió de nombre, en vez del rechazo genérico que no explica nada.
