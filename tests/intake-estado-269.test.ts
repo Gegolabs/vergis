@@ -562,3 +562,41 @@ async function adminArnes(slots: IntakeSlot[]) {
     },
   }
 }
+
+describe('#269 · juez P1 · M1: el cursor nunca pasa por encima de una corrida no terminada', () => {
+  it('una NotStarted vieja que después arranca y declara ✔ se sigue viendo: la carga termina procesada, no sin-informe', () => {
+    const c = carga('x.xlsx')
+    const otro = corrida(5, 6, 'Completed', '[intake] ✔ procesado: otro.xlsx\n')
+    // Vuelta 1 (t0+90 min): R1 `NotStarted` desde t0+1 (vieja: se ignora para el veredicto) y R2 que no nombra x.
+    const v1 = resolverEstadoDeCarga(c, [corrida(1, null, 'NotStarted', null, 'en-curso'), otro], [archivoEn(LANDING, 'x.xlsx')], [], [], [], { nowMs: T0 + 90 * 60_000 })
+    expect(v1.estado).toBeNull()
+    // El cursor queda ANTES de R1: su desenlace tardío no puede quedar fuera de la ventana.
+    expect(v1.evaluadoHasta == null || Date.parse(v1.evaluadoHasta) < Date.parse(iso(1))).toBe(true)
+    // Vuelta 2 (t0+160 min): R1 arrancó al fin con el MISMO startedAt, terminó y declaró ✔ x; x salió del landing.
+    const opts = { nowMs: T0 + 160 * 60_000, ...(v1.evaluadoHasta ? { evaluadoHasta: v1.evaluadoHasta } : {}) }
+    const v2 = resolverEstadoDeCarga(c, [corrida(1, 152, 'Completed', '[intake] ✔ procesado: x.xlsx\n'), otro], [], [], [], [], opts)
+    expect(v2).toMatchObject({ estado: 'procesada', final: true, runStartedAt: iso(1) })
+  })
+})
+
+describe('#269 · juez P1 · M2: la corrida que ya corría al subir y sigue en curso cuenta como en curso', () => {
+  it('arrancó antes de la subida, sigue InProgress y ya archivó el archivo ⇒ sin estado («Cargando»), nunca sin-informe', () => {
+    const r = resolverEstadoDeCarga(
+      { id: 1, filename: 'x.xlsx', uploadedAt: new Date(T0 + 15_000).toISOString() },
+      [corrida(0, null, 'InProgress', null, 'en-curso')],
+      [], [], [], [], { nowMs: T0 + 5 * 60_000 },
+    )
+    expect(r).toMatchObject({ estado: null, enCurso: true })
+  })
+
+  it('en el lazo: mientras esa corrida no termine, ni estado falso ni correo', async () => {
+    const a = await arnes({ operador: true })
+    const id = await a.subir('x.xlsx', 0.25)
+    a.runs.push({ startedAt: iso(0), status: 'InProgress' })
+    a.clock.ms = T0 + 5 * 60_000
+    await a.loop.tick()
+    expect((await a.fila(id))?.desenlace).toBeUndefined()
+    expect(a.avisosUsuario).toHaveLength(0)
+    expect(a.avisosOperador).toHaveLength(0)
+  })
+})

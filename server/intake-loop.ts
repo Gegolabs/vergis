@@ -780,6 +780,9 @@ const VENTANA_EN_CURSO_MS = 6 * 3_600_000
 function leInteresa(c: IntakeUploadRow, r: RunRecord): boolean {
   const ini = Date.parse(r.startedAt)
   if (!Number.isFinite(ini)) return false
+  // Una corrida no terminada siempre interesa: puede estar tomando el archivo (P27, M2) y el cursor
+  // nunca la deja atrás (M1). Leerla cuesta nada: no tiene log todavía.
+  if (r.status === 'InProgress' || r.status === 'NotStarted') return true
   const legado = c.desenlace != null && c.desenlaceFinal === undefined
   if (!legado && c.evaluadoHasta) return ini > Date.parse(c.evaluadoHasta)
   const subida = Date.parse(c.uploadedAt)
@@ -939,8 +942,12 @@ export function resolverEstadoDeCarga(
       if (!Number.isFinite(ini) || ini >= tEnd) return false
       if (Number.isFinite(cursor) && ini <= cursor) return false
       if (!Number.isFinite(t0) || ini >= t0) return true
+      // Estaba en curso cuando se subió (P27): terminó después de la subida, o TODAVÍA no termina
+      // (juez P1 · M2: «estaba en curso» no exige que ya haya terminado; sin esto, una corrida viva
+      // que ya archivó el archivo lo dejaba «sin informe» y mandaba el correo antes de su ✔).
+      if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') return true
       const fin = c.run.endedAt ? Date.parse(c.run.endedAt) : NaN
-      return Number.isFinite(fin) && fin >= t0 // en curso cuando se subió (P27)
+      return Number.isFinite(fin) && fin >= t0
     })
     .sort((a, b) => Date.parse(a.run.startedAt) - Date.parse(b.run.startedAt))
 
@@ -953,11 +960,16 @@ export function resolverEstadoDeCarga(
   // declarado este archivo: mientras exista en la ventana, la ausencia de declaración no concluye nada.
   let ciego = false
   const maxEnCurso = opts.maxEnCursoMs ?? DEFAULT_MAX_RUN_MINUTES * 60_000
+  // Juez P1 · M1 · el cursor NUNCA pasa por encima de una corrida no terminada, se la crea en curso o
+  // no: si después arranca y termina (con el mismo `startedAt`), su declaración tiene que verse.
+  let topeCursor = false
   for (const c of ventana) {
     if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') {
+      topeCursor = true
       // Una corrida no terminada MÁS VIEJA que el umbral de corrida colgada no está tomando nada: el
       // motor deja `NotStarted` que nunca arrancan (medido en el oráculo: 12 filas, una de hace 19
-      // días), y creerles bloquearía para siempre a toda carga posterior. No es evidencia ni espera.
+      // días), y creerles bloquearía para siempre a toda carga posterior. No es evidencia ni espera —
+      // pero tampoco se salta con el cursor (arriba): solo no bloquea el veredicto.
       if (opts.nowMs != null && opts.nowMs - Date.parse(c.run.startedAt) > maxEnCurso) continue
       // Su resultado todavía puede decidir: nada de lo que siga se interpreta antes de que termine.
       enCurso = true
@@ -968,8 +980,9 @@ export function resolverEstadoDeCarga(
     const hayGramatica = !!texto && parseRunFileOutcomes(texto).length > 0
     if (hayGramatica) primeraGramatica = Math.min(primeraGramatica, Date.parse(c.run.startedAt))
     const d = texto ? declaracionDeArchivo(texto, nombre) : undefined
-    // El cursor no pasa por encima de un log que no se pudo mirar: la próxima vuelta lo vuelve a mirar.
-    if (!ciego) evaluadoHasta = c.run.startedAt
+    // El cursor no pasa por encima de un log que no se pudo mirar (la próxima vuelta lo vuelve a mirar)
+    // ni de una corrida no terminada (M1).
+    if (!ciego && !topeCursor) evaluadoHasta = c.run.startedAt
     if (d) {
       const i: IntentoObservado = { runStartedAt: c.run.startedAt, resultado: RESULTADO_POR_OUTCOME[d.outcome] }
       if (d.motivo != null) i.motivo = d.motivo
