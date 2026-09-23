@@ -133,13 +133,11 @@ con el cliente de run-history del motor — ver `frescura-oferta-demanda.md`).
 La ingesta vive en la gestión de dominio. Es el **espejo** de la publicación de data maestra: ahí el
 dato **sale** (proyección `__replica`), acá el archivo **entra**.
 
-> **La carga manual se pliega en Frescura** (no es una faceta aparte). Subir un archivo es el **gemelo
-> manual** del schedule automático: las dos formas producen una corrida fresca de la misma entidad. Por
-> eso el acto de cargar vive en la fila de la entidad dentro de Frescura («Alimentar»), junto a «Aplicar
-> cadencia». El write-path (staging, slots, validación, land-and-trigger) es idéntico — solo cambió su
-> hogar en la UI: de «ver staleness» y «actuar» en un solo lugar. El `slot` casa con la entidad por el
-> item del motor (`slot.trigger.processRef === engine_ref.itemId`). Los slots sin entidad registrada
-> aparecen en «Otras cargas» (no se pierden).
+> **Quien sube entra por una sola puerta: «Cargar archivos» (`/cargar`).** Ahí suelta sus archivos y
+> cada uno va al tipo de archivo que le corresponde por su nombre; la página de cada tipo dice qué es,
+> de dónde se saca, cómo se llama, qué reemplaza, qué va junto y qué subir antes, y muestra cómo va cada
+> carga sin recargar. La consola de Cargas queda como **vista técnica** de quien opera, y Frescura
+> **enlaza** los tipos de archivo que alimentan cada entidad (sin formularios).
 
 ### Staging, NUNCA directo a las tablas
 El usuario sube el archivo a Mira y Mira lo aterriza en **`Files/<...>` de un Lakehouse** = **landing
@@ -227,6 +225,50 @@ en el catálogo, o la carga falla nombrando archivo y catálogo.
 > imputación es incorrecta sin señal. Antes de anclar una **RLS** en un campo derivado del nombre, esa
 > decisión debe tomarse mirando esto.
 
+### La puerta: «Cargar archivos» (`/cargar`, #269)
+
+Una sola superficie para quien sube, con el gate de la gestión de dominio (quien gestiona un dominio
+sube a sus tipos de archivo). Entradas: el menú del avatar (debajo de «Catálogo de PIs»), la cabecera
+del catálogo y la primera tarjeta del home de cada dominio.
+
+- **`/cargar`** — una zona de subida general y una tarjeta por tipo de archivo, agrupadas por área, con
+  el estado de su última carga («✓ Cargado», «⏳ N archivo(s) cargándose», «⚠ N archivo(s) necesitan
+  que hagas algo») y el enlace a su página.
+- **`/cargar/<slot>`** — la **ficha** del tipo, su zona de subida, «Cargas de este archivo» con estado
+  vivo y «Problemas frecuentes y cómo resolverlos» (las guías de carga, §7 del contrato de ingesta).
+  `/admin/dominio/<d>/errores/<slot>` redirige acá.
+
+**El destino lo decide el nombre, y la puerta nunca es más estricta que la subida con tipo elegido.**
+En orden: el tipo que el usuario eligió para ese archivo; el tipo de la página donde lo soltó, si su
+`accept` calza (aunque calce también con otros); el único tipo del usuario cuyo `accept` calza. Si el
+nombre calza con dos o más —o con ninguno pero hay tipos sin `accept`—, la página **pide elegir**; solo
+un nombre que ningún tipo aceptaría se rechaza, con los nombres esperados. Antes de subir, el navegador
+muestra qué pasará con cada archivo (a qué tipo va, si hay que elegir, si ya se subió). El POST de
+siempre (`/admin/dominio/<d>/intake/<slot>`) lo atiende la misma puerta y vuelve a la página del archivo.
+
+**Estado vivo sin empujar nada:** la lista de cargas se pide cada 10 s mientras haya alguna que
+todavía pueda cambiar (pausa con la pestaña oculta), y lee solo el registro y la proyección del
+vigilante. Tras una subida o un retiro, el vigilante observa y resuelve **ese** tipo cada 30 s mientras
+tenga cargas no finales de menos de 45 min, bajo el mismo guard anti-solape.
+
+**La ficha la declara la instancia** (bloque opcional `ficha:` por slot, estricto; recarga en caliente):
+
+```yaml
+ficha:
+  origen: "…"            # de dónde se saca
+  nombre: "…"            # cómo tiene que llamarse, en palabras (sin él: el `accept` dicho en palabras)
+  ejemplo: "…"           # un nombre real
+  regimen: acumula       # acumula | reemplaza | version
+  clave: "la OC"         # obligatoria con acumula
+  juego: "…"             # qué tiene que venir junto
+  requiere:              # qué subir antes (otro slot del mismo archivo, con el porqué)
+    - slot: oc_crossdocking
+      motivo: "el detalle de productos de la misma OC"
+  cadencia: "…"          # cuándo lo toma el proceso, para un tipo sin disparo
+```
+
+Cada bloque sin su dato no se dibuja. Un campo de `meta` admite además `ayuda:` (texto junto al campo).
+
 ### Disparo (por slot)
 - **land-only** — Mira deja el crudo; el pipeline lo toma en su próxima corrida.
 - **land-and-trigger** — tras subir, Mira hace **run-now** del pipeline (inmediatez).
@@ -235,9 +277,9 @@ en el catálogo, o la carga falla nombrando archivo y catálogo.
 
 `/admin/dominio/<dom>/cargas` es la operación completa de las cargas del dominio, y muestra **una
 casilla a la vez**. Con más de un slot declarado, una **barra de pestañas** —una por casilla, en el
-orden de `slots.yaml`— encabeza la página, y el bloque de abajo (última conversión, log, «Subir
-archivos», Actividad, Landing, Procesados) es el de la casilla **activa**; con un solo slot no se
-dibuja. La barra hace dos cosas:
+orden de `slots.yaml`— encabeza la página, y el bloque de abajo (última conversión, log, Actividad,
+Landing, Procesados) es el de la casilla **activa**; con un solo slot no se dibuja. La consola es la
+vista técnica: no sube archivos (enlaza la página del tipo en «Cargar archivos»). La barra hace dos cosas:
 
 - **Es el inventario visible de casillas del dominio.** Un dominio con casillas hermanas —el archivo de
   productos, el de distribuciones, el maestro— las declara todas en pantalla, así que «esta es la
@@ -249,17 +291,6 @@ dibuja. La barra hace dos cosas:
 El historial vive pegado a **su** casilla (Actividad, Landing y Procesados se filtran por `slot_id`):
 la pestaña no lo mueve de ahí, evita que el de una casilla entierre a las otras, y hace que la página
 pida datos solo de la casilla que dibuja.
-
-**El desenlace de una carga vuelve a donde el usuario estaba.** El formulario declara su origen y todo
-resultado —recibido o rechazado— aterriza en esa pantalla: el rechazo de una carga hecha en Cargas se
-pinta en la pestaña de su casilla, y lo que nace en Frescura muere en Frescura.
-
-**El rechazo por patrón nombra la casilla correcta.** Cuando el archivo rechazado **sí** matchea el
-`accept` declarado de otra casilla del dominio, el error lo dice y la enlaza («Este archivo va en
-*<label>*»); si matchean varias, se listan. Si ninguna, el mensaje queda en el patrón que falló y **no
-se ofrece destino**: solo se nombra un slot cuyo patrón declarado matchea el nombre real del archivo —
-nunca una heurística de parecido, contenido o tamaño, y nunca un slot sin `accept` (que aceptaría
-cualquier cosa).
 
 ### Revertir una carga (`revert_delete`)
 

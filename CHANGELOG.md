@@ -61,6 +61,75 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+*Contenido previsto para el corte **0.36.0** (hito P2 · «Puerta única» del diseño de la experiencia de
+carga, lab A.R.B.O.L. `work/269`). El corte —`package.json` y tag— es de la custodia.*
+
+### Una sola puerta para cargar archivos, que se entiende sin manual (`CAP-205`, `CAP-206`, `CAP-207`)
+
+**El hueco.** Quien sube tenía que saber en qué casilla va cada archivo, cómo tiene que llamarse, qué
+reemplaza y qué subir antes, y eso no estaba escrito en ninguna pantalla: la carga vivía repartida entre
+Frescura y la consola de Cargas, con vocabulario de operador, la celda de estado vacía durante minutos
+(la página no se refrescaba) y 17 líneas de la interfaz en voseo.
+
+**Qué trae.**
+
+- **`/cargar` — «Cargar archivos».** Una zona de subida general y una tarjeta por tipo de archivo,
+  agrupadas por área, con el estado de su última carga. Entradas: el menú del avatar (debajo de
+  «Catálogo de PIs»), la cabecera del catálogo y la primera tarjeta del home de cada dominio. Mismo gate
+  que la gestión de dominio.
+- **El nombre enruta, y la puerta nunca es más estricta que la subida con tipo elegido** (D-222 del lab).
+  Un archivo va al único tipo cuyo `accept` calza con su nombre; si calza con dos o más —o con ninguno,
+  pero hay tipos sin `accept`—, la página **pide elegir** en vez de rechazar; con el tipo elegido, la
+  validación es exactamente la de 0.35.1. Solo se rechaza el nombre que ningún tipo aceptaría, con los
+  nombres esperados. Antes de subir, el navegador muestra qué pasará con cada archivo (a qué tipo va, si
+  hay que elegir, si ya se subió, qué dato deriva del nombre). Medido con el archivo de intake de la
+  primera instancia y sus 150 subidas reales: con tipo elegido acepta las mismas 131 que 0.35.1; sin
+  tipo, las 150 van a elegir (sus patrones se pisan) y ninguna se rechaza.
+- **La página de cada tipo (`/cargar/<slot>`):** su **ficha** (qué es, de dónde se saca, cómo se llama,
+  qué pasa con lo que ya estaba, qué va junto, qué subir antes), su zona de subida con los datos que
+  pide y su ayuda, «Cargas de este archivo» con el estado de cada una en palabras de quien sube (los 14
+  estados de `work/269` §4.2, con «Retirar este archivo» donde corresponde) y «Problemas frecuentes y
+  cómo resolverlos». Las horas van en la zona del navegador.
+- **Estado vivo:** la lista se pide cada 10 s mientras haya cargas que todavía puedan cambiar (pausa con
+  la pestaña oculta) y lee solo el registro y la proyección del vigilante — ni el almacenamiento ni el
+  motor. Tras subir o retirar, el vigilante observa y resuelve **ese** tipo cada 30 s mientras tenga
+  cargas no finales de menos de 45 min, bajo el mismo guard anti-solape y solo en el nodo con el control.
+- **Vista técnica y Frescura, separadas de la puerta:** la consola de Cargas pasa a «Cargas (vista
+  técnica)» y ya no sube (enlaza la página del tipo; acepta `?tipo=`); Frescura no tiene formularios ni
+  logs y enlaza **todos** los tipos de archivo que alimentan cada entidad (antes, con un proceso
+  compartido, todas las filas subían a la primera casilla). `/admin/dominio/<d>/errores/<slot>` redirige a
+  «Problemas frecuentes» de la página del archivo, y el correo a quien subió enlaza esa página.
+- **`/contrato` lista los flujos de aviso** (`alerts`, `reports`, `cargas-usuario`, `cargas-operador`) con
+  la cantidad de destinos suscritos, sin direcciones: lo que decide, en vivo, si la página puede decir
+  «Le avisamos al equipo».
+- **Tokens y componentes compartidos** en `server/ui.ts` (`--ok`, `--warn`, `--info`, `--wait` y sus
+  fondos; chip, aviso, ficha, zona de subida, fila de carga, pasos, plegado). El catálogo importa los
+  tokens en vez de duplicarlos; el amarillo de aviso deja de ser un `--yellow` sin definir.
+- **Tuteo en toda la interfaz del Producto:** las 17 líneas de `server/` en voseo que quedaban y una
+  del validador del DSL (búsqueda de control sobre `server/` y `packages/*/src`: 18 → 0).
+
+**Qué cambia para quien opera.**
+
+- **El POST de siempre (`/admin/dominio/<d>/intake/<slot>`) lo atiende la misma puerta** y vuelve a la
+  página del archivo (`/cargar/<slot>`), no a Frescura ni a la consola. Consecuencia: un archivo cuyo
+  nombre calza **solo** con otro tipo del usuario ya no se rechaza en la casilla elegida — **se enruta a
+  ese tipo** (`work/269` D2). Lo que calza con la casilla elegida entra en ella, como en 0.35.1.
+- **Claves nuevas, opcionales y con recarga en caliente** en el archivo de intake: `ficha:` por slot
+  (estricto por dentro: una clave desconocida, un régimen inválido, `acumula` sin `clave` o un `requiere`
+  a un slot inexistente se acusan al cargar) y `ayuda:` en un campo de `meta`. 0.35.1 las tolera (no las
+  usa): el rollback no exige quitarlas (medido).
+- **`cargar` pasa a ser ruta del nodo:** una colección estática de instancia con `path: cargar` deja de
+  cargar (se acusa al arrancar, como las demás rutas reservadas).
+- **Cero variables de entorno nuevas y sin migración del store.** El rollback a 0.35.1 procede tal cual;
+  a 0.34.0, la nota de 0.35.0 (quitar antes `cargas-operador` de `VERGIS_NOTIFY`).
+
+**Qué NO cambia.** La autorización (el gate de la gestión de dominio), la validación con tipo elegido,
+el resolvedor de estados y los guards de los jobs. Los textos que ve quien sube son los de la
+instancia donde ella los declara: una `description` con jerga de operador se muestra tal cual hasta que
+la instancia la reescriba.
+
 ## 0.35.1 — 2026-09-23
 
 ### 0.35.0 en producción: la puerta rechazaba todo, «CONTRADICE» sobre un landing sano y «VARADO» sobre archivos en espera (PR #352)
