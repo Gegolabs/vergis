@@ -15,7 +15,6 @@
  * por-identidad; cada mutación se asienta en el log append-only de auditoría (quién · qué · cuándo).
  * Independiente del motor de datos: la Administración no sirve dato gobernado, lo edita/ingesta.
  */
-import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   coerceRow,
@@ -33,11 +32,6 @@ import {
   renderTemplate,
   canManageDomain,
   manageableDomains,
-  slotMaxBytes,
-  slotsQueAceptan,
-  validateUpload,
-  validateMeta,
-  buildSidecar,
   secondsToDuration,
   resolveRunLog,
   type AdminEntry,
@@ -79,10 +73,11 @@ import type { LogEventInput } from '@vergis/botler'
 import { shellNav, avatarMenu, THEME_TOGGLE_JS, send, redirect, readForm, requireCsrf, csrfFactory, CsrfError } from './ui'
 import type { MenuSection } from './menu-config'
 import { NOTAS_SETTINGS, leerNotasSettings, validarRetencion, validarMaxSchedules } from './notas-settings'
-import { readMultipart } from './multipart'
-import { cargasBody, revertPlanBody, cargasHref, destinoAviso, erroresFrecuentesBody, motivoDeRechazo, type CargasOps, type SlotCargas } from './admin-cargas'
-// #269 · capacidades nuevas, importadas de su módulo (el barril no es parte del territorio del cambio).
-import { nombreCanonico, slotsQueCalzan } from '../packages/capabilities/src/intake'
+import { cargasBody, revertPlanBody, cargasHref, destinoAviso, type CargasOps, type SlotCargas } from './admin-cargas'
+import { atenderCargar, subir as subirALaPuerta, insumosDeDuplicado, ultimaConContenido, avisoDeDuplicado, type CargarContexto, type ProyeccionTipo } from './cargar'
+// #269·P2 · la puerta vive en `./cargar`; estas funciones se re-exportan desde acá porque son la
+// superficie que ya consumían los tests y el wiring.
+export { validarEnLaPuerta, enrutarPorNombre, avisoDeDuplicado, dupLabel } from './cargar'
 import { corridaBody, type CorridaResolucion, type CorridaView } from './admin-corrida'
 
 /** Chrome de la página: sidebar (navegación del scope activo) + avatar (menú de identidad). */
@@ -305,6 +300,12 @@ export interface AdminDeps {
   /** #269·V12 · ¿hay HOY un destino suscrito a `cargas-operador`? Decide la línea de aviso de la consola
    *  («Le avisamos al equipo» solo si es cierto). Ausente = no hay. */
   hayDestinoOperador?: () => boolean
+  /** #269·P2 · acelera el vigilante sobre un tipo recién subido o retirado (tick focalizado, D3).
+   *  Ausente = sin vigilante: el estado se resuelve en la vuelta normal. */
+  acelerarCarga?: (slotId: string) => void
+  /** #269·P2 · la PROYECCIÓN del vigilante para un tipo (landing y corridas de su última observación):
+   *  lo que la puerta lee para «Cargando» y «en espera» sin ir al almacenamiento. `null` = sin medida. */
+  intakeProyeccion?: (slot: IntakeSlot) => Promise<ProyeccionTipo | null>
   /** Dispara (fire-and-forget) el indexado retroactivo de `_processed/` del slot si aún no corrió.
    * Lo implementa el wiring: ni la subida ni el pre-check esperan por él. Opcional. */
   intakeBackfill?: (slot: IntakeSlot) => void
@@ -434,7 +435,10 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 
   async function tryHandle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/admin'
-    if (path !== '/admin' && !path.startsWith('/admin/')) return false
+    // #269·P2 · la puerta `/cargar` comparte el gate de la gestión de dominio: quien gestiona un
+    // dominio sube a sus tipos de archivo. La atiende `./cargar`.
+    const esCargar = path === '/cargar' || path.startsWith('/cargar/')
+    if (!esCargar && path !== '/admin' && !path.startsWith('/admin/')) return false
 
     const email = (deps.identityOf(req.headers).user ?? '').toLowerCase()
     const isAdmin = await deps.adminStore.isAdmin(email)
@@ -455,6 +459,14 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
     }
     const token = csrf(email)
     const url = new URL(req.url ?? '/', 'http://localhost')
+    if (esCargar) {
+      try {
+        await atenderCargar(await cargarContexto(deps, email, token, isAdmin, stewardAll, manageable), req, res, path, url)
+      } catch (e) {
+        send(res, statusForError(e), adminPage(deps, { sidebar: '', avatar: '' }, 'Error', `<p class="msg err">${escapeHtml(errMsg(e))}</p><p><a href="/cargar">← Cargar archivos</a></p>`))
+      }
+      return true
+    }
     // Scope (Gestión de dominios · Configuración de plataforma · Perfil) + item activo, según la ruta.
     let scope = 'gestion'
     let active = 'home'
@@ -475,7 +487,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
         active = e?.domain ? `dom:${e.domain}/maestra/${e.id}` : 'home'
       }
     }
-    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active, isAdmin), avatar: await buildAvatar(deps, email, isAdmin, manageable.length > 0) }
+    const nav: Chrome = { sidebar: buildSidebar(deps, manageable, scope, active, isAdmin), avatar: await buildAvatar(deps, email, isAdmin, manageable.length > 0, manageable) }
     const denyPlatform = (): boolean => {
       send(res, 403, adminPage(deps, nav, 'Solo plataforma', `<p class="msg err">Esta sección es de gestión de plataforma (solo administradores).</p>`))
       return true
@@ -529,7 +541,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           return true
         }
         if (section === 'intake' && slotId && !di[4] && req.method === 'POST') {
-          await handleIntake(deps, nav, domain, slotId, req, res, token, email)
+          await handleIntake(deps, nav, domain, slotId, req, res, token, email, isAdmin, stewardAll, manageable)
           return true
         }
         // Consola de CARGAS (issue #58): historial + landing + retiro/reactivación + re-run. Stewards.
@@ -562,15 +574,15 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           redirect(res, `${volver}${slot ? '&' : '?'}msg=${encodeURIComponent(msg)}`)
           return true
         }
-        // #346 · «Errores frecuentes» de UNA casilla. Bajo el MISMO gate de dominio que Cargas (este
-        // bloque ya pasó `canMng`): quien gestiona las cargas del dominio la ve; nadie más.
-        if (section === 'errores' && slotId && !di[4] && deps.cargas && deps.intakeGuias && req.method === 'GET') {
+        // #346 · «Errores frecuentes» de UNA casilla → #269·§4.1: «Problemas frecuentes y cómo
+        // resolverlos» vive en la página del archivo. La ruta de siempre redirige (enlaces y correos viejos).
+        if (section === 'errores' && slotId && !di[4] && req.method === 'GET') {
           const slot = (deps.intakeSlots ?? []).find((s) => s.id === slotId && (s.domain ?? '') === domain.id)
           if (!slot) {
             send(res, 404, adminPage(deps, nav, 'No encontrado', `<p class="msg err">Casilla desconocida en este dominio: <code>${escapeHtml(slotId)}</code></p>`))
             return true
           }
-          send(res, 200, await erroresPage(deps, nav, domain, slot))
+          redirect(res, `/cargar/${encodeURIComponent(slot.id)}#problemas`)
           return true
         }
         // Log de UNA corrida (issue #99): fallida O exitosa — `Completed` no garantiza el dato.
@@ -759,7 +771,7 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
           const hash = (f['hash'] ?? '').trim()
           if (!hash) throw new ValidationError('Falta el sello del plan confirmado.')
           if (hash !== ctx.plan.hash) {
-            send(res, 409, adminPage(deps, nav, 'Publicar el job', publishPlanBody(ctx, token, 'El estado cambió desde que viste este plan — revisalo de nuevo.')))
+            send(res, 409, adminPage(deps, nav, 'Publicar el job', publishPlanBody(ctx, token, 'El estado cambió desde que viste este plan — revísalo de nuevo.')))
             return true
           }
           const out = await ejecutarPublicacion(deps, ctx, email)
@@ -896,47 +908,18 @@ export function createAdmin(deps: AdminDeps): AdminHandler {
 }
 
 // ─── Ingesta de archivos (gestión de dominio) ────────────────────────────────
-/**
- * Cómo se NOMBRA la carga original en el aviso de duplicado (issue #62).
- *
- * Formato ya en producción para las cargas vividas (`<filename> · <YYYY-MM-DD HH:MM> UTC`): el audit
- * log lo trae escrito así desde 0.7.0 y no se re-formatea. Para una fila derivada del indexado
- * retroactivo de `_processed/` lo único que se sabe es que el archivo YA fue procesado, y eso dice.
- */
-export function dupLabel(row: Pick<IntakeUploadRow, 'filename' | 'uploadedAt' | 'origen'>): string {
-  const cuando = `${row.uploadedAt.slice(0, 16).replace('T', ' ')} UTC`
-  return row.origen === 'retro' ? `${row.filename} · procesado el ${cuando}` : `${row.filename} · ${cuando}`
-}
-
 const SHA_RE = /^[0-9a-f]{64}$/
 
 /**
- * La subida a una CASILLA ELEGIDA por el usuario (#269·0.35.1, D-222 del lab): la validación de
- * siempre del slot, y nada más. **Un nombre que calza con la casilla elegida se acepta SIEMPRE**,
- * aunque calce también con otras: el usuario ya dijo a cuál va, y su patrón lo confirma. Que calce con
- * otras es un defecto de la CONFIGURACIÓN, no del archivo: se devuelve (`tambienCalza`) para señalarlo
- * al operador, jamás para rechazar. Por construcción, ninguna configuración de instancia puede volver
- * esta puerta más estricta que la de 0.34.0 (en 0.35.0 lo hizo: con cinco casillas en `*.xlsx`
- * rechazaba toda subida — INC-09).
- *
- * El rechazo por ambigüedad existe solo donde no hay casilla elegida (`enrutarPorNombre`, la puerta
- * general `/cargar` de P2): ahí el nombre es lo único que decide el destino.
+ * El contexto de la puerta `/cargar` (#269·P2): qué tipos de archivo puede subir la identidad (los de
+ * los dominios que gestiona, con el mismo `canMng` de la gestión de dominio) y el marco de la página.
  */
-export function validarEnLaPuerta(slots: IntakeSlot[], slot: IntakeSlot, filename: string, size: number): { ok: true; tambienCalza: IntakeSlot[] } | { ok: false; error: string; reason?: 'accept' } {
-  const v = validateUpload(slot, filename, size)
-  if (!v.ok) return v.reason ? { ok: false, error: v.error, reason: v.reason } : { ok: false, error: v.error }
-  return { ok: true, tambienCalza: slotsQueCalzan(slots, filename).filter((s) => s.id !== slot.id) }
-}
-
-/**
- * La puerta SIN casilla (#269·§4.1, D12; la usa `/cargar` de P2): el nombre decide el destino. Con
- * exactamente un tipo que calza, ese; con ninguno, `ninguno`; con dos o más, `ambiguo` — no se puede
- * saber a cuál va, y adivinar es el «archivo en el tipo equivocado» que el invariante vuelve imposible.
- */
-export function enrutarPorNombre(slots: IntakeSlot[], filename: string): { kind: 'uno'; slot: IntakeSlot } | { kind: 'ninguno' } | { kind: 'ambiguo'; slots: IntakeSlot[] } {
-  const calzan = slotsQueCalzan(slots, filename)
-  if (calzan.length === 1) return { kind: 'uno', slot: calzan[0]! }
-  return calzan.length === 0 ? { kind: 'ninguno' } : { kind: 'ambiguo', slots: calzan }
+async function cargarContexto(deps: AdminDeps, email: string, token: string, isAdmin: boolean, stewardAll: boolean, manageable: DomainDecl[]): Promise<CargarContexto> {
+  const dominios = isAdmin || stewardAll ? deps.domains ?? [] : manageable
+  const ids = new Set(dominios.map((d) => d.id))
+  const tipos = (deps.intakeSlots ?? []).filter((s) => ids.has(s.domain ?? ''))
+  const avatar = await buildAvatar(deps, email, isAdmin, manageable.length > 0, dominios)
+  return { deps, email, token, tipos, dominios, avatar, brand: deps.brandTitle ?? 'Vergis' }
 }
 
 /**
@@ -980,79 +963,12 @@ async function handlePrecheck(
   json(200, { dups })
 }
 
-/** #269·V4 · la carga MÁS RECIENTE con ese contenido (la original puede haberse pisado o no haberse
- *  cargado nunca). Sin la lectura nueva en el store, la original: el aviso degrada, no miente. */
-async function ultimaConContenido(store: IntakeUploadStore, slotId: string, sha: string): Promise<IntakeUploadRow | null> {
-  const f = store.findLatestUploadBySha ? store.findLatestUploadBySha.bind(store) : store.findUploadBySha.bind(store)
-  return f(slotId, sha).catch(() => null)
-}
-
-/** Lo que el aviso de duplicado necesita saber del slot, además de la carga previa. */
-interface InsumosDuplicado {
-  /** Cargas recientes del slot (para saber si la previa sigue vigente). `null` = no se pudo leer. */
-  cargas: IntakeUploadRow[] | null
-  /** Nombres en el landing. `null` = no se pudo leer a tiempo: no se afirma «en espera». */
-  landing: Set<string> | null
-}
-
-async function insumosDeDuplicado(deps: AdminDeps, slot: IntakeSlot): Promise<InsumosDuplicado> {
-  const cargas = deps.intakeUploads ? await deps.intakeUploads.listUploads(slot.id, 200).catch(() => null) : null
-  let landing: Set<string> | null = null
-  if (deps.cargas?.landing) {
-    // El pre-check tiene 3 s del lado del navegador: si el landing no responde en 2 s, no se afirma
-    // nada que dependa de él (la carga «en espera» se dice solo sabiendo que sigue ahí).
-    const lista = await Promise.race([
-      deps.cargas.landing(slot).catch(() => null),
-      new Promise<null>((r) => setTimeout(() => r(null), 2_000)),
-    ])
-    if (lista) landing = new Set(lista.filter((e) => !e.isDirectory).map((e) => e.path.replace(/^.*\//, '')))
-  }
-  return { cargas, landing }
-}
-
 /**
- * El AVISO de duplicado, verdadero (#269·V4). Antes citaba la carga MÁS ANTIGUA con ese contenido y
- * afirmaba «procesado el …; re-procesarlo no cambiará el dato» sin mirar si esa carga se había
- * cargado, si otra la había pisado después o si seguía esperando (P3: la 223). Ahora se mira la MÁS
- * RECIENTE y su estado, y cada frase se dice solo si es cierta:
- *  · cargada y vigente (ninguna carga posterior del mismo nombre se cargó después) → «no cambia nada»;
- *  · cargada pero pisada, o de vigencia desconocida → solo el hecho, sin la promesa;
- *  · en espera (sigue en el landing) → «se vuelve a intentar solo»;
- *  · todavía cargándose → que se está cargando;
- *  · no cargada y fuera del landing → que esa vez no se cargó, y por qué.
- * `pregunta` = el navegador ofrece «Subir igual / No subir»; si no, solo informa.
+ * El POST de subida de siempre (`/admin/dominio/<d>/intake/<slot>`, #269·§4.1): sigue aceptando la
+ * subida —un formulario viejo o un cliente que ya la usa no se rompe— y la atiende la MISMA puerta que
+ * `/cargar/<tipo>`, con ese tipo como página. Redirige a la página del archivo, que es donde se ve cómo
+ * va (la vista técnica ya no tiene formulario de subida).
  */
-export function avisoDeDuplicado(prev: IntakeUploadRow, ins: InsumosDuplicado, nowMs: number): { texto: string; pregunta: boolean } {
-  const fecha = `${prev.uploadedAt.slice(0, 16).replace('T', ' ')} UTC`
-  const quien = prev.uploadedBy && prev.origen !== 'retro' ? ` (${prev.uploadedBy})` : ''
-  if (prev.origen === 'retro') return { texto: `Este mismo archivo ya se cargó el ${fecha}.`, pregunta: true }
-  const estado = prev.desenlace
-  if (estado === 'procesada') {
-    const pisada = ins.cargas == null
-      ? null
-      : ins.cargas.some((c) => c.id !== prev.id && c.ok && c.filename === prev.filename && c.desenlace === 'procesada' && Date.parse(c.uploadedAt) > Date.parse(prev.uploadedAt))
-    if (pisada === false) return { texto: `Ya se cargó este mismo archivo el ${fecha}${quien}. Subirlo de nuevo no cambia nada.`, pregunta: true }
-    return { texto: `Este mismo archivo ya se cargó el ${fecha}${quien}.`, pregunta: true }
-  }
-  const enLanding = ins.landing?.has(prev.filename.replace(/^.*[/\\]/, '')) ?? null
-  if (estado == null) {
-    const min = Math.max(0, Math.round((nowMs - Date.parse(prev.uploadedAt)) / 60_000))
-    return { texto: `Subiste este mismo archivo hace ${min} minuto${min === 1 ? '' : 's'} y todavía se está cargando.`, pregunta: true }
-  }
-  if ((estado === 'fallida' || estado === 'saltada') && enLanding === true)
-    return { texto: `Ya subiste este mismo archivo el ${fecha} y todavía está en espera: se vuelve a intentar solo. No hace falta subirlo de nuevo.`, pregunta: true }
-  const frase: Partial<Record<string, string>> = {
-    fallida: 'el proceso de carga lo rechazó',
-    saltada: 'el proceso de carga no lo cargó',
-    'sin-informe': 'el proceso de carga no informó qué pasó',
-    retirada: 'se retiró antes de cargarse',
-    reemplazada: 'lo reemplazó otra carga con el mismo nombre',
-    deshecha: 'se cargó y después se deshizo',
-    varada: 'quedó esperando sin que el proceso lo tomara',
-  }
-  return { texto: `Ya subiste este mismo archivo el ${fecha} y esa vez no se cargó: ${frase[estado] ?? estado}. Revisa eso antes de volver a subirlo.`, pregunta: true }
-}
-
 async function handleIntake(
   deps: AdminDeps,
   nav: Chrome,
@@ -1062,120 +978,19 @@ async function handleIntake(
   res: ServerResponse,
   token: string,
   by: string,
+  isAdmin: boolean,
+  stewardAll: boolean,
+  manageable: DomainDecl[],
 ): Promise<void> {
   const slot = (deps.intakeSlots ?? []).find((s) => s.id === slotId && (s.domain ?? '') === domain.id)
   if (!slot || !deps.intake) {
     send(res, deps.intake ? 404 : 503, adminPage(deps, nav, 'Ingesta', `<p class="msg err">${deps.intake ? `Slot desconocido: <code>${escapeHtml(slotId)}</code>` : 'La ingesta no está habilitada en esta instancia.'}</p>`))
     return
   }
-  const { fields, files } = await readMultipart(req, 60 * 1024 * 1024) // headroom para lotes
-  requireCsrf(fields, token) // CSRF inválido → CsrfError → 403 (catch del tryHandle)
-  // #178 · el desenlace de la carga vuelve a la pantalla donde el usuario ESTABA. El form declara su
-  // origen con un valor ACOTADO (`origen=cargas`), nunca con una URL: un campo de formulario no elige
-  // el destino de un redirect. Sin el campo —los forms de Frescura, un cliente viejo— el destino es
-  // Frescura, exactamente como antes: lo que nace en Frescura sigue muriendo en Frescura.
-  const enCargas = fields['origen'] === 'cargas'
-  const volver = (msg: string, destinos: IntakeSlot[] = []): string => {
-    // Los candidatos viajan como IDS de slot; el label y el enlace los resuelve la página que aterriza.
-    const d = destinos.length ? `&destino=${encodeURIComponent(destinos.map((s) => s.id).join(','))}` : ''
-    const base = enCargas ? cargasHref(domain.id, slot.id) + '&' : `/admin/dominio/${domain.id}/frescura?`
-    return `${base}msg=${encodeURIComponent(msg)}${d}`
-  }
-  // #269·D7 · el nombre se lleva a su forma canónica (NFC) ANTES de validar, registrar y aterrizar: una
-  // descarga en macOS llega a veces descompuesta y no calzaría con ningún patrón, ni siquiera con `?`.
-  const uploads = files.filter((f) => f.field === 'file' && f.filename).map((f) => ({ ...f, filename: nombreCanonico(f.filename) }))
-  if (uploads.length === 0) {
-    redirect(res, volver('Error: no se adjuntó ningún archivo.'))
-    return
-  }
-  deps.intakeBackfill?.(slot) // el indexado retroactivo de `_processed/` converge solo, en background
-  // Identidad del CONTENIDO (issue #62): el sha se calcula una vez por archivo y acompaña a la carga
-  // en todos sus registros — incluidos los rechazos, que también son historia del slot.
-  const shas = uploads.map((u) => createHash('sha256').update(u.bytes).digest('hex'))
-  const uploadRow = (i: number, ok: boolean, extra: Partial<Omit<IntakeUploadRow, 'id'>> = {}): Omit<IntakeUploadRow, 'id'> => ({
-    slotId: slot.id, filename: uploads[i]!.filename, sha256: shas[i]!, bytes: uploads[i]!.bytes.length,
-    uploadedBy: by, uploadedAt: new Date().toISOString(), ok, triggered: false, origen: 'upload', ...extra,
-  })
-  const registrar = async (row: Omit<IntakeUploadRow, 'id'>): Promise<number | undefined> =>
-    deps.intakeUploads ? await deps.intakeUploads.recordUpload(row).catch(() => undefined) : undefined
-  // Validar TODOS antes de aterrizar ninguno: o entra el lote completo o ninguno (atomicidad — evita
-  // dejar la semana a medio cargar). El SJD failure-safe espera el set consistente, no archivos sueltos.
-  const tambienCalza: Record<string, string[]> = {}
-  for (const [i, u] of uploads.entries()) {
-    const v = validarEnLaPuerta(deps.intakeSlots ?? [], slot, u.filename, u.bytes.length)
-    if (v.ok && v.tambienCalza.length) tambienCalza[u.filename] = v.tambienCalza.map((s) => s.id)
-    if (!v.ok && v.reason === 'accept') {
-      // #269·§4.1 · un nombre que ya se RECIBIÓ antes y hoy no calza con ningún tipo (la carga 27): se
-      // dice que ese archivo cambió de nombre, en vez del rechazo genérico que no explica nada.
-      const previo = !slotsQueCalzan(deps.intakeSlots ?? [], u.filename).length && deps.intakeUploads?.findAcceptedUploadByFilename
-        ? await deps.intakeUploads.findAcceptedUploadByFilename(u.filename).catch(() => null)
-        : null
-      const tipoPrevio = previo ? (deps.intakeSlots ?? []).find((s) => s.id === previo.slotId) : undefined
-      if (tipoPrevio) v.error = `Este archivo se recibió antes como «${tipoPrevio.label}», pero ese archivo ahora tiene que llamarse así: «${tipoPrevio.accept ?? '(sin patrón)'}». Si es la planilla nueva, cámbiale el nombre; si es la antigua, ya no se carga.`
-    }
-    if (!v.ok) {
-      await registrar(uploadRow(i, false, { error: v.error }))
-      deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: v.error })
-      // #178 · el rechazo por PATRÓN es el único con destino computable: qué otra casilla del dominio
-      // aceptaría este archivo, según su `accept` declarado. Si ninguna, la lista va vacía y el mensaje
-      // queda como está — no se adivina un destino. Si varias, se listan todas.
-      const destinos = v.reason === 'accept'
-        ? slotsQueAceptan((deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id), u.filename, slot.id)
-        : []
-      redirect(res, volver('Error: ' + v.error, destinos))
-      return
-    }
-  }
-  // Metadata requerida del slot (issue #76): la subida DEBE traer los campos declarados — la validación
-  // aquí es la que manda (la del browser es cortesía). Un campo requerido sin valor, o un valor que no
-  // calza el tipo, rechaza el LOTE completo (misma atomicidad). Los campos llegan como `meta_<id>`.
-  // Un campo con `from_filename` (#95) se resuelve POR ARCHIVO desde su nombre: un lote puede traer
-  // `Listado EasyDoc VH.xlsx` y `Listado SAP COVH.xlsx` y cada uno lleva su propio sidecar.
-  const submittedMeta: Record<string, string> = {}
-  for (const [k, v] of Object.entries(fields)) if (k.startsWith('meta_')) submittedMeta[k.slice('meta_'.length)] = v
-  const metaPorArchivo: { values: Record<string, string>; verify?: Record<string, string> }[] = []
-  for (const [i, u] of uploads.entries()) {
-    const metaCheck = validateMeta(slot, submittedMeta, u.filename)
-    if (!metaCheck.ok) {
-      await registrar(uploadRow(i, false, { error: metaCheck.error }))
-      deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: false, error: metaCheck.error })
-      redirect(res, volver('Error: ' + metaCheck.error))
-      return
-    }
-    metaPorArchivo.push({ values: metaCheck.values, ...(metaCheck.verify ? { verify: metaCheck.verify } : {}) })
-  }
-  // UN SOLO disparo por LOTE (no uno por archivo: N triggers = N corridas = throttling de capacidad).
-  const willTrigger = !!(slot.trigger && deps.intake.runNow)
-  // Sidecar (issue #76): solo si el slot declara `meta` — sin `meta` NO se escribe sidecar y el flujo es
-  // idéntico al de siempre (regresión cero). Un solo `uploadedAt` para todo el lote (misma subida).
-  const hasMeta = (slot.meta?.length ?? 0) > 0
-  const uploadedAt = new Date().toISOString()
-  // Aterriza cada crudo en la landing zone OneLake (staging). El pipeline/SJD lee de ahí y transforma.
-  const duplicados: string[] = []
-  // Dedup por CONTENIDO (issue #62): el sha vs las cargas previas del slot en el registro — el NOMBRE
-  // no participa (las copias re-descargadas llegan como «… (1) (1).xlsx»). Avisar, NUNCA bloquear:
-  // re-procesar idéntico es legítimo (re-materialización); lo que se elimina es la sorpresa.
-  // Check-then-insert POR ARCHIVO y en orden: dos idénticos del MISMO lote también se detectan.
-  // #269·V4 · el aviso cita la carga MÁS RECIENTE con ese contenido y dice solo lo que es cierto de
-  // ella; `dup_of` sigue apuntando a la ORIGINAL (es la referencia estable del registro).
-  const insumosDup = deps.intakeUploads ? await insumosDeDuplicado(deps, slot) : null
-  for (const [i, u] of uploads.entries()) {
-    const sha256 = shas[i]!
-    const previa = deps.intakeUploads ? await deps.intakeUploads.findUploadBySha(slot.id, sha256).catch(() => null) : null
-    const dupOf = previa ? dupLabel(previa) : null
-    const ultima = previa && deps.intakeUploads ? await ultimaConContenido(deps.intakeUploads, slot.id, sha256) : null
-    if (ultima && insumosDup) duplicados.push(`«${u.filename}»: ${avisoDeDuplicado(ultima, insumosDup, Date.now()).texto}`)
-    const m = metaPorArchivo[i]!
-    const sidecar = hasMeta ? buildSidecar(slot.id, m.values, by, uploadedAt, m.verify) : undefined
-    await deps.intake.put(slot.target, u.filename, u.bytes, sidecar)
-    await registrar(uploadRow(i, true, { uploadedAt, triggered: willTrigger, ...(previa ? { dupOfId: previa.id } : {}) }))
-    // #269·0.35.1 · aceptado en la casilla elegida aunque también calce con otras: queda en la auditoría
-    // (la señal de contrato de la consola lo mide sobre el registro en la próxima vuelta del lazo).
-    deps.audit({ type: 'intake', slot: slot.id, domain: domain.id, filename: u.filename, bytes: u.bytes.length, by, ok: true, triggered: willTrigger, sha256, ...(dupOf ? { dupOf } : {}), ...(tambienCalza[u.filename] ? { tambienCalza: tambienCalza[u.filename] } : {}) })
-  }
-  if (willTrigger) await deps.intake.runNow!(slot.trigger!, slot.target)
-  const aviso = duplicados.length ? ` ⚠ ${duplicados.join(' ')}` : ''
-  redirect(res, volver(`Recibimos ${uploads.length} archivo(s).${willTrigger ? ' Ya empezó la carga: el resultado aparece en «Actividad» en unos minutos.' : ' Este archivo no se carga en el momento: lo toma el proceso en su próxima corrida.'}${aviso}`))
+  const ctx = await cargarContexto(deps, by, token, isAdmin, stewardAll, manageable)
+  // El dominio de la URL ya pasó `canMng`: su tipo está entre los que la identidad puede subir.
+  if (!ctx.tipos.some((s) => s.id === slot.id)) ctx.tipos = [...ctx.tipos, slot]
+  await subirALaPuerta(ctx, req, res, slot, (dest, msg, t) => redirect(res, `${dest}?msg=${encodeURIComponent(msg)}&t=${t}`))
 }
 
 async function handleEntityWrite(
@@ -1240,7 +1055,7 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
         }
         if (deps.domainFreshness) s += lvl(`/admin/dominio/${d.id}/frescura`, 'Frescura', active === `${base}/frescura`, 'l2')
         if (deps.cargas && (deps.intakeSlots ?? []).some((sl) => (sl.domain ?? '') === d.id)) {
-          s += lvl(`/admin/dominio/${d.id}/cargas`, 'Cargas', active === `${base}/cargas`, 'l2')
+          s += lvl(`/admin/dominio/${d.id}/cargas`, 'Cargas (vista técnica)', active === `${base}/cargas`, 'l2')
         }
       }
     }
@@ -1250,10 +1065,12 @@ function buildSidebar(deps: AdminDeps, manageable: DomainDecl[], scope: string, 
 
 /** Avatar (arriba-derecha, siempre) → menú de identidad: Perfil · Gestión · Configuración · salir.
  * Usa el componente compartido (`avatarMenu`) — el mismo marco del catálogo. */
-async function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean): Promise<string> {
+async function buildAvatar(deps: AdminDeps, email: string, isAdmin: boolean, hasDomains: boolean, dominios: DomainDecl[] = []): Promise<string> {
   const hasMiranda = deps.hasMiranda ? await deps.hasMiranda(email, isAdmin) : false
   const hasConsola = deps.hasConsola ? await deps.hasConsola(email, isAdmin) : false
-  return avatarMenu({ email, isAdmin, hasDomains, hasMiranda, hasConsola, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
+  // #269·§5.1 · «Cargar archivos» para quien gestiona un dominio con tipos de archivo (o es admin).
+  const hasCargas = (deps.intakeSlots ?? []).some((sl) => isAdmin || dominios.some((d) => d.id === (sl.domain ?? '')))
+  return avatarMenu({ email, isAdmin, hasDomains, hasCargas, hasMiranda, hasConsola, sections: deps.menuSections, signoutRd: deps.signoutRd ?? '/admin' })
 }
 
 const tile = (n: string | number, label: string, warn = false): string =>
@@ -1267,7 +1084,7 @@ async function dashboard(deps: AdminDeps, nav: Chrome, email: string, isAdmin: b
     const inv: string[] = []
     const ne = entitiesOf(d.id).length
     const ns = slotsOf(d.id).length
-    if (ns) inv.push(`${ns} slot${ns === 1 ? '' : 's'} de ingesta`)
+    if (ns) inv.push(`${ns} tipo${ns === 1 ? '' : 's'} de archivo`)
     if (ne) inv.push(`${ne} ${ne === 1 ? 'entidad' : 'entidades'} de data maestra`)
     return `<li><a href="/admin/dominio/${escapeHtml(d.id)}">${escapeHtml(d.label)} →</a><div class="sub">${escapeHtml(d.description ?? '')}${d.description && inv.length ? ' · ' : ''}${inv.join(' · ')}</div></li>`
   }
@@ -1285,7 +1102,7 @@ async function dashboard(deps: AdminDeps, nav: Chrome, email: string, isAdmin: b
   const nslots = (deps.intakeSlots ?? []).filter((s) => manageable.some((d) => d.id === (s.domain ?? ''))).length
   const tiles: string[] = [tile(manageable.length, 'Dominios')]
   if (deps.piCount != null) tiles.push(tile(deps.piCount, 'PIs'))
-  tiles.push(tile(nslots, nslots === 1 ? 'Slot ingesta' : 'Slots ingesta'))
+  tiles.push(tile(nslots, nslots === 1 ? 'Tipo de archivo' : 'Tipos de archivo'))
   // Tile del VIGILANTE de cargas (#161·§6.1). Distingue lo que el requisito exige distinguir: «en
   // alerta» (se midió y algo está mal) de «sin medir» (no se pudo mirar) — un vigilante que confunde
   // «no hay» con «no veo» es peor que ninguno. Un fallo del resumen no tumba el dashboard.
@@ -1381,14 +1198,19 @@ async function domainPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl): Pro
     ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/maestra">Data Maestra</a><div class="sub">Entidades gobernadas del dominio (${entities.length}).</div></li>`
     : ''
   const frescura = deps.domainFreshness
-    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/frescura">Frescura</a><div class="sub">Por entidad: qué tan fresca está vs. lo que demandan sus PIs, sus corridas y su cadencia — y <b>alimentarla</b> (subir archivo) o aplicar su cadencia.</div></li>`
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/frescura">Frescura</a><div class="sub">Por entidad: qué tan fresca está vs. lo que demandan sus PIs, sus corridas y su cadencia, y qué archivos la alimentan.</div></li>`
     : ''
-  const cargas = deps.cargas && (deps.intakeSlots ?? []).some((s) => (s.domain ?? '') === domain.id)
-    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/cargas">Cargas</a><div class="sub">La operación completa de las cargas: historial y estado de cada conversión con su log, y el ciclo del landing — retirar, reactivar, re-correr.</div></li>`
+  const tieneTipos = (deps.intakeSlots ?? []).some((s) => (s.domain ?? '') === domain.id)
+  // #269·§5.1 · la puerta primero: «Cargar archivos de <Dominio>»; la consola queda como vista técnica.
+  const cargar = deps.intake && tieneTipos
+    ? `<li><a href="/cargar">Cargar archivos de ${escapeHtml(domain.label)}</a><div class="sub">Sube los archivos del dominio y mira cómo va cada uno.</div></li>`
+    : ''
+  const cargas = deps.cargas && tieneTipos
+    ? `<li><a href="/admin/dominio/${escapeHtml(domain.id)}/cargas">Cargas (vista técnica)</a><div class="sub">La operación completa de las cargas: historial y estado de cada conversión con su log, y el ciclo del landing — retirar, reactivar, re-correr.</div></li>`
     : ''
 
-  const gestion = maestra || frescura || cargas
-    ? `<h2>Gestión del dominio</h2><ul class="cards">${maestra}${frescura}${cargas}</ul>`
+  const gestion = cargar || maestra || frescura || cargas
+    ? `<h2>Gestión del dominio</h2><ul class="cards">${cargar}${maestra}${frescura}${cargas}</ul>`
     : '<p class="sub">Este dominio aún no tiene facetas habilitadas.</p>'
 
   // Facetas previstas del dominio (roadmap visible, deshabilitadas) — ver work/041 §4.
@@ -1738,7 +1560,7 @@ async function jobsPublishSection(deps: AdminDeps, token: string, processes: Pro
       `<td><code>${escapeHtml(r.definitionSha256.slice(0, 12))}…</code></td><td>${marca(r.outcome)}</td><td class="sub">${escapeHtml(r.detail ?? '')}</td></tr>`)
     .join('')
   const colaHtml = pendientes.length
-    ? `<p class="sub">Publicaciones con desenlace <b>desconocido</b> (el motor no confirmó): re-observá el item para resolverlas — Vergis nunca las da por publicadas.</p>` +
+    ? `<p class="sub">Publicaciones con desenlace <b>desconocido</b> (el motor no confirmó): vuelve a observar el ítem para resolverlas — Vergis nunca las da por publicadas.</p>` +
       pendientes
         .map((r) => `<form method="post" action="/admin/sources/publish-reverify" style="display:inline">${csrfIn}<input type="hidden" name="id" value="${r.id}">` +
           `<button class="add">Re-verificar #${r.id} · ${escapeHtml(r.processId)}</button></form> `)
@@ -2104,7 +1926,7 @@ async function reverificarPublicacion(deps: AdminDeps, f: Record<string, string>
   if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Id de publicación inválido.')
   const row = (await ops.ledger.pendingUnknown()).find((r) => r.id === id)
   if (!row) throw new ValidationError(`La publicación #${id} no está pendiente de re-verificación.`)
-  if (!row.itemId) throw new ValidationError(`La publicación #${id} no dejó item conocido: no hay qué re-observar (buscá el item por nombre en el motor).`)
+  if (!row.itemId) throw new ValidationError(`La publicación #${id} no dejó item conocido: no hay qué re-observar (busca el ítem por nombre en el motor).`)
   const tpl = ops.templates.find((t) => t.template.id === row.templateId)
   if (!tpl) throw new ValidationError(`La plantilla '${row.templateId}' ya no está declarada: no se puede acotar la comparación a sus partes.`)
   const publicados = new Set(tpl.template.parts.map((p) => p.path))
@@ -2194,95 +2016,6 @@ function freshnessHealthCell(r: DomainEntityFreshness, runHref?: (r: DomainEntit
   return `${kind}<br>${runStateCell({ runs: r.runs ?? [], health: r.health, projection: r.projection, runHref: runHref?.(r) ?? null })}`
 }
 
-/** Controles de la metadata requerida del slot (issue #76). Vacío si el slot no declara `meta`. */
-function metaFieldsHtml(slot: IntakeSlot): string {
-  if (!slot.meta?.length) return ''
-  return slot.meta.map((f) => {
-    const name = `meta_${escapeHtml(f.id)}`
-    // #95 · el campo lo declara el NOMBRE del archivo: no se pide, se explica la convención. Si el
-    // nombre no la cumple, la subida falla con el mismo texto — el usuario ve antes lo que se espera.
-    if (f.fromFilename) {
-      const pats = f.fromFilename.patterns.map((p) => `<code>${escapeHtml(p)}</code>`).join(' o ')
-      const cods = f.fromFilename.catalog ? ` · códigos: ${Object.keys(f.fromFilename.catalog).map((c) => `<code>${escapeHtml(c)}</code>`).join(', ')}` : ''
-      return `<div class="sub" style="flex-basis:100%">${escapeHtml(f.label)} se toma del nombre del archivo: ${pats}${cods}</div>`
-    }
-    const req = f.required ? ' required' : ''
-    const mark = f.required ? ' <span style="color:var(--err)">*</span>' : ''
-    let control: string
-    if (f.type === 'enum') {
-      // #109 · lo que viaja en el POST es el `value`; el texto visible antepone la etiqueta cuando la hay
-      // («Hijuelas S.A. · 96835510-4»: se elige por nombre y se verifica el dato a la vista). Un enum
-      // inline sin etiquetas (label = value) renderiza idéntico a antes.
-      const opts = (f.options ?? [])
-        .map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label === o.value ? o.value : `${o.label} · ${o.value}`)}</option>`)
-        .join('')
-      control = `<select name="${name}"${req}><option value="">— elegir —</option>${opts}</select>`
-    } else if (f.type === 'number') {
-      control = `<input type="number" step="any" name="${name}"${req}>`
-    } else if (f.type === 'rut') {
-      // La validación real (DV) es server-side; el pattern del browser es solo forma (cortesía).
-      control = `<input type="text" name="${name}" placeholder="12345678-9" pattern="[0-9]{1,8}-[0-9Kk]"${req}>`
-    } else {
-      control = `<input type="text" name="${name}"${req}>`
-    }
-    return `<label class="sub" style="flex-basis:100%">${escapeHtml(f.label)}${mark}<br>${control}</label>`
-  }).join('')
-}
-
-/**
- * Pre-check de duplicados en el CLIENTE (issue #62), sin librerías: antes de que los bytes salgan del
- * browser calcula el SHA-256 de cada archivo (`crypto.subtle`), consulta el endpoint `/precheck` y —si
- * el contenido ya fue procesado— pregunta «¿Continuar?». Preguntar después de subir sería teatro: la
- * conversión ya estaría corriendo.
- *
- * FAIL-SAFE por contrato: sin `crypto.subtle`, con el fetch caído o lento (3 s), el form se envía SIN
- * aviso previo. El server recalcula el sha con sus propios bytes y el aviso post-hoc del redirect es
- * la red de seguridad. El pre-check nunca bloquea una carga: aceptar es siempre posible.
- */
-const PRECHECK_JS = `(function(f){
-  if(!f||f.dataset.pc)return; f.dataset.pc='1';
-  f.addEventListener('submit',function(ev){
-    if(f.dataset.go){f.dataset.go='';return}
-    var inp=f.querySelector('input[type=file]'); var fs=inp&&inp.files?[].slice.call(inp.files):[];
-    if(!fs.length||!(window.crypto&&crypto.subtle&&crypto.subtle.digest))return;
-    ev.preventDefault();
-    var send=function(){f.dataset.go='1';f.submit()};
-    var hex=function(b){return [].map.call(new Uint8Array(b),function(x){return ('0'+x.toString(16)).slice(-2)}).join('')};
-    Promise.all(fs.map(function(x){return x.arrayBuffer().then(function(b){return crypto.subtle.digest('SHA-256',b)}).then(hex)}))
-      .then(function(shas){
-        var body=new URLSearchParams(); body.set('_csrf',f._csrf.value); body.set('shas',shas.join(','));
-        return fetch(f.action+'/precheck',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:body,signal:AbortSignal.timeout(3000)})
-          .then(function(r){return r.json()}).then(function(j){
-            var by={}; (j.dups||[]).forEach(function(d){by[d.sha256]=d});
-            for(var i=0;i<shas.length;i++){var d=by[shas[i]]; if(!d)continue;
-              var msg='«'+fs[i].name+'»: '+(d.aviso||('es idéntico a «'+d.filename+'».'));
-              if(d.bloquea===false){alert(msg);continue}
-              if(!confirm(msg+' ¿Subir igual?'))return;
-            }
-            send();
-          })
-      }).catch(send);
-  });
-})(document.currentScript.previousElementSibling)`
-
-/**
- * Formulario compacto de carga manual de un slot (mismo write-path que el intake).
- *
- * `origen` (#178) declara DÓNDE vive este formulario, para que el desenlace de la carga —recibido o
- * rechazado— vuelva a esa pantalla. Es un valor acotado que el handler compara contra `'cargas'`,
- * no una URL de retorno: el destino del redirect lo decide el server.
- */
-function uploadForm(domainId: string, slot: IntakeSlot, token: string, origen?: 'cargas'): string {
-  return `<form method="post" action="/admin/dominio/${escapeHtml(domainId)}/intake/${escapeHtml(slot.id)}" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:320px">
-       <input type="hidden" name="_csrf" value="${token}">
-       ${origen ? `<input type="hidden" name="origen" value="${origen}">` : ''}
-       <input type="file" name="file" multiple required>
-       ${metaFieldsHtml(slot)}
-       <button class="add">Subir</button>
-       ${slot.accept ? `<div class="sub" style="flex-basis:100%">patrón: <code>${escapeHtml(slot.accept)}</code> · máx. ${Math.round(slotMaxBytes(slot) / (1024 * 1024))} MB c/u</div>` : ''}
-     </form><script>${PRECHECK_JS}</script>`
-}
-
 /** Consola de CARGAS de un dominio (issue #58): arma los datos de la casilla activa (#178, tolerante a
  * fallos) y delega el render puro a admin-cargas. Gate de steward: lo aplica el ruteo del dominio. */
 async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, token: string, params: URLSearchParams): Promise<string> {
@@ -2290,7 +2023,8 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
   const slots = (deps.intakeSlots ?? []).filter((s) => (s.domain ?? '') === domain.id)
   // #178 · la casilla ACTIVA: la del `?slot=`, y si el parámetro falta o nombra un slot que no existe,
   // la primera declarada — sin error. Una URL vieja (sin el parámetro) sigue abriendo una página válida.
-  const activo = slots.find((s) => s.id === params.get('slot')) ?? slots[0]
+  // #269·P2 · `?tipo=` es el alias que usa la página del archivo (la vista de usuario no nombra casillas).
+  const activo = slots.find((s) => s.id === (params.get('slot') ?? params.get('tipo'))) ?? slots[0]
   const msg = params.get('msg') ?? undefined
   // #56 · procesos registrados (para la coherencia trigger↔proceso). Tolerante: sin registro, no acusa.
   const engineIds = new Set<string>(
@@ -2340,16 +2074,7 @@ async function cargasPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, toke
   const runLogHrefOf = deps.runLogs
     ? (s: IntakeSlot, r: RunRecord): string => `/admin/dominio/${domain.id}/corrida?slot=${encodeURIComponent(s.id)}&started=${encodeURIComponent(r.startedAt)}`
     : undefined
-  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, slots, data, token, (s) => uploadForm(domain.id, s, token, 'cargas'), runLogHrefOf))
-}
-
-/** «Errores frecuentes» de una casilla (#346): catálogo vivo + frecuencia de 90 días (tolerante). */
-async function erroresPage(deps: AdminDeps, nav: Chrome, domain: DomainDecl, slot: IntakeSlot): Promise<string> {
-  const ops = deps.cargas!
-  const conteos = ops.codigos
-    ? await ops.codigos(slot, new Date(Date.now() - 90 * 86_400_000).toISOString()).catch(() => 'error' as const)
-    : undefined
-  return adminPage(deps, nav, `${domain.label} · Errores frecuentes`, erroresFrecuentesBody(domain.id, domain.label, slot, deps.intakeGuias ?? [], conteos))
+  return adminPage(deps, nav, `${domain.label} · Cargas`, feedback + cargasBody(domain.id, domain.label, slots, data, token, (s) => `<p class="sub">Para subir archivos de este tipo: <a href="/cargar/${encodeURIComponent(s.id)}">Cargar archivos · ${escapeHtml(s.label)}</a> (la vista técnica no sube).</p>`, runLogHrefOf))
 }
 
 /**
@@ -2487,14 +2212,14 @@ async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<s
     if (!archivo || archivo.includes('/') || archivo.includes('..')) throw new ValidationError('Nombre de archivo inválido.')
     await ops.retire(slot, archivo, by)
     deps.audit({ type: 'intake-retire', slot: slot.id, domain: slot.domain ?? '', filename: archivo, by })
-    return `«${archivo}» retirado del landing (respaldado en _retirado/). Corré la conversión para re-materializar sin él.`
+    return `«${archivo}» retirado del landing (respaldado en _retirado/). Corre la conversión para re-materializar sin él.`
   }
   if (accion === 'restore') {
     const ruta = f['archivo'] ?? ''
     if (!ruta || ruta.includes('..') || !/\/_processed\//.test('/' + ruta)) throw new ValidationError('Solo se reactivan archivos del histórico _processed/.')
     await ops.restore(slot, ruta, by)
     deps.audit({ type: 'intake-restore', slot: slot.id, domain: slot.domain ?? '', filename: ruta, by })
-    return `«${ruta.split('/').pop()}» reactivado en el landing. Corré la conversión para materializarlo.`
+    return `«${ruta.split('/').pop()}» reactivado en el landing. Corre la conversión para materializarlo.`
   }
   // ── «Revertir esta carga» (issue #63): derivar el plan → confirmarlo → ejecutarlo ──
   // El mapeo carga→claves lo mantiene el convertidor en `_processed/<clave>/`: el plan se DERIVA de
@@ -2511,7 +2236,7 @@ async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<s
     const ref = revertRefDeForm(f)
     const out = await ops.revertExec(slot, hash, ref, by)
     // Fail-closed: el slot cambió entre confirmar y ejecutar ⇒ no se ejecuta nada, se re-confirma.
-    if (!out.ok) return { plan: out.plan, aviso: 'El estado del slot cambió desde que viste este plan — revisalo de nuevo.' }
+    if (!out.ok) return { plan: out.plan, aviso: 'El estado del slot cambió desde que viste este plan — revísalo de nuevo.' }
     const r = out.result
     const claves = r.resumen.map((c) => `${c.clave}:${c.accion}`).join(',')
     deps.audit({
@@ -2522,7 +2247,7 @@ async function handleCargasAccion(deps: AdminDeps, slot: IntakeSlot, f: Record<s
     const sinTocar = r.resumen.filter((c) => c.accion !== 'rematerializar' && c.accion !== 'vaciar')
     const detalle = hechos.length ? ` ${hechos.join('; ')}.` : ' Ninguna clave requería compensación.'
     const cola = r.convirtiendo ? ' La conversión compensatoria está corriendo — el resultado aparece en «Actividad» en ~1-3 min.' : ''
-    const nota = sinTocar.length ? ` ${sinTocar.length} clave(s) quedaron SIN tocar (revisá el detalle en la fila ↩️ de Actividad).` : ''
+    const nota = sinTocar.length ? ` ${sinTocar.length} clave(s) quedaron SIN tocar (revisa el detalle en la fila ↩️ de Actividad).` : ''
     return `Reversión ejecutada: «${r.filename}».${detalle}${r.landingRetirado ? ' La copia del landing se retiró.' : ''}${cola}${nota}`
   }
   throw new ValidationError(`Acción desconocida: ${accion}`)
@@ -2556,31 +2281,19 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
       coherenciaAlert = `<p class="msg err">⚠ ${huerfanos.length === 1 ? 'El slot' : 'Los slots'} ${huerfanos.map((s) => `<b>${escapeHtml(s.label)}</b> (dispara <code>${escapeHtml(s.trigger!.processRef)}</code>)`).join(', ')} no ${huerfanos.length === 1 ? 'tiene' : 'tienen'} su proceso registrado en <a href="/admin/sources">Fuentes</a> → sin fila de entidad, sin salud, sin monitor. Registrarlo en <code>sources.yaml</code>.</p>`
     }
   }
-  // Log de la última conversión por slot (issue #55): la reconfirmación de una carga (filas, semana,
-  // commit, archivado) legible sin acceso a Fabric. Tolerante a fallos: sin log → sin sección.
-  const slotLogs = new Map<string, string>()
-  if (deps.intakeLog) {
-    await Promise.all(domSlots.map(async (s) => {
-      const log = await deps.intakeLog!(s).catch(() => null)
-      if (log?.trim()) slotLogs.set(s.id, log)
-    }))
-  }
-  const logDetails = (slotId: string): string => {
-    const log = slotLogs.get(slotId)
-    if (!log) return ''
-    const tail = log.length > 4000 ? `…${log.slice(-4000)}` : log
-    return `<details class="guia"><summary class="sub">Log de la última conversión</summary><pre class="sub" style="white-space:pre-wrap;overflow-x:auto;max-height:260px;overflow-y:auto">${escapeHtml(tail.trim())}</pre></details>`
-  }
   // #99 · destino del «Ver log» de la última corrida de la entidad. Sin `runLogs` cableado no hay enlace.
   const runLogHrefOfEntity = (r: DomainEntityFreshness): string | null => {
     if (!deps.runLogs || !r.processId) return null
     const last = (r.runs ?? [])[0]
     return last ? `/admin/dominio/${domain.id}/corrida?proc=${encodeURIComponent(r.processId)}&started=${encodeURIComponent(last.startedAt)}` : null
   }
-  const slotFor = (r: DomainEntityFreshness): IntakeSlot | undefined =>
-    r.engineItemId ? domSlots.find((s) => s.trigger?.processRef && s.trigger.processRef === r.engineItemId) : undefined
+  // #269·V13 · TODOS los tipos de archivo que alimentan la entidad (un proceso compartido por varios
+  // tipos tiene varias puertas: con `.find` todas las filas subían a la primera — P8).
+  const slotsFor = (r: DomainEntityFreshness): IntakeSlot[] =>
+    r.engineItemId ? domSlots.filter((s) => s.trigger?.processRef && s.trigger.processRef === r.engineItemId) : []
+  const puertas = (xs: IntakeSlot[]): string => xs.map((s) => `<div><a href="/cargar/${encodeURIComponent(s.id)}">${escapeHtml(s.label)}</a></div>`).join('')
   if (!rows.length && !domSlots.length) {
-    return adminPage(deps, nav, title, `${feedback}${back}<p class="sub">Este dominio aún no tiene entidades con fuente registrada. Conectá sus fuentes en <a href="/admin/sources">Fuentes</a> (plataforma) y asignales este dominio.</p>`)
+    return adminPage(deps, nav, title, `${feedback}${back}<p class="sub">Este dominio aún no tiene entidades con fuente registrada. Conecta sus fuentes en <a href="/admin/sources">Fuentes</a> (plataforma) y asígnales este dominio.</p>`)
   }
   const matched = new Set<string>()
   const body = rows
@@ -2615,19 +2328,20 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
             ? `<div>${accionForm('pausar', 'Pausar', 'del')}</div>`
             : ''
         : ''
-      const slot = slotFor(r)
-      if (slot) matched.add(slot.id)
+      const tiposEnt = slotsFor(r)
+      for (const t of tiposEnt) matched.add(t.id)
+      const slot = tiposEnt[0]
       // #279 · el slot casa por `trigger.processRef` = item del motor: si hay slot, subir el archivo ES
       // la corrida (land-and-trigger) y un schedule correría sobre nada. En vez del botón, la razón —
       // que además explica por qué la fila puede mostrar «sin schedule» sin estar mal.
       const aplicar = !r.processId || r.paused || !deps.applyCadence
         ? ''
         : slot
-          ? `<div class="sub">Alimentado por carga manual (slot <b>${escapeHtml(slot.label)}</b>): la cadencia se vigila, no se programa.</div>`
+          ? `<div class="sub">Alimentado por carga manual (${tiposEnt.map((t) => `<b>${escapeHtml(t.label)}</b>`).join(', ')}): la cadencia se vigila, no se programa.</div>`
           : drift
             ? `<form method="post" action="/admin/dominio/${escapeHtml(domain.id)}/frescura" style="display:inline"><input type="hidden" name="_csrf" value="${token}"><input type="hidden" name="process" value="${escapeHtml(r.processId)}"><button class="add">Aplicar</button></form>`
             : ''
-      const alimentar = slot ? uploadForm(domain.id, slot, token) + logDetails(slot.id) : '<span class="sub">automática</span>'
+      const alimentar = tiposEnt.length ? puertas(tiposEnt) : '<span class="sub">automática</span>'
       const pis = r.dependentPis.map((p) => escapeHtml(p)).join(', ')
       return `<tr${warn ? ' style="color:var(--err)"' : ''}>
         <td><span class="c">${escapeHtml(r.entity)}</span>${r.processLabel ? `<div class="sub">${escapeHtml(r.processLabel)}</div>` : ''}${pis ? `<div class="sub">PIs: ${pis}</div>` : ''}</td>
@@ -2640,39 +2354,21 @@ async function domainFreshnessPage(deps: AdminDeps, nav: Chrome, domain: DomainD
   // Slots del dominio sin entidad registrada (land-only, o cuya fuente/proceso aún no está en el registro):
   // su carga manual igual debe tener dónde — no se pierde.
   const orphanSlots = domSlots.filter((s) => !matched.has(s.id))
-  // Estado de conversión por slot huérfano (mismo dato que «Última corrida» de las entidades): sin él,
-  // quien sube acá queda a ciegas si el job disparado falla — solo vería el archivo «recibido».
-  const orphanRuns = new Map<string, RunRecord[] | 'error'>()
-  if (deps.intakeStatus) {
-    await Promise.all(orphanSlots.filter((s) => s.trigger).map(async (s) => {
-      orphanRuns.set(s.id, await deps.intakeStatus!(s).catch(() => 'error' as const))
-    }))
-  }
-  const slotRunLine = (s: IntakeSlot): string => {
-    const st = orphanRuns.get(s.id)
-    if (st === undefined) return ''
-    if (st === 'error') return '<div class="sub">No se pudo consultar el estado de la conversión (reintentá refrescando).</div>'
-    if (!st.length) return '<div class="sub">Sin corridas todavía.</div>'
-    const href = deps.runLogs ? `/admin/dominio/${domain.id}/corrida?slot=${encodeURIComponent(s.id)}&started=${encodeURIComponent(st[0].startedAt)}` : null
-    const verLog = href ? ` · <a href="${escapeHtml(href)}">Ver log</a>` : ''
-    return `<div class="sub">Última corrida: ${statusBadge(st[0].status)} ${fmtWhen(st[0].startedAt)}${verLog}</div>${runErrorLine(st[0])}`
-  }
   const orphanSection = orphanSlots.length
-    ? `<h2>Otras cargas</h2><p class="sub">Slots de ingesta del dominio sin entidad registrada en Frescura todavía (registrá su fuente/proceso en <a href="/admin/sources">Fuentes</a> para verlas por entidad).</p>
-       <ul class="cards">${orphanSlots.map((s) => `<li><b>${escapeHtml(s.label)}</b>${s.description ? `<div class="sub">${escapeHtml(s.description)}</div>` : ''}${slotRunLine(s)}${uploadForm(domain.id, s, token)}${logDetails(s.id)}</li>`).join('')}</ul>`
+    ? `<h2>Otros archivos del dominio</h2><p class="sub">Tipos de archivo del dominio sin entidad registrada en Frescura todavía:</p>${puertas(orphanSlots)}`
     : ''
   const guia = domSlots.length
-    ? `<details class="guia"><summary>¿Cómo alimentar manualmente?</summary>
-         <p class="sub">Subí el/los archivo(s) en la fila de la entidad (columna «Alimentar»). Mira los aterriza en staging y dispara la conversión; el resultado aparece en «Última corrida». Respetá el patrón de nombre del slot. La carga manual es el gemelo del schedule automático: las dos producen una corrida fresca.</p>
+    ? `<details class="guia"><summary>¿Cómo se alimentan estas tablas?</summary>
+         <p class="sub">Las tablas que se alimentan con archivos muestran el enlace al archivo que las carga. Para subirlo, usa «Cargar archivos». La cadencia de esas tablas se vigila, no se programa: la carga la dispara la subida.</p>
        </details>`
     : ''
   const table = rows.length
-    ? `<table><thead><tr><th>Entidad</th><th>Demanda</th><th>Oferta</th><th>Cadencia req.</th><th>Schedule motor</th><th>Última corrida</th><th>Alimentar</th></tr></thead>
+    ? `<table><thead><tr><th>Entidad</th><th>Demanda</th><th>Oferta</th><th>Cadencia req.</th><th>Schedule motor</th><th>Última corrida</th><th>Archivos que la alimentan</th></tr></thead>
        <tbody>${body}</tbody></table>`
     : ''
   return adminPage(deps, nav, title,
     `${feedback}${migAlert}${coherenciaAlert}${back}
-     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El refresco es de dos formas: <b>automático</b> (el «schedule motor»; «Aplicar» lo alinea a la cadencia requerida) y <b>manual</b> (subir archivo en «Alimentar»). «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
+     <p class="sub">Por entidad: la demanda más exigente de sus PIs vs. la oferta de su fuente → <b>cadencia requerida</b>. El refresco es de dos formas: <b>automático</b> (el «schedule motor»; «Aplicar» lo alinea a la cadencia requerida) y <b>manual</b> (los archivos de la última columna, que se suben en «Cargar archivos»). «Última corrida» indica el tipo de motor (Notebook / Spark Job). ⚠️ = demanda insatisfacible, o entidad atrasada/fallida.</p>
      ${guia}
      ${table}
      ${orphanSection}`,
@@ -2954,8 +2650,8 @@ function parseClaimLines(texto: string): Record<string, string[]> {
     const clave = linea.slice(0, i).trim()
     const vals = linea.slice(i + 1).split(',').map((v) => v.trim()).filter(Boolean)
     if (!clave) throw new ValidationError(`Claim sin nombre: '${linea}'.`)
-    if (!vals.length) throw new ValidationError(`El claim '${clave}' no trae ningún valor. Para dejar la identidad sin claims, borrá la línea entera.`)
-    if (out[clave]) throw new ValidationError(`El claim '${clave}' aparece dos veces: escribí sus valores en una sola línea, separados por coma.`)
+    if (!vals.length) throw new ValidationError(`El claim '${clave}' no trae ningún valor. Para dejar la identidad sin claims, borra la línea entera.`)
+    if (out[clave]) throw new ValidationError(`El claim '${clave}' aparece dos veces: escribe sus valores en una sola línea, separados por coma.`)
     out[clave] = vals
   }
   return out

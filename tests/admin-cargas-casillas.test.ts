@@ -167,71 +167,45 @@ describe('consola de Cargas · navegación por casilla (#178)', () => {
     expect(pedidos.length).toBeGreaterThanOrEqual(5) // history + runs + log + landing + archived
   })
 
-  // ─── (2) El rechazo vuelve a su casilla, no a Frescura ─────────────────────
-  it('el rechazo por patrón deja al usuario en SU casilla (ya no navega a Frescura)', async () => {
-    const page = await get('/admin/dominio/comercial/cargas')
-    const { body, ct } = multipart(
-      { _csrf: tokenFrom(page.body), origen: 'cargas' },
-      'oc-17473580-distributions-details-11-08-2026.xlsx',
-    )
+  // ─── (2) #269·P2 · el POST de siempre lo atiende la puerta: enruta, y vuelve a la página del archivo ──
+  it('el archivo de B soltado en A se ENRUTA a B (D2): aterriza en B y vuelve a la página de B', async () => {
+    const page = await get('/cargar')
+    const { body, ct } = multipart({ _csrf: tokenFrom(page.body), origen: 'cargas' }, 'oc-17473580-distributions-details-11-08-2026.xlsx')
     const res = await go(mockReq('POST', '/admin/dominio/comercial/intake/oc_crossdocking', body, ct))
     expect(res.statusCode).toBe(303)
     const loc = res.headers['location']!
-    expect(loc).toContain('/admin/dominio/comercial/cargas?slot=oc_crossdocking&')
-    expect(loc).not.toContain('frescura')
-    expect(puts).toEqual([]) // rechazada: no aterrizó nada
+    expect(loc).toContain('/cargar/oc_crossdocking_distribuciones?msg=')
+    expect(loc).toContain('&t=ok')
+    expect(puts).toEqual(['oc-17473580-distributions-details-11-08-2026.xlsx'])
   })
 
-  it('la carga ACEPTADA nacida en la consola también vuelve a su casilla', async () => {
-    const page = await get('/admin/dominio/comercial/cargas')
+  it('la carga aceptada vuelve a la página del archivo, con el mensaje de §4.2', async () => {
+    const page = await get('/cargar')
     const { body, ct } = multipart({ _csrf: tokenFrom(page.body), origen: 'cargas' }, 'oc-1747-products-details-11-08-2026.xlsx')
     const res = await go(mockReq('POST', '/admin/dominio/comercial/intake/oc_crossdocking', body, ct))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/cargas?slot=oc_crossdocking&msg=')
+    // El arnés no cablea `runNow`: sin disparo, la frase es la de land-only (§4.2).
+    expect(decodeURIComponent(res.headers['location']!)).toContain('/cargar/oc_crossdocking?msg=Recibimos 1 archivo(s). Este archivo no se carga en el momento: lo toma el proceso en su próxima pasada.')
     expect(puts).toEqual(['oc-1747-products-details-11-08-2026.xlsx'])
   })
 
-  it('lo que nace en Frescura sigue muriendo en Frescura', async () => {
+  it('Frescura ya no sube (V13): sin formulario, con el enlace a cada archivo que alimenta la entidad', async () => {
     const page = await get('/admin/dominio/comercial/frescura')
-    // El form de Frescura no declara origen: su rechazo vuelve ahí, como siempre.
-    const { body, ct } = multipart({ _csrf: tokenFrom(page.body) }, 'Tiendas por zona Sodimac.xlsx')
-    const res = await go(mockReq('POST', '/admin/dominio/comercial/intake/oc_crossdocking', body, ct))
-    expect(res.statusCode).toBe(303)
-    const loc = res.headers['location']!
-    expect(loc).toContain('/admin/dominio/comercial/frescura?')
-    // …y el destino viaja con él: el aviso se pinta también acá.
-    expect(loc).toContain('destino=oc_crossdocking_maestro')
-    const pintada = await get(loc)
-    expect(pintada.body).toContain('Este archivo va en')
-    expect(pintada.body).toContain('OC Crossdocking · Maestro de tiendas')
+    expect(page.body).not.toContain('type="file"')
+    expect(page.body).toContain('href="/cargar/oc_crossdocking"')
+    expect(page.body).toContain('Archivos que la alimentan')
   })
 
-  // ─── (3) El mensaje nombra la casilla correcta ─────────────────────────────
-  it('rechazo en A con archivo de B: el mensaje nombra B y enlaza su pestaña', async () => {
-    const page = await get('/admin/dominio/comercial/cargas')
-    const { body, ct } = multipart(
-      { _csrf: tokenFrom(page.body), origen: 'cargas' },
-      'oc-17473580-distributions-details-11-08-2026.xlsx',
-    )
-    const res = await go(mockReq('POST', '/admin/dominio/comercial/intake/oc_crossdocking', body, ct))
-    const loc = res.headers['location']!
-    expect(loc).toContain('destino=oc_crossdocking_distribuciones')
-
-    const pintada = await get(loc)
-    expect(pintada.body).toContain('msg err')
-    expect(pintada.body).toContain('no coincide con el patrón esperado') // el error de siempre, intacto
-    expect(pintada.body).toContain('Este archivo va en <a href="/admin/dominio/comercial/cargas?slot=oc_crossdocking_distribuciones"><b>OC Crossdocking · Distribuciones</b></a>.')
-  })
-
-  it('si NINGÚN otro slot acepta el archivo, el mensaje no menciona ningún destino', async () => {
-    const page = await get('/admin/dominio/comercial/cargas')
+  it('un nombre que ningún tipo acepta: se rechaza con los nombres esperados y no aterriza nada', async () => {
+    const page = await get('/cargar')
     const { body, ct } = multipart({ _csrf: tokenFrom(page.body), origen: 'cargas' }, 'cualquier-cosa.csv')
     const res = await go(mockReq('POST', '/admin/dominio/comercial/intake/oc_crossdocking', body, ct))
     const loc = res.headers['location']!
-    expect(loc).not.toContain('destino=')
+    expect(loc).toContain('&t=error')
     const pintada = await get(loc)
-    expect(pintada.body).toContain('msg err')
-    expect(pintada.body).not.toContain('Este archivo va en')
+    expect(pintada.body).toContain('aviso t-error')
+    expect(pintada.body).toContain('Este nombre no corresponde a ningún archivo que puedas subir.')
+    expect(puts).toEqual([])
   })
 
   it('un `destino` inventado en la barra de direcciones no produce aviso', async () => {

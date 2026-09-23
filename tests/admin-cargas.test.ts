@@ -490,7 +490,8 @@ describe('admin-cargas · dedup por contenido contra el registro de cargas (issu
     const admin = await mkAdmin(ops(), [], store)
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
     const res = await subir(admin, token, 'gigante.xlsx', Buffer.alloc(2048)) // maxBytes del slot = 1024
-    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Error')
+    // #269·P2 · el rechazo vuelve a la página del archivo, marcado como error.
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('&t=error')
     const rows = await store.listUploads('saldos', 10)
     expect(rows).toHaveLength(1)
     expect(rows[0].ok).toBe(false)
@@ -500,12 +501,15 @@ describe('admin-cargas · dedup por contenido contra el registro de cargas (issu
     await store.close()
   })
 
-  it('el form trae el pre-check en el cliente (SHA-256 + POST al /precheck del slot)', async () => {
+  it('la zona de subida revisa en el cliente (SHA-256 + POST a /cargar/revisar) antes de subir', async () => {
+    // #269·P2 · la revisión antes de subir vive en la puerta; la vista técnica ya no sube.
     const admin = await mkAdmin(ops())
-    const body = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    const body = (await go(admin, mockReq('GET', '/cargar/saldos', STEWARD))).body
     expect(body).toContain("crypto.subtle.digest('SHA-256'")
-    expect(body).toContain("f.action+'/precheck'")
-    expect(body).toContain('¿Continuar?')
+    expect(body).toContain("fetch('/cargar/revisar'")
+    expect(body).toContain("'Subir igual'")
+    const tecnica = (await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body
+    expect(tecnica).not.toContain('type="file"')
   })
 
   it('timeline marca la carga duplicada con el aviso', () => {
@@ -585,15 +589,15 @@ const postCargas = async (admin: AdminHandler, token: string, body: string) =>
   go(admin, mockReq('POST', '/admin/dominio/cartera/cargas', STEWARD, `_csrf=${token}&slot=saldos&${body}`, 'application/x-www-form-urlencoded'))
 
 describe('admin-cargas · revertir esta carga (issue #63)', () => {
-  it('(a) la fila 📤 con id y sha ofrece «Revertir esta carga»; sin id o sin sha, no', async () => {
+  it('(a) la fila 📤 con id y sha ofrece «Deshacer esta carga»; sin id o sin sha, no', async () => {
     const conAncla = await go(await mkAdmin(opsRevert()), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
-    expect(conAncla.body).toContain('>Revertir esta carga<')
+    expect(conAncla.body).toContain('<button class="add">Deshacer esta carga</button>')
     expect(conAncla.body).toContain('name="upload" value="7"')
     // Sin sha (carga migrada) o sin id: la identidad no es verificable ⇒ no se ofrece revertir.
     const sinSha = await go(await mkAdmin(opsRevert({ history: async () => [{ ...HISTORY[0], id: 7 }] })), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
-    expect(sinSha.body).not.toContain('>Revertir esta carga<')
+    expect(sinSha.body).not.toContain('<button class="add">Deshacer esta carga</button>')
     const sinId = await go(await mkAdmin(opsRevert({ history: async () => [{ ...HISTORY[0], sha256: 'f'.repeat(64) }] })), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
-    expect(sinId.body).not.toContain('>Revertir esta carga<')
+    expect(sinId.body).not.toContain('<button class="add">Deshacer esta carga</button>')
   })
 
   it('(b) revert-plan responde 200 con el plan (no redirect), con el texto sellado de cada clave', async () => {
@@ -686,7 +690,7 @@ describe('admin-cargas · revertir esta carga (issue #63)', () => {
 
   it('(h) el botón del histórico de procesados postea revert-plan con la ruta archivada', async () => {
     const res = await go(await mkAdmin(opsRevert()), mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))
-    expect(res.body).toContain('>Revertir</button>')
+    expect(res.body).toContain('>Deshacer</button>')
     expect(res.body).toContain('value="revert-plan"')
     expect(res.body).toContain('name="archivo" value="Files/intake/_processed/W28/saldos VH WK28.xlsx"')
   })

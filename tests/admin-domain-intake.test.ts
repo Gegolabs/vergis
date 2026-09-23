@@ -210,11 +210,11 @@ describe('admin · gestión de dominio + ingesta', () => {
     expect(res.body).toContain('← Cartera / Finanzas') // navegación de regreso al home del dominio
   })
 
-  it('la carga (plegada en Frescura) muestra el form por entidad', async () => {
+  it('Frescura enlaza, en la fila de la entidad, el archivo que la alimenta (sin formulario: #269·V13)', async () => {
     const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
     expect(res.statusCode).toBe(200)
-    expect(res.body).toContain('enctype="multipart/form-data"')
-    expect(res.body).toContain('/admin/dominio/cartera/intake/saldos_cartera') // form de carga en la fila de la entidad
+    expect(res.body).not.toContain('enctype="multipart/form-data"')
+    expect(res.body).toContain('href="/cargar/saldos_cartera"') // la puerta del archivo, en la fila de la entidad
     expect(res.body).toContain('dbo.fact_saldos') // la entidad que casa con el slot
     expect(res.body).toContain('← Cartera / Finanzas') // navegación de regreso al home del dominio
   })
@@ -226,11 +226,11 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('ingesta válida (steward): 303 + put a OneLake + run-now + auditoría', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos w24.xlsx', bytes: Buffer.from('contenido ok') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/admin/dominio/cartera/frescura?msg=')
+    expect(res.headers['location']).toContain('/cargar/saldos_cartera?msg=') // #269·P2: vuelve a la página del archivo
     expect(puts).toHaveLength(1)
     expect(puts[0].filename).toBe('saldos w24.xlsx')
     expect(puts[0].target.path).toBe('Files/intake/saldos')
@@ -241,7 +241,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('nombre que no matchea el patrón → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'otra-cosa.csv', bytes: Buffer.from('x') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303) // PRG: el error vuelve como msg a Frescura
@@ -250,7 +250,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('archivo que excede maxBytes → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos big.xlsx', bytes: Buffer.alloc(2048, 7) })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303) // PRG: el error vuelve como msg a Frescura
@@ -265,21 +265,21 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('multi-archivo: N archivos → N puts + UN SOLO run-now por lote', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipartFiles({ _csrf: token }, [
       { filename: 'saldos clientes w24.xlsx', bytes: Buffer.from('clientes') },
       { filename: 'saldos proveedores w24.xlsx', bytes: Buffer.from('proveedores') },
     ])
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
-    expect(res.headers['location']).toContain('/admin/dominio/cartera/frescura?msg=')
+    expect(res.headers['location']).toContain('/cargar/saldos_cartera?msg=') // #269·P2: vuelve a la página del archivo
     expect(puts).toHaveLength(2)
     expect(runs).toEqual(['PIPE']) // UN trigger, no dos
     expect(audit.filter((e) => e.type === 'intake' && e.ok)).toHaveLength(2)
   })
 
   it('multi-archivo atómico: si un archivo del lote es inválido → 400 y NINGÚN put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipartFiles({ _csrf: token }, [
       { filename: 'saldos clientes w24.xlsx', bytes: Buffer.from('ok') },
       { filename: 'otra-cosa.csv', bytes: Buffer.from('mal') }, // no matchea el patrón
@@ -291,13 +291,13 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('input de archivo acepta selección múltiple', async () => {
-    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    const res = await go(mockReq('GET', '/cargar/saldos_cartera', STEWARD))
     expect(res.body).toMatch(/<input type="file" name="file" multiple required>/)
   })
 
   // ── Issue #76: metadata requerida por slot ──────────────────────────────────
   it('slot sin meta: put SIN sidecar (regresión cero)', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'saldos w24.xlsx', bytes: Buffer.from('ok') })
     await go(mockReq('POST', '/admin/dominio/cartera/intake/saldos_cartera', STEWARD, mp.body, mp.ct))
     expect(puts).toHaveLength(1)
@@ -305,7 +305,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('slot con meta válida: put CON sidecar (slot → campos → auditoría) + run-now', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token, meta_empresa_rut: '96835510-4', meta_version: 'V1' }, { filename: 'facturas.xlsx', bytes: Buffer.from('datos') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/facturas', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
@@ -316,7 +316,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('slot con meta: campo requerido faltante → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token, meta_version: 'V1' }, { filename: 'facturas.xlsx', bytes: Buffer.from('datos') }) // falta empresa_rut
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/facturas', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303) // PRG: el error vuelve como msg
@@ -327,7 +327,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('slot con meta: RUT con DV inválido → 400, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token, meta_empresa_rut: '96835510-3', meta_version: 'V1' }, { filename: 'facturas.xlsx', bytes: Buffer.from('datos') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/facturas', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
@@ -336,17 +336,17 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('uploadForm del slot con meta: renderiza los controles (select enum + rut) requeridos', async () => {
-    // El slot `facturas` no casa con una entidad de FRESHNESS → aparece como slot huérfano con su form.
-    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    // #269·P2 · los campos viven en la página del archivo, con nombre por tipo (`meta.<tipo>.<campo>`).
+    const res = await go(mockReq('GET', '/cargar/facturas', STEWARD))
     expect(res.statusCode).toBe(200)
-    expect(res.body).toContain('name="meta_empresa_rut"')
-    expect(res.body).toContain('name="meta_version"')
+    expect(res.body).toContain('name="meta.facturas.empresa_rut"')
+    expect(res.body).toContain('name="meta.facturas.version"')
     expect(res.body).toContain('<option value="V0">V0</option>')
   })
 
   // ── Issue #109: el catálogo de la instancia es la fuente de opciones del campo ──
   it('#109 · uploadForm del slot con options_ref: dropdown con «etiqueta · value» y placeholder', async () => {
-    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    const res = await go(mockReq('GET', '/cargar/cargos', STEWARD))
     expect(res.statusCode).toBe(200)
     expect(res.body).toContain('<option value="">— elegir —</option>')
     expect(res.body).toContain('<option value="96835510-4">Hijuelas S.A. · 96835510-4</option>')
@@ -354,7 +354,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('#109 · el POST manda, no el <select>: un value fuera del catálogo → sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token, meta_empresa: '12345678-5' }, { filename: 'cargos.xlsx', bytes: Buffer.from('datos') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/cargos', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
@@ -363,7 +363,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('#109 · value del catálogo → sube y el sidecar lleva el value (el label jamás viaja)', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token, meta_empresa: '96835510-4' }, { filename: 'cargos.xlsx', bytes: Buffer.from('datos') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/cargos', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
@@ -374,7 +374,7 @@ describe('admin · gestión de dominio + ingesta', () => {
 
   // ── Issue #95: metadata derivada del nombre del archivo ─────────────────────
   it('#95 · lote con dos empresas distintas: cada archivo lleva SU sidecar derivado + un solo run-now', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipartFiles({ _csrf: token }, [
       { filename: 'Listado EasyDoc VH.xlsx', bytes: Buffer.from('easydoc') },
       { filename: 'Listado SAP TSV.xlsx', bytes: Buffer.from('sap') },
@@ -388,7 +388,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('#95 · nombre fuera de convención → 400 con el patrón esperado, sin put ni trigger', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'Factura_VH.xlsx', bytes: Buffer.from('datos') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/documentos', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
@@ -399,7 +399,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('#95 · código fuera del catálogo → 400 nombrando los códigos válidos, sin put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipart({ _csrf: token }, { filename: 'Listado EasyDoc ZZZ.xlsx', bytes: Buffer.from('datos') })
     const res = await go(mockReq('POST', '/admin/dominio/cartera/intake/documentos', STEWARD, mp.body, mp.ct))
     expect(decodeURIComponent(res.headers['location'] as string)).toMatch(/catálogo.*VH, TSV/)
@@ -407,7 +407,7 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('#95 · lote atómico: un nombre malo entre válidos → NINGÚN put', async () => {
-    const token = tokenFrom((await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))).body)
+    const token = tokenFrom((await go(mockReq('GET', '/cargar', STEWARD))).body)
     const mp = multipartFiles({ _csrf: token }, [
       { filename: 'Listado EasyDoc VH.xlsx', bytes: Buffer.from('ok') },
       { filename: 'Listado SAP ZZZ.xlsx', bytes: Buffer.from('mal') },
@@ -418,11 +418,12 @@ describe('admin · gestión de dominio + ingesta', () => {
   })
 
   it('#95 · el formulario NO pide el campo derivado: explica la convención', async () => {
-    const res = await go(mockReq('GET', '/admin/dominio/cartera/frescura', STEWARD))
+    const res = await go(mockReq('GET', '/cargar/documentos', STEWARD))
     expect(res.body).toContain('se toma del nombre del archivo')
     expect(res.body).toContain('Listado EasyDoc {codigo}.xlsx')
-    // El único `meta_empresa_rut` de la página es el del slot #76 (formulario); el derivado no agrega input.
-    expect(res.body.match(/name="meta_empresa_rut"/g)).toHaveLength(1)
+    // El derivado no agrega input: el único campo de empresa de la página es el del tipo #76 (formulario).
+    expect(res.body).not.toContain('name="meta.documentos.empresa_rut"')
+    expect(res.body.match(/name="meta\.facturas\.empresa_rut"/g)).toHaveLength(1)
   })
 
   it('steward de cartera NO puede ingestar a un dominio que no gestiona', async () => {

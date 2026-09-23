@@ -181,6 +181,14 @@ export interface ContractSnapshot {
    * que es distinto de «encendida y sin generar» (eso sale con `current: null`).
    */
   datadoc?: DatadocContract | null
+  /**
+   * #269·V12 (juez P1 · m1) · Los FLUJOS DE AVISO del nodo y cuántos destinos tiene suscritos cada uno
+   * AHORA (`alerts`, `reports`, `cargas-usuario`, `cargas-operador`) — sin direcciones: cuántos, no
+   * quiénes. Es lo que decide, en vivo, si la página de carga puede decir «Le avisamos al equipo».
+   * DERIVADO de los arreglos vivos de destinos (la recarga en caliente los repuebla). `[]`/ausente =
+   * el proceso no cableó el proveedor.
+   */
+  avisos?: { flujo: string; destinos: number }[]
 }
 
 /** Lo que `/contrato` publica del Datadoc. Ni más ni menos que lo que un operador necesita mirar. */
@@ -277,6 +285,9 @@ export function createContractRegistry(opts: {
    *  SÍNCRONO como todo `snapshot()`: el sello es un JSON chico que se lee del disco en el acto, y
    *  las perillas del operador viajan en la caché que el propio generador refresca al usarlas. */
   datadoc?: () => DatadocContract | null
+  /** Proveedor de los flujos de aviso y su conteo de destinos (#269·V12). CLOSURE sobre los arreglos
+   *  vivos de destinos, igual que los otros: lo que el contrato dice es lo que el nodo haría ahora. */
+  avisos?: () => { flujo: string; destinos: number }[]
 }): ContractRegistry {
   const envSource = opts.envSource ?? process.env
   const clock = opts.now ?? ((): Date => new Date())
@@ -331,6 +342,17 @@ export function createContractRegistry(opts: {
     } catch (e) {
       console.error(`[contrato] no se pudo derivar el estado del Datadoc: ${errMsg(e)}`)
       return null
+    }
+  }
+
+  /** Igual que `control`: observabilidad, jamás un 500 en `/contrato`. */
+  const avisos = (): { flujo: string; destinos: number }[] => {
+    if (!opts.avisos) return []
+    try {
+      return opts.avisos()
+    } catch (e) {
+      console.error(`[contrato] no se pudo derivar los flujos de aviso: ${errMsg(e)}`)
+      return []
     }
   }
 
@@ -439,6 +461,7 @@ export function createContractRegistry(opts: {
         protos: opts.protos?.() ?? [],
         static: estaticos(),
         datadoc: datadoc(),
+        avisos: avisos(),
       }
     },
   }
