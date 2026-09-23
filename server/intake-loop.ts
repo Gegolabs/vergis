@@ -46,7 +46,11 @@ import {
   slotRunLogsDir,
   diffAlertState,
   type CargaDesenlace,
+  type CargaDesenlaceInput,
+  type DesenlaceParams,
   type IntakeDesenlaceStore,
+  type GuiaDecl,
+  resolverGuia,
   type IntakeSlot,
   type IntakeUploadRow,
   type IntakeWatchStore,
@@ -108,6 +112,8 @@ export interface IntakeLoopDeps {
   /** Envío del aviso a QUIEN SUBIÓ (flujo `'cargas-usuario'`, §6.3). undefined = sin destinos
    *  suscritos: el desenlace se persiste y se consulta igual — el registro no depende del canal. */
   notifyUploader?: (n: Notification) => Promise<void>
+  /** #346 · catálogo vivo de guías de carga. Ausente = el aviso a quien subió es el de siempre. */
+  guias?: () => readonly GuiaDecl[]
   /** Dominios DECLARADOS: solo ellos tienen página, y por tanto solo ellos aportan label y enlace. */
   domains: { id: string; label: string }[]
   log: (line: string) => void
@@ -362,11 +368,15 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       for (const carga of pendientes) {
         const r = resolveDesenlaceDeCarga(carga, corridas, obs.landing, nowMs, maxAgeMinutes)
         if (!r) continue // todavía sin evidencia: se vuelve a intentar en el próximo tick
-        const input: { desenlace: CargaDesenlace; motivo?: string; runStartedAt?: string } = { desenlace: r.desenlace }
+        const input: CargaDesenlaceInput = { desenlace: r.desenlace }
         // El motivo que se PERSISTE es el que declaró el job POR ARCHIVO. El titular de la corrida no
         // se guarda como motivo de la carga: es de la corrida, y confundirlos le atribuiría a este
         // archivo una causa que se afirmó de todos.
         if (r.motivo != null) input.motivo = r.motivo
+        // #346 · el código y los datos del caso viajan con el desenlace del MISMO archivo; el motivo ya
+        // llega sin el sufijo `⟦…⟧` (lo quitó el lector), así que «Detalle técnico» no lo muestra.
+        if (r.codigo != null) input.codigo = r.codigo
+        if (r.params != null) input.params = r.params
         if (r.runStartedAt != null) input.runStartedAt = r.runStartedAt
         await deps.store.setUploadDesenlace(carga.id, input)
         deps.log(`intake-loop: '${slot.id}' carga ${carga.id} (${carga.filename}) → ${r.desenlace}`)
@@ -423,6 +433,13 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
     }
     if (r.motivo != null) ctx.motivo = r.motivo
     if (r.titular != null) ctx.titular = r.titular
+    // #346 · con código declarado por el job y catálogo cableado, el aviso usa la guía resuelta (el
+    // actor sale de la familia). Sin guía resoluble, el aviso es el de siempre con el motivo textual.
+    if (r.codigo != null) {
+      ctx.codigo = r.codigo
+      const guia = deps.guias ? resolverGuia(slot, r.codigo, r.params, deps.guias(), carga.filename) : null
+      if (guia) ctx.guia = guia
+    }
     if (r.ageMinutes != null) ctx.ageMinutes = r.ageMinutes
     await deps.notifyUploader(composeCargaUserNotice(ctx))
   }
@@ -555,6 +572,9 @@ export interface ResolucionCarga {
   desenlace: CargaDesenlace
   /** Motivo POR ARCHIVO declarado por el job. Ausente = el job no lo declaró; jamás se rellena. */
   motivo?: string
+  /** #346 · código estable y datos del caso, del sufijo `⟦…⟧` de la MISMA línea que el motivo. */
+  codigo?: string
+  params?: DesenlaceParams
   /** Titular de la corrida (última `✖` del log) cuando no hubo motivo por archivo. NO se persiste
    *  como motivo de la carga: se presenta rotulado como lo que es. */
   titular?: string
@@ -613,6 +633,8 @@ export function resolveDesenlaceDeCarga(
     if (declarado) {
       res = { desenlace: DESENLACE_POR_OUTCOME[declarado.outcome], runStartedAt: c.run.startedAt }
       if (declarado.motivo != null) res.motivo = declarado.motivo
+      if (declarado.codigo != null) res.codigo = declarado.codigo
+      if (declarado.params != null) res.params = declarado.params
       continue
     }
     if (c.run.status === 'Failed') {
