@@ -22,6 +22,7 @@ import { createIntakeLoop, ACELERAR_VENTANA_MS, type IntakeLoopDeps } from '../s
 import { PAGE_CSS, TOKENS_CSS, avatarMenu } from '../server/ui'
 import { indexHtml } from '../server/catalog'
 import { createContractRegistry } from '../server/contract'
+import { createRequestHandler } from '../server/routes'
 
 /**
  * #269·P2 · La puerta única `/cargar` (work/269 §4, §6.1, §6.2.2). Datos SINTÉTICOS, sin personas: los
@@ -541,5 +542,35 @@ describe('#269·§5 · tokens y componentes compartidos · /contrato con los flu
     const reg = createContractRegistry({ engine: 't', hotReload: true, envSource: {}, avisos: () => [{ flujo: 'cargas-usuario', destinos: 1 }, { flujo: 'cargas-operador', destinos: 0 }] })
     expect(reg.snapshot().avisos).toEqual([{ flujo: 'cargas-usuario', destinos: 1 }, { flujo: 'cargas-operador', destinos: 0 }])
     expect(createContractRegistry({ engine: 't', hotReload: true, envSource: {} }).snapshot().avisos).toEqual([])
+  })
+})
+
+describe('#269·P2 · el router despacha `/cargar` al handler de gestión, con el gate de mutación', () => {
+  const fake = () => {
+    const vistos: string[] = []
+    return { vistos, admin: { tryHandle: async (req: IncomingMessage, res: ServerResponse) => { vistos.push(`${req.method} ${req.url}`); res.writeHead(200); res.end('ok'); return true } } }
+  }
+  const deps = (admin: unknown, control?: unknown) => ({
+    engine: 'x', gateSecret: '', isReady: () => false, getAdmin: () => admin as never, getPiConfig: () => null, discover: () => [],
+    identityFor: () => ({ agent: 't', user: 'a@x.cl' }), renderReport: async () => '', indexReports: async (a: never[]) => a, renderIndexPage: async () => '', canOpenPi: async () => true,
+    ...(control ? { control } : {}),
+  }) as never
+  const correr = (h: ReturnType<typeof createRequestHandler>, url: string, method = 'GET') => new Promise<number>((resolve) => {
+    let code = 0
+    const res = { writeHead: (c: number) => { code = c }, end: () => resolve(code), setHeader: () => {}, headersSent: false } as unknown as ServerResponse
+    h({ url, method, headers: {} } as unknown as IncomingMessage, res)
+  })
+  it('GET /cargar y /cargar/<tipo>/cargas llegan al handler aunque el motor no esté listo (no sirve dato gobernado)', async () => {
+    const f = fake()
+    const h = createRequestHandler(deps(f.admin))
+    expect(await correr(h, '/cargar')).toBe(200)
+    expect(await correr(h, '/cargar/productos/cargas?x=1')).toBe(200)
+    expect(f.vistos).toEqual(['GET /cargar', 'GET /cargar/productos/cargas?x=1'])
+  })
+  it('un nodo en espera (standby) no acepta la subida: 409 antes de tocar el handler', async () => {
+    const f = fake()
+    const h = createRequestHandler(deps(f.admin, { hasControl: () => false, activeHolder: () => 'nodo-a' }))
+    expect(await correr(h, '/cargar', 'POST')).toBe(409)
+    expect(f.vistos).toEqual([])
   })
 })
