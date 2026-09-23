@@ -61,12 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.36.0 — 2026-09-23
 
-*Contenido previsto para el corte **0.36.0** (hito P2 · «Puerta única» del diseño de la experiencia de
-carga, lab A.R.B.O.L. `work/269`). El corte —`package.json` y tag— es de la custodia.*
-
-### Una sola puerta para cargar archivos, que se entiende sin manual (`CAP-205`, `CAP-206`, `CAP-207`)
+### Una sola puerta para cargar archivos, que se entiende sin manual (`CAP-205`, `CAP-206`, `CAP-207`; PR #353)
 
 **El hueco.** Quien sube tenía que saber en qué casilla va cada archivo, cómo tiene que llamarse, qué
 reemplaza y qué subir antes, y eso no estaba escrito en ninguna pantalla: la carga vivía repartida entre
