@@ -245,3 +245,13 @@ async function adminArnes(slots: IntakeSlot[], auditLog: Record<string, unknown>
     },
   }
 }
+
+describe('0.35.1 · juez m1 · `accept` en NFD', () => {
+  it('un patrón escrito en NFD y un archivo en NFD se aceptan (como en 0.34.0)', async () => {
+    const acceptNFD = 'Antigu\u0308edad de saldos *.xlsx'
+    const CFG = parseIntakeConfig({ slots: [base('saldos', acceptNFD)] })
+    const h = await adminArnes(CFG)
+    const res = await h.subir('saldos', 'Antigu\u0308edad de saldos X WK38.xlsx')
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('Recibimos 1 archivo(s).')
+  })
+})
