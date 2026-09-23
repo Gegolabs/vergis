@@ -166,7 +166,7 @@ describe('columna Desenlace en Actividad', () => {
     const html = cargasBody('cartera', 'Cartera', [SLOT], slotCargas({ history: CON_DESENLACE }), 'TOK', () => '',
       (s, r) => `/admin/dominio/cartera/corrida?slot=${s.id}&started=${r.startedAt}`)
     expect(html).toContain('<th>Desenlace</th>')
-    expect(html).toContain('✕ Falló')
+    expect(html).toContain('✕ No se pudo cargar')
     expect(html).toContain('ancho inesperado: 28 columnas (se esperaban 48)')
     expect(html).toContain('/admin/dominio/cartera/corrida?slot=saldos&amp;started=2026-07-13T16:17:47Z')
   })
@@ -188,8 +188,8 @@ describe('columna Desenlace en Actividad', () => {
 
   it('sin-informe SIN motivo dice que nadie reportó la causa — no se fabrica ninguna', () => {
     const celda = desenlaceCelda({ ...HISTORY[0]!, desenlace: 'sin-informe' }, RUNS)
-    expect(celda).toContain('✕ Sin informe')
-    expect(celda).toContain('el proceso terminó sin reportar la causa')
+    expect(celda).toContain('⚠ Sin informe')
+    expect(celda).toContain('No sabemos qué pasó con este archivo: el proceso de carga no lo informó.')
   })
 
   it('sin corrida correlacionable en el historial mostrado, no se enlaza nada', () => {

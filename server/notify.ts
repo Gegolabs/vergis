@@ -24,7 +24,7 @@ import {
   LINEA_ACTOR,
   type GuiaResuelta,
 } from '@vergis/capabilities'
-import { erroresHref } from './admin-cargas'
+import { erroresHref, lineaDeAviso } from './admin-cargas'
 import { sendSmtp, type MailMessage, type SmtpConnectConfig } from './smtp'
 
 export type NotificationSeverity = 'warning' | 'ok' | 'info'
@@ -56,7 +56,7 @@ export type NotifyDestinationType = 'slack-webhook' | 'webhook' | 'email-smtp'
  * A qué FLUJO se suscribe un destino (issue #102). El routing por tipo de mensaje vive en la CONFIG
  * y se aplica en el WIRING (`forEvent`): el `Notification` sigue sin saber por dónde sale.
  */
-export type NotifyEvent = 'alerts' | 'reports' | 'cargas-usuario'
+export type NotifyEvent = 'alerts' | 'reports' | 'cargas-usuario' | 'cargas-operador'
 
 /**
  * Token del destinatario en el `to` de un destino email suscrito a `'cargas-usuario'` (#162·§6.3):
@@ -117,7 +117,7 @@ export interface NotifyConfig {
 }
 
 const TIPOS: NotifyDestinationType[] = ['slack-webhook', 'webhook', 'email-smtp']
-const EVENTOS: NotifyEvent[] = ['alerts', 'reports', 'cargas-usuario']
+const EVENTOS: NotifyEvent[] = ['alerts', 'reports', 'cargas-usuario', 'cargas-operador']
 const TLS_MODOS = ['starttls', 'implicit', 'none'] as const
 const WEEKDAYS: ReportWeekday[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 
@@ -580,6 +580,10 @@ export interface CargaUserNoticeContext {
   filename: string
   /** Solo los desenlaces que se avisan. `procesada` no notifica (anti-ruido, §6.2). */
   desenlace: Exclude<CargaDesenlace, 'procesada'>
+  /** #269·V12 · hay un destino suscrito a `cargas-operador`: el aviso puede decir que el equipo sabe. */
+  equipoAvisado?: boolean
+  /** #269·V12 · a quién avisar cuando nadie más fue avisado (`contacto` del intake). */
+  contacto?: string
   /** Motivo POR ARCHIVO declarado por el job (gramática `_logs/`). Ausente = el job no lo declaró. */
   motivo?: string
   /** Titular de la corrida (última `✖` del log) cuando el job NO declaró motivo por archivo — se
@@ -612,7 +616,6 @@ export function fmtFechaUsuario(iso: string): string {
   return `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`
 }
 
-const AVISADO_OPERADOR = 'El operador de la plataforma ya fue avisado, con el detalle técnico.'
 const REINTENTAR = 'Cuando lo corrijas, puedes volver a subirlo desde la consola de Cargas.'
 
 /**
@@ -643,6 +646,10 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
     // tampoco agrega el «cuando lo corrijas…» del aviso sin guía: no es su archivo.
     lines.push('Qué hacer:')
     guia.queHacer.forEach((p, i) => lines.push(`${i + 1}. ${redactSecrets(p)}`))
+    if (guia.actor === 'operador') {
+      const aviso = lineaDeAviso(ctx)
+      if (aviso) lines.push(aviso)
+    }
     if (motivo) lines.push(`Detalle técnico: ${motivo}`)
   } else if (ctx.desenlace === 'fallida') {
     title = `Tu archivo ${archivo} no pudo procesarse`
@@ -657,21 +664,24 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
     lines.push(motivo ? `Motivo: ${motivo}` : 'La conversión lo omitió sin declarar un motivo.')
     // Un archivo omitido no siempre es un archivo malo (un corte ya cargado, por ejemplo): pedirle
     // que «lo corrija» sería mandarlo a arreglar algo que puede estar bien.
-    lines.push('Si esperabas que se procesara, avísale al equipo de la plataforma.')
+    lines.push(ctx.contacto ? `Si esperabas que se procesara, avísale a ${ctx.contacto}.` : 'Si esperabas que se procesara, avísale al equipo de la plataforma.')
   } else if (ctx.desenlace === 'sin-informe') {
     // El caso que este flujo existe para no maquillar: hubo una conversión, terminó mal y no dijo por
     // qué. Decirlo es lo único honesto — la plataforma NO tiene la causa y no la va a inventar.
     title = `Tu archivo ${archivo} no se procesó y el proceso no reportó la causa`
-    lines.push('La conversión terminó sin informar qué pasó con tu archivo, así que no podemos decirte el motivo: sería inventarlo.')
-    lines.push(AVISADO_OPERADOR)
+    lines.push('No sabemos qué pasó con este archivo: el proceso de carga no lo informó, y decirte un motivo sería inventarlo.')
+    const aviso = lineaDeAviso(ctx)
+    if (aviso) lines.push(aviso)
   } else {
+    // Legado (< 0.35.0): `varada` dejó de producirse (#269·§3.1). Se conserva para leer lo ya escrito.
     title = `Tu archivo ${archivo} sigue sin procesarse`
     lines.push(
       ctx.ageMinutes != null
         ? `Lo recibimos hace ${fmtDur(ctx.ageMinutes * 60)} y ninguna conversión lo ha tomado todavía.`
         : 'Lo recibimos y ninguna conversión lo ha tomado todavía.',
     )
-    lines.push(`${AVISADO_OPERADOR} No hace falta que lo vuelvas a subir.`)
+    const aviso = lineaDeAviso(ctx)
+    lines.push(aviso ? `${aviso} No hace falta que lo vuelvas a subir.` : 'No hace falta que lo vuelvas a subir.')
   }
   lines.push(`Archivo recibido el ${fmtFechaUsuario(ctx.uploadedAt)} · ${ctx.slotLabel}`)
 
@@ -694,6 +704,60 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
       actor: guia?.actor ?? null,
       slotId: ctx.slotId,
       uploadId: ctx.uploadId ?? null,
+      domainId: ctx.domainId ?? null,
+    },
+  }
+}
+
+// ── Aviso al OPERADOR por carga (#269·V12, flujo `'cargas-operador'`) — PURO ─────────────────────
+/**
+ * Contexto del aviso al operador de UNA carga que quedó «sin informe» o con una guía cuyo actor es el
+ * operador: lo que el operador necesita para mirar — qué archivo, qué estado, por qué camino se llegó
+ * a él y dónde está. A diferencia del aviso al usuario, acá sí va el detalle técnico.
+ */
+export interface CargaOperadorContext {
+  filename: string
+  estado: CargaDesenlace
+  uploadedAt: string
+  uploadedBy?: string
+  uploadId: number
+  /** El camino del resolvedor (`sin-log`, `fuera-sin-declaracion`, `declaracion`…). */
+  via: string
+  motivo?: string
+  guia?: GuiaResuelta
+  slotId: string
+  slotLabel: string
+  domainId?: string
+  domainLabel?: string
+  baseUrl: string
+}
+
+const VIA_OPERADOR: Record<string, string> = {
+  'sin-log': 'la corrida que lo tomó terminó en falla sin escribir su log',
+  'fuera-sin-declaracion': 'el archivo salió del landing sin que ninguna corrida lo declarara ni se retirara por `_retirado/`',
+  declaracion: 'el proceso lo declaró con un código cuyo actor es el operador',
+}
+
+/** Redacta el aviso al operador por carga (#269·V12). El motivo del job va redactado de secretos. */
+export function composeCargaOperadorNotice(ctx: CargaOperadorContext): Notification {
+  const lines: string[] = []
+  lines.push(`Estado: ${ctx.estado}${ctx.guia ? ` · ${redactSecrets(ctx.guia.titulo)}` : ''}.`)
+  lines.push(`Por qué: ${VIA_OPERADOR[ctx.via] ?? ctx.via}.`)
+  if (ctx.motivo) lines.push(`Lo que declaró el proceso: ${redactSecrets(ctx.motivo)}`)
+  lines.push(`Subido el ${fmtFechaUsuario(ctx.uploadedAt)}${ctx.uploadedBy ? ` por ${ctx.uploadedBy}` : ''} · carga #${ctx.uploadId}`)
+  if (ctx.domainId == null) lines.push(SIN_ENLACES)
+  return {
+    severity: 'warning',
+    title: `Cargas — ${ctx.domainLabel ?? SIN_DOMINIO} · ${ctx.slotLabel}: «${ctx.filename}» necesita al operador`,
+    lines,
+    links: ctx.domainId == null ? [] : [{ label: 'Cargas del dominio', url: `${hrefCargas(ctx.baseUrl, ctx.domainId)}` }],
+    data: {
+      event: 'carga-operador',
+      estado: ctx.estado,
+      via: ctx.via,
+      filename: ctx.filename,
+      uploadId: ctx.uploadId,
+      slotId: ctx.slotId,
       domainId: ctx.domainId ?? null,
     },
   }

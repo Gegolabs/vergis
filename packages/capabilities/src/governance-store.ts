@@ -316,6 +316,16 @@ export interface IntakeUploadRow {
   desenlaceCodigo?: string
   /** #346 · datos del caso que acompañan al código. */
   desenlaceParams?: DesenlaceParams
+  /** #269·D1 · el estado es FINAL (cargada, retirada, reemplazada, deshecha): no vuelve a evaluarse.
+   *  `false` = no final. AUSENTE = el valor lo escribió la versión anterior, que no conocía la marca:
+   *  se reevalúa entero, y la primera vez que cambia queda guardado como intento `registro-v1`. */
+  desenlaceFinal?: boolean
+  /** #269·D1 · cursor del resolvedor: `startedAt` de la última corrida TERMINADA que ya consideró. */
+  evaluadoHasta?: string
+  /** #269·V12 · cuándo se avisó al operador por esta carga (flujo `cargas-operador`). Dedup por carga. */
+  operadorAvisadoAt?: string
+  /** #269·§4.2 · instante del ACTO que cerró la carga (el retiro, la re-subida, el deshacer). */
+  actoAt?: string
 }
 
 /** Datos del caso de un desenlace con código (#346): escalar, o lista si el job la declaró así. */
@@ -330,11 +340,59 @@ export type DesenlaceParams = Record<string, string | string[]>
  * `'fallida'` TIENE motivo declarado por el job; `'sin-informe'` NO lo tiene y lo dice.
  */
 export type CargaDesenlace =
-  | 'procesada'   // gramática `_logs/`: ✔ procesado, o corrida Completed que la archivó
+  | 'procesada'   // FINAL · gramática `_logs/`: ✔ procesado; o el puente histórico (#269·§3.1)
   | 'saltada'     // gramática `_logs/`: ⚠ saltado — con motivo
-  | 'fallida'     // gramática `_logs/`: ✖ fallido — con motivo; o corrida Failed que la cubre
-  | 'sin-informe' // la corrida que la cubría murió sin escribir log (`resolveRunLog` = 'sin-log')
-  | 'varada'      // el archivo excedió la edad máxima sin que ninguna corrida lo tomara
+  | 'fallida'     // gramática `_logs/`: ✖ fallido — con motivo; o corrida Failed con log sin gramática
+  | 'sin-informe' // corrida Failed sin log; o el archivo salió del landing sin declaración ni acto
+  | 'varada'      // LEGADO (< 0.35.0): la edad dejó de ser un estado (#269·§3.1); solo se lee
+  | 'retirada'    // FINAL · el archivo salió a `_retirado/` (o se revirtió) antes de cargarse
+  | 'reemplazada' // FINAL · una subida posterior con el mismo nombre lo reemplazó antes de cargarse
+  | 'deshecha'    // FINAL · «Deshacer esta carga» sobre una carga cargada
+
+/**
+ * Los estados FINALES (#269·D1): el estado avanza hasta uno de estos y ahí se queda. Los demás son
+ * intermedios — un archivo que falló y sigue en el landing se reintenta solo y puede terminar cargado,
+ * y la plataforma tiene que poder decirlo.
+ */
+export const CARGA_ESTADOS_FINALES: readonly CargaDesenlace[] = ['procesada', 'retirada', 'reemplazada', 'deshecha']
+
+/** Un INTENTO observado de una carga (#269·D1): lo que una corrida declaró de ella, o el valor que la
+ *  versión anterior había escrito (`origen: 'registro-v1'`). Solo se agregan filas. */
+export interface IntakeIntentoRow {
+  id: number
+  uploadId: number
+  /** `startedAt` de la corrida que lo declaró. Ausente en `registro-v1` sin corrida. */
+  runStartedAt?: string
+  resultado: CargaDesenlace
+  motivo?: string
+  codigo?: string
+  params?: DesenlaceParams
+  /** ISO del instante en que la plataforma lo observó. */
+  observadoAt: string
+  origen: 'declaracion' | 'registro-v1'
+}
+
+/** Lo que el resolvedor aporta como intento: una declaración de una corrida. */
+export type IntakeIntentoInput = Omit<IntakeIntentoRow, 'id' | 'uploadId' | 'observadoAt' | 'origen'> & { observadoAt?: string }
+
+/** El avance de estado de UNA carga (#269·D1) — lo que escribe `avanzarEstado`. */
+export interface CargaEstadoInput {
+  /** `null` = sin estado todavía (el archivo sigue en el landing sin declaración). Solo para una carga
+   *  no final: sirve para retirar un valor que la versión anterior infirió sin evidencia (`varada`). */
+  estado: CargaDesenlace | null
+  final: boolean
+  motivo?: string
+  codigo?: string
+  params?: DesenlaceParams
+  runStartedAt?: string
+  /** Cursor: la última corrida terminada que el resolvedor consideró. */
+  evaluadoHasta?: string
+  /** Instante del acto que produjo el estado (retirada, reemplazada, deshecha). */
+  actoAt?: string
+  /** Declaraciones observadas en esta evaluación (idempotentes por corrida y resultado). */
+  intentos?: IntakeIntentoInput[]
+  at?: string
+}
 
 /** Lo que el resolver escribe por carga. `at` default = ahora. */
 export interface CargaDesenlaceInput {
@@ -353,6 +411,12 @@ export interface IntakeUploadStore {
   recordUpload(row: Omit<IntakeUploadRow, 'id'>): Promise<number>
   /** La carga ORIGINAL (ok=1) con ese contenido en el slot: la fila más antigua con ese sha. */
   findUploadBySha(slotId: string, sha256: string): Promise<IntakeUploadRow | null>
+  /** #269·V4 · la carga MÁS RECIENTE (ok=1) con ese contenido en el slot: la que dice si subirlo de
+   *  nuevo cambia algo (la original puede haberse pisado, retirado o no haberse cargado nunca). */
+  findLatestUploadBySha?(slotId: string, sha256: string): Promise<IntakeUploadRow | null>
+  /** #269·§4.1 · la carga aceptada más reciente con ESE nombre exacto, en cualquier slot: el mensaje
+   *  de un nombre que ya se recibió y hoy no calza con ningún tipo (la carga 27). */
+  findAcceptedUploadByFilename?(filename: string): Promise<IntakeUploadRow | null>
   /** Cargas del slot, recientes primero. */
   listUploads(slotId: string, limit: number): Promise<IntakeUploadRow[]>
   /** ¿El indexado retroactivo de `_processed/` del slot ya corrió? */
@@ -367,22 +431,34 @@ export interface IntakeUploadStore {
  */
 export interface IntakeDesenlaceStore {
   /**
-   * Cargas del slot que el resolver todavía no resolvió, MÁS ANTIGUAS PRIMERO (el varado más viejo
-   * es el que más urge). `limit` acota el lote de una vuelta del lazo; no es una política.
+   * Cargas del slot que todavía NO están en un estado final (#269·D1), MÁS ANTIGUAS PRIMERO. Incluye
+   * las que nunca se resolvieron y las que la versión anterior resolvió (su valor no es final hasta
+   * que el resolvedor vigente lo confirme). `limit` acota el lote de una vuelta; no es una política.
    *
-   * Quedan FUERA dos clases de fila que jamás podrán tener desenlace y, si entraran, volverían
-   * eternamente en cada tick: las rechazadas (`ok = 0`, que nunca aterrizaron — no hay archivo en
-   * el landing del que preguntar) y las del indexado retroactivo (`origen = 'retro'`, derivadas de
-   * `_processed/`: no son un evento vivido y no tienen quién sea notificado).
+   * Quedan FUERA las rechazadas (`ok = 0`: nunca aterrizaron) y las del indexado retroactivo
+   * (`origen = 'retro'`: no son un evento vivido).
    */
-  listUploadsSinDesenlace(slotId: string, limit?: number): Promise<IntakeUploadRow[]>
+  listUploadsNoFinales(slotId: string, limit?: number): Promise<IntakeUploadRow[]>
   /**
-   * Escribe el desenlace de UNA carga. Lanza `GovernanceConflict` si la fila YA tiene desenlace: el
-   * desenlace se resuelve una vez y no se recalcula (§3.4), así que una segunda escritura es un bug
-   * del resolver — y un bug que pisa el motivo original en silencio es indistinguible de un dato
-   * bueno. Lanza `Error` si el id no existe.
+   * Avanza el estado de UNA carga (#269·D1). Reglas, todas del diseño:
+   *  · Un estado FINAL no cambia: si la carga ya está en uno y el nuevo es distinto, lanza
+   *    `GovernanceConflict`. Única excepción, porque es un ACTO sobre lo cargado: `procesada` →
+   *    `deshecha`. Repetir el mismo estado final es un no-op.
+   *  · Un estado no final cambia solo con su fila en `intake_intento`: la primera vez que se pisa un
+   *    valor que escribió la versión anterior, ese valor se guarda como intento `registro-v1`.
+   *  · Los intentos son idempotentes por (carga, corrida, resultado).
+   * Lanza `Error` si el id no existe.
    */
-  setUploadDesenlace(id: number, d: CargaDesenlaceInput): Promise<void>
+  avanzarEstado(id: number, input: CargaEstadoInput): Promise<void>
+  /** Registra lo que una vuelta vio (intentos + cursor) SIN cambiar el estado. No toca una carga final. */
+  registrarEvaluacion(id: number, evaluadoHasta: string | undefined, intentos?: IntakeIntentoInput[]): Promise<void>
+  /** Los intentos de una carga, en orden de observación. */
+  listIntentos(uploadId: number): Promise<IntakeIntentoRow[]>
+  /** #269·V6 · las declaraciones de las corridas sobre cargas de ESTE slot desde `desdeIso`: con ellas
+   *  la consola dice qué tomó cada corrida de un proceso compartido, sin leer logs en el request path. */
+  listIntentosDeSlot(slotId: string, desdeIso: string): Promise<(IntakeIntentoRow & { filename: string })[]>
+  /** #269·V12 · marca que el operador ya fue avisado por esta carga (dedup del flujo). */
+  marcarOperadorAvisado(id: number, at?: string): Promise<void>
 }
 
 /** Un conteo de desenlaces DECLARADOS por el job (`fallida`/`saltada`) de un slot, por código (#346).
@@ -832,6 +908,26 @@ const INTAKE_UPLOAD_DESENLACE_COLS = ['desenlace TEXT', 'desenlace_motivo TEXT',
 // anterior las ignora al leer y no las escribe — el rollback dentro de la ventana sigue procediendo.
 // Se persiste el hecho (código + datos), nunca la redacción de la guía: la guía se resuelve al mostrar.
 const INTAKE_UPLOAD_CODIGO_COLS = ['desenlace_codigo TEXT', 'desenlace_params TEXT']
+// #269·D1 · estado que avanza: la marca de final, el cursor del resolvedor y el dedup del aviso al
+// operador. Aditivas y anulables (CONTRIBUTING «Migraciones»): la versión anterior no las lee y sigue
+// escribiendo sus columnas de siempre; NULL en `desenlace_final` = «no final», que es exactamente lo
+// que hay que decir de todo valor escrito por ella.
+const INTAKE_UPLOAD_ESTADO_COLS = ['desenlace_final INTEGER', 'evaluado_hasta TEXT', 'operador_avisado_at TEXT', 'acto_at TEXT']
+/** #269·D1 · la historia de intentos de cada carga. Solo se agregan filas. */
+const INTAKE_INTENTO_DDL = `CREATE TABLE IF NOT EXISTS intake_intento (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upload_id INTEGER NOT NULL,
+  run_started_at TEXT,
+  resultado TEXT NOT NULL,
+  motivo TEXT,
+  codigo TEXT,
+  params TEXT,
+  observado_at TEXT NOT NULL,
+  origen TEXT NOT NULL DEFAULT 'declaracion'
+);`
+// Idempotencia por (carga, corrida, resultado). COALESCE porque SQLite trata dos NULL como distintos
+// en un índice único: sin él, el intento `registro-v1` sin corrida se duplicaría en cada reintento.
+const INTAKE_INTENTO_IDX = `CREATE UNIQUE INDEX IF NOT EXISTS idx_intake_intento_uniq ON intake_intento (upload_id, COALESCE(run_started_at, ''), resultado);`
 // Índice de la consulta del resolver: por slot, las pendientes, más antiguas primero.
 const INTAKE_UPLOAD_IDX_DESENLACE = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sin_desenlace ON intake_upload (slot_id, desenlace, uploaded_at);`
 const INTAKE_UPLOAD_IDX_SHA = `CREATE INDEX IF NOT EXISTS idx_intake_upload_sha ON intake_upload (slot_id, sha256);`
@@ -1102,6 +1198,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
     // rellena con NULL, que ES el estado «pendiente»).
     ensureColumns(db, 'intake_upload', INTAKE_UPLOAD_DESENLACE_COLS)
     ensureColumns(db, 'intake_upload', INTAKE_UPLOAD_CODIGO_COLS)
+    ensureColumns(db, 'intake_upload', INTAKE_UPLOAD_ESTADO_COLS)
+    db.run(INTAKE_INTENTO_DDL)
+    db.run(INTAKE_INTENTO_IDX)
     db.run(INTAKE_UPLOAD_IDX_SHA)
     db.run(INTAKE_UPLOAD_IDX_TS)
     db.run(INTAKE_UPLOAD_IDX_DESENLACE)
@@ -1793,10 +1892,15 @@ export class SqliteGovernanceStore implements GovernanceStore {
         if (p && typeof p === 'object' && !Array.isArray(p)) row.desenlaceParams = p as DesenlaceParams
       } catch { /* omitido a propósito: ver arriba */ }
     }
+    // NULL ≠ 0: NULL = el valor lo escribió la versión anterior (< 0.35.0), que no conoce la columna.
+    if (r['desenlace_final'] != null) row.desenlaceFinal = Number(r['desenlace_final']) !== 0
+    if (r['evaluado_hasta'] != null) row.evaluadoHasta = String(r['evaluado_hasta'])
+    if (r['operador_avisado_at'] != null) row.operadorAvisadoAt = String(r['operador_avisado_at'])
+    if (r['acto_at'] != null) row.actoAt = String(r['acto_at'])
     return row
   }
 
-  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of, desenlace, desenlace_motivo, desenlace_run_started_at, desenlace_at, desenlace_codigo, desenlace_params`
+  private static readonly INTAKE_COLS = `id, slot_id, filename, sha256, bytes, uploaded_by, uploaded_at, ok, error, triggered, origen, dup_of, desenlace, desenlace_motivo, desenlace_run_started_at, desenlace_at, desenlace_codigo, desenlace_params, desenlace_final, evaluado_hasta, operador_avisado_at, acto_at`
 
   async recordUpload(row: Omit<IntakeUploadRow, 'id'>): Promise<number> {
     this.db.run(
@@ -1840,6 +1944,36 @@ export class SqliteGovernanceStore implements GovernanceStore {
     return this.intakeUploadRow(r)
   }
 
+  async findLatestUploadBySha(slotId: string, sha256: string): Promise<IntakeUploadRow | null> {
+    const stmt = this.db.prepare(
+      `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
+       WHERE slot_id = ? AND sha256 = ? AND ok = 1 ORDER BY uploaded_at DESC, id DESC LIMIT 1`,
+    )
+    stmt.bind([slotId.trim(), sha256.trim().toLowerCase()])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const r = stmt.getAsObject()
+    stmt.free()
+    return this.intakeUploadRow(r)
+  }
+
+  async findAcceptedUploadByFilename(filename: string): Promise<IntakeUploadRow | null> {
+    const stmt = this.db.prepare(
+      `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
+       WHERE filename = ? AND ok = 1 AND origen = 'upload' ORDER BY uploaded_at DESC, id DESC LIMIT 1`,
+    )
+    stmt.bind([String(filename ?? '')])
+    if (!stmt.step()) {
+      stmt.free()
+      return null
+    }
+    const r = stmt.getAsObject()
+    stmt.free()
+    return this.intakeUploadRow(r)
+  }
+
   async listUploads(slotId: string, limit: number): Promise<IntakeUploadRow[]> {
     const stmt = this.db.prepare(
       `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
@@ -1869,11 +2003,11 @@ export class SqliteGovernanceStore implements GovernanceStore {
     this.persist()
   }
 
-  // ── IntakeDesenlaceStore (el desenlace por carga, issue #162) ──
-  async listUploadsSinDesenlace(slotId: string, limit = 500): Promise<IntakeUploadRow[]> {
+  // ── IntakeDesenlaceStore (el estado de cada carga: #162, y el que avanza: #269·D1) ──
+  async listUploadsNoFinales(slotId: string, limit = 500): Promise<IntakeUploadRow[]> {
     const stmt = this.db.prepare(
       `SELECT ${SqliteGovernanceStore.INTAKE_COLS} FROM intake_upload
-       WHERE slot_id = ? AND desenlace IS NULL AND ok = 1 AND origen = 'upload'
+       WHERE slot_id = ? AND ok = 1 AND origen = 'upload' AND COALESCE(desenlace_final, 0) = 0
        ORDER BY uploaded_at ASC, id ASC LIMIT ?`,
     )
     stmt.bind([slotId.trim(), Math.max(0, Math.trunc(limit))])
@@ -1883,28 +2017,142 @@ export class SqliteGovernanceStore implements GovernanceStore {
     return out
   }
 
-  async setUploadDesenlace(id: number, d: CargaDesenlaceInput): Promise<void> {
-    const stmt = this.db.prepare(`SELECT desenlace FROM intake_upload WHERE id = ?`)
+  async avanzarEstado(id: number, d: CargaEstadoInput): Promise<void> {
+    const stmt = this.db.prepare(
+      `SELECT desenlace, desenlace_motivo, desenlace_run_started_at, desenlace_at, desenlace_codigo, desenlace_params, desenlace_final FROM intake_upload WHERE id = ?`,
+    )
     stmt.bind([id])
     const existe = stmt.step()
-    const previo = existe ? (stmt.getAsObject() as { desenlace?: string | null }).desenlace : null
+    const previo = existe ? (stmt.getAsObject() as Record<string, unknown>) : null
     stmt.free()
-    if (!existe) throw new Error(`No existe la carga ${id} en el registro.`)
+    if (!existe || !previo) throw new Error(`No existe la carga ${id} en el registro.`)
+    const valorPrevio = previo['desenlace'] == null ? null : String(previo['desenlace'])
+    const eraFinal = previo['desenlace_final'] != null && Number(previo['desenlace_final']) !== 0
+    const at = d.at || now()
     // Lectura + escritura sin transacción: el db es de un solo proceso y el único escritor de estas
-    // columnas es el resolver del lazo, que corre serializado bajo su guard anti-solape (#161·§7/H4).
-    if (previo != null) throw new GovernanceConflict(`La carga ${id} ya tiene desenlace '${String(previo)}'; un desenlace no se recalcula.`)
+    // columnas es el resolvedor del lazo (serializado bajo su guard anti-solape) y el acto «Deshacer».
+    if (d.final && d.estado == null) throw new Error(`La carga ${id}: un estado final necesita valor.`)
+    if (eraFinal) {
+      if (valorPrevio === d.estado) return // repetir el mismo estado final no es un cambio
+      if (!(valorPrevio === 'procesada' && d.estado === 'deshecha'))
+        throw new GovernanceConflict(`La carga ${id} ya está en el estado final '${String(valorPrevio)}'; un estado final no cambia.`)
+    }
+    const insertar = (i: { runStartedAt?: string | null; resultado: string; motivo?: string | null; codigo?: string | null; params?: DesenlaceParams | null; observadoAt: string; origen: string }): void => {
+      this.db.run(
+        `INSERT OR IGNORE INTO intake_intento (upload_id, run_started_at, resultado, motivo, codigo, params, observado_at, origen) VALUES (?,?,?,?,?,?,?,?)`,
+        [id, i.runStartedAt ?? null, i.resultado, i.motivo ?? null, i.codigo ?? null, i.params && Object.keys(i.params).length ? JSON.stringify(i.params) : null, i.observadoAt, i.origen],
+      )
+    }
+    // El valor que escribió la versión anterior no se pisa en silencio: la PRIMERA vez que cambia se
+    // guarda como intento `registro-v1` (el diseño lo exige para poder restaurar por id). Se reconoce
+    // por `desenlace_final` NULL: esta versión SIEMPRE escribe 0 o 1, la anterior no conoce la columna.
+    if (valorPrevio != null && valorPrevio !== d.estado && previo['desenlace_final'] == null) {
+      const ya = this.db.prepare(`SELECT 1 FROM intake_intento WHERE upload_id = ? AND origen = 'registro-v1' LIMIT 1`)
+      ya.bind([id])
+      const hay = ya.step()
+      ya.free()
+      if (!hay) {
+        let params: DesenlaceParams | null = null
+        try {
+          params = previo['desenlace_params'] != null ? (JSON.parse(String(previo['desenlace_params'])) as DesenlaceParams) : null
+        } catch { /* un JSON corrupto no impide guardar el resto del valor anterior */ }
+        insertar({
+          runStartedAt: previo['desenlace_run_started_at'] == null ? null : String(previo['desenlace_run_started_at']),
+          resultado: valorPrevio,
+          motivo: previo['desenlace_motivo'] == null ? null : String(previo['desenlace_motivo']),
+          codigo: previo['desenlace_codigo'] == null ? null : String(previo['desenlace_codigo']),
+          params,
+          observadoAt: previo['desenlace_at'] == null ? at : String(previo['desenlace_at']),
+          origen: 'registro-v1',
+        })
+      }
+    }
+    for (const i of d.intentos ?? []) insertar({ ...i, observadoAt: i.observadoAt ?? at, origen: 'declaracion' })
     this.db.run(
-      `UPDATE intake_upload SET desenlace = ?, desenlace_motivo = ?, desenlace_run_started_at = ?, desenlace_at = ?, desenlace_codigo = ?, desenlace_params = ? WHERE id = ?`,
+      `UPDATE intake_upload SET desenlace = ?, desenlace_motivo = ?, desenlace_run_started_at = ?, desenlace_at = ?, desenlace_codigo = ?, desenlace_params = ?, desenlace_final = ?, evaluado_hasta = COALESCE(?, evaluado_hasta), acto_at = ? WHERE id = ?`,
       [
-        d.desenlace,
+        d.estado,
         d.motivo ?? null,
         d.runStartedAt ?? null,
-        d.at || now(),
+        at,
         d.codigo ?? null,
         d.params && Object.keys(d.params).length ? JSON.stringify(d.params) : null,
+        d.final ? 1 : 0,
+        d.evaluadoHasta ?? null,
+        d.actoAt ?? null,
         id,
       ],
     )
+    this.persist()
+  }
+
+  /** Solo el cursor y los intentos, sin cambiar el estado (#269·D1): la vuelta que no vio nada nuevo
+   *  que cambie el estado igual deja registrado lo que vio y hasta dónde miró. */
+  async registrarEvaluacion(id: number, evaluadoHasta: string | undefined, intentos: IntakeIntentoInput[] = []): Promise<void> {
+    const at = now()
+    for (const i of intentos)
+      this.db.run(
+        `INSERT OR IGNORE INTO intake_intento (upload_id, run_started_at, resultado, motivo, codigo, params, observado_at, origen) VALUES (?,?,?,?,?,?,?,'declaracion')`,
+        [id, i.runStartedAt ?? null, i.resultado, i.motivo ?? null, i.codigo ?? null, i.params && Object.keys(i.params).length ? JSON.stringify(i.params) : null, i.observadoAt ?? at],
+      )
+    if (evaluadoHasta) this.db.run(`UPDATE intake_upload SET evaluado_hasta = ? WHERE id = ? AND COALESCE(desenlace_final, 0) = 0`, [evaluadoHasta, id])
+    this.persist()
+  }
+
+  async listIntentos(uploadId: number): Promise<IntakeIntentoRow[]> {
+    const out: IntakeIntentoRow[] = []
+    for (const r of selectAll(this.db, `SELECT id, upload_id, run_started_at, resultado, motivo, codigo, params, observado_at, origen FROM intake_intento WHERE upload_id = ${Math.trunc(Number(uploadId)) || 0} ORDER BY id ASC`)) {
+      const row: IntakeIntentoRow = {
+        id: Number(r['id']),
+        uploadId: Number(r['upload_id']),
+        resultado: String(r['resultado']) as CargaDesenlace,
+        observadoAt: String(r['observado_at']),
+        origen: String(r['origen']) === 'registro-v1' ? 'registro-v1' : 'declaracion',
+      }
+      if (r['run_started_at'] != null) row.runStartedAt = String(r['run_started_at'])
+      if (r['motivo'] != null) row.motivo = String(r['motivo'])
+      if (r['codigo'] != null) row.codigo = String(r['codigo'])
+      if (r['params'] != null) {
+        try {
+          const p = JSON.parse(String(r['params'])) as unknown
+          if (p && typeof p === 'object' && !Array.isArray(p)) row.params = p as DesenlaceParams
+        } catch { /* dato corrupto: se omite, igual que en la fila de la carga */ }
+      }
+      out.push(row)
+    }
+    return out
+  }
+
+  async listIntentosDeSlot(slotId: string, desdeIso: string): Promise<(IntakeIntentoRow & { filename: string })[]> {
+    const stmt = this.db.prepare(
+      `SELECT i.id, i.upload_id, i.run_started_at, i.resultado, i.motivo, i.codigo, i.observado_at, i.origen, u.filename
+       FROM intake_intento i JOIN intake_upload u ON u.id = i.upload_id
+       WHERE u.slot_id = ? AND i.origen = 'declaracion' AND i.run_started_at IS NOT NULL AND i.run_started_at >= ?
+       ORDER BY i.run_started_at DESC, i.id ASC`,
+    )
+    stmt.bind([slotId.trim(), desdeIso])
+    const out: (IntakeIntentoRow & { filename: string })[] = []
+    while (stmt.step()) {
+      const r = stmt.getAsObject() as Record<string, unknown>
+      const row: IntakeIntentoRow & { filename: string } = {
+        id: Number(r['id']),
+        uploadId: Number(r['upload_id']),
+        runStartedAt: String(r['run_started_at']),
+        resultado: String(r['resultado']) as CargaDesenlace,
+        observadoAt: String(r['observado_at']),
+        origen: 'declaracion',
+        filename: String(r['filename']),
+      }
+      if (r['motivo'] != null) row.motivo = String(r['motivo'])
+      if (r['codigo'] != null) row.codigo = String(r['codigo'])
+      out.push(row)
+    }
+    stmt.free()
+    return out
+  }
+
+  async marcarOperadorAvisado(id: number, at?: string): Promise<void> {
+    this.db.run(`UPDATE intake_upload SET operador_avisado_at = ? WHERE id = ?`, [at || now(), id])
     this.persist()
   }
 

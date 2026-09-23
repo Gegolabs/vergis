@@ -354,7 +354,9 @@ describe('admin-cargas · dedup por contenido contra el registro de cargas (issu
     expect(decodeURIComponent(primera.headers['location'] ?? '')).not.toContain('idéntico')
     const segunda = await subir(admin, token, 'copia (1) (1).xlsx', bytes)
     expect(segunda.statusCode).toBe(303) // avisa, NO bloquea: la carga entra igual
-    expect(decodeURIComponent(segunda.headers['location'] ?? '')).toContain('idéntico a saldos VH WK28.xlsx')
+    // #269·V4 · el aviso habla de la carga MÁS RECIENTE con ese contenido y de SU estado: acá, la
+    // primera todavía no tiene estado — se está cargando —, así que no se promete «no cambia nada».
+    expect(decodeURIComponent(segunda.headers['location'] ?? '')).toContain('«copia (1) (1).xlsx»: Subiste este mismo archivo hace 0 minutos y todavía se está cargando.')
     const evs = audit.filter((e) => (e as { type?: string }).type === 'intake') as { sha256?: string; dupOf?: string }[]
     expect(evs[0].sha256).toBe(shaOf(bytes))
     expect(evs[0].dupOf).toBeUndefined()
@@ -393,7 +395,7 @@ describe('admin-cargas · dedup por contenido contra el registro de cargas (issu
     const token = tokenFrom((await go(admin, mockReq('GET', '/admin/dominio/cartera/cargas', STEWARD))).body)
     const res = await subir(admin, token, 'saldos VH WK25 (1).xlsx', bytes)
     const msg = decodeURIComponent(res.headers['location'] ?? '')
-    expect(msg).toContain('idéntico a saldos VH WK25.xlsx · procesado el 2026-06-22 11:03 UTC')
+    expect(msg).toContain('«saldos VH WK25 (1).xlsx»: Este mismo archivo ya se cargó el 2026-06-22 11:03 UTC.')
     const ev = audit.find((e) => (e as { type?: string }).type === 'intake') as { dupOf?: string }
     expect(ev.dupOf).toContain('procesado el')
     await store.close()
@@ -408,7 +410,7 @@ describe('admin-cargas · dedup por contenido contra el registro de cargas (issu
     const mp = mpMany({ _csrf: token }, [{ filename: 'a.xlsx', bytes }, { filename: 'a (1).xlsx', bytes }])
     const res = await go(admin, mockReqBuf('POST', '/admin/dominio/cartera/intake/saldos', STEWARD, mp.body, mp.ct))
     expect(res.statusCode).toBe(303)
-    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('«a (1).xlsx» es idéntico a a.xlsx')
+    expect(decodeURIComponent(res.headers['location'] ?? '')).toContain('«a (1).xlsx»: Subiste este mismo archivo hace 0 minutos')
     const rows = await store.listUploads('saldos', 10)
     expect(rows.find((r) => r.filename === 'a (1).xlsx')!.dupOfId).toBe(rows.find((r) => r.filename === 'a.xlsx')!.id)
     await store.close()

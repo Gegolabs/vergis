@@ -11,8 +11,9 @@ import {
   selectAll,
   type FileOutcome,
   type IntakeUploadRow,
+  type CargaDesenlace,
 } from '@vergis/capabilities'
-import { resolveDesenlaceDeCarga, type CorridaConLog } from '../server/intake-loop'
+import { resolverEstadoDeCarga, type CorridaConLog } from '../server/intake-loop'
 
 /**
  * H1 de #346 · el CÓDIGO del desenlace viaja por el contrato `_logs/` y se persiste.
@@ -160,14 +161,14 @@ describe('#346·H1 · un sufijo que no calza NO existe: sin código, el texto qu
 })
 
 describe('#346·H1 · el resolver lleva código y params hasta el desenlace', () => {
-  it('resolveDesenlaceDeCarga copia codigo y params de la línea del MISMO archivo', () => {
+  it('resolverEstadoDeCarga copia codigo y params de la línea del MISMO archivo', () => {
     const texto = `${lineaDe(OC)} ⟦referencia-ausente/tienda-sin-zona oc=17525983 faltan=58,88⟧\n${lineaDe(MAESTRO)}`
     const corridas: CorridaConLog[] = [{ run: { startedAt: '2026-09-22T17:15:54Z', endedAt: '2026-09-22T17:17:00Z', status: 'Failed' }, log: 'match', texto }]
-    const r = resolveDesenlaceDeCarga({ filename: OC, uploadedAt: '2026-09-22T17:15:00Z' }, corridas, [], Date.parse('2026-09-22T18:00:00Z'))
-    expect(r).toMatchObject({ desenlace: 'fallida', codigo: 'referencia-ausente/tienda-sin-zona', params: { oc: '17525983', faltan: ['58', '88'] } })
+    const r = resolverEstadoDeCarga({ filename: OC, uploadedAt: '2026-09-22T17:15:00Z' }, corridas, [], [], [], [])
+    expect(r).toMatchObject({ estado: 'fallida', codigo: 'referencia-ausente/tienda-sin-zona', params: { oc: '17525983', faltan: ['58', '88'] } })
     expect(r!.motivo).not.toContain('⟦')
     // El maestro, sin sufijo, queda sin código: el código de una línea no contamina otra.
-    const m = resolveDesenlaceDeCarga({ filename: MAESTRO, uploadedAt: '2026-09-22T17:15:00Z' }, corridas, [], Date.parse('2026-09-22T18:00:00Z'))
+    const m = resolverEstadoDeCarga({ filename: MAESTRO, uploadedAt: '2026-09-22T17:15:00Z' }, corridas, [], [], [], [])
     expect(m!.codigo).toBeUndefined()
     expect(m!.motivo!.length).toBe(508)
   })
@@ -187,12 +188,13 @@ const upload = (over: Partial<Omit<IntakeUploadRow, 'id'>> = {}): Omit<IntakeUpl
 })
 
 describe('#346·H1 · persistencia: desenlace_codigo y desenlace_params', () => {
-  it('setUploadDesenlace escribe código + params, y sobreviven a reabrir el archivo', async () => {
+  it('avanzarEstado escribe código + params, y sobreviven a reabrir el archivo', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'vergis-346-')), 'governance.sqlite')
     const g1 = await SqliteGovernanceStore.open(file, {})
     const id = await g1.recordUpload(upload())
-    await g1.setUploadDesenlace(id, {
-      desenlace: 'fallida',
+    await g1.avanzarEstado(id, {
+      estado: 'fallida',
+      final: false,
       motivo: 'el maestro nuevo NO cubre 50 local(es)',
       codigo: 'catalogo-incompleto/maestro-tiendas',
       params: { n: '50', faltan: ['11', '12'] },
@@ -210,7 +212,7 @@ describe('#346·H1 · persistencia: desenlace_codigo y desenlace_params', () => 
   it('sin código: las columnas quedan NULL y la fila se lee como antes (sin los campos)', async () => {
     const g = await SqliteGovernanceStore.open(null, {})
     const id = await g.recordUpload(upload())
-    await g.setUploadDesenlace(id, { desenlace: 'fallida', motivo: 'x' })
+    await g.avanzarEstado(id, { estado: 'fallida', final: false, motivo: 'x' })
     const r = (await g.listUploads('oc_crossdocking_maestro', 5))[0]!
     expect('desenlaceCodigo' in r).toBe(false)
     expect('desenlaceParams' in r).toBe(false)
@@ -249,9 +251,9 @@ describe('#346·H1 · persistencia: desenlace_codigo y desenlace_params', () => 
 
   it('contarDesenlaceCodigos: solo fallida/saltada del slot, desde la fecha, agrupado por código', async () => {
     const g = await SqliteGovernanceStore.open(null, {})
-    const mk = async (over: Partial<Omit<IntakeUploadRow, 'id'>>, d: Parameters<SqliteGovernanceStore['setUploadDesenlace']>[1]): Promise<void> => {
+    const mk = async (over: Partial<Omit<IntakeUploadRow, 'id'>>, d: { desenlace: CargaDesenlace; codigo?: string }): Promise<void> => {
       const id = await g.recordUpload(upload(over))
-      await g.setUploadDesenlace(id, d)
+      await g.avanzarEstado(id, { estado: d.desenlace, final: d.desenlace === 'procesada', ...(d.codigo ? { codigo: d.codigo } : {}) })
     }
     await mk({}, { desenlace: 'fallida', codigo: 'formato' })
     await mk({}, { desenlace: 'fallida', codigo: 'formato' })

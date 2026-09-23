@@ -254,7 +254,7 @@ describe('#346·H2 · resolverGuia: la precedencia, un test por nivel', () => {
   it('el ACTOR sale siempre de la familia: la guía de instancia de falla-plataforma sigue siendo del operador', () => {
     const g = resolverGuia(MAESTRO, 'falla-plataforma', undefined, catalogo())
     expect(g).toMatchObject({ nivel: 'entrada', actor: 'operador', deInstancia: true })
-    expect(LINEA_ACTOR[g!.actor]).toBe('No es por tu archivo: el equipo ya fue avisado')
+    expect(LINEA_ACTOR[g!.actor]).toBe('No es por tu archivo: el proceso de carga tuvo un problema propio')
   })
 })
 
