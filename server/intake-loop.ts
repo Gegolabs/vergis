@@ -73,7 +73,7 @@ import {
 // #269 · capacidades nuevas de este corte, importadas de su módulo (mismo patrón que `version`/
 // `table-runtime`): el barril `@vergis/capabilities` no es parte del territorio de este cambio.
 import { declaracionDeArchivo } from '../packages/capabilities/src/run-logs'
-import { nombresAmbiguos } from '../packages/capabilities/src/intake'
+import { nombresAmbiguos, firmaDePatrones, patronesQueSePisan, slotProcessedDir } from '../packages/capabilities/src/intake'
 import { nombreSinSello, selloDelNombre } from '../packages/capabilities/src/intake-observability'
 import type { CargaEstadoInput, IntakeIntentoInput } from '../packages/capabilities/src/governance-store'
 import { diagnosticoDeFalla, type SlotVigilancia } from './admin-cargas'
@@ -230,8 +230,9 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
             const input: SlotWatchInput = { slotId: obs.slotId, obs }
             const proj = proyeccion.get(obs.slotId)
             if (proj) input.projection = proj
-            const { expected, registro } = await insumosDelRegistro(slot, obs)
+            const { expected, registro, enEspera } = await insumosDelRegistro(slot, obs)
             if (expected.length) input.expected = expected
+            if (enEspera?.length) input.enEspera = enEspera
             if (registro) input.registro = registro
             return { input, config: watchConfigDe(slot)! }
           }),
@@ -259,22 +260,29 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
   }
 
   /**
-   * #269·§4.1 · La SEÑAL de disjunción posterior a cada recarga: cuántos nombres del registro calzan
-   * con dos o más tipos. La garantía vive en la puerta (el nombre ambiguo no aterriza); esto le dice al
-   * operador que la configuración recién cargada tiene patrones que se pisan sobre nombres reales.
-   * Se mide solo cuando cambian los patrones (su firma), no en cada vuelta.
+   * #269·§4.1 · La SEÑAL de disjunción: qué pares de casillas tienen patrones que se pisan y qué
+   * nombres del registro calzan con dos o más tipos. Es SEÑAL al operador, nunca una compuerta: la
+   * subida a una casilla elegida acepta todo nombre que calce con ella (D-222 del lab, 0.35.1). Se
+   * vuelve a medir cuando cambian los patrones (recarga) o crece el registro (un nombre nuevo puede ser
+   * el primero ambiguo), y el log dice las TRANSICIONES en los dos sentidos (juez 0.35.1 · m1).
    */
   let firmaDisjuncion: string | null = null
+  let cruceAnterior: boolean | null = null
   async function medirDisjuncion(slots: IntakeSlot[], nowIso: string): Promise<void> {
-    const firma = JSON.stringify(slots.map((s) => [s.id, s.accept ?? null]))
-    if (firma === firmaDisjuncion) return
     try {
       const nombres: string[] = []
       for (const s of slots) for (const u of await deps.store.listUploads(s.id, RESOLVER_HISTORIA)) if (u.ok && u.origen === 'upload') nombres.push(u.filename)
+      const firma = `${firmaDePatrones(slots)}#${nombres.length}`
+      if (firma === firmaDisjuncion) return
       const ambiguos = nombresAmbiguos(slots, nombres)
-      await deps.store.setSetting(INTAKE_DISJUNCION_KEY, JSON.stringify({ medidoAt: nowIso, nombres: new Set(nombres).size, ambiguos }), 'intake-watch')
-      if (ambiguos.length)
-        deps.log(`intake-loop: ${ambiguos.length} nombre(s) del registro calzan con 2+ tipos: ${ambiguos.slice(0, 5).map((a) => `«${a.nombre}» (${a.slots.join(', ')})`).join('; ')}${ambiguos.length > 5 ? '; …' : ''}`)
+      const pisan = patronesQueSePisan(slots)
+      const medida: MedidaDisjuncion = { medidoAt: nowIso, firma: firmaDePatrones(slots), nombres: new Set(nombres).size, ambiguos, pisan }
+      await deps.store.setSetting(INTAKE_DISJUNCION_KEY, JSON.stringify(medida), 'intake-watch')
+      const cruce = pisan.length > 0 || ambiguos.length > 0
+      if (cruce && cruceAnterior !== true)
+        deps.log(`intake-loop: los patrones de estas casillas se pisan: ${[...pisan.map(([x, y]) => `${x} / ${y}`), ...ambiguos.slice(0, 3).map((x) => `«${x.nombre}» (${x.slots.join(', ')})`)].slice(0, 8).join('; ')}${pisan.length + ambiguos.length > 8 ? '; …' : ''} — la subida con casilla acepta igual (el usuario eligió); la puerta sin casilla no podrá enrutar esos nombres`)
+      else if (!cruce && cruceAnterior === true) deps.log('intake-loop: los patrones de las casillas ya no se pisan: cada nombre del registro calza con un solo tipo')
+      cruceAnterior = cruce
       firmaDisjuncion = firma
     } catch (e) {
       deps.log(`intake-loop: no se pudo medir la disjunción de los tipos de archivo — ${msg(e)}`)
@@ -379,6 +387,15 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
         // (la contradicción se sostiene igual: la evidencia es la carga, no su reloj).
         if (ultima) registro.ultimaCargaAt = ultima.uploadedAt
         out.registro = registro
+        // #269·0.35.1 · en espera = la carga MÁS RECIENTE de ese nombre está declarada ✖/⚠.
+        const ultimaPorNombre = new Map<string, CargaRegistrada>()
+        for (const c of vividas) {
+          const n = base(c.filename)
+          const prev = ultimaPorNombre.get(n)
+          if (!prev || Date.parse(c.uploadedAt) > Date.parse(prev.uploadedAt)) ultimaPorNombre.set(n, c)
+        }
+        const enEspera = [...ultimaPorNombre].filter(([, c]) => c.estado === 'fallida' || c.estado === 'saltada').map(([n]) => n)
+        if (enEspera.length) out.enEspera = enEspera
       }
       if (obs.runs == null || !cargas.length) return out
       // `null` = no se pudo saber qué se retiró. Sin ese descuento la predicción incluiría archivos
@@ -528,14 +545,24 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
    *  a las que trajo este tick. El tick trae solo las 10 más recientes: una carga cuya corrida quedó
    *  más atrás se quedaría sin su declaración. */
   async function corridasDelSlot(slot: IntakeSlot, obs: SlotObservation): Promise<RunRecord[]> {
-    const porInicio = new Map<string, RunRecord>()
+    // La clave es el INSTANTE, no la cadena: la proyección conserva filas de antes de que el motor
+    // normalizara a UTC (`…6685436` y `…6685436Z` son la misma corrida; medido en Facturas, 0.35.0).
+    // Entre las dos gana la que trae designador de zona, y lo fresco manda sobre lo proyectado.
+    const porInicio = new Map<number, RunRecord>()
+    const poner = (r: RunRecord, manda: boolean): void => {
+      const conZona = /(Z|[+-]\d\d:\d\d)$/.test(r.startedAt)
+      const k = Date.parse(conZona ? r.startedAt : r.startedAt + 'Z')
+      if (!Number.isFinite(k)) return
+      const prev = porInicio.get(k)
+      if (!prev || manda || (!/(Z|[+-]\d\d:\d\d)$/.test(prev.startedAt) && conZona)) porInicio.set(k, r)
+    }
     try {
       const snap = (await deps.store.listSlotSnapshots({ runsPerSlot: INTAKE_WATCH_RUN_RETENTION })).find((x) => x.slotId === slot.id)
-      for (const r of snap?.runs ?? []) porInicio.set(r.startedAt, r)
+      for (const r of snap?.runs ?? []) poner(r, false)
     } catch (e) {
       deps.log(`intake-loop: no se pudo leer la proyección de corridas de '${slot.id}' — ${msg(e)}`)
     }
-    for (const r of obs.runs ?? []) if (r?.startedAt) porInicio.set(r.startedAt, r) // lo fresco manda
+    for (const r of obs.runs ?? []) if (r?.startedAt) poner(r, true)
     return [...porInicio.values()]
   }
 
@@ -720,6 +747,8 @@ interface InsumosRegistro {
   expected: string[]
   /** Control del directorio (009·§4.2): ausente = el slot no tiene cargas vividas registradas. */
   registro?: { cargasVividas: number; ultimaCargaAt?: string }
+  /** #269·0.35.1 · archivos en espera (carga declarada ✖/⚠): no son varados. */
+  enEspera?: string[]
 }
 
 /** Cargas no finales que se evalúan por slot y por vuelta. No es una política: es el tope del lote de
@@ -729,11 +758,15 @@ const RESOLVER_LOTE = 200
 /** Clave de `platform_setting` con la última medida de disjunción de los tipos de archivo (#269·§4.1). */
 export const INTAKE_DISJUNCION_KEY = 'intake.disjuncion'
 
-/** La medida persistida de la disjunción: qué nombres del registro calzan con 2+ tipos. */
+/** La medida persistida de la disjunción: qué nombres del registro calzan con 2+ tipos, y qué
+ *  pares de patrones se pisan con certeza, para la configuración de firma `firma`. */
 export interface MedidaDisjuncion {
   medidoAt: string
+  /** `firmaDePatrones` de la configuración medida. Ausente (medida de 0.35.0) = no vale para nada. */
+  firma?: string
   nombres: number
   ambiguos: { nombre: string; slots: string[] }[]
+  pisan?: [string, string][]
 }
 
 /** Lee la medida persistida; ilegible = `null` (la consola no afirma nada que no pueda leer). */
@@ -1139,7 +1172,10 @@ const base = (p: string): string => String(p ?? '').replace(/^.*[/\\]/, '')
 export function intakeWatchConfig(slot: IntakeSlot, pollMs: number): SlotWatchConfig | null {
   if (slot.watch === false) return null
   const cfg: SlotWatchConfig = { pollMs }
-  const maxAgeMinutes = slot.watch?.maxAgeMinutes ?? (slot.trigger ? DEFAULT_MAX_AGE_MINUTES : undefined)
+  // #269·0.35.1 · un slot cuyo proceso NO archiva (`processed: false`) deja su archivo en el landing a
+  // propósito: es el vigente, y ninguna edad lo vuelve varado — tampoco en la alerta al operador.
+  const noArchiva = slotProcessedDir(slot) == null
+  const maxAgeMinutes = noArchiva ? undefined : slot.watch?.maxAgeMinutes ?? (slot.trigger ? DEFAULT_MAX_AGE_MINUTES : undefined)
   if (maxAgeMinutes != null) cfg.maxAgeMinutes = maxAgeMinutes
   if (slot.watch?.maxRunMinutes != null) cfg.maxRunMinutes = slot.watch.maxRunMinutes
   return cfg
@@ -1241,6 +1277,7 @@ export function slotVigilanciaDeProyeccion(
   pollMs: number,
   nowMs: number,
   razonDelLazo?: SlotAlertReason,
+  enEspera?: string[],
 ): SlotVigilancia | null {
   const config = intakeWatchConfig(slot, pollMs)
   if (!config) return null // el slot no se vigila ⇒ la página no muestra banner
@@ -1257,6 +1294,7 @@ export function slotVigilanciaDeProyeccion(
     if (snapshot?.runs.length) obs.runs = snapshot.runs
   }
   const input: SlotWatchInput = { slotId: slot.id, obs }
+  if (enEspera?.length) input.enEspera = enEspera
   if (snapshot) {
     const proj: SlotProjection = { landing: snapshot.landing, runs: snapshot.runs }
     if (snapshot.observedAt != null) proj.observedAt = snapshot.observedAt

@@ -2115,7 +2115,7 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
           (await govStore.listUploads(slotId, 200))
             .filter((r) => r.origen === 'upload' && r.ok)
             // #269·V5 · una carga en estado final ya no se espera en el landing.
-            .map((r) => ({ filename: r.filename, uploadedAt: r.uploadedAt, ok: r.ok, ...(r.desenlaceFinal ? { final: true } : {}) })),
+            .map((r) => ({ filename: r.filename, uploadedAt: r.uploadedAt, ok: r.ok, ...(r.desenlaceFinal ? { final: true } : {}), ...(r.desenlace != null ? { estado: r.desenlace } : {}) })),
         retiros: watch.retiros,
         archivados: watch.archivados,
         reverts: async (slotId) => (await govStore.listReverts(slotId, 500)).map((r) => ({ filename: r.filename, at: r.at, landingRetirado: r.landingRetirado, ...(r.uploadId != null ? { uploadId: r.uploadId } : {}) })),
@@ -2221,6 +2221,19 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
     // Se ofrece solo con el lazo EFECTIVAMENTE corriendo (`watch` cableado y `pollMs > 0`), que es la
     // misma condición del `if` que lo instala: con el vigilante apagado la proyección es un recuerdo
     // que nadie refresca, y la consola tiene que renderizar exactamente la página de siempre.
+    /** #269·0.35.1 · basenames cuya carga MÁS RECIENTE está declarada ✖/⚠ (en espera, no varados). */
+    const enEsperaDe = async (slotId: string): Promise<string[]> => {
+      const vistas = new Set<string>()
+      const out: string[] = []
+      for (const r of await govStore.listUploads(slotId, 200).catch(() => [])) {
+        if (r.origen !== 'upload' || !r.ok) continue
+        const n = r.filename.replace(/^.*\//, '')
+        if (vistas.has(n)) continue // listUploads viene de la más reciente a la más antigua
+        vistas.add(n)
+        if (r.desenlace === 'fallida' || r.desenlace === 'saltada') out.push(n)
+      }
+      return out
+    }
     const cargasOps: CargasOps | undefined =
       fabricWiring.cargas && fabricWiring.watch && intakeWatchMs > 0
         ? {
@@ -2241,12 +2254,18 @@ if (process.env['VERGIS_MASTER_DATA'] || ADMIN_SEED.length) {
                 intakeWatchMs,
                 Date.now(),
                 razones[slot.id],
+                // #269·0.35.1 · los archivos en espera (carga declarada ✖/⚠) no se marcan VARADO.
+                await enEsperaDe(slot.id),
               )
               // #269·§4.1 · la señal de disjunción que el lazo midió tras la última recarga: solo los
               // nombres que tocan a ESTE slot. Ilegible = sin señal (no se afirma lo que no se lee).
               if (v) {
                 const d = parseMedidaDisjuncion(await govStore.getSetting(INTAKE_DISJUNCION_KEY).catch(() => null))
-                if (d) v.ambiguos = d.ambiguos.filter((a) => a.slots.includes(slot.id))
+                if (d) {
+                  v.ambiguos = d.ambiguos.filter((a) => a.slots.includes(slot.id))
+                  const pisan = (d.pisan ?? []).filter(([a, b]) => a === slot.id || b === slot.id)
+                  if (pisan.length) v.pisan = pisan
+                }
               }
               return v
             },
