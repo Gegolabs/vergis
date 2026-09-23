@@ -136,11 +136,31 @@ export interface IntakeLoopDeps {
   domains: { id: string; label: string }[]
   log: (line: string) => void
   now?: () => number
+  /** #269·P2 · ¿Este nodo puede escribir? (plano de control). El tick focalizado de `acelerar` corre
+   *  fuera del registro de lazos que arma el control, así que lo pregunta él mismo. Ausente = sí. */
+  hasControl?: () => boolean
+  /** #269·P2 · temporizador del tick focalizado (inyectable para tests). Default `setInterval` con
+   *  `unref`: nunca retiene el proceso vivo. */
+  timer?: { every(ms: number, fn: () => void): { stop(): void } }
 }
+
+/** #269·P2 · cada cuánto corre el tick focalizado de un tipo de archivo recién subido. */
+export const ACELERAR_CADA_MS = 30_000
+/** #269·P2 · hasta cuándo se acelera: mientras el tipo tenga cargas no finales de menos de esto. */
+export const ACELERAR_VENTANA_MS = 45 * 60_000
 
 export interface IntakeLoop {
   /** Una vuelta. Re-entrada mientras hay una en vuelo = no-op (guard anti-solape). Nunca lanza. */
   tick(): Promise<void>
+  /**
+   * #269·P2 (D3) · Tras una subida o un retiro: cada `ACELERAR_CADA_MS`, observar + resolver SOLO ese
+   * tipo de archivo, mientras tenga cargas no finales de menos de `ACELERAR_VENTANA_MS`. Bajo el MISMO
+   * guard anti-solape que `tick` (el resolvedor sigue teniendo un solo escritor a la vez). No bloquea:
+   * programa y vuelve. Un tipo ya acelerado no se duplica.
+   */
+  acelerar(slotId: string): void
+  /** Una vuelta focalizada sobre un tipo. Devuelve si hay que seguir acelerándolo. Nunca lanza. */
+  tickFocalizado(slotId: string): Promise<boolean>
 }
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -735,7 +755,56 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
     return intakeWatchConfig(slot, pollMs)
   }
 
-  return { tick }
+  // ── #269·P2 · tick focalizado (acelerar) ─────────────────────────────────────────────────────────
+  const acelerados = new Set<string>()
+  let reloj: { stop(): void } | null = null
+  const timer = deps.timer ?? {
+    every: (ms: number, fn: () => void) => {
+      const h = setInterval(fn, ms)
+      h.unref?.()
+      return { stop: () => clearInterval(h) }
+    },
+  }
+
+  async function tickFocalizado(slotId: string): Promise<boolean> {
+    const slot = deps.slots().find((s) => s.id === slotId)
+    if (!slot || watchConfigDe(slot) == null) return false
+    if (deps.hasControl && !deps.hasControl()) return false
+    // Mismo guard que `tick`: si hay una vuelta en vuelo, esta se salta y se reintenta en la próxima.
+    if (inFlight) return true
+    inFlight = true
+    try {
+      const nowMs = now()
+      const obs = await observar(slot)
+      const cache = new Map<string, OneLakeEntry[]>()
+      await medirContratoLogs(slot, obs, cache)
+      await deps.store.recordSlotObservations([obs])
+      await resolverSlot(slot, obs, nowMs, cache)
+      const pendientes = await deps.store.listUploadsNoFinales(slot.id, RESOLVER_LOTE)
+      return pendientes.some((c) => nowMs - Date.parse(c.uploadedAt) <= ACELERAR_VENTANA_MS)
+    } catch (e) {
+      deps.log(`intake-loop: vuelta focalizada de '${slotId}' fallida — ${msg(e)}`)
+      return true
+    } finally {
+      inFlight = false
+    }
+  }
+
+  function acelerar(slotId: string): void {
+    acelerados.add(slotId)
+    if (reloj) return
+    reloj = timer.every(ACELERAR_CADA_MS, () => {
+      void (async () => {
+        for (const id of [...acelerados]) if (!(await tickFocalizado(id))) acelerados.delete(id)
+        if (!acelerados.size && reloj) {
+          reloj.stop()
+          reloj = null
+        }
+      })()
+    })
+  }
+
+  return { tick, acelerar, tickFocalizado }
 }
 
 /** Lo que la alerta clasificada aporta al aviso compuesto. */

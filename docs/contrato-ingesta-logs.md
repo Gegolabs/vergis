@@ -358,12 +358,14 @@ guias:
 
 ### ¿Qué ve el usuario, y qué pasa sin guía?
 
-- **Cargas, celda Desenlace:** la insignia, la línea de actor («Hay que corregir el archivo» · «No es
-  por tu archivo: el equipo ya fue avisado» · «No tienes que hacer nada»), el título y el qué pasó,
-  el qué hacer numerado, y un plegado «Detalle técnico» con el motivo **completo** y el código.
-- **«Errores frecuentes»** por casilla (`/admin/dominio/<id>/errores/<slot>`, enlazada desde el
-  encabezado de la casilla y desde el correo, bajo el mismo gate que Cargas): las guías de la casilla
-  ordenadas por cuántas veces ocurrió su código en 90 días. Se puede consultar antes de que algo falle.
+- **Página del archivo (`/cargar/<slot>`) y Cargas, celda Desenlace:** la insignia, la línea de actor
+  («Hay que corregir el archivo» · «No es por tu archivo: el proceso de carga tuvo un problema propio»
+  · «No tienes que hacer nada»), el título y el qué pasó, el qué hacer numerado; en la vista técnica,
+  además, un plegado «Detalle técnico» con el motivo **completo** y el código.
+- **«Problemas frecuentes y cómo resolverlos»** en la página del archivo (`/cargar/<slot>#problemas`;
+  `/admin/dominio/<id>/errores/<slot>` redirige ahí, y el correo la enlaza): las guías del tipo de
+  archivo ordenadas por cuántas veces ocurrió su código en 90 días. Se puede consultar antes de que
+  algo falle.
 - **Correo a quien subió** (§4): el título es el de la guía, el cuerpo dice quién actúa y qué hacer, y
   el motivo técnico va al final. Con actor `operador` no le pide corregir nada.
 - **Señal de cobertura** para el operador, por casilla: desenlaces de 30 días sin código, con código

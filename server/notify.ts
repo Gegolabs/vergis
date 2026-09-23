@@ -685,8 +685,9 @@ export function composeCargaUserNotice(ctx: CargaUserNoticeContext): Notificatio
   }
   lines.push(`Archivo recibido el ${fmtFechaUsuario(ctx.uploadedAt)} · ${ctx.slotLabel}`)
 
-  const links: NotificationLink[] = ctx.domainId != null ? [{ label: 'Ver mis cargas', url: hrefCargas(ctx.baseUrl, ctx.domainId) }] : []
-  if (guia && ctx.domainId != null) links.push({ label: 'Errores frecuentes de esta carga', url: `${ctx.baseUrl}${erroresHref(ctx.domainId, ctx.slotId)}` })
+  // #269·§5.1 · el correo lleva a la PÁGINA DEL ARCHIVO (`/cargar/<tipo>`), no a la vista técnica.
+  const links: NotificationLink[] = ctx.domainId != null ? [{ label: 'Ver cómo va este archivo', url: `${ctx.baseUrl}/cargar/${encodeURIComponent(ctx.slotId)}` }] : []
+  if (guia && ctx.domainId != null) links.push({ label: 'Problemas frecuentes y cómo resolverlos', url: `${ctx.baseUrl}/cargar/${encodeURIComponent(ctx.slotId)}#problemas` })
   return {
     severity: 'warning',
     title,

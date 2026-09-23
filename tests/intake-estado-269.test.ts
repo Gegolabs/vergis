@@ -325,10 +325,11 @@ describe('#269·§4.1 · la puerta: NFC, disjunción y el nombre que ya se recib
     h.slots.splice(0, 1, slot('inv', '*Recepcion Vivero*.xlsx'))
     const res = await h.subir('inv', '20260101 - Inventario Vivero 2026.xlsx')
     const msg = decodeURIComponent(res.headers['location'] ?? '')
-    expect(msg).toContain('Este archivo se recibió antes como «INV», pero ese archivo ahora tiene que llamarse así: «*Recepcion Vivero*.xlsx».')
-    // Control: un nombre que NUNCA se recibió se rechaza con el mensaje de siempre.
+    // #269·P2 · el nombre esperado se dice en palabras (la ficha, o el patrón descrito).
+    expect(msg).toContain('Este archivo se recibió antes como «INV», pero ese archivo ahora tiene que llamarse así: El nombre tiene que contener «Recepcion Vivero» y ser un Excel (.xlsx).')
+    // Control: un nombre que NUNCA se recibió se rechaza con el mensaje de la puerta (§4.2).
     const otro = decodeURIComponent((await h.subir('inv', 'Libro1.xlsx')).headers['location'] ?? '')
-    expect(otro).toContain('no coincide con el patrón esperado')
+    expect(otro).toContain('Este nombre no corresponde a ningún archivo que puedas subir.')
     expect(otro).not.toContain('se recibió antes')
   })
 
@@ -546,7 +547,7 @@ async function adminArnes(slots: IntakeSlot[]) {
     return r
   }
   const token = async (): Promise<string> => {
-    const page = await go(req('GET', `/admin/dominio/d/cargas`))
+    const page = await go(req('GET', `/cargar`))
     return page.body.match(/name="_csrf" value="([0-9a-f]+)"/)![1]!
   }
   return {

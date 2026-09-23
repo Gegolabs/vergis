@@ -194,7 +194,7 @@ describe('columna Desenlace en Actividad', () => {
 
   it('sin corrida correlacionable en el historial mostrado, no se enlaza nada', () => {
     const celda = desenlaceCelda({ ...HISTORY[0]!, desenlace: 'varada', desenlaceRunStartedAt: '2020-01-01T00:00:00Z' }, RUNS, () => '/x')
-    expect(celda).toContain('⚠ Varada')
+    expect(celda).toContain('⚠ En espera')
     expect(celda).not.toContain('Ver corrida')
   })
 
