@@ -415,7 +415,14 @@ export function renderCarga(slot: IntakeSlot, tipos: IntakeSlot[], h: IntakeUplo
   const v = estadoVisible(rechazo, ctx, guia)
   const extra: string[] = []
   const conGuia = guia && (h.desenlace === 'fallida' || h.desenlace === 'saltada') && guia.actor !== 'operador' && !(ctx.enCurso && h.desenlaceFinal !== true)
-  if (conGuia) extra.push(bloqueGuia(guia!))
+  if (conGuia) {
+    extra.push(bloqueGuia(guia!))
+    // work/274 DP-19 (D-11) · el motivo que declaró el proceso, PLEGADO bajo la guía: el dato del caso
+    // (los SKU, las filas, los nombres aceptados) está a un clic en la misma página, como prometía
+    // work/264, y la guía deja de depender de la vista técnica. Texto no confiable del job: completo,
+    // redactado y escapado.
+    if (h.desenlaceMotivo) extra.push(plegado('ver el detalle', `<div class="sub" style="white-space:pre-wrap">${escapeHtml(redactSecrets(h.desenlaceMotivo))}</div>`))
+  }
   if (h.ok && h.desenlace === 'fallida' && !guia && h.desenlaceMotivo && !(ctx.enCurso && h.desenlaceFinal !== true)) {
     const m = redactSecrets(h.desenlaceMotivo)
     extra.push(m.length > 300
@@ -454,8 +461,15 @@ export function estadoDeTarjeta(deps: AdminDeps, slot: IntakeSlot, cargas: Intak
   const vistos = new Set<string>()
   const ultimas: IntakeUploadEvent[] = []
   for (const h of cargas) if (h.ok && !vistos.has(h.filename)) { vistos.add(h.filename); ultimas.push(h) }
-  const visibles = ultimas.map((h) => ({ h, v: estadoVisible(h, ctxDe(h), guiaDeCarga(slot, h, deps.intakeGuias)) }))
-  const pide = visibles.filter(({ v }) => v.tono === 'error' || v.etiqueta === '⚠ Detenido por precaución').length
+  const visibles = ultimas.map((h) => {
+    const g = guiaDeCarga(slot, h, deps.intakeGuias)
+    return { h, g, v: estadoVisible(h, ctxDe(h), g) }
+  })
+  // work/274 DP-18 · una carga `saltada` cuya guía es de actor `usuario` también pide acción: el paso es
+  // de quien sube. Se cuenta solo mientras se dibuja «⏸ No se cargó» (no si se está cargando o retirando).
+  const pideAccion = ({ h, g, v }: (typeof visibles)[number]): boolean =>
+    v.tono === 'error' || v.etiqueta === '⚠ Detenido por precaución' || (h.desenlace === 'saltada' && g?.actor === 'usuario' && v.etiqueta === '⏸ No se cargó')
+  const pide = visibles.filter(pideAccion).length
   if (pide) return chip('atencion', `⚠ ${pide} archivo(s) necesitan que hagas algo`)
   const cargando = visibles.filter(({ v }) => v.etiqueta === 'Recibido' || v.etiqueta === '⏳ Cargando').length
   if (cargando) return chip('curso', `⏳ ${cargando} archivo(s) cargándose`)
