@@ -15,11 +15,16 @@
 export type RunStatus = 'Completed' | 'Failed' | 'InProgress' | 'NotStarted' | 'Cancelled' | 'Deduped'
 
 export interface RunRecord {
-  /** ISO-8601. */
+  /** ISO-8601. Es un ATRIBUTO de la corrida, no su identidad: el motor puede cambiarlo (Fabric informa
+   *  un instante mientras la corrida espera en cola y otro desde que arranca). */
   startedAt: string
   endedAt?: string
   status: RunStatus
   error?: string
+  /** Id de la instancia en el motor (Fabric: `jobs/instances[].id`), cuando el motor lo entrega. Es la
+   *  IDENTIDAD de la corrida: dos observaciones con el mismo id son la misma corrida aunque su
+   *  `startedAt` difiera. Ausente = el motor no lo dio (o la fila es de antes de que se guardara). */
+  instanceId?: string
 }
 
 export interface ProcessHealth {
