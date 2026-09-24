@@ -217,7 +217,8 @@ export { createFabricItemAuthoring, AuthoringError, AuthoringDenied, AuthoringCo
 export type { ItemAuthoringClient, ItemDeclaration, ItemDefinition, DefinitionPart } from './fabric-authoring'
 export { SqliteAdminStore, AdminLockout, ADMIN_SCHEMA_VERSION } from './admin-roles'
 export type { AdminStore, AdminEntry } from './admin-roles'
-export { SqliteGovernanceStore, GovernanceConflict, SCHEMA_VERSION, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION, PI_DISPLAY_NAME_MAX } from './governance-store'
+export { SqliteGovernanceStore, GovernanceConflict, SCHEMA_VERSION, INGESTION_RUN_RETENTION, INTAKE_WATCH_RUN_RETENTION, PI_DISPLAY_NAME_MAX, emparejarSustituidas } from './governance-store'
+export type { FilaDeCorridaProyectada } from './governance-store'
 export type { PiDisplayName } from './governance-store'
 export type {
   GovernanceStore,

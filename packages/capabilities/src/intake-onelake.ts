@@ -248,6 +248,7 @@ export interface FabricJobStatus {
 
 /** Forma (parcial) de un *job instance* de Fabric — solo los campos que consumimos. */
 interface FabricJobInstance {
+  id?: string
   status?: string
   startTimeUtc?: string
   endTimeUtc?: string | null
@@ -296,6 +297,8 @@ export function createFabricJobStatus(tokens: TokenSource, opts: { fetch?: Fetch
         const endedAt = asUtcIso(j.endTimeUtc)
         if (endedAt) rec.endedAt = endedAt
         if (j.failureReason?.message) rec.error = j.failureReason.message
+        // El id es la identidad de la corrida: su `startTimeUtc` cambia cuando sale de la cola (corrida fantasma).
+        if (typeof j.id === 'string' && j.id.trim()) rec.instanceId = j.id.trim()
         return rec
       })
       // Orden defensivo (no asumimos el orden del backend): más reciente primero.
