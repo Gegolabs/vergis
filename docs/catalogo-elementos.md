@@ -131,6 +131,37 @@ plataforma**, no un opcional del spec: un gráfico de barras sin cifra obliga a 
   contra el borde. La anti-colisión fina entre rótulos vecinos (rotar/omitir) es decisión del motor y
   **no se declara por spec**.
 
+#### Total de cada barra apilada (`totals`)
+
+En **apilado** (`stacked: true`) no se rotula cada segmento —caerían dentro de un área que no
+controlamos y se fundirían con el vecino; su valor lo dice el tooltip—, y en su lugar cada barra lleva
+**un rótulo con su total**: la suma de sus segmentos, sobre la barra en vertical y a su derecha en
+horizontal.
+
+```yaml
+- distribution:
+    dimension: data.cruce.mes
+    metric: data.cruce.total
+    series: zona
+    stacked: true
+    totals: false          # opcional: apaga el rótulo del total (por defecto está encendido)
+```
+
+- **Total negativo**: el rótulo va igual **fuera** de la barra, del lado de su punta — bajo la punta
+  negativa en vertical y a su izquierda en horizontal. Con signos mixtos en una misma barra, se ancla
+  en la punta del lado del signo del total.
+- **Cuadra con la barra**: el total suma **todos** los segmentos dibujados, incluida la serie
+  «(otras)» del colapso de series y la categoría «(otros)» del top-N.
+- **Formato**: el mismo de los rótulos de valor — el `format` declarado; sin él, `abbr`.
+- **Siempre visible**: el dominio del eje deja aire para el rótulo (su alto en vertical, su ancho en
+  horizontal), y en vertical el lienzo se ensancha lo necesario para que los totales quepan al menos
+  en dos carriles (misma anti-colisión de los rótulos de valor). Ningún total se oculta.
+- **Tooltip**: cada segmento dice además el total de su barra (`Enero · Venta — 1,2M (total 1,7M)`).
+- **No es una marca de dato**: es texto. Las barras (`aria-roledescription="bar"`) siguen siendo una
+  por segmento, con o sin totales.
+- `totals` solo tiene efecto en apilado; en agrupado se ignora. Debe ser booleano
+  (`distribution-totals-not-boolean`): una cadena `"false"` lo dejaría encendido en silencio.
+
 #### Formato `abbr` — magnitud abreviada (es-CL)
 
 | Valor | `abbr` | `int_0` |

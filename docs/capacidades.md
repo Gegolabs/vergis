@@ -159,6 +159,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-74` | Paleta categórica de series del theme, con re-color en vivo por variable CSS | token `chartSeries`; `Theme.chartTokensByPalette`; `--chart-*` | 0.10.0 · 0.16.0 | [catalogo-elementos.md §4](catalogo-elementos.md) |
 | `CAP-75` | Fondo y theme por tipo de PI, conmutables por la instancia | `VERGIS_THEME_REPORT` / `VERGIS_THEME_DASHBOARD` (`theme[@paleta]`) | 0.10.0 | [catalogo-elementos.md §4](catalogo-elementos.md) |
 | `CAP-76` | Render de gráficos **sin E/S**: gate declarativo y loader que niega red y disco | gate del render de charts | 0.16.0 | [CHANGELOG 0.16.0](../CHANGELOG.md) |
+| `CAP-208` | **Total de cada barra apilada**, rotulado fuera de la barra en la punta de su signo (sobre/bajo en vertical, derecha/izquierda en horizontal): Σ de los segmentos, incluida «(otras)», con el formato del chart (si no `abbr`), siempre visible (carriles, lienzo que se ensancha) y repetido en el tooltip de cada segmento | encendido por defecto en `distribution.stacked: true`; `distribution.totals: false` lo apaga | 0.38.0 | [catalogo-elementos.md §2 · «Total de cada barra apilada»](catalogo-elementos.md) |
 
 ## Notas
 

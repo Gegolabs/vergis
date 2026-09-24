@@ -61,12 +61,20 @@ describe('#203 · apilado', () => {
   })
 
   it('en apilado NO se rotulan los segmentos: el valor lo dice el tooltip (#208)', async () => {
-    const html = await render({ ...BASE, stacked: true } as unknown as ResolvedNode)
+    // #359 · sin la capa del total (`totals: false`), el apilado no emite ningún rótulo de marca.
+    const html = await render({ ...BASE, stacked: true, totals: false } as unknown as ResolvedNode)
     expect(html).not.toContain('mark-text role-mark')
     // Pero el dato sigue siendo legible: un tooltip por segmento, con su serie.
     const tips = [...html.matchAll(/<title>([^<]*)<\/title>/g)].map((m) => m[1]!).filter((t) => t !== 'T')
     expect(tips).toHaveLength(4)
     expect(tips).toContain('Enero · Venta — 100')
+    // #359 · con el total (default), el único texto de marca es el total: uno por barra, ninguno
+    // por segmento — en vertical ni en horizontal.
+    for (const orientation of ['vertical', 'horizontal']) {
+      const conTotal = await render({ ...BASE, orientation, stacked: true } as unknown as ResolvedNode)
+      const rotulos = [...conTotal.matchAll(/<text aria-label="([^"]*)"[^>]*aria-roledescription="text mark"/g)].map((m) => m[1]!)
+      expect(rotulos).toEqual(['Febrero · Total — 225', 'Enero · Total — 150'])
+    }
   })
 
   it('agrupado CONSERVA sus rótulos: el cambio no toca el modo por defecto', async () => {
