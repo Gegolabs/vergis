@@ -127,6 +127,12 @@ sube (guía de actor `usuario`) no se contaba en la tarjeta del tipo como «nece
   demás familias de actor `nadie` siguen en «⏸ En espera».
 - **La tarjeta del tipo cuenta la `saltada` de actor `usuario`** mientras se dibuja «⏸ No se cargó»
   (no mientras se está cargando o retirando).
+- **`redactSecrets` enmascara más formas de secreto**, porque el motivo llega ahora a la página de
+  quien sube: tokens sueltos con prefijo conocido (`sk-…`, `sk-ant-…`, `ghp_`, `gho_`, `ghu_`, `ghs_`,
+  `ghr_`, `github_pat_`, `xoxa-`/`xoxb-`/`xoxp-`, `AKIA…`), `Bearer <token>` aunque no sea un JWT, y el
+  valor entre llaves de una cadena de conexión (`Pwd={…}`). Lo usan también la consola técnica y el
+  correo. Control negativo sobre los logs retenidos de una instancia (79 logs, 1.867 líneas, 306
+  motivos): ninguno cambia.
 
 **Qué exige.** Nada: sin cambio de configuración, de esquema ni de entorno.
 

@@ -165,13 +165,37 @@ export function contarCorridasSinLog(runs: RunRecord[], entries: OneLakeEntry[])
 
 const REDACTADO = '«…redactado…»'
 const CLAVES = 'client_secret|clientsecret|password|pwd|accountkey|sharedaccesskey|sas|secret|token'
-const PAR_RE = new RegExp(`\\b(${CLAVES})(\\s*["']?\\s*[=:]\\s*["']?)([^\\s;,"']+)`, 'gi')
+// El valor de un par: hasta el primer separador de cadena de conexión, o entero si viene entre llaves
+// (`Pwd={a;b}`, la forma ODBC de un valor que trae `;`).
+const PAR_RE = new RegExp(`\\b(${CLAVES})(\\s*["']?\\s*[=:]\\s*["']?)(\\{[^}]*\\}|[^\\s;,"']+)`, 'gi')
 const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.-]+/g
+/**
+ * Tokens SUELTOS, sin clave delante, reconocibles por su prefijo (work/274, juez de C3): Anthropic y
+ * OpenAI (`sk-…`, `sk-ant-…`), GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), Slack
+ * (`xoxa-`, `xoxb-`, `xoxp-`) y la llave de acceso de AWS (`AKIA` + 16). Cada uno exige el largo mínimo
+ * de su forma real y bordes a ambos lados: un nombre de archivo, una OC o un RUT no tienen esa forma.
+ */
+const TOKEN_SUELTO_RE = new RegExp(
+  ['sk-(?:ant-)?[A-Za-z0-9_-]{20,}', 'gh[pousr]_[A-Za-z0-9]{20,}', 'github_pat_[A-Za-z0-9_]{20,}', 'xox[abp]-[A-Za-z0-9-]{10,}', 'AKIA[0-9A-Z]{16}']
+    .map((t) => `(?<![A-Za-z0-9_-])${t}(?![A-Za-z0-9_-])`)
+    .join('|'),
+  'g',
+)
+/** `Bearer <token>` de un encabezado `Authorization`, con o sin JWT. */
+const BEARER_RE = /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi
 
-/** Defensa en profundidad (D9): enmascara secretos obvios con `«…redactado…»`. */
+/**
+ * Defensa en profundidad (D9): enmascara secretos obvios con `«…redactado…»` — JWT, `Bearer <token>`,
+ * tokens sueltos con prefijo conocido y pares clave=valor de secreto (incluidas las cadenas de conexión
+ * con `Password=`/`Pwd=`). Todo lo demás pasa idéntico.
+ */
 export function redactSecrets(text: string): string {
   if (!text) return text
-  return text.replace(JWT_RE, REDACTADO).replace(PAR_RE, (_m, k: string, sep: string) => `${k}${sep}${REDACTADO}`)
+  return text
+    .replace(JWT_RE, REDACTADO)
+    .replace(TOKEN_SUELTO_RE, REDACTADO)
+    .replace(BEARER_RE, (_m, b: string) => `${b} ${REDACTADO}`)
+    .replace(PAR_RE, (_m, k: string, sep: string) => `${k}${sep}${REDACTADO}`)
 }
 
 /** Desenlace que el job declaró para UN archivo del landing (gramática por-archivo, issue #162). */
