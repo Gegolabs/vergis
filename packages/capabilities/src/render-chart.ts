@@ -439,6 +439,29 @@ function labelLayers(horizontal: boolean, tokens: ThemeTokens, mode: LabelMode) 
 /** Campo sintético con la posición (en unidades de la métrica) donde se ancla el rótulo del total (#359). */
 const TOTAL_POS_FIELD = '__tpos'
 
+/** Campo sintético: el total es NEGATIVO ⇒ su rótulo va bajo la punta negativa (vertical) o a su izquierda (horizontal). */
+const TOTAL_NEG_FIELD = '__tneg'
+
+/**
+ * `assignLanes` para rótulos que pueden ir a los DOS lados del cero (#359). Un total negativo se
+ * rotula bajo su punta y su carril alto baja en vez de subir, así que el espejo de la misma regla
+ * vale: carril 1 si su línea base queda a menos de una mancha de tinta de la del vecino del MISMO
+ * signo. Entre vecinos de signo distinto no hay colisión posible — uno queda sobre el cero y el
+ * otro bajo él —, así que el vecino de otro signo no cuenta.
+ */
+export function assignLanesSigned(topsPx: number[], negative: boolean[]): number[] {
+  const lanes: number[] = []
+  let prev: { base: number; neg: boolean } | undefined
+  for (let i = 0; i < topsPx.length; i++) {
+    const top = topsPx[i]!
+    const neg = negative[i] === true
+    const lane = prev !== undefined && prev.neg === neg && Math.abs(top - prev.base) < LABEL_INK_H_PX ? 1 : 0
+    lanes.push(lane)
+    prev = { base: neg ? top + lane * LABEL_LANE_RISE_PX : top - lane * LABEL_LANE_RISE_PX, neg }
+  }
+  return lanes
+}
+
 /**
  * Sumas por categoría de un apilado (#359), a partir de `nums` en orden (categoría × serie).
  *
@@ -501,6 +524,8 @@ export function totalsPadFraction(horizontal: boolean, mode: LabelMode, texts: s
  * la punta de la pila (`__tpos`, sin `stack`) y el color de serie por el del texto del theme: un
  * total no pertenece a ninguna serie, y heredar `color` lo pintaría con la paleta y lo metería en la
  * leyenda. Carriles (#97) igual que los rótulos de valor: `lanes` parte la capa en dos por `__lane`.
+ * Un total NEGATIVO va fuera de su barra del lado de su punta (bajo ella / a su izquierda): `__tneg`
+ * parte la capa por signo, y su carril alto baja en vez de subir (`assignLanesSigned`).
  */
 function totalLayers(
   horizontal: boolean,
@@ -519,17 +544,32 @@ function totalLayers(
     description: { field: TOOLTIP_FIELD, type: 'nominal' as const },
   }
   const data = { values: rows }
+  // #359 · un total negativo se ancla FUERA de su barra, del lado de su punta: bajo ella en vertical
+  // (`baseline: top`, `dy` hacia abajo) y a su izquierda en horizontal (`align: right`, `dx` negativo).
+  // Con el mismo anclaje que el positivo caería dentro del segmento de la punta.
+  const signs = [false, true].filter((neg) => rows.some((r) => (r[TOTAL_NEG_FIELD] === true) === neg))
+  const bySign = (neg: boolean) => ({ filter: `datum.${TOTAL_NEG_FIELD} === ${neg}` })
   if (horizontal) {
-    return [{ data, mark: { type: 'text', align: 'left', baseline: 'middle', dx: LABEL_DY_PX, fontSize: LABEL_FONT_PX } as const, encoding }]
+    return signs.map((neg) => ({
+      data,
+      transform: [bySign(neg)],
+      mark: { type: 'text', align: neg ? 'right' : 'left', baseline: 'middle', dx: neg ? -LABEL_DY_PX : LABEL_DY_PX, fontSize: LABEL_FONT_PX } as const,
+      encoding,
+    }))
   }
-  const vertical = (dy: number) => ({ type: 'text', align: 'center', baseline: 'bottom', dy, fontSize: LABEL_FONT_PX }) as const
-  if (mode === 'single') return [{ data, mark: vertical(-LABEL_DY_PX), encoding }]
-  return [0, 1].map((lane) => ({
-    data,
-    transform: [{ filter: `datum.${LABEL_LANE_FIELD} === ${lane}` }],
-    mark: vertical(lane === 0 ? -LABEL_DY_PX : -(LABEL_DY_PX + LABEL_LANE_RISE_PX)),
-    encoding,
-  }))
+  const vertical = (neg: boolean, lane: number) => {
+    const off = LABEL_DY_PX + lane * LABEL_LANE_RISE_PX
+    return { type: 'text', align: 'center', baseline: neg ? 'top' : 'bottom', dy: neg ? off : -off, fontSize: LABEL_FONT_PX } as const
+  }
+  const lanes = mode === 'lanes' ? [0, 1] : [0]
+  return signs.flatMap((neg) =>
+    lanes.map((lane) => ({
+      data,
+      transform: mode === 'lanes' ? [bySign(neg), { filter: `datum.${LABEL_LANE_FIELD} === ${lane}` }] : [bySign(neg)],
+      mark: vertical(neg, lane),
+      encoding,
+    })),
+  )
 }
 
 export async function renderDistribution(
@@ -662,7 +702,9 @@ async function renderDistributionGrouped(
     : labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
   const mode: LabelMode = stacked ? 'none' : wanted === 'lanes' && !domain ? 'single' : wanted
   const lanes = mode === 'lanes' && domain ? assignLanes(nums.map((v) => markTopPx(v, domain, height))) : []
-  const tLanes = totals && totalMode === 'lanes' && domain ? assignLanes(totals.anchor.map((v) => markTopPx(v, domain, height))) : []
+  const tLanes = totals && totalMode === 'lanes' && domain
+    ? assignLanesSigned(totals.anchor.map((v) => markTopPx(v, domain, height)), totals.total.map((v) => v < 0))
+    : []
   const values = rows.flatMap((r, ri) =>
     metrics.map((m, si) => {
       const k = ri * nSeries + si
@@ -690,6 +732,7 @@ async function renderDistributionGrouped(
     ? rows.map((r, ri) => ({
         [dim]: r[dim],
         [TOTAL_POS_FIELD]: totals.anchor[ri],
+        [TOTAL_NEG_FIELD]: totals.total[ri]! < 0,
         [LABEL_FIELD]: totalTexts[ri],
         [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} · Total — ${totalTexts[ri]}`,
         ...(totalMode === 'lanes' ? { [LABEL_LANE_FIELD]: tLanes[ri] } : {}),

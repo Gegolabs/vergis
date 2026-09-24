@@ -72,7 +72,8 @@ de cada segmento se pisarían, y el motor los apagaba todos. El número que más
 **Qué trae.**
 
 - **Un rótulo por barra con su total** (la suma de sus segmentos), sobre la barra en vertical y a su
-  derecha en horizontal. El total suma **todo** lo dibujado, incluida la serie «(otras)» del colapso
+  derecha en horizontal; un total **negativo** va bajo su punta (vertical) o a su izquierda
+  (horizontal), siempre fuera de la barra. El total suma **todo** lo dibujado, incluida la serie «(otras)» del colapso
   de series y la categoría «(otros)» del top-N: cuadra con la barra.
 - **Formato**: el `format` declarado del chart; sin él, `abbr` — igual que los rótulos de valor.
 - **Siempre visible**: el dominio del eje deja aire para el rótulo, y en vertical el lienzo se
