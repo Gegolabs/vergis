@@ -436,6 +436,142 @@ function labelLayers(horizontal: boolean, tokens: ThemeTokens, mode: LabelMode) 
   }))
 }
 
+/** Campo sintético con la posición (en unidades de la métrica) donde se ancla el rótulo del total (#359). */
+const TOTAL_POS_FIELD = '__tpos'
+
+/** Campo sintético: el total es NEGATIVO ⇒ su rótulo va bajo la punta negativa (vertical) o a su izquierda (horizontal). */
+const TOTAL_NEG_FIELD = '__tneg'
+
+/**
+ * `assignLanes` para rótulos que pueden ir a los DOS lados del cero (#359). Un total negativo se
+ * rotula bajo su punta y su carril alto baja en vez de subir, así que el espejo de la misma regla
+ * vale: carril 1 si su línea base queda a menos de una mancha de tinta de la del vecino del MISMO
+ * signo. Entre vecinos de signo distinto no hay colisión posible — uno queda sobre el cero y el
+ * otro bajo él —, así que el vecino de otro signo no cuenta.
+ */
+export function assignLanesSigned(topsPx: number[], negative: boolean[]): number[] {
+  const lanes: number[] = []
+  let prev: { base: number; neg: boolean } | undefined
+  for (let i = 0; i < topsPx.length; i++) {
+    const top = topsPx[i]!
+    const neg = negative[i] === true
+    const lane = prev !== undefined && prev.neg === neg && Math.abs(top - prev.base) < LABEL_INK_H_PX ? 1 : 0
+    lanes.push(lane)
+    prev = { base: neg ? top + lane * LABEL_LANE_RISE_PX : top - lane * LABEL_LANE_RISE_PX, neg }
+  }
+  return lanes
+}
+
+/**
+ * Sumas por categoría de un apilado (#359), a partir de `nums` en orden (categoría × serie).
+ *
+ * - `total`: la Σ de TODOS los segmentos de la categoría, incluida la serie «(otras)» del colapso
+ *   de `CHART_MAX_SERIES` y la categoría «(otros)» del top-N — es el número que se rotula, y cuadra
+ *   con la barra porque se suma de los mismos valores que Vega apila.
+ * - `pos` / `neg`: la punta de la pila positiva y la de la negativa. Vega apila `stack: 'zero'` por
+ *   signo, así que la barra dibujada va de `neg` a `pos`: son las cotas del dominio.
+ * - `anchor`: dónde va el rótulo — la punta del lado del signo del total.
+ */
+export function stackTotals(
+  nums: number[],
+  nCats: number,
+  nSeries: number,
+): { total: number[]; pos: number[]; neg: number[]; anchor: number[] } {
+  const total: number[] = []
+  const pos: number[] = []
+  const neg: number[] = []
+  const anchor: number[] = []
+  for (let c = 0; c < nCats; c++) {
+    let t = 0
+    let p = 0
+    let n = 0
+    for (let s = 0; s < nSeries; s++) {
+      const v = nums[c * nSeries + s] ?? 0
+      t += v
+      if (v >= 0) p += v
+      else n += v
+    }
+    total.push(t)
+    pos.push(p)
+    neg.push(n)
+    anchor.push(t >= 0 ? p : n)
+  }
+  return { total, pos, neg, anchor }
+}
+
+/**
+ * Holgura del dominio para que el rótulo del total no se corte contra el borde (#359). Misma
+ * álgebra que `lanesPadFraction`: una fracción `f` deja `f/(1+f) · lienzo` px sobre la punta mayor.
+ * - Vertical: la separación del rótulo más su mancha de tinta — y el carril alto si hay carriles.
+ * - Horizontal: el rótulo va a la DERECHA de la barra, así que lo que hay que dejar es su ANCHO
+ *   (el más ancho de todos, más el `dx`), no su alto.
+ */
+export function totalsPadFraction(horizontal: boolean, mode: LabelMode, texts: string[], plotPx: number): number {
+  if (!horizontal && mode === 'lanes') return lanesPadFraction(plotPx)
+  const need = horizontal
+    ? LABEL_DY_PX + Math.max(0, ...texts.map(labelWidthPx))
+    : LABEL_DY_PX + LABEL_INK_H_PX
+  if (plotPx <= need * 2) return 1
+  return Math.max(0.1, need / (plotPx - need))
+}
+
+/**
+ * Capa(s) del rótulo del TOTAL de un apilado (#359): UNA marca de texto por categoría, con sus
+ * propios datos (una fila por categoría) — por eso no cambia la cardinalidad de las marcas de dato
+ * (`aria-roledescription="bar"`), que es lo que cuenta el instrumento del lab.
+ *
+ * Hereda del encoding de nivel superior solo la categoría; la posición cuantitativa se reemplaza por
+ * la punta de la pila (`__tpos`, sin `stack`) y el color de serie por el del texto del theme: un
+ * total no pertenece a ninguna serie, y heredar `color` lo pintaría con la paleta y lo metería en la
+ * leyenda. Carriles (#97) igual que los rótulos de valor: `lanes` parte la capa en dos por `__lane`.
+ * Un total NEGATIVO va fuera de su barra del lado de su punta (bajo ella / a su izquierda): `__tneg`
+ * parte la capa por signo, y su carril alto baja en vez de subir (`assignLanesSigned`).
+ */
+function totalLayers(
+  horizontal: boolean,
+  tokens: ThemeTokens,
+  mode: LabelMode,
+  rows: Record<string, unknown>[],
+  cat: Record<string, unknown>,
+  domain: [number, number] | undefined,
+) {
+  if (rows.length === 0 || mode === 'none') return []
+  const pos = { field: TOTAL_POS_FIELD, type: 'quantitative' as const, title: null, stack: null, ...(domain ? { scale: { domain } } : {}) }
+  const encoding = {
+    ...(horizontal ? { y: cat, x: pos } : { x: cat, y: pos }),
+    color: { value: tokens.chartText },
+    text: { field: LABEL_FIELD, type: 'nominal' as const },
+    description: { field: TOOLTIP_FIELD, type: 'nominal' as const },
+  }
+  const data = { values: rows }
+  // #359 · un total negativo se ancla FUERA de su barra, del lado de su punta: bajo ella en vertical
+  // (`baseline: top`, `dy` hacia abajo) y a su izquierda en horizontal (`align: right`, `dx` negativo).
+  // Con el mismo anclaje que el positivo caería dentro del segmento de la punta.
+  const signs = [false, true].filter((neg) => rows.some((r) => (r[TOTAL_NEG_FIELD] === true) === neg))
+  const bySign = (neg: boolean) => ({ filter: `datum.${TOTAL_NEG_FIELD} === ${neg}` })
+  if (horizontal) {
+    return signs.map((neg) => ({
+      data,
+      transform: [bySign(neg)],
+      mark: { type: 'text', align: neg ? 'right' : 'left', baseline: 'middle', dx: neg ? -LABEL_DY_PX : LABEL_DY_PX, fontSize: LABEL_FONT_PX } as const,
+      encoding,
+    }))
+  }
+  const vertical = (neg: boolean, lane: number) => {
+    const off = LABEL_DY_PX + lane * LABEL_LANE_RISE_PX
+    return { type: 'text', align: 'center', baseline: neg ? 'top' : 'bottom', dy: neg ? off : -off, fontSize: LABEL_FONT_PX } as const
+  }
+  const lanes = mode === 'lanes' ? [0, 1] : [0]
+  return signs.flatMap((neg) =>
+    lanes.map((lane) => ({
+      data,
+      transform: mode === 'lanes' ? [bySign(neg), { filter: `datum.${LABEL_LANE_FIELD} === ${lane}` }] : [bySign(neg)],
+      mark: vertical(neg, lane),
+      encoding,
+    })),
+  )
+}
+
 export async function renderDistribution(
   node: ResolvedNode,
   tokens: ThemeTokens,
@@ -534,31 +670,50 @@ async function renderDistributionGrouped(
   const nSeries = Math.max(1, metrics.length)
   // #203 · apilado: UNA barra por categoría ⇒ el ancho no escala con el nº de series.
   const stacked = node.stacked === true
-  const width = horizontal ? 360 : Math.max(320, rows.length * 26 * (stacked ? 1 : nSeries))
-  // Barras agrupadas ocupan más: el alto (horizontal) escala con categorías × series, acotado.
-  const height = horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * (stacked ? 1 : nSeries))) : 260
+  // #359 · en apilado, un rótulo con el TOTAL de cada barra (Σ de sus segmentos). Encendido por
+  // defecto; `totals: false` en el nodo lo apaga y deja el apilado exactamente como era.
+  const totalsOn = stacked && node.totals !== false
   // Anti-colisión (#97): acá el paso lo marca la SUB-barra (categoría × serie), no la categoría, y el
   // orden de `nums` es CORRELATIVO de izquierda a derecha (categoría × serie) — el que pide `assignLanes`.
   const nums = rows.flatMap((r) => metrics.map((m) => Number(r[m.field]) || 0))
   const texts = nums.map((v) => vtFormat(v, fmt))
+  const totals = totalsOn ? stackTotals(nums, rows.length, nSeries) : undefined
+  const totalTexts = totals ? totals.total.map((v) => vtFormat(v, fmt)) : []
+  // #359 · el total SIEMPRE se ve: en vertical el lienzo crece hasta que el rótulo más ancho quepa al
+  // menos en dos carriles (`labelMode` nunca da `none`). Es el mismo recurso que ya usa el agrupado
+  // (el ancho escala con las barras), aplicado a la otra razón por la que falta lugar.
+  const minTotalStep = totals && !horizontal ? Math.ceil((Math.max(0, ...totalTexts.map(labelWidthPx)) + LABEL_GAP_PX) / 2) : 0
+  const width = horizontal ? 360 : Math.max(320, rows.length * Math.max(26 * (stacked ? 1 : nSeries), minTotalStep))
+  // Barras agrupadas ocupan más: el alto (horizontal) escala con categorías × series, acotado.
+  const height = horizontal ? Math.min(1200, Math.max(120, rows.length * 22 * (stacked ? 1 : nSeries))) : 260
   const wanted: LabelMode = horizontal ? 'single' : labelMode(texts, barStepPx(width, rows.length, stacked ? 1 : nSeries))
-  // ⚠️ #203 · En APILADO no se rotulan los segmentos ni se fija el dominio, y las dos cosas son la
-  // misma razón: `labelledDomain` y `assignLanes` razonan sobre valores INDIVIDUALES puestos lado a
-  // lado, y apilados lo que manda es la SUMA por categoría — un dominio calculado sobre el máximo
-  // individual recortaría la barra, y un rótulo por segmento cae dentro de un área que no controlamos
-  // y se funde con el vecino de arriba. Se deja que Vega escale por el total (`stack: 'zero'`) y el
-  // valor de cada segmento lo dice el TOOLTIP (#208), que no compite por espacio.
-  const domain = stacked ? undefined : labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
+  // ⚠️ #203 · En APILADO no se rotulan los segmentos, y el dominio no se calcula sobre ellos:
+  // `labelledDomain` y `assignLanes` razonan sobre valores INDIVIDUALES puestos lado a lado, y
+  // apilados lo que manda es la SUMA por categoría — un dominio calculado sobre el máximo individual
+  // recortaría la barra, y un rótulo por segmento cae dentro de un área que no controlamos y se funde
+  // con el vecino de arriba. El valor de cada segmento lo dice el TOOLTIP (#208). Lo que SÍ se rotula
+  // es el total (#359): una marca por categoría, en la punta de la pila, y ahí el dominio se fija
+  // sobre las SUMAS con aire para ese rótulo. Sin totales, se deja que Vega escale por el total.
+  const totalMode: LabelMode = totals ? (horizontal ? 'single' : labelMode(totalTexts, barStepPx(width, rows.length, 1))) : 'none'
+  const domain = stacked
+    ? totals
+      ? labelledDomain([...totals.pos, ...totals.neg], totalsPadFraction(horizontal, totalMode, totalTexts, horizontal ? width : height))
+      : undefined
+    : labelledDomain(nums, wanted === 'lanes' ? lanesPadFraction(height) : undefined)
   const mode: LabelMode = stacked ? 'none' : wanted === 'lanes' && !domain ? 'single' : wanted
   const lanes = mode === 'lanes' && domain ? assignLanes(nums.map((v) => markTopPx(v, domain, height))) : []
+  const tLanes = totals && totalMode === 'lanes' && domain
+    ? assignLanesSigned(totals.anchor.map((v) => markTopPx(v, domain, height)), totals.total.map((v) => v < 0))
+    : []
   const values = rows.flatMap((r, ri) =>
     metrics.map((m, si) => {
       const k = ri * nSeries + si
       // #208 · el tooltip nombra la SERIE además de la categoría: en agrupado, saber «cuál barra»
-      // es justo lo que el rótulo no alcanza a decir cuando se ocultan por colisión.
+      // es justo lo que el rótulo no alcanza a decir cuando se ocultan por colisión. #359 · en
+      // apilado con totales, cada segmento dice además el total de su barra.
       const base = {
         [dim]: r[dim], serie: m.label, valor: nums[k], [LABEL_FIELD]: texts[k],
-        [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} · ${m.label} — ${texts[k]}`,
+        [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} · ${m.label} — ${texts[k]}${totals ? ` (total ${totalTexts[ri]})` : ''}`,
       }
       return mode === 'lanes' ? { ...base, [LABEL_LANE_FIELD]: lanes[k] } : base
     }),
@@ -573,6 +728,16 @@ async function renderDistributionGrouped(
     scale: { domain: labels, range: colors },
     legend: chartLegendConfig(),
   }
+  const totalRows = totals
+    ? rows.map((r, ri) => ({
+        [dim]: r[dim],
+        [TOTAL_POS_FIELD]: totals.anchor[ri],
+        [TOTAL_NEG_FIELD]: totals.total[ri]! < 0,
+        [LABEL_FIELD]: totalTexts[ri],
+        [TOOLTIP_FIELD]: `${String(r[dim] ?? '')} · Total — ${totalTexts[ri]}`,
+        ...(totalMode === 'lanes' ? { [LABEL_LANE_FIELD]: tLanes[ri] } : {}),
+      }))
+    : []
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
@@ -587,9 +752,11 @@ async function renderDistributionGrouped(
         ? { y: cat, x: quant, yOffset: offset, color }
         : { x: cat, y: quant, xOffset: offset, color },
     // Un rótulo POR SUB-BARRA: la capa de texto hereda el encoding posicional y el offset de serie.
+    // En apilado no hay rótulo por segmento (tampoco en horizontal, donde `labelLayers` no mira el
+    // modo): lo reemplaza la capa del total.
     layer: [
       { mark: { type: 'bar', cornerRadiusEnd: 2 }, encoding: { description: { field: TOOLTIP_FIELD, type: 'nominal' as const } } },
-      ...labelLayers(horizontal, tokens, mode),
+      ...(stacked ? totalLayers(horizontal, tokens, totalMode, totalRows, cat, domain) : labelLayers(horizontal, tokens, mode)),
     ],
     config: chartAxisConfig(tokens),
   }

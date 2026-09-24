@@ -61,6 +61,35 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### El total de cada barra apilada, rotulado (`CAP-208`; #359)
+
+**El hueco.** Un `distribution` apilado (`stacked: true`) no mostraba ningún rótulo de valor: los
+de cada segmento se pisarían, y el motor los apagaba todos. El número que más se pide de un apilado
+—cuánto suma cada barra— no se veía; había que estimarlo contra el eje. Lo pidió PI-32 (A.R.B.O.L.).
+
+**Qué trae.**
+
+- **Un rótulo por barra con su total** (la suma de sus segmentos), sobre la barra en vertical y a su
+  derecha en horizontal; un total **negativo** va bajo su punta (vertical) o a su izquierda
+  (horizontal), siempre fuera de la barra. El total suma **todo** lo dibujado, incluida la serie «(otras)» del colapso
+  de series y la categoría «(otros)» del top-N: cuadra con la barra.
+- **Formato**: el `format` declarado del chart; sin él, `abbr` — igual que los rótulos de valor.
+- **Siempre visible**: el dominio del eje deja aire para el rótulo, y en vertical el lienzo se
+  ensancha lo justo para que los totales quepan al menos en dos carriles (#97). Ninguno se oculta ni
+  se solapa.
+- **Tooltip**: cada segmento dice además el total de su barra — `Enero · Venta — 1,2M (total 1,7M)`.
+- **Opt-out**: `totals: false` en el nodo lo apaga y deja el apilado como estaba. `totals` debe ser
+  booleano (`distribution-totals-not-boolean`).
+
+**Qué cambia para quien ya tiene apilados.** Aparecen los totales sin tocar el spec (encendido por
+defecto). En vertical, un apilado con muchas barras o rótulos largos puede quedar **más ancho** que
+antes. En **horizontal**, los rótulos por segmento que se dibujaban hasta ahora —el motor no los
+apagaba en esa orientación, y quedaban encima del segmento vecino— **desaparecen**: el único rótulo
+es el total. Las marcas de dato no cambian: sigue habiendo un `<path aria-roledescription="bar">`
+por segmento, así que un instrumento que las cuente da el mismo número.
+
 ## 0.37.0 — 2026-09-24
 
 ### Corregido: una lista cuyos elementos traen espacios llega como lista (frente arbol, `work/274` C1; PR #354)
