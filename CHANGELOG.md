@@ -108,6 +108,8 @@ sin guía, como hoy.
 
 ### `/cargar` deja el detalle a un clic bajo la guía, distingue «reemplazado» de «en espera» y cuenta lo que es de quien sube (frente arbol, work/274 C3)
 
+### `/cargar` deja el detalle a un clic bajo la guía, distingue «reemplazado» de «en espera» y cuenta lo que es de quien sube (frente arbol, work/274 C3; PR #356)
+
 **El hueco.** Cuando una carga tenía guía, la página de quien sube dibujaba el título, el qué pasó y los
 pasos, pero **no el motivo que declaró el proceso**: el motivo solo salía en la rama `fallida` sin guía.
 Las guías que dicen «busca los SKU que nombra el detalle» mandaban a un dato que la página no mostraba
