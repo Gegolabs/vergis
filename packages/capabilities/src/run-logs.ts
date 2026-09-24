@@ -187,8 +187,10 @@ export type FileOutcome = {
    *  catálogo de la instancia — un código de familia desconocida se persiste y lo trata quien muestra. */
   codigo?: string
   /** Datos del caso que acompañan al código (#346). Un valor PELADO con comas es una lista
-   *  (`faltan=58,88` ⇒ `['58','88']`); un valor ENTRECOMILLADO es siempre un escalar, aunque traiga
-   *  comas (`vigente="Control, v2.xlsx"`). Ausente si el sufijo no trae ninguno. */
+   *  (`faltan=58,88` ⇒ `['58','88']`); un solo par de comillas es un escalar, aunque traiga comas
+   *  (`vigente="Control, v2.xlsx"`); dos o más elementos entrecomillados separados por coma son una
+   *  lista (`faltan="folio","rut receptor"` ⇒ `['folio','rut receptor']`). Ausente si el sufijo no
+   *  trae ninguno. */
   params?: Record<string, string | string[]>
 }
 
@@ -264,11 +266,26 @@ function cortaMotivo(resto: string): { corte: number; largo: number } {
  * código con mayúscula, valor pelado con espacio), NO existe — la línea se lee como antes de #346 y el
  * texto queda dentro del motivo, sin código. Es la regla rectora del contrato aplicada al sufijo: un
  * código a medias sería un desenlace adivinado.
+ *
+ * Un valor tiene tres formas, probadas en este orden:
+ *
+ * 1. LISTA ENTRECOMILLADA — dos o más elementos entrecomillados separados por coma, sin espacios entre
+ *    ellos: `faltan="folio","rut receptor"` → `['folio', 'rut receptor']`. Es la única forma de llevar
+ *    una lista cuyos elementos traen espacios o comas; cada elemento se devuelve TEXTUAL, sin las
+ *    comillas (ni se recorta ni se descarta uno vacío: lo entrecomillado es exacto por definición).
+ * 2. ESCALAR ENTRECOMILLADO — `vigente="a, b.xlsx"` → `'a, b.xlsx'`. Un solo par de comillas es
+ *    siempre escalar, aunque traiga comas (`filas="2,65"` → `'2,65'`).
+ * 3. PELADO — `n=3` → `'3'`; con coma es lista: `faltan=58,88` → `['58', '88']`.
+ *
+ * La forma 1 va primero para que la alternancia no se quede con el primer elemento como escalar y deje
+ * el resto sin calzar; como exige al menos dos elementos, un `"x"` solo nunca la toma. Una lista con
+ * una comilla sin cerrar (`a="x","y`) no calza ninguna forma y, por todo o nada, no hay sufijo.
  */
 const CODIGO_SRC = '[a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)?'
-const PARAM_SRC = '[a-z][a-z0-9_]*=(?:"[^"⟧]*"|[^\\s"⟧]+)'
+const VALOR_LISTA_SRC = '"[^"⟧]*"(?:,"[^"⟧]*")+'
+const PARAM_SRC = `[a-z][a-z0-9_]*=(?:${VALOR_LISTA_SRC}|"[^"⟧]*"|[^\\s"⟧]+)`
 const SUFIJO_RE = new RegExp(`\\s⟦(${CODIGO_SRC})((?:\\s+${PARAM_SRC})*)\\s*⟧\\s*$`)
-const PARAM_RE = /([a-z][a-z0-9_]*)=(?:"([^"⟧]*)"|([^\s"⟧]+))/g
+const PARAM_RE = new RegExp(`([a-z][a-z0-9_]*)=(?:(${VALOR_LISTA_SRC})|"([^"⟧]*)"|([^\\s"⟧]+))`, 'g')
 /** Gramática de un código de desenlace (#346), exportada para quien valida catálogos de guías. */
 export const DESENLACE_CODIGO_RE = new RegExp(`^${CODIGO_SRC}$`)
 
@@ -281,9 +298,11 @@ export function extraerSufijoDesenlace(resto: string): { resto: string; codigo: 
   const params: Record<string, string | string[]> = {}
   for (const p of (m[2] ?? '').matchAll(PARAM_RE)) {
     const clave = p[1]!
-    if (p[2] !== undefined) params[clave] = p[2]
+    // Lista entrecomillada: ningún elemento puede traer `"`, así que `","` separa sin ambigüedad.
+    if (p[2] !== undefined) params[clave] = p[2].slice(1, -1).split('","')
+    else if (p[3] !== undefined) params[clave] = p[3]
     else {
-      const crudo = p[3]!
+      const crudo = p[4]!
       params[clave] = crudo.includes(',') ? crudo.split(',').map((x) => x.trim()).filter(Boolean) : crudo
     }
   }
