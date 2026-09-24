@@ -106,8 +106,6 @@ como hoy. **Orden de despliegue:** primero esta versión, después el job que em
 `bloqueado-por-otro`; con una versión anterior, el código es de familia desconocida y la carga se ve
 sin guía, como hoy.
 
-### `/cargar` deja el detalle a un clic bajo la guía, distingue «reemplazado» de «en espera» y cuenta lo que es de quien sube (frente arbol, work/274 C3)
-
 ### `/cargar` deja el detalle a un clic bajo la guía, distingue «reemplazado» de «en espera» y cuenta lo que es de quien sube (frente arbol, work/274 C3; PR #356)
 
 **El hueco.** Cuando una carga tenía guía, la página de quien sube dibujaba el título, el qué pasó y los
