@@ -105,6 +105,13 @@ de usuario (título, qué pasó, qué hacer) con el motivo técnico plegado detr
 | `<codigo>` | `familia` o `familia/especifico`, con la gramática `^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)?$`. La familia es una de las del Producto o una declarada por la instancia en su catálogo de guías (`guias:` del archivo de intake) |
 | `<clave>=<valor>` | cero o más, separados por espacio; clave `[a-z][a-z0-9_]*`. El valor va **pelado** si no tiene espacios, `"` ni `⟧` (`faltan=58,88`), o **entre comillas dobles** si los tiene (`vigente="Control de despachos 2026-09-01.xlsx"`); dentro de las comillas no puede haber `"` ni `⟧`, y la raya `—` sí. Un valor pelado con comas es una **lista**; un solo par de comillas es siempre un **escalar**, aunque traiga comas (`filas="2,65"`). Una lista cuyos elementos traen espacios o comas va como **lista entrecomillada**: cada elemento entre comillas, separados por coma y sin espacios (`faltan="folio","rut receptor"` → `folio`, `rut receptor`). Si un valor trae `"` o `⟧`, el helper los reemplaza por `'` y `]` |
 
+**Quién lo emite.** Para un escritor que ya emite el sufijo, el código es **obligatorio en toda línea
+`saltado`/`fallido`**, incluidas las que el job no previó: un archivo detenido porque la corrida se
+cortó por otro lleva `bloqueado-por-otro causante=…`, y un error no controlado lleva
+`falla-plataforma`. Una línea sin código de un job que ya adoptó el sufijo es un defecto del job, no
+un caso permitido. El **lector** sigue tolerando líneas sin código (§7, «¿Qué ve el usuario, y qué
+pasa sin guía?»): la obligación es del escritor.
+
 El sufijo **no reemplaza** al motivo: el motivo técnico sigue siendo obligatorio y sigue sujeto a sus
 reglas. **Todo o nada:** un sufijo que no calza la gramática completa (comillas sin cerrar, `⟦` sin
 cerrar, un código con mayúscula, un valor pelado con espacio, una lista entrecomillada con una comilla
@@ -271,10 +278,13 @@ Para que un slot cumpla el contrato completo, su job debe:
 3. Emitir **una** línea de desenlace por archivo de datos encontrado en el landing, con la gramática
    de §2, **antes** de la línea de cierre.
 4. Escribir motivos legibles por el usuario que subió el archivo, en términos del dato.
-5. *(Opcional para el escritor, #346.)* Agregar a cada línea `saltado`/`fallido` el sufijo `⟦…⟧` con
-   el **código** del desenlace y los **datos del caso** que su guía interpola (§2). Sin él, la
-   plataforma muestra el motivo técnico como siempre; con él, muestra la guía de ese código y deja el
-   motivo plegado como detalle técnico. El motivo técnico sigue siendo obligatorio igual.
+5. Agregar a cada línea `saltado`/`fallido` el sufijo `⟦…⟧` con el **código** del desenlace y los
+   **datos del caso** que su guía interpola (§2). **Obligatorio para todo escritor que ya emite el
+   sufijo** (#346): uno que lo emite en unas líneas y no en otras deja justo esas sin guía, y la
+   plataforma no puede distinguir «no quiso decirlo» de «no supo». Solo un job que todavía no adoptó el
+   sufijo en ninguna línea queda fuera, y la plataforma lo sigue leyendo (§2, «Todo o nada»). Sin
+   sufijo, la plataforma muestra el motivo técnico como siempre; con él, muestra la guía de ese código
+   y deja el motivo plegado como detalle técnico. El motivo técnico sigue siendo obligatorio igual.
 6. Archivar lo que procesó, en las corridas que terminan `Completed`, en el directorio que el slot
    declara (`target.processed: <ruta>`; sin declarar, `<padre del landing>/_processed`). Un proceso
    que **no** archiva (un catálogo que se lee siempre del landing) lo declara con
@@ -329,6 +339,7 @@ cambia el actor: es el único dato que debe ser verdadero aunque el texto esté 
 | `volumen-anomalo` | usuario | mucho menos que lo vigente (el primer paso es del usuario; forzar la carga es del operador, y la guía lo dice) |
 | `en-espera` | nadie | falta el archivo compañero; se procesará cuando llegue |
 | `desplazado` | nadie | un archivo más reciente del mismo tipo lo reemplazó |
+| `bloqueado-por-otro` | nadie | la corrida se detuvo por otro archivo antes de llegar a este; el job nombra al culpable en `causante` (siempre lista) y el archivo se reintenta en cada corrida |
 | `falla-plataforma` | operador | error no controlado, warehouse inaccesible, invariante interno roto |
 
 Son **semilla, no lista cerrada**: la instancia declara familias propias con su actor obligatorio.

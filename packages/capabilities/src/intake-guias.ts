@@ -7,7 +7,7 @@
  *     caso, en el sufijo `⟦…⟧` de su línea de desenlace (`run-logs.ts`, contrato `_logs/` §2).
  *   · La INSTANCIA declara **cómo se le explica**: un catálogo de guías en el bloque raíz `guias:` del
  *     mismo YAML de intake (hereda su recarga en caliente con validate-before-swap, sin env nueva).
- *   · El PRODUCTO **junta las dos cosas al mostrar** (`resolverGuia`) y trae la semilla: 13 familias,
+ *   · El PRODUCTO **junta las dos cosas al mostrar** (`resolverGuia`) y trae la semilla: 14 familias,
  *     cada una con su ACTOR y una guía genérica.
  *
  * **El actor vive en la familia, no en la guía.** El error más caro que esto cierra no es la jerga:
@@ -17,9 +17,9 @@
  * entrada de guía con clave `actor:` es error de validación, y una familia del Producto no admite que
  * la instancia la redeclare.
  *
- * **Familias abiertas.** Las 13 del Producto son semilla, no lista cerrada: la instancia puede declarar
+ * **Familias abiertas.** Las 14 del Producto son semilla, no lista cerrada: la instancia puede declarar
  * familias propias en `guias.familias`, con su actor OBLIGATORIO. Un guard nuevo cuya falla no calce en
- * las 13 no tiene que esperar un release del Producto para tener actor y guía.
+ * las 14 no tiene que esperar un release del Producto para tener actor y guía.
  *
  * **Se resuelve al mostrar, nunca se persiste la redacción.** El registro de cargas guarda el código y
  * los datos (el hecho); la guía se resuelve al renderizar. Corregir una guía mejora de inmediato las
@@ -106,13 +106,17 @@ const f = (familia: string, actor: GuiaActor, titulo: string, quePaso: string, q
 })
 
 /**
- * Las 13 familias del Producto, derivadas de los guards reales de los jobs de la primera instancia y
+ * Las 14 familias del Producto, derivadas de los guards reales de los jobs de la primera instancia y
  * redactadas SIN vocabulario de ninguna instancia (el Producto no se ajusta a su beta tester: «maestro
  * de tiendas» es de la instancia, «el archivo tiene que venir completo» es genérico).
  *
  * `volumen-anomalo` es `usuario` porque el primer paso es suyo (revisar que el archivo sea el correcto);
  * si la baja es real, quien decide forzar la carga es el operador — y así lo dice la guía. No es
  * «siempre es culpa del archivo».
+ *
+ * `bloqueado-por-otro` es `nadie`: es de cualquier job que procesa N archivos por corrida y se detiene
+ * por uno de ellos antes de llegar a los demás. El archivo bloqueado no tiene nada que corregir; el job
+ * nombra al culpable en `causante` (siempre lista) y el archivo se reintenta en cada corrida.
  */
 export const FAMILIAS_PRODUCTO: readonly FamiliaDesenlace[] = [
   f('formato', 'usuario', 'El archivo no tiene la forma que se espera',
@@ -151,6 +155,9 @@ export const FAMILIAS_PRODUCTO: readonly FamiliaDesenlace[] = [
   f('desplazado', 'nadie', 'Un archivo más reciente lo reemplazó',
     'Llegó otro archivo más reciente del mismo tipo, y rige el más nuevo. Este no se usó.',
     ['No tienes que hacer nada. Si querías que rigiera este, súbelo de nuevo.']),
+  f('bloqueado-por-otro', 'nadie', 'La carga se detuvo antes de llegar a este archivo',
+    'La carga se detuvo por un problema al procesar «{causante}» y no alcanzó a llegar a este archivo. Nada indica que este archivo tenga un problema: sigue en espera.',
+    ['No tienes que corregir este archivo ni subirlo de nuevo.', 'Se vuelve a intentar en cada carga, pero mientras no se resuelva el problema de «{causante}», este archivo volverá a quedar detenido.', 'Si no fuiste tú quien subió «{causante}», avísale a quien lo hizo.']),
   f('falla-plataforma', 'operador', 'No es por tu archivo: falló el proceso de carga',
     'El proceso que carga los archivos tuvo un problema propio y se detuvo. Tu archivo no tiene la culpa.',
     ['No lo corrijas ni lo vuelvas a subir.']),
