@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { SqliteGovernanceStore, SCHEMA_VERSION, emparejarSustituidas, openSqliteDb, persistSqliteDb, selectAll } from '@vergis/capabilities'
 
 /**
@@ -205,6 +205,134 @@ describe('P-2 · migración de un archivo de 0.38.0 con las fantasma reales', ()
     const snap = (await g.listSlotSnapshots({ runsPerSlot: 60 })).find((s) => s.slotId === SLOTS[0])!
     const enCola = snap.runs.filter((r) => r.status === 'NotStarted')
     expect(enCola.map((r) => [r.startedAt, r.instanceId])).toEqual([[B_COLA, ID_B]])
+    await g.close()
+  })
+})
+
+/**
+ * El escenario que corrió el juez del PR (acta `2026-09-24-juez-vergis-pr361`): el único en que el
+ * criterio de P-2 cierra una corrida VIVA. Bajo 0.38.0 queda J1 en cola (fila sin id); tras el
+ * despliegue, el primer tick NO la lista (listado truncado a `top`, o la instancia llegó sin
+ * `startTimeUtc`) y sí lista J2, que arrancó dentro de 60 min. J1 se cierra como sustituida por J2. El
+ * daño se contiene solo: si reaparece con su id en el mismo instante, la adopción la reabre; si
+ * reaparece ya arrancada con otro instante, nace su fila con id y la legada queda cerrada.
+ */
+describe('P-2 · fila legada VIVA que el motor no lista: se cierra y se autorrepara', () => {
+  const SLOT = 'oc_crossdocking'
+  const J1_COLA = '2026-09-25T10:00:00.1Z'
+  const J1_ARRANQUE = '2026-09-25T10:07:41.1234567Z'
+  const J2_ARRANQUE = '2026-09-25T10:05:00.7654321Z'
+  const ID_J1 = 'j1-0000-4000-8000-000000000001'
+  const ID_J2 = 'j2-0000-4000-8000-000000000002'
+
+  async function conJ1Legada(): Promise<{ g: SqliteGovernanceStore; file: string }> {
+    const file = join(mkdtempSync(join(tmpdir(), 'vergis-corrida-viva-')), 'governance.sqlite')
+    const db = await openSqliteDb(file)
+    db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+    db.run(`CREATE TABLE intake_watch_run (slot_id TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, status TEXT NOT NULL, error TEXT, PRIMARY KEY (slot_id, started_at))`)
+    db.run(`INSERT INTO intake_watch_run (slot_id, started_at, ended_at, status, error) VALUES (?,?,?,?,?)`, [SLOT, J1_COLA, null, 'NotStarted', null])
+    persistSqliteDb(db, file)
+    db.close()
+    const g = await SqliteGovernanceStore.open(file, {})
+    // Primer tick tras el despliegue: el motor lista J2 (ya arrancada) y NO lista J1.
+    await g.recordSlotObservations([{ slotId: SLOT, observedAt: '2026-09-25T10:06:00Z', landing: [], runs: [{ instanceId: ID_J2, startedAt: J2_ARRANQUE, status: 'InProgress' }] }])
+    return { g, file }
+  }
+  const visibles = async (g: SqliteGovernanceStore) =>
+    (await g.listSlotSnapshots({ runsPerSlot: 60 })).find((s) => s.slotId === SLOT)!.runs.map((r) => [r.startedAt, r.status, r.instanceId ?? null])
+  const enArchivo = async (file: string) => {
+    const insp = await openSqliteDb(file, { mode: 'read', schemaVersion: SCHEMA_VERSION })
+    const filas = selectAll(insp, `SELECT started_at, status, instance_id, superseded_by FROM intake_watch_run WHERE slot_id = '${SLOT}' ORDER BY started_at`)
+    insp.close()
+    return filas
+  }
+
+  it('el tick que no la lista la cierra como sustituida por J2: la única fila visible es J2', async () => {
+    const { g, file } = await conJ1Legada()
+    expect(await visibles(g)).toEqual([[J2_ARRANQUE, 'InProgress', ID_J2]])
+    await g.close()
+    expect(await enArchivo(file)).toEqual([
+      { started_at: J1_COLA, status: 'NotStarted', instance_id: null, superseded_by: J2_ARRANQUE },
+      { started_at: J2_ARRANQUE, status: 'InProgress', instance_id: ID_J2, superseded_by: null },
+    ])
+  })
+
+  it('si reaparece con su id en el MISMO instante, la adopción la reabre (con id) y J2 sigue visible', async () => {
+    const { g, file } = await conJ1Legada()
+    await g.recordSlotObservations([
+      {
+        slotId: SLOT,
+        observedAt: '2026-09-25T10:07:00Z',
+        landing: [],
+        runs: [
+          { instanceId: ID_J2, startedAt: J2_ARRANQUE, status: 'InProgress' },
+          { instanceId: ID_J1, startedAt: J1_COLA, status: 'NotStarted' },
+        ],
+      },
+    ])
+    expect(await visibles(g)).toEqual([
+      [J2_ARRANQUE, 'InProgress', ID_J2],
+      [J1_COLA, 'NotStarted', ID_J1],
+    ])
+    await g.close()
+    expect((await enArchivo(file)).find((f) => f['started_at'] === J1_COLA)).toEqual({ started_at: J1_COLA, status: 'NotStarted', instance_id: ID_J1, superseded_by: null })
+  })
+
+  it('si reaparece ya arrancada con OTRO instante, nace su fila con id y la legada queda cerrada apuntando a J2', async () => {
+    const { g, file } = await conJ1Legada()
+    await g.recordSlotObservations([
+      {
+        slotId: SLOT,
+        observedAt: '2026-09-25T10:09:00Z',
+        landing: [],
+        runs: [
+          { instanceId: ID_J1, startedAt: J1_ARRANQUE, status: 'InProgress' },
+          { instanceId: ID_J2, startedAt: J2_ARRANQUE, status: 'Completed', endedAt: '2026-09-25T10:08:00Z' },
+        ],
+      },
+    ])
+    expect(await visibles(g)).toEqual([
+      [J1_ARRANQUE, 'InProgress', ID_J1],
+      [J2_ARRANQUE, 'Completed', ID_J2],
+    ])
+    await g.close()
+    expect((await enArchivo(file)).find((f) => f['started_at'] === J1_COLA)).toEqual({ started_at: J1_COLA, status: 'NotStarted', instance_id: null, superseded_by: J2_ARRANQUE })
+  })
+})
+
+describe('la colisión inobservada (dos instancias con el mismo started_at) no es muda', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const SLOT = 'oc_crossdocking'
+  const T = '2026-09-25T11:00:00.1111111Z'
+
+  it('una instancia nueva cuyo instante ya ocupa otra instancia: no pisa la otra y avisa por stderr', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const g = await SqliteGovernanceStore.open(null, {})
+    await g.recordSlotObservations([{ slotId: SLOT, observedAt: T, landing: [], runs: [{ instanceId: 'X', startedAt: T, status: 'InProgress' }] }])
+    expect(warn).not.toHaveBeenCalled() // control: sin colisión, silencio
+    await g.recordSlotObservations([{ slotId: SLOT, observedAt: T, landing: [], runs: [{ instanceId: 'Y', startedAt: T, status: 'Completed' }] }])
+    const runs = (await g.listSlotSnapshots()).find((s) => s.slotId === SLOT)!.runs
+    expect(runs.map((r) => [r.instanceId, r.status])).toEqual([['X', 'InProgress']])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]![0])).toMatch(/\[store\] intake_watch_run: dos instancias con el mismo started_at en 'oc_crossdocking'.*'Y' y 'X'.*NO se proyecta/)
+    await g.close()
+  })
+
+  it('una corrida con id que pasa a un instante ocupado por otra instancia: conserva su instante previo y avisa', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const g = await SqliteGovernanceStore.open(null, {})
+    const PREVIO = '2026-09-25T10:59:00.2222222Z'
+    await g.recordSlotObservations([
+      { slotId: SLOT, observedAt: T, landing: [], runs: [{ instanceId: 'X', startedAt: T, status: 'InProgress' }, { instanceId: 'Y', startedAt: PREVIO, status: 'NotStarted' }] },
+    ])
+    await g.recordSlotObservations([{ slotId: SLOT, observedAt: T, landing: [], runs: [{ instanceId: 'Y', startedAt: T, status: 'InProgress' }] }])
+    const runs = (await g.listSlotSnapshots()).find((s) => s.slotId === SLOT)!.runs
+    expect(runs.map((r) => [r.instanceId, r.startedAt, r.status])).toEqual([
+      ['X', T, 'InProgress'],
+      ['Y', PREVIO, 'InProgress'],
+    ])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]![0])).toMatch(/'Y' y 'X'.*conserva su instante previo/)
     await g.close()
   })
 })
