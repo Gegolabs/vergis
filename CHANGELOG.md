@@ -106,6 +106,28 @@ como hoy. **Orden de despliegue:** primero esta versión, después el job que em
 `bloqueado-por-otro`; con una versión anterior, el código es de familia desconocida y la carga se ve
 sin guía, como hoy.
 
+### `/cargar` deja el detalle a un clic bajo la guía, distingue «reemplazado» de «en espera» y cuenta lo que es de quien sube (frente arbol, work/274 C3)
+
+**El hueco.** Cuando una carga tenía guía, la página de quien sube dibujaba el título, el qué pasó y los
+pasos, pero **no el motivo que declaró el proceso**: el motivo solo salía en la rama `fallida` sin guía.
+Las guías que dicen «busca los SKU que nombra el detalle» mandaban a un dato que la página no mostraba
+(medido en 14 de 14 guías de la instancia A.R.B.O.L.). Además, un archivo desplazado por otro más
+reciente se veía «⏸ En espera», aunque no espera nada; y una carga `saltada` cuyo paso es de quien
+sube (guía de actor `usuario`) no se contaba en la tarjeta del tipo como «necesita que hagas algo».
+
+**Qué trae.**
+
+- **El motivo, plegado bajo la guía** («ver el detalle»), completo, escapado y con `redactSecrets`, en
+  todo estado que dibuja guía: `fallida` y `saltada`, actor `usuario` y `nadie`. Con actor `operador`
+  la página sigue sin guía ni motivo (lo dice el chip de la plataforma), y sin guía la rama de siempre
+  no cambia.
+- **Chip propio para la familia `desplazado`**: «Reemplazado por uno más reciente», sin «Retirar». Las
+  demás familias de actor `nadie` siguen en «⏸ En espera».
+- **La tarjeta del tipo cuenta la `saltada` de actor `usuario`** mientras se dibuja «⏸ No se cargó»
+  (no mientras se está cargando o retirando).
+
+**Qué exige.** Nada: sin cambio de configuración, de esquema ni de entorno.
+
 ## 0.36.0 — 2026-09-23
 
 ### Una sola puerta para cargar archivos, que se entiende sin manual (`CAP-205`, `CAP-206`, `CAP-207`; PR #353)
