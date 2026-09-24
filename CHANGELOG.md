@@ -61,6 +61,21 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Corregido: «Cargando» falso de hasta 60 minutos cuando la corrida pasó por cola (frente arbol, `work/281` P)
+
+**El hueco.** La proyección de corridas del vigilante (`intake_watch_run`) identificaba cada corrida por su `started_at`, y `RunRecord` no llevaba el id de la instancia del motor (`listInstances` lo recibía y lo descartaba). Fabric informa una corrida en cola como `NotStarted` con un `startTimeUtc` y, al sacarla de la cola, con **otro**: la proyección insertaba una fila nueva y la vieja quedaba `NotStarted` para siempre. El resolvedor se detenía en ella hasta cumplir 60 min (`maxEnCursoMs`) y `/cargar` mostraba «Cargando» para una carga cuyo `✔` ya estaba en el log. Medido en producción el 2026-09-24 (cargas de Cross Docking) y en 4 ocurrencias anteriores; ya estaba en 0.38.0 y antes.
+
+**El arreglo.**
+
+- `RunRecord.instanceId` (opcional): el id de la instancia de Fabric. Es la **identidad** de la corrida; `startedAt` pasa a ser un atributo que se actualiza.
+- `intake_watch_run` suma `instance_id` y `superseded_by` y un índice único parcial `(slot_id, instance_id)`. Una corrida que el motor reporta con otro `started_at` **actualiza su fila** en vez de crear otra. Una fila del mismo instante sin id (vista por la versión anterior) se **adopta**.
+- Las filas legadas sin id que quedaron `NotStarted` se cierran como **sustituidas** (`superseded_by`) y dejan de proyectarse; **nunca se borran**. Criterio: la sustituta es una corrida del mismo slot que ya arrancó, con `started_at` posterior y a lo más 60 min más tarde, emparejadas **uno a uno** en orden de cola; se evalúa después de escribir las corridas del tick, así que una fila legada cuya instancia el motor sigue listando ya fue adoptada y no se cierra. Probado con las 6 fantasma reales de producción.
+- `corridasDelSlot` deduplica por id (sin id, por instante, como antes).
+
+**Qué exige.** Nada. La migración es **aditiva** y no sube `SCHEMA_VERSION`: la PK sigue siendo `(slot_id, started_at)`, así que una versión anterior abierta sobre el archivo migrado (rollback) sigue escribiendo sin tropezar; lo único que haría es volver a crear fantasmas.
+
 ## 0.38.0 — 2026-09-24
 
 ### El total de cada barra apilada, rotulado (`CAP-208`; #359, PR #360)

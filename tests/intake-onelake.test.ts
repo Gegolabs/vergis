@@ -123,6 +123,17 @@ describe('intake-onelake · estado de corridas (jobs/instances)', () => {
     expect(failed.error).toBe('mezcla de semanas')
   })
 
+  it('listInstances: conserva el id de la instancia (la identidad de la corrida); sin id, la clave no viaja', async () => {
+    const value = [
+      { id: '907e4539-aaaa-4bbb-8ccc-000000000001', status: 'Failed', startTimeUtc: '2026-09-24T15:36:23.4725792', endTimeUtc: '2026-09-24T15:38:45.2191304' },
+      { status: 'Completed', startTimeUtc: '2026-09-24T13:00:00Z' },
+    ]
+    const status = createFabricJobStatus(tokens, { fetch: jsonFetch({ value }) })
+    const runs = await status.listInstances('WS', 'SJD')
+    expect(runs[0]).toEqual({ instanceId: '907e4539-aaaa-4bbb-8ccc-000000000001', startedAt: '2026-09-24T15:36:23.4725792Z', endedAt: '2026-09-24T15:38:45.2191304Z', status: 'Failed' })
+    expect('instanceId' in runs[1]!).toBe(false)
+  })
+
   it('listInstances: sin corridas (value vacío) → []', async () => {
     const status = createFabricJobStatus(tokens, { fetch: jsonFetch({}) })
     expect(await status.listInstances('WS', 'SJD')).toEqual([])

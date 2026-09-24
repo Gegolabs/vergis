@@ -565,16 +565,26 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
    *  a las que trajo este tick. El tick trae solo las 10 más recientes: una carga cuya corrida quedó
    *  más atrás se quedaría sin su declaración. */
   async function corridasDelSlot(slot: IntakeSlot, obs: SlotObservation): Promise<RunRecord[]> {
-    // La clave es el INSTANTE, no la cadena: la proyección conserva filas de antes de que el motor
-    // normalizara a UTC (`…6685436` y `…6685436Z` son la misma corrida; medido en Facturas, 0.35.0).
-    // Entre las dos gana la que trae designador de zona, y lo fresco manda sobre lo proyectado.
+    // La identidad de una corrida es su ID de instancia cuando el motor lo da: el motor le cambia el
+    // `startedAt` al sacarla de la cola, y deduplicar por instante dejaba las dos versiones (la de cola,
+    // `NotStarted` para siempre, y la arrancada). Lo fresco manda sobre lo proyectado.
+    // Sin id, la clave es el INSTANTE, no la cadena: la proyección conserva filas de antes de que el
+    // motor normalizara a UTC (`…6685436` y `…6685436Z` son la misma corrida; medido en Facturas,
+    // 0.35.0). Entre las dos gana la que trae designador de zona.
+    const conZona = (s: string): boolean => /(Z|[+-]\d\d:\d\d)$/.test(s)
+    const instante = (r: RunRecord): number => Date.parse(conZona(r.startedAt) ? r.startedAt : r.startedAt + 'Z')
+    const porId = new Map<string, RunRecord>()
     const porInicio = new Map<number, RunRecord>()
     const poner = (r: RunRecord, manda: boolean): void => {
-      const conZona = /(Z|[+-]\d\d:\d\d)$/.test(r.startedAt)
-      const k = Date.parse(conZona ? r.startedAt : r.startedAt + 'Z')
+      const k = instante(r)
       if (!Number.isFinite(k)) return
+      if (r.instanceId) {
+        const prev = porId.get(r.instanceId)
+        if (!prev || manda) porId.set(r.instanceId, r)
+        return
+      }
       const prev = porInicio.get(k)
-      if (!prev || manda || (!/(Z|[+-]\d\d:\d\d)$/.test(prev.startedAt) && conZona)) porInicio.set(k, r)
+      if (!prev || manda || (!conZona(prev.startedAt) && conZona(r.startedAt))) porInicio.set(k, r)
     }
     try {
       const snap = (await deps.store.listSlotSnapshots({ runsPerSlot: INTAKE_WATCH_RUN_RETENTION })).find((x) => x.slotId === slot.id)
@@ -583,7 +593,9 @@ export function createIntakeLoop(deps: IntakeLoopDeps, cfg: IntakeLoopConfig): I
       deps.log(`intake-loop: no se pudo leer la proyección de corridas de '${slot.id}' — ${msg(e)}`)
     }
     for (const r of obs.runs ?? []) if (r?.startedAt) poner(r, true)
-    return [...porInicio.values()]
+    // Una corrida sin id en el mismo instante que una con id es la misma, vista antes de guardar ids.
+    const conId = new Set([...porId.values()].map(instante))
+    return [...porId.values(), ...[...porInicio.entries()].filter(([k]) => !conId.has(k)).map(([, r]) => r)]
   }
 
   /** Aviso al OPERADOR (#269·V12, flujo `cargas-operador`): una notificación por carga que quedó
@@ -1068,10 +1080,13 @@ export function resolverEstadoDeCarga(
   for (const c of ventana) {
     if (c.run.status === 'InProgress' || c.run.status === 'NotStarted') {
       topeCursor = true
-      // Una corrida no terminada MÁS VIEJA que el umbral de corrida colgada no está tomando nada: el
-      // motor deja `NotStarted` que nunca arrancan (medido en el oráculo: 12 filas, una de hace 19
-      // días), y creerles bloquearía para siempre a toda carga posterior. No es evidencia ni espera —
-      // pero tampoco se salta con el cursor (arriba): solo no bloquea el veredicto.
+      // Una corrida no terminada MÁS VIEJA que el umbral de corrida colgada no está tomando nada, y
+      // creerle bloquearía para siempre a toda carga posterior. No es evidencia ni espera —pero tampoco
+      // se salta con el cursor (arriba): solo no bloquea el veredicto. [Las 12 `NotStarted` «que nunca
+      // arrancan» del oráculo eran en su mayoría corridas que SÍ arrancaron con otro `startedAt`: la
+      // proyección las guardaba por instante. Con la identidad por id de instancia esa fila no nace, y
+      // las legadas se cierran como sustituidas (`cerrarSustituidas` del store); este umbral queda como
+      // defensa para una corrida de verdad colgada.]
       if (opts.nowMs != null && opts.nowMs - Date.parse(c.run.startedAt) > maxEnCurso) continue
       // Su resultado todavía puede decidir: nada de lo que siga se interpreta antes de que termine.
       enCurso = true
