@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.38.0 — 2026-09-24
 
-### El total de cada barra apilada, rotulado (`CAP-208`; #359)
+### El total de cada barra apilada, rotulado (`CAP-208`; #359, PR #360)
 
 **El hueco.** Un `distribution` apilado (`stacked: true`) no mostraba ningún rótulo de valor: los
 de cada segmento se pisarían, y el motor los apagaba todos. El número que más se pide de un apilado
