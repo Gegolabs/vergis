@@ -1008,7 +1008,7 @@ export function cargasBody(domainId: string, domainLabel: string, slots: IntakeS
  *
  * Qué se lista: las guías de la instancia que aplican al slot (aunque su código no haya ocurrido) y
  * las guías —de la instancia o genéricas del Producto— de todo código que SÍ ocurrió. Las genéricas del
- * Producto que nunca ocurrieron en el slot no se listan: trece guías abstractas no ayudan a nadie.
+ * Producto que nunca ocurrieron en el slot no se listan: catorce guías abstractas no ayudan a nadie.
  * Varios códigos que caen en la misma guía suman su frecuencia (`GuiaResuelta.clave`).
  *
  * `conteos` ausente o `'error'`: sin orden por frecuencia (se dice), la lista va en orden declarado.
