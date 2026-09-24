@@ -357,6 +357,11 @@ export function estadoVisible(h: IntakeUploadEvent, ctx: ContextoEstado = {}, gu
   if (ctx.retiroPedido && !final) return e('espera', 'Retirando', 'Lo retiraste; no se va a cargar.')
   if ((!h.desenlace || !final) && ctx.enCurso) return e('curso', '⏳ Cargando', 'Se está cargando.')
   const operador = (): EstadoVisible => e('atencion', '⚠ Problema de la plataforma', `No es por tu archivo: el proceso de carga tuvo un problema propio. No lo corrijas ni lo vuelvas a subir.${aviso}`)
+  // work/274 DP-17 (D-10) · el chip se decide por lo que PASÓ (la familia), no solo por el actor: un
+  // archivo desplazado por uno más reciente no está «en espera» de nada: rige el más nuevo y este no se
+  // usó. Sin «Retirar»: no hay nada que sacar del camino (el actor sigue siendo `nadie`). Vale para la
+  // página de quien sube y para la consola técnica, que leen el mismo `estadoVisible`.
+  const desplazado = (): EstadoVisible => e('espera', 'Reemplazado por uno más reciente', '')
   switch (h.desenlace) {
     case undefined: {
       const lleva = ctx.esperaMin != null && ctx.edadMaximaMin != null && ctx.esperaMin > ctx.edadMaximaMin ? ` Lleva ${edadLegible(ctx.esperaMin)} esperando.` : ''
@@ -371,12 +376,14 @@ export function estadoVisible(h: IntakeUploadEvent, ctx: ContextoEstado = {}, gu
     }
     case 'fallida':
       if (guia?.actor === 'operador') return operador()
+      if (guia?.familia === 'desplazado') return desplazado()
       if (guia?.actor === 'nadie') return e('espera', '⏸ En espera', '')
       if (guia) return e('error', '✕ Hay que corregir algo', espera.trim(), ctx.enLanding === true)
       return e('error', '✕ No se pudo cargar', `El proceso de carga lo rechazó con este mensaje:${espera}`, ctx.enLanding === true)
     case 'saltada':
       if (guia?.actor === 'operador') return operador()
       if (guia?.familia === 'volumen-anomalo') return e('atencion', '⚠ Detenido por precaución', '', ctx.enLanding === true)
+      if (guia?.familia === 'desplazado') return desplazado()
       if (guia?.actor === 'nadie') return e('espera', '⏸ En espera', '')
       if (guia) return e('atencion', '⏸ No se cargó', espera.trim(), ctx.enLanding === true)
       return e('atencion', '⏸ No se cargó', `El proceso de carga no lo cargó y no dijo por qué.${ctx.enLanding ? ' Sigue en espera y se volverá a intentar.' : ''}${aviso}`)
