@@ -63,6 +63,8 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+*El corte —`package.json` y tag— es de la custodia.*
+
 ### Corregido: una lista cuyos elementos traen espacios llega como lista (frente arbol, `work/274` C1)
 
 **El hueco.** El sufijo `⟦…⟧` solo podía llevar una lista con valores pelados (`faltan=58,88`). Una
@@ -78,6 +80,27 @@ mal formada sigue sin sufijo (todo o nada). Contrato: `docs/contrato-ingesta-log
 
 **Orden de despliegue.** Esta versión va **antes** que cualquier job que emita la forma nueva; un lector
 anterior pierde el código entero de esa línea.
+
+### Una familia nueva del Producto: `bloqueado-por-otro` (amplía `CAP-200`)
+
+**El hueco.** Un job que procesa varios archivos por corrida y se detiene por uno de ellos deja a los
+demás `saltado` sin haberlos mirado. Sin una familia que lo nombre, esas líneas salían sin código y
+`/cargar` le decía a quien subió un archivo sano que el proceso «no dijo por qué», que es falso.
+
+**Qué trae.**
+
+- **Familia `bloqueado-por-otro`, actor `nadie`**, con guía genérica: dice que el archivo no tiene
+  nada que corregir, nombra al culpable (`{causante}`, siempre lista: «a.xlsx» o «a.xlsx y b.xlsx»),
+  que se reintenta en cada carga y que vuelve a quedar detenido mientras el culpable siga sin
+  resolverse. Son 14 familias del Producto. Una instancia no la puede redeclarar en `guias.familias`
+  (lo rechaza la validación, como a cualquier familia del Producto).
+- **Contrato `_logs/` §2 y §5:** para un escritor que ya emite el sufijo `⟦…⟧`, el código pasa a ser
+  obligatorio en toda línea `saltado`/`fallido`. El lector sigue tolerando líneas sin código.
+
+**Qué exige.** Nada: ni migración, ni env, ni ventana. Un job que todavía no emita el código se ve
+como hoy. **Orden de despliegue:** primero esta versión, después el job que emite
+`bloqueado-por-otro`; con una versión anterior, el código es de familia desconocida y la carga se ve
+sin guía, como hoy.
 
 ## 0.36.0 — 2026-09-23
 
