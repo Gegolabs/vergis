@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.39.0 — 2026-09-24
 
-### Corregido: «Cargando» falso de hasta 60 minutos cuando la corrida pasó por cola (frente arbol, `work/281` P)
+### Corregido: «Cargando» falso de hasta 60 minutos cuando la corrida pasó por cola (frente arbol, `work/281` P; PR #361)
 
 **El hueco.** La proyección de corridas del vigilante (`intake_watch_run`) identificaba cada corrida por su `started_at`, y `RunRecord` no llevaba el id de la instancia del motor (`listInstances` lo recibía y lo descartaba). Fabric informa una corrida en cola como `NotStarted` con un `startTimeUtc` y, al sacarla de la cola, con **otro**: la proyección insertaba una fila nueva y la vieja quedaba `NotStarted` para siempre. El resolvedor se detenía en ella hasta cumplir 60 min (`maxEnCursoMs`) y `/cargar` mostraba «Cargando» para una carga cuyo `✔` ya estaba en el log. Medido en producción el 2026-09-24 (cargas de Cross Docking) y en 4 ocurrencias anteriores; ya estaba en 0.38.0 y antes.
 
