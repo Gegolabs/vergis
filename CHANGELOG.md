@@ -134,6 +134,14 @@ sube (guía de actor `usuario`) no se contaba en la tarjeta del tipo como «nece
 
 **Qué exige.** Nada: sin cambio de configuración, de esquema ni de entorno.
 
+### `redactSecrets` tapa las formas de secreto que todavía se le escapaban (frente arbol, work/274 C3-bis; PR #357)
+
+**El hueco.** El juez de #356 (C3-01) midió que pasaban idénticos `sas_token=…`, `access_token=…` sin JWT, `AZURE_CLIENT_SECRET=…`, `api_key=…` y `apikey: …` (la clave iba pegada a `_` o no estaba en la lista, y `\b` no ve borde entre `_` y la letra), `?sig=…` y `SharedAccessSignature=…` de un SAS, `Authorization: Basic <base64>` y el secreto suelto de un service principal de Azure. Y `password="a b"` se tapaba a medias (C3-04). Todo eso ya se escapaba en 0.36.0; no es regresión de #356.
+
+**El arreglo.** La clave de un par ya no exige `\b` sino que no venga pegada a una letra o un dígito; se suman `sig`, `sharedaccesssignature` y `api_key`/`api-key`/`apikey`. `Basic <base64>` se tapa cuando el valor trae un dígito, `+`, `/` o `=` («Basic information» pasa). El secreto de un SP (tres caracteres, un dígito, `Q~` y el resto) se reconoce suelto. Un valor entre comillas se tapa entero. Un valor sin comillas llega hasta el primer espacio o `;`, así que en una URL con SAS se lleva también los parámetros que siguen a `sig=`: tapar de más es el lado seguro.
+
+**Medido.** Los 11 casos fallan con el `run-logs.ts` de 0.36.0 y pasan con este. Hay un control negativo de texto normal («Basic information», `signal=5`, «API Key» como nombre de columna). En el lab, los 306 motivos reales salen idénticos y el control de mutación tapa los 306.
+
 ## 0.36.0 — 2026-09-23
 
 ### Una sola puerta para cargar archivos, que se entiende sin manual (`CAP-205`, `CAP-206`, `CAP-207`; PR #353)
