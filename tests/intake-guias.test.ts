@@ -75,16 +75,32 @@ const MAESTRO = { id: 'oc_crossdocking_maestro', label: 'Maestro de tiendas' }
 const DIST = { id: 'oc_crossdocking_distribuciones', label: 'Distribuciones de OC' }
 const SALDOS = { id: 'saldos_cartera', label: 'Saldos de cartera' }
 
-describe('#346·H2 · las 13 familias del Producto', () => {
-  it('son 13, con actor fijo y guía genérica completa, sin nombres repetidos', () => {
-    expect(FAMILIAS_PRODUCTO).toHaveLength(13)
-    expect(new Set(FAMILIAS_PRODUCTO.map((f) => f.familia)).size).toBe(13)
+describe('#346·H2 · las 14 familias del Producto', () => {
+  it('son 14, con actor fijo y guía genérica completa, sin nombres repetidos', () => {
+    expect(FAMILIAS_PRODUCTO).toHaveLength(14)
+    expect(new Set(FAMILIAS_PRODUCTO.map((f) => f.familia)).size).toBe(14)
     for (const f of FAMILIAS_PRODUCTO) {
       expect(['usuario', 'operador', 'nadie']).toContain(f.actor)
       expect(f.guia.titulo && f.guia.quePaso && f.guia.queHacer.length).toBeTruthy()
     }
     const actor = Object.fromEntries(FAMILIAS_PRODUCTO.map((f) => [f.familia, f.actor]))
-    expect(actor).toMatchObject({ 'falla-plataforma': 'operador', 'en-espera': 'nadie', desplazado: 'nadie', 'volumen-anomalo': 'usuario', formato: 'usuario' })
+    expect(actor).toMatchObject({ 'falla-plataforma': 'operador', 'en-espera': 'nadie', desplazado: 'nadie', 'bloqueado-por-otro': 'nadie', 'volumen-anomalo': 'usuario', formato: 'usuario' })
+  })
+
+  it('bloqueado-por-otro (D-228 del lab A.R.B.O.L.): nombra al causante y se lee bien con uno y con dos', () => {
+    const g1 = resolverGuia(MAESTRO, 'bloqueado-por-otro', { causante: ['a.xlsx'] }, [])!
+    expect(g1).toMatchObject({ familia: 'bloqueado-por-otro', actor: 'nadie', nivel: 'familia-generica', deInstancia: false })
+    expect(g1.titulo).toBe('La carga se detuvo antes de llegar a este archivo')
+    expect(g1.quePaso).toBe('La carga se detuvo por un problema al procesar «a.xlsx» y no alcanzó a llegar a este archivo. Nada indica que este archivo tenga un problema: sigue en espera.')
+    expect(g1.queHacer).toEqual([
+      'No tienes que corregir este archivo ni subirlo de nuevo.',
+      'Se vuelve a intentar en cada carga, pero mientras no se resuelva el problema de «a.xlsx», este archivo volverá a quedar detenido.',
+      'Si no fuiste tú quien subió «a.xlsx», avísale a quien lo hizo.',
+    ])
+    const g2 = resolverGuia(MAESTRO, 'bloqueado-por-otro', { causante: ['a.xlsx', 'b.xlsx'] }, [])!
+    expect(g2.quePaso).toContain('al procesar «a.xlsx» y «b.xlsx» y no alcanzó')
+    expect(g2.queHacer[1]).toContain('el problema de «a.xlsx» y «b.xlsx», este archivo')
+    expect(g2.queHacer[2]).toBe('Si no fuiste tú quien subió «a.xlsx» y «b.xlsx», avísale a quien lo hizo.')
   })
 
   it('las genéricas del Producto no hablan el vocabulario de ninguna instancia', () => {
@@ -139,6 +155,10 @@ guias:
 guias:
   familias:
     - { familia: formato, actor: nadie, titulo: t, que_paso: q, que_hacer: [h] }`, /familia de guía 'formato'.*ya es una familia del Producto/],
+    ['la instancia no redeclara bloqueado-por-otro (un solo hogar: el Producto, D-228)', `
+guias:
+  familias:
+    - { familia: bloqueado-por-otro, actor: usuario, titulo: t, que_paso: q, que_hacer: [h] }`, /familia de guía 'bloqueado-por-otro'.*ya es una familia del Producto/],
     ['EL ACTOR NO SE SOBRESCRIBE DESDE LA GUÍA: una entrada con `actor:`', `
 guias:
   entradas:
@@ -259,6 +279,32 @@ describe('#346·H2 · resolverGuia: la precedencia, un test por nivel', () => {
 })
 
 describe('#346·H2 · interpolación', () => {
+  describe('un marcador entre comillas con una lista reparte las comillas sobre cada elemento', () => {
+    const T = 'al procesar «{causante}» y no alcanzó'
+    it('un causante: igual que antes', () => {
+      expect(interpolarGuia(T, { causante: ['a.xlsx'] })).toBe('al procesar «a.xlsx» y no alcanzó')
+      expect(interpolarGuia(T, { causante: 'a.xlsx' })).toBe('al procesar «a.xlsx» y no alcanzó')
+    })
+    it('dos causantes con nombres reales (espacios, guiones y una «y» dentro del nombre): se ve dónde termina cada uno', () => {
+      const causante = ['20260810 - Control de despachos Hardening.xlsx', '20260810 - Recepción y Facturación Vitro.xlsx']
+      expect(interpolarGuia(T, { causante })).toBe(
+        'al procesar «20260810 - Control de despachos Hardening.xlsx» y «20260810 - Recepción y Facturación Vitro.xlsx» y no alcanzó',
+      )
+    })
+    it('cinco o más: los tres primeros entre comillas y «y N más» fuera de ellas', () => {
+      expect(interpolarGuia(T, { causante: ['a.xlsx', 'b.xlsx', 'c.xlsx', 'd.xlsx', 'e.xlsx'] })).toBe('al procesar «a.xlsx», «b.xlsx», «c.xlsx» y 2 más y no alcanzó')
+    })
+    it('elementos vacíos se descartan; una lista vacía queda «(dato no informado)»', () => {
+      expect(interpolarGuia(T, { causante: [' a.xlsx ', ''] })).toBe('al procesar «a.xlsx» y no alcanzó')
+      expect(interpolarGuia(T, { causante: [] })).toBe(`al procesar «${DATO_NO_INFORMADO}» y no alcanzó`)
+      expect(interpolarGuia(T, {})).toBe(`al procesar «${DATO_NO_INFORMADO}» y no alcanzó`)
+    })
+    it('un marcador SIN comillas con lista no cambia', () => {
+      expect(interpolarGuia('faltan {faltan}', { faltan: ['58', '88'] })).toBe('faltan 58 y 88')
+      expect(interpolarGuia('faltan {faltan}', { faltan: ['58', '88', '95', '1', '2'] })).toBe('faltan 58, 88, 95 y 2 más')
+    })
+  })
+
   it('lista corta, lista mediana y lista larga', () => {
     expect(formatoLista(['58'])).toBe('58')
     expect(formatoLista(['58', '88'])).toBe('58 y 88')
