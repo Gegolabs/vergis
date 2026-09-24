@@ -61,6 +61,24 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Corregido: una lista cuyos elementos traen espacios llega como lista (frente arbol, `work/274` C1)
+
+**El hueco.** El sufijo `⟦…⟧` solo podía llevar una lista con valores pelados (`faltan=58,88`). Una
+lista con espacios (`folio`, `rut receptor`) tenía que ir entre comillas, y un valor entrecomillado es
+un escalar: la guía mostraba «folio,rut receptor» en vez de «folio y rut receptor». Y si el job
+entrecomillaba cada elemento por separado, el sufijo dejaba de calzar y la línea perdía el código.
+
+**Qué trae.** Una tercera forma de valor en el lector: la **lista entrecomillada**, dos o más
+elementos entrecomillados separados por coma y sin espacios (`faltan="folio","rut receptor"`), que se
+lee como `string[]` con los elementos textuales. Todo lo que ya se leía se sigue leyendo igual: un solo
+par de comillas sigue siendo escalar (`filas="2,65"` → `"2,65"`), la lista pelada no cambia y una lista
+mal formada sigue sin sufijo (todo o nada). Contrato: `docs/contrato-ingesta-logs.md` §2.
+
+**Orden de despliegue.** Esta versión va **antes** que cualquier job que emita la forma nueva; un lector
+anterior pierde el código entero de esa línea.
+
 ## 0.36.0 — 2026-09-23
 
 ### Una sola puerta para cargar archivos, que se entiende sin manual (`CAP-205`, `CAP-206`, `CAP-207`; PR #353)

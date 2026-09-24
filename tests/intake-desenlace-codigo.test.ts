@@ -137,6 +137,51 @@ describe('#346·H1 · el sufijo ⟦…⟧ se extrae y el motivo queda SIN él', 
   })
 })
 
+describe('274·C1 · lista entrecomillada: una lista cuyos elementos traen espacios o comas (D-05)', () => {
+  it('`faltan="folio","rut receptor"` ⇒ string[] con los elementos sin comillas; el motivo no cambia', () => {
+    const sin = parseRunFileOutcomes(lineaDe(MAESTRO))[0]!
+    const con = parseRunFileOutcomes(`${lineaDe(MAESTRO)} ⟦formato/firma-incompleta faltan="folio","rut receptor"⟧`)[0]!
+    expect(con).toEqual({ ...sin, codigo: 'formato/firma-incompleta', params: { faltan: ['folio', 'rut receptor'] } })
+  })
+
+  it('elementos con coma, con raya y con `=` viajan textuales; convive con escalares y listas peladas', () => {
+    const r = extraerSufijoDesenlace('a.xlsx — m ⟦bloqueado-por-otro causante="a, b.xlsx","Control — 2026.xlsx","x=y" n=2 filas=2,65⟧')!
+    expect(r.codigo).toBe('bloqueado-por-otro')
+    expect(r.params).toEqual({ causante: ['a, b.xlsx', 'Control — 2026.xlsx', 'x=y'], n: '2', filas: ['2', '65'] })
+    expect(r.resto).toBe('a.xlsx — m')
+  })
+
+  it('un solo par de comillas sigue siendo ESCALAR, aunque traiga comas: `filas="2,65"` ⇒ "2,65"', () => {
+    expect(extraerSufijoDesenlace('a.xlsx — m ⟦formato filas="2,65"⟧')!.params).toEqual({ filas: '2,65' })
+    expect(extraerSufijoDesenlace('a.xlsx — m ⟦formato x="solo"⟧')!.params).toEqual({ x: 'solo' })
+  })
+
+  it('la lista pelada no cambia: `a=58,88` ⇒ ["58","88"]', () => {
+    expect(extraerSufijoDesenlace('a.xlsx — m ⟦formato a=58,88⟧')!.params).toEqual({ a: ['58', '88'] })
+  })
+
+  it('dos elementos iguales, y un elemento vacío, se conservan tal cual (lo entrecomillado es exacto)', () => {
+    expect(extraerSufijoDesenlace('a.xlsx — m ⟦formato a="x","x","" b="y"⟧')!.params).toEqual({ a: ['x', 'x', ''], b: 'y' })
+  })
+
+  const noCalzan: [string, string][] = [
+    ['lista con la última comilla sin cerrar', '⟦formato a="x","y⟧'],
+    ['lista con espacio tras la coma', '⟦formato a="x", "y"⟧'],
+    ['lista que termina en coma', '⟦formato a="x","y",⟧'],
+    ['lista que mezcla entrecomillado y pelado', '⟦formato a="x",y⟧'],
+  ]
+  for (const [nombre, sufijo] of noCalzan) {
+    it(`control negativo, todo o nada: ${nombre} ⇒ sin sufijo, la línea se lee como antes`, () => {
+      const linea = `✖ fallido: a.xlsx — motivo técnico ${sufijo}`
+      const o = parseRunFileOutcomes(linea)[0]!
+      expect(o.codigo).toBeUndefined()
+      expect(o.params).toBeUndefined()
+      expect(o).toEqual(lectorPre346(linea)[0])
+      expect(extraerSufijoDesenlace(`a.xlsx — motivo técnico ${sufijo}`)).toBeNull()
+    })
+  }
+})
+
 describe('#346·H1 · un sufijo que no calza NO existe: sin código, el texto queda dentro del motivo', () => {
   const casos: [string, string][] = [
     ['comillas sin cerrar', '⟦desplazado vigente="Control de despachos.xlsx⟧'],

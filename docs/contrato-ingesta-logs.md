@@ -103,12 +103,18 @@ de usuario (título, qué pasó, qué hacer) con el motivo técnico plegado detr
 |---|---|
 | `⟦ … ⟧` | U+27E6 / U+27E7, al **final** de la línea, precedido de un espacio. Solo en `saltado`/`fallido`. Lo emite el helper del job, nunca texto escrito a mano |
 | `<codigo>` | `familia` o `familia/especifico`, con la gramática `^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)?$`. La familia es una de las del Producto o una declarada por la instancia en su catálogo de guías (`guias:` del archivo de intake) |
-| `<clave>=<valor>` | cero o más, separados por espacio; clave `[a-z][a-z0-9_]*`. El valor va **pelado** si no tiene espacios, `"` ni `⟧` (`faltan=58,88`), o **entre comillas dobles** si los tiene (`vigente="Control de despachos 2026-09-01.xlsx"`); dentro de las comillas no puede haber `"` ni `⟧`, y la raya `—` sí. Un valor pelado con comas es una **lista**; uno entrecomillado es siempre un escalar. Si un valor trae `"` o `⟧`, el helper los reemplaza por `'` y `]` |
+| `<clave>=<valor>` | cero o más, separados por espacio; clave `[a-z][a-z0-9_]*`. El valor va **pelado** si no tiene espacios, `"` ni `⟧` (`faltan=58,88`), o **entre comillas dobles** si los tiene (`vigente="Control de despachos 2026-09-01.xlsx"`); dentro de las comillas no puede haber `"` ni `⟧`, y la raya `—` sí. Un valor pelado con comas es una **lista**; un solo par de comillas es siempre un **escalar**, aunque traiga comas (`filas="2,65"`). Una lista cuyos elementos traen espacios o comas va como **lista entrecomillada**: cada elemento entre comillas, separados por coma y sin espacios (`faltan="folio","rut receptor"` → `folio`, `rut receptor`). Si un valor trae `"` o `⟧`, el helper los reemplaza por `'` y `]` |
 
 El sufijo **no reemplaza** al motivo: el motivo técnico sigue siendo obligatorio y sigue sujeto a sus
 reglas. **Todo o nada:** un sufijo que no calza la gramática completa (comillas sin cerrar, `⟦` sin
-cerrar, un código con mayúscula, un valor pelado con espacio) **no existe** — la línea se lee como si
-no lo tuviera y el texto queda dentro del motivo, sin código.
+cerrar, un código con mayúscula, un valor pelado con espacio, una lista entrecomillada con una comilla
+sin cerrar o con un espacio tras la coma) **no existe** — la línea se lee como si no lo tuviera y el
+texto queda dentro del motivo, sin código.
+
+**La lista entrecomillada exige un lector que la conozca.** Un lector anterior a ella no calza el
+sufijo entero y, por todo o nada, pierde el **código de toda la línea**, no solo la lista. El mismo
+orden de despliegue de abajo rige para ella: primero la plataforma que la lee, después el job que la
+emite; y si la plataforma vuelve a una versión anterior, el job vuelve con ella.
 
 **Por qué al final y no dentro del marcador** (`✖ fallido[COD]: …`): un lector anterior a #346 no
 reconocería esa línea y el desenlace **entero** desaparecería si el job se despliega antes que la
