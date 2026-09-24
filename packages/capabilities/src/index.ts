@@ -19,6 +19,7 @@ export {
   stackTotals,
   totalsPadFraction,
   assignLanes,
+  assignLanesSigned,
   markTopPx,
   seriesLabelStride,
   seriesLabelIndices,

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { labelledDomain, markTopPx, renderHtmlPiece, stackTotals, totalsPadFraction, type ResolvedNode } from '@vergis/capabilities'
+import { assignLanesSigned, labelledDomain, markTopPx, renderHtmlPiece, stackTotals, totalsPadFraction, type ResolvedNode } from '@vergis/capabilities'
 import { parseSpec, validateSpec, OTHER_SERIES_LABEL } from '@vergis/mira'
 import { VergisError, type Capability } from '@vergis/botler'
 import { runSpec } from '@vergis/cli'
@@ -201,6 +201,59 @@ describe('#359 · total de cada barra apilada', () => {
     }
     // Y en apilado horizontal ya no se rotula cada segmento (se fundían con el vecino): solo el total.
     expect(html.match(/<text[^>]*aria-roledescription="text mark"/g) ?? []).toHaveLength(3)
+  })
+
+  it('(8) total NEGATIVO: el rótulo va FUERA de la barra, del lado de su punta — vertical y horizontal', async () => {
+    // Caso del juez (H-01): Enero = −500 −300 (total −800) junto a Febrero positivo. Con el anclaje
+    // del positivo, el texto caía DENTRO del segmento de la punta negativa.
+    const neg = {
+      ...BASE,
+      metricsSpec: BASE.metricsSpec.slice(0, 2),
+      rows: [{ mes: 'Enero', a: -500, b: -300 }, { mes: 'Febrero', a: 400, b: 200 }],
+      sortSpec: { kind: 'chrono' },
+    }
+    // Vertical: la línea base (`baseline: top`) queda BAJO la punta negativa, y el rótulo no se sale
+    // del lienzo por abajo.
+    const v = await render(neg)
+    const tv = totales(v)
+    expect(tv.map((r) => r.text).sort()).toEqual(['-800', '600'])
+    const domain = labelledDomain([0, 600, -800, 0], totalsPadFraction(false, 'single', ['-800', '600'], 260))!
+    const puntaNeg = markTopPx(-800, domain, 260)
+    const e = tv.find((r) => r.cat === 'Enero')!
+    // Vega emite la LÍNEA BASE alfabética: con `baseline: top` la baja ~0,8 em (≈ 8,8 px) bajo el
+    // ancla. La tinta de dígitos (≈ 8 px sobre la línea base) queda entonces entera bajo la punta.
+    expect(e.y - 8).toBeGreaterThan(puntaNeg) // fuera: la tinta no toca [cero, punta]
+    expect(e.y - puntaNeg).toBeLessThan(16)
+    expect(e.y).toBeLessThanOrEqual(260) // y no se sale del lienzo por abajo
+    // Control: el positivo sigue SOBRE su punta.
+    const f = tv.find((r) => r.cat === 'Febrero')!
+    expect(f.y).toBeLessThan(markTopPx(600, domain, 260))
+    // Control de la geometría predicha: la pila de Enero dibujada mide lo que va del cero a la punta.
+    const altoEnero = segmentos(v).filter((sg) => sg.cat === 'Enero').reduce((acc, sg) => acc + Math.abs(sg.h), 0)
+    expect(altoEnero).toBeCloseTo(puntaNeg - markTopPx(0, domain, 260), 3)
+
+    // Horizontal: `align: right`, a la IZQUIERDA de la punta negativa (el ancla es el borde derecho
+    // del texto), y el texto entero cabe en el lienzo.
+    const h = await render({ ...neg, orientation: 'horizontal' })
+    const segs = segmentos(h)
+    const eh = totales(h).find((r) => r.cat === 'Enero')!
+    const izq = Math.min(...segs.filter((sg) => sg.cat === 'Enero').map((sg) => Math.min(sg.x, sg.x + sg.w)))
+    expect(eh.x).toBeLessThan(izq)
+    expect(izq - eh.x).toBeLessThan(6)
+    expect(eh.x - eh.text.length * 6.5).toBeGreaterThanOrEqual(0)
+    expect(h).toMatch(/aria-label="Enero · Total — -800"[^>]*text-anchor="end"/)
+    // Control: el positivo sigue a la DERECHA de su punta.
+    const fh = totales(h).find((r) => r.cat === 'Febrero')!
+    const der = Math.max(...segs.filter((sg) => sg.cat === 'Febrero').map((sg) => Math.max(sg.x, sg.x + sg.w)))
+    expect(fh.x).toBeGreaterThan(der)
+  })
+
+  it('(8) carriles con negativos: el carril alto de un negativo BAJA, y vecinos de distinto signo no se estorban', () => {
+    // Dos negativos con puntas casi iguales: el segundo sube de carril (lane 1). Un positivo en medio
+    // corta la vecindad: no hereda la línea base del negativo.
+    expect(assignLanesSigned([200, 202], [true, true])).toEqual([0, 1])
+    expect(assignLanesSigned([200, 202, 204], [true, false, true])).toEqual([0, 0, 0])
+    expect(assignLanesSigned([50, 52], [false, false])).toEqual([0, 1])
   })
 
   it('(7) barras angostas: los totales van en carriles y ninguno se solapa con su vecino', async () => {

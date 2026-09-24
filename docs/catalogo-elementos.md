@@ -147,6 +147,9 @@ horizontal.
     totals: false          # opcional: apaga el rótulo del total (por defecto está encendido)
 ```
 
+- **Total negativo**: el rótulo va igual **fuera** de la barra, del lado de su punta — bajo la punta
+  negativa en vertical y a su izquierda en horizontal. Con signos mixtos en una misma barra, se ancla
+  en la punta del lado del signo del total.
 - **Cuadra con la barra**: el total suma **todos** los segmentos dibujados, incluida la serie
   «(otras)» del colapso de series y la categoría «(otros)» del top-N.
 - **Formato**: el mismo de los rótulos de valor — el `format` declarado; sin él, `abbr`.
