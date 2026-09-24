@@ -176,6 +176,8 @@ export interface ResolvedNode {
   metricsSpec?: { field: string; label: string }[]
   /** `distribution` agrupado: apila las series en vez de yuxtaponerlas (#203). */
   stacked?: boolean
+  /** `distribution` apilado: rótulo con el TOTAL de cada barra (#359). Encendido salvo `false`. */
+  totals?: boolean
   /** `distribution`: criterio de orden de las categorías, ya normalizado por compose (#81). */
   sortSpec?: ChartSort
   orientation?: string

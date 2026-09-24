@@ -127,6 +127,8 @@ export interface ResolvedNode {
   metricsSpec?: { field: string; label: string }[]
   /** `distribution` agrupado: apila las series en vez de yuxtaponerlas (#203). */
   stacked?: boolean
+  /** `distribution` apilado: rótulo con el TOTAL de cada barra (#359). Encendido salvo `false`. */
+  totals?: boolean
   /** `distribution`: criterio de orden de las categorías, ya normalizado (#81). */
   sortSpec?: ChartSort
   orientation?: string
@@ -325,6 +327,8 @@ export function composePiece(
       series?: string
       /** #203 · apila las series en vez de yuxtaponerlas (solo modo agrupado). */
       stacked?: boolean
+      /** #359 · rótulo del total de cada barra apilada; `false` lo apaga (default: encendido). */
+      totals?: boolean
       orientation?: string
       sort?: string
       format?: string
@@ -352,6 +356,7 @@ export function composePiece(
         metricsSpec: folded.metricsSpec,
         sortSpec,
         stacked: d.stacked === true,
+        ...(d.totals === false ? { totals: false } : {}),
         orientation: d.orientation,
         format: d.format,
         title: d.title,
@@ -368,6 +373,7 @@ export function composePiece(
         metricsSpec,
         sortSpec,
         stacked: d.stacked === true,
+        ...(d.totals === false ? { totals: false } : {}),
         orientation: d.orientation,
         format: d.format,
         title: d.title,
