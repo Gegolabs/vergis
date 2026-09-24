@@ -169,6 +169,40 @@ describe('run-logs · redactSecrets (D9)', () => {
     expect(redactSecrets('Server=x;PWD={a;b ' + cola(6) + '};Encrypt=yes')).toBe('Server=x;PWD=«…redactado…»;Encrypt=yes')
   })
 
+  // work/274 C3-bis · las formas que el juez de C3 encontró sin tapar (C3-01, C3-04). Cada una se escapaba en
+  // 0.36.0: la corrida discriminante es este mismo bloque contra el `run-logs.ts` del tag.
+  const ESCAPABAN: [string, string, string][] = [
+    ['`sas_token=` (clave pegada a `_`)', 'sas_token=' + cola(24), 'sas_token=«…redactado…»'],
+    ['`access_token=` sin JWT', 'access_token=' + cola(24), 'access_token=«…redactado…»'],
+    ['`AZURE_CLIENT_SECRET=`', 'AZURE_CLIENT_SECRET=' + cola(20), 'AZURE_CLIENT_SECRET=«…redactado…»'],
+    ['`api_key=`', 'api_key=' + cola(20), 'api_key=«…redactado…»'],
+    ['`apikey:`', 'apikey: ' + cola(20), 'apikey: «…redactado…»'],
+    ['`x-api-key:`', 'x-api-key: ' + cola(20), 'x-api-key: «…redactado…»'],
+    // El valor sin comillas llega hasta el primer espacio o `;`: se lleva también `&se=1`. Tapar de más es el
+    // lado seguro; cortar en `&` dejaría a la vista el resto de una contraseña que lo trae.
+    ['`?sig=` de un SAS', 'https://x.blob.core.windows.net/c/a.xlsx?sv=2022&sig=' + cola(30) + '&se=1', 'https://x.blob.core.windows.net/c/a.xlsx?sv=2022&sig=«…redactado…»'],
+    ['`SharedAccessSignature=`', 'SharedAccessSignature=' + cola(30) + ';', 'SharedAccessSignature=«…redactado…»;'],
+    ['`Authorization: Basic <base64>`', 'Authorization: Basic ' + 'dXNlcjpw' + 'YXNzd29yZA==', 'Authorization: Basic «…redactado…»'],
+    ['secreto de un SP de Azure, suelto', 'secreto ' + 'Ab3' + '8Q~' + cola(34) + ' vencido', 'secreto «…redactado…» vencido'],
+    ['`password="…"` con espacio adentro', 'password="abc ' + cola(8) + '"', 'password="«…redactado…»"'],
+  ]
+  for (const [nombre, entrada, esperado] of ESCAPABAN) {
+    it(`enmascara ${nombre}`, () => {
+      expect(redactSecrets(entrada)).toBe(esperado)
+    })
+  }
+
+  it('control negativo de C3-bis: `Basic`, `sig` y `key` en texto normal pasan idénticos', () => {
+    const textos = [
+      'Basic information del archivo: 3 hojas',
+      'la señal signal=5 no es una firma',
+      'consig: 3 filas',
+      'la columna «API Key» no existe',
+      'Clave: 3 · valor: 7',
+    ]
+    for (const m of textos) expect(redactSecrets(m)).toBe(m)
+  })
+
   it('control negativo: motivos con la forma de los reales (archivos, OC, RUT, locales, semanas) pasan idénticos', () => {
     const motivos = [
       "OC 17525983: locales del despacho AUSENTES del maestro dbo.dim_local: ['58', '88'] — ROLLBACK. Sin zona no se puede construir la vista por Local; subir el maestro de tiendas actualizado y reintentar.",
