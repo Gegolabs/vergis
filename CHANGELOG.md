@@ -61,11 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.37.0 — 2026-09-24
 
-*El corte —`package.json` y tag— es de la custodia.*
-
-### Corregido: una lista cuyos elementos traen espacios llega como lista (frente arbol, `work/274` C1)
+### Corregido: una lista cuyos elementos traen espacios llega como lista (frente arbol, `work/274` C1; PR #354)
 
 **El hueco.** El sufijo `⟦…⟧` solo podía llevar una lista con valores pelados (`faltan=58,88`). Una
 lista con espacios (`folio`, `rut receptor`) tenía que ir entre comillas, y un valor entrecomillado es
@@ -81,7 +79,7 @@ mal formada sigue sin sufijo (todo o nada). Contrato: `docs/contrato-ingesta-log
 **Orden de despliegue.** Esta versión va **antes** que cualquier job que emita la forma nueva; un lector
 anterior pierde el código entero de esa línea.
 
-### Una familia nueva del Producto: `bloqueado-por-otro` (amplía `CAP-200`)
+### Una familia nueva del Producto: `bloqueado-por-otro` (amplía `CAP-200`; PR #355)
 
 **El hueco.** Un job que procesa varios archivos por corrida y se detiene por uno de ellos deja a los
 demás `saltado` sin haberlos mirado. Sin una familia que lo nombre, esas líneas salían sin código y
