@@ -137,6 +137,53 @@ describe('run-logs · redactSecrets (D9)', () => {
     const log = "DELETE fct_saldos WHERE semana='W28': 7580 filas\nINSERT: 7626 filas\n✖ ABORTADO: archivo sin filas de datos"
     expect(redactSecrets(log)).toBe(log)
   })
+  // work/274 C3 · tokens sueltos, Bearer y cadenas de conexión. Los valores de prueba se arman en tiempo
+  // de ejecución: así ningún escáner de secretos los confunde con uno real, y ninguno lo es.
+  const cola = (n: number): string => 'Ab3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dF3hJ5kL7nP9'.slice(0, n)
+  const TOKENS: [string, string][] = [
+    ['sk- (OpenAI)', 'sk' + '-' + cola(40)],
+    ['sk-ant- (Anthropic)', 'sk' + '-ant-api03-' + cola(40)],
+    ['ghp_', 'gh' + 'p_' + cola(36)],
+    ['gho_', 'gh' + 'o_' + cola(36)],
+    ['github_pat_', 'github' + '_pat_' + cola(22) + '_' + cola(30)],
+    ['xoxb-', 'xo' + 'xb-' + '1234567890-' + cola(24)],
+    ['xoxp-', 'xo' + 'xp-' + '1234567890-' + cola(24)],
+    ['xoxa-', 'xo' + 'xa-' + '2-' + cola(24)],
+    ['AKIA', 'AKIA' + 'IOSFODNN7' + 'EXAMPLE'],
+  ]
+  for (const [nombre, token] of TOKENS) {
+    it(`enmascara un token suelto ${nombre}, sin clave delante`, () => {
+      const out = redactSecrets(`la conexión falló con ${token} en el host`)
+      expect(out).toBe('la conexión falló con «…redactado…» en el host')
+    })
+  }
+
+  it('enmascara `Bearer <token>` aunque el token no sea un JWT', () => {
+    expect(redactSecrets('Authorization: Bearer ' + cola(32) + ' rechazado')).toBe('Authorization: Bearer «…redactado…» rechazado')
+  })
+
+  it('enmascara la contraseña de una cadena de conexión (`Password=`, `Pwd=`, y el valor entre llaves)', () => {
+    const cadena = 'Driver={ODBC Driver 18};Server=tcp:x.datawarehouse.fabric.microsoft.com,1433;Uid=arboltec;Password=' + cola(12) + ';Encrypt=yes'
+    expect(redactSecrets(cadena)).toBe('Driver={ODBC Driver 18};Server=tcp:x.datawarehouse.fabric.microsoft.com,1433;Uid=arboltec;Password=«…redactado…»;Encrypt=yes')
+    expect(redactSecrets('Server=x;pwd=' + cola(10) + ';')).toBe('Server=x;pwd=«…redactado…»;')
+    expect(redactSecrets('Server=x;PWD={a;b ' + cola(6) + '};Encrypt=yes')).toBe('Server=x;PWD=«…redactado…»;Encrypt=yes')
+  })
+
+  it('control negativo: motivos con la forma de los reales (archivos, OC, RUT, locales, semanas) pasan idénticos', () => {
+    const motivos = [
+      "OC 17525983: locales del despacho AUSENTES del maestro dbo.dim_local: ['58', '88'] — ROLLBACK. Sin zona no se puede construir la vista por Local; subir el maestro de tiendas actualizado y reintentar.",
+      'desplazado por «Tiendas por zona Sodimac (2).xlsx» (rige el maestro más reciente)',
+      'esperando products-details de la OC 17400358',
+      'RUTRECEPTOR trae 99524070-K y la subcarpeta declara 96835510-4',
+      'la corrida se detuvo por otro archivo («oc-17502693-distributions-details-24-08-2026.xlsx»)',
+      'SKUs repetidos en la OC 17400358: sk-17400358, SKU-A123 y B9',
+      'desk-top-sodimac-ask-2026.xlsx: falta la columna «Año entrega a cliente»',
+      'hoja «compromisos venta 2025» no encontrada; hojas: Resumen, token, Bearer',
+      'Antigüedad de saldos de clientes COVH WK37.xlsx: 3 de 5 empresas bajan (piso 50 %)',
+      'la versión 2 trae 0 filas y la vigente 1.240: snapshot-vacío (AKIA no es una llave)',
+    ]
+    for (const m of motivos) expect(redactSecrets(m)).toBe(m)
+  })
 })
 
 // ─── Gramática por-archivo del contrato `_logs/` (issue #162) ──────────────

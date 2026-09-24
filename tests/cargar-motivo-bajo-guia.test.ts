@@ -75,12 +75,14 @@ describe('work/274 DP-19 · el motivo va plegado bajo la guía', () => {
     expect(p[0]).toContain('Pedir el maestro actualizado.')
   })
 
-  it('un secreto en el motivo sale redactado (pasa por `redactSecrets`)', () => {
-    // `redactSecrets` enmascara pares clave=valor y JWT; un `sk-…` suelto, sin clave, no es de su
-    // gramática hoy (fuera del alcance de este cambio).
-    const html = render(carga('fallida', 'duplicado/sku', 'conexión falló: token=sk-prueba-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 en el host'))
-    expect(html).not.toContain('sk-prueba-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
-    expect(plegados(html)[0]).toContain('token=«…redactado…» en el host')
+  it('un secreto en el motivo sale redactado (pasa por `redactSecrets`): con clave y suelto', () => {
+    const conClave = render(carga('fallida', 'duplicado/sku', 'conexión falló: token=sk-prueba-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 en el host'))
+    expect(conClave).not.toContain('sk-prueba-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+    expect(plegados(conClave)[0]).toContain('token=«…redactado…» en el host')
+    const suelto = 'sk' + '-ant-api03-' + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    const html = render(carga('fallida', 'duplicado/sku', `conexión falló con ${suelto} en el host`))
+    expect(html).not.toContain(suelto)
+    expect(plegados(html)[0]).toContain('conexión falló con «…redactado…» en el host')
   })
 
   it('sin motivo no se dibuja un plegado vacío', () => {
