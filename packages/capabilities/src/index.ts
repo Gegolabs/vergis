@@ -16,6 +16,8 @@ export {
   labelWidthPx,
   barStepPx,
   lanesPadFraction,
+  stackTotals,
+  totalsPadFraction,
   assignLanes,
   markTopPx,
   seriesLabelStride,

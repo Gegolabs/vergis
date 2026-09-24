@@ -283,6 +283,19 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         })
       }
     }
+    // `totals` (#359): booleano. El render lo trata como «encendido salvo `false`», así que un
+    // `totals: "false"` (cadena) o un `totals: no` mal tipeado dejaría el rótulo prendido en silencio
+    // — lo contrario de lo declarado. Se exige el tipo acá.
+    if ('totals' in d && typeof d['totals'] !== 'boolean') {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'distribution-totals-not-boolean',
+        path: 'piece -> distribution.totals',
+        value: (d['totals'] ?? null) as never,
+        message: `El 'totals' de un gráfico distribution debe ser true o false; recibió ${JSON.stringify(d['totals'] ?? null)}.`,
+        remediation: `Escribir 'totals: false' para apagar el rótulo del total de cada barra apilada (por defecto está encendido).`,
+      })
+    }
     // `sort` (#81): vocabulario CERRADO — `magnitude` (default e implícito) · `chrono` (manda el
     // ORDER BY del SQL) · `value:<serie>` (una serie declarada, por label o por field). En modo mono
     // se acepta además el token legacy `-campo`/`campo`. Un `value:` colgante ordenaría por un campo
