@@ -88,7 +88,7 @@ eso la legibilidad es obligación del escritor:
 - **Sin secretos.** La plataforma enmascara los patrones obvios al renderizar (`redactSecrets`), pero
   esa es una defensa en profundidad, no un permiso para escribirlos.
 
-### El sufijo opcional: código estable y datos del caso (issue #346)
+### El sufijo: opcional para el lector, obligatorio para quien ya lo emite — código estable y datos del caso (issue #346)
 
 El motivo le dice al operador **qué pasó** en términos del dato; no le dice al usuario **qué hacer**.
 Para eso la línea admite, **al final**, un sufijo estructurado que declara el desenlace con un
@@ -282,7 +282,7 @@ Para que un slot cumpla el contrato completo, su job debe:
    **datos del caso** que su guía interpola (§2). **Obligatorio para todo escritor que ya emite el
    sufijo** (#346): uno que lo emite en unas líneas y no en otras deja justo esas sin guía, y la
    plataforma no puede distinguir «no quiso decirlo» de «no supo». Solo un job que todavía no adoptó el
-   sufijo en ninguna línea queda fuera, y la plataforma lo sigue leyendo (§2, «Todo o nada»). Sin
+   sufijo en ninguna línea queda fuera, y la plataforma lo sigue leyendo (§7, caso «Sin código»). Sin
    sufijo, la plataforma muestra el motivo técnico como siempre; con él, muestra la guía de ese código
    y deja el motivo plegado como detalle técnico. El motivo técnico sigue siendo obligatorio igual.
 6. Archivar lo que procesó, en las corridas que terminan `Completed`, en el directorio que el slot
@@ -370,7 +370,7 @@ guias:
 | Regla | Detalle |
 |---|---|
 | Validación | Estricta: clave desconocida, familia que repite una del Producto, familia propia sin `actor`, entrada **con** `actor`, código de familia desconocida, slot inexistente, `titulo`/`que_paso` vacíos o `que_hacer` sin pasos ⇒ error nombrando la guía. Al arrancar lo acusa el chequeo de despliegue; en la recarga en caliente se **conservan las guías vigentes** |
-| Interpolación | `{clave}` toma los datos del caso; `{archivo}` y `{slot}` los pone la plataforma. Una lista se lee «58 y 88», o «58, 88, 95 y 7 más» con cinco o más elementos. Un marcador sin dato queda «(dato no informado)» y no rompe la vista |
+| Interpolación | `{clave}` toma los datos del caso; `{archivo}` y `{slot}` los pone la plataforma. Una lista se lee «58 y 88», o «58, 88, 95 y 7 más» con cinco o más elementos. Si el marcador va entre comillas en el texto (`«{causante}»`), las comillas se reparten sobre cada elemento: «a.xlsx» y «b.xlsx». Un marcador sin dato queda «(dato no informado)» y no rompe la vista |
 | Precedencia | entrada con el código exacto y el slot → entrada con el código exacto sin `slots` → entrada con el código de la familia sola (con slot, luego sin) → guía genérica de la familia (de la instancia o del Producto) → sin guía. El actor sale siempre de la familia |
 
 ### ¿Qué ve el usuario, y qué pasa sin guía?

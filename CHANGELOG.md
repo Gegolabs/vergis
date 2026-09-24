@@ -90,10 +90,14 @@ demás `saltado` sin haberlos mirado. Sin una familia que lo nombre, esas línea
 **Qué trae.**
 
 - **Familia `bloqueado-por-otro`, actor `nadie`**, con guía genérica: dice que el archivo no tiene
-  nada que corregir, nombra al culpable (`{causante}`, siempre lista: «a.xlsx» o «a.xlsx y b.xlsx»),
+  nada que corregir, nombra al culpable (`{causante}`, siempre lista: «a.xlsx» o «a.xlsx» y «b.xlsx»),
   que se reintenta en cada carga y que vuelve a quedar detenido mientras el culpable siga sin
   resolverse. Son 14 familias del Producto. Una instancia no la puede redeclarar en `guias.familias`
   (lo rechaza la validación, como a cualquier familia del Producto).
+- **Un marcador entre comillas con una lista reparte las comillas sobre cada elemento**
+  (`interpolarGuia`): «{causante}» con dos archivos se lee «a.xlsx» y «b.xlsx», porque con nombres
+  reales (espacios, guiones, una «y» dentro del nombre) un solo par no deja ver dónde termina cada
+  uno. Un marcador sin comillas no cambia («58 y 88»).
 - **Contrato `_logs/` §2 y §5:** para un escritor que ya emite el sufijo `⟦…⟧`, el código pasa a ser
   obligatorio en toda línea `saltado`/`fallido`. El lector sigue tolerando líneas sin código.
 

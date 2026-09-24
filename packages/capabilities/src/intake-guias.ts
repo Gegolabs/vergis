@@ -304,13 +304,24 @@ export function formatoLista(xs: readonly string[]): string {
 }
 
 /** Reemplaza `{clave}` por su dato; un marcador sin dato queda como «(dato no informado)». Solo se
- *  tocan marcadores con la gramática de clave (`{[a-z][a-z0-9_]*}`): cualquier otra llave es texto. */
+ *  tocan marcadores con la gramática de clave (`{[a-z][a-z0-9_]*}`): cualquier otra llave es texto.
+ *
+ *  **Un marcador entre comillas con una lista reparte las comillas sobre cada elemento:** «{causante}»
+ *  con dos archivos se lee «a.xlsx» y «b.xlsx», no «a.xlsx y b.xlsx» — con nombres reales (espacios,
+ *  guiones, una «y» dentro del nombre) un solo par de comillas no deja ver dónde termina uno y empieza
+ *  el otro. Un marcador sin comillas no cambia: «58 y 88». */
 export function interpolarGuia(texto: string, datos: Record<string, string | string[] | undefined>, sinDato: string = DATO_NO_INFORMADO): string {
-  return texto.replace(/\{([a-z][a-z0-9_]*)\}/g, (_m, k: string) => {
+  return texto.replace(/«\{([a-z][a-z0-9_]*)\}»|\{([a-z][a-z0-9_]*)\}/g, (_m, kComillas: string | undefined, kSolo: string | undefined) => {
+    const k = (kComillas ?? kSolo)!
     const v = datos[k]
-    if (v === undefined) return sinDato
+    const entre = (x: string): string => (kComillas ? `«${x}»` : x)
+    if (v === undefined) return entre(sinDato)
+    if (Array.isArray(v) && kComillas) {
+      const xs = v.map((x) => String(x).trim()).filter(Boolean)
+      return xs.length ? formatoLista(xs.map((x) => `«${x}»`)) : entre(sinDato)
+    }
     const s = Array.isArray(v) ? formatoLista(v) : String(v)
-    return s.trim() ? s : sinDato
+    return entre(s.trim() ? s : sinDato)
   })
 }
 

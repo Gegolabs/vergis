@@ -98,9 +98,9 @@ describe('#346·H2 · las 14 familias del Producto', () => {
       'Si no fuiste tú quien subió «a.xlsx», avísale a quien lo hizo.',
     ])
     const g2 = resolverGuia(MAESTRO, 'bloqueado-por-otro', { causante: ['a.xlsx', 'b.xlsx'] }, [])!
-    expect(g2.quePaso).toContain('al procesar «a.xlsx y b.xlsx» y no alcanzó')
-    expect(g2.queHacer[1]).toContain('el problema de «a.xlsx y b.xlsx», este archivo')
-    expect(g2.queHacer[2]).toBe('Si no fuiste tú quien subió «a.xlsx y b.xlsx», avísale a quien lo hizo.')
+    expect(g2.quePaso).toContain('al procesar «a.xlsx» y «b.xlsx» y no alcanzó')
+    expect(g2.queHacer[1]).toContain('el problema de «a.xlsx» y «b.xlsx», este archivo')
+    expect(g2.queHacer[2]).toBe('Si no fuiste tú quien subió «a.xlsx» y «b.xlsx», avísale a quien lo hizo.')
   })
 
   it('las genéricas del Producto no hablan el vocabulario de ninguna instancia', () => {
@@ -279,6 +279,32 @@ describe('#346·H2 · resolverGuia: la precedencia, un test por nivel', () => {
 })
 
 describe('#346·H2 · interpolación', () => {
+  describe('un marcador entre comillas con una lista reparte las comillas sobre cada elemento', () => {
+    const T = 'al procesar «{causante}» y no alcanzó'
+    it('un causante: igual que antes', () => {
+      expect(interpolarGuia(T, { causante: ['a.xlsx'] })).toBe('al procesar «a.xlsx» y no alcanzó')
+      expect(interpolarGuia(T, { causante: 'a.xlsx' })).toBe('al procesar «a.xlsx» y no alcanzó')
+    })
+    it('dos causantes con nombres reales (espacios, guiones y una «y» dentro del nombre): se ve dónde termina cada uno', () => {
+      const causante = ['20260810 - Control de despachos Hardening.xlsx', '20260810 - Recepción y Facturación Vitro.xlsx']
+      expect(interpolarGuia(T, { causante })).toBe(
+        'al procesar «20260810 - Control de despachos Hardening.xlsx» y «20260810 - Recepción y Facturación Vitro.xlsx» y no alcanzó',
+      )
+    })
+    it('cinco o más: los tres primeros entre comillas y «y N más» fuera de ellas', () => {
+      expect(interpolarGuia(T, { causante: ['a.xlsx', 'b.xlsx', 'c.xlsx', 'd.xlsx', 'e.xlsx'] })).toBe('al procesar «a.xlsx», «b.xlsx», «c.xlsx» y 2 más y no alcanzó')
+    })
+    it('elementos vacíos se descartan; una lista vacía queda «(dato no informado)»', () => {
+      expect(interpolarGuia(T, { causante: [' a.xlsx ', ''] })).toBe('al procesar «a.xlsx» y no alcanzó')
+      expect(interpolarGuia(T, { causante: [] })).toBe(`al procesar «${DATO_NO_INFORMADO}» y no alcanzó`)
+      expect(interpolarGuia(T, {})).toBe(`al procesar «${DATO_NO_INFORMADO}» y no alcanzó`)
+    })
+    it('un marcador SIN comillas con lista no cambia', () => {
+      expect(interpolarGuia('faltan {faltan}', { faltan: ['58', '88'] })).toBe('faltan 58 y 88')
+      expect(interpolarGuia('faltan {faltan}', { faltan: ['58', '88', '95', '1', '2'] })).toBe('faltan 58, 88, 95 y 2 más')
+    })
+  })
+
   it('lista corta, lista mediana y lista larga', () => {
     expect(formatoLista(['58'])).toBe('58')
     expect(formatoLista(['58', '88'])).toBe('58 y 88')
