@@ -1088,6 +1088,15 @@ function cerrarSustituidas(db: SqlDb, slotId: string): number {
   return pares.size
 }
 
+/** La colisión inobservada de `upsertSlotRun`: dos instancias DISTINTAS con el mismo `started_at` en
+ *  el mismo slot. La PK `(slot_id, started_at)` no admite las dos; no se destruye nada, pero tampoco se
+ *  calla. Mismo canal que los avisos del plano de escritura (`[store]` en stderr). */
+function avisarColision(slotId: string, startedAt: string, id: string, otroId: string, efecto: string): void {
+  console.warn(
+    `[store] intake_watch_run: dos instancias con el mismo started_at en '${slotId}' (${startedAt}: '${id}' y '${otroId}') — ${efecto}.`,
+  )
+}
+
 /**
  * Upsert de UNA corrida observada. Con `instanceId`, la identidad es el id: la corrida que el motor
  * reporta con otro `started_at` actualiza SU fila en vez de nacer de nuevo (la fantasma no puede nacer).
@@ -1122,7 +1131,10 @@ function upsertSlotRun(db: SqlDb, slotId: string, r: RunRecord): void {
       // (su clave era justo ese instante): se absorbe. Con otro id serían dos instancias con el mismo
       // `startTimeUtc` al 1e-7 s —no observado nunca—; no se destruye nada y se conserva el instante previo.
       if (ocupanteId == null) db.run(`DELETE FROM intake_watch_run WHERE slot_id = ? AND started_at = ? AND instance_id IS NULL`, [slotId, r.startedAt])
-      else startedAt = String(propia['started_at'])
+      else {
+        startedAt = String(propia['started_at'])
+        avisarColision(slotId, r.startedAt, id, ocupanteId, 'la corrida conserva su instante previo')
+      }
     }
     db.run(
       `UPDATE intake_watch_run SET started_at = ?, ended_at = ?, status = ?, error = ?, superseded_by = NULL WHERE slot_id = ? AND instance_id = ?`,
@@ -1138,7 +1150,11 @@ function upsertSlotRun(db: SqlDb, slotId: string, r: RunRecord): void {
         `UPDATE intake_watch_run SET instance_id = ?, ended_at = ?, status = ?, error = ?, superseded_by = NULL WHERE slot_id = ? AND started_at = ?`,
         [id, ended, r.status, error, slotId, r.startedAt],
       )
-    return // con otro id: mismo caso inobservado de arriba, no se pisa la otra corrida
+    // Con otro id: mismo caso inobservado de arriba. No se pisa la otra corrida, y esta queda SIN
+    // proyectar mientras dure la colisión — por eso se avisa: el síntoma sería una corrida que el motor
+    // lista y la proyección no.
+    else avisarColision(slotId, r.startedAt, id, ocupanteId, 'la corrida NO se proyecta')
+    return
   }
   db.run(`INSERT INTO intake_watch_run (slot_id, started_at, ended_at, status, error, instance_id) VALUES (?,?,?,?,?,?)`, [slotId, r.startedAt, ended, r.status, error, id])
 }
