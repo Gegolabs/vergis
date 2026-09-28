@@ -9,3 +9,5 @@ out/
 .env
 .DS_Store
 local/
+# worktrees del propio repo (ww:wingworking, layout: wt/)
+wt/
