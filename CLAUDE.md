@@ -18,8 +18,10 @@ y ventanas de un tercero, y esa decisión no es del que escribe el código.
 | Declarar **qué trae y qué exige** — migraciones, env nuevo, capacidades sin verificar contra motor vivo | El `pull`, el recreate, la ventana, el rollback |
 | Avisar por el canal del cliente | Su control de cambio, su QA, su respaldo |
 
-**El sombrero se elige por el repo, no por la capacidad.** La skill `mira-ops` sabe desplegar y **es del
-operador**: se ejecuta desde el repo del lab de A.R.B.O.L., no desde acá. Una sesión de este repo que
+**El sombrero se elige por el repo, no por la capacidad.** Las skills de operador **se distribuyen desde
+el Producto** (el plugin `vergis`, en `plugins/vergis/`) y **se ejecutan desde el repo del operador**, donde
+vive la declaración de su instalación (`vergis-ops.json`); acá no hay ninguna, y el CLI se niega a operar
+sin ella. Una sesión de este repo que
 recibe «hay que desplegar esto» no despliega — **publica y avisa**. Si César pide explícitamente en la
 sesión que operemos la VM, ahí el sombrero cambia por su acto, y consta.
 
