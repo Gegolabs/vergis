@@ -78,7 +78,7 @@ En una plataforma en GA típica, **lo que no corta no pide permiso** (se desplie
 2. `vo contract classify <archivo>` → tiene que decir `content`. Si dice otra cosa, **no es este flujo**.
 3. Si la instalación declara `governance.pretest`, correrlo y tener su evidencia (p. ej. el render local contra el dato real).
 4. **Espejo primero:** el archivo está en el repo del operador y la fuente es él, no el host.
-5. `vo publish <archivo> --pretest "<qué corriste y qué dio>"` — clasifica, aplica el gate, **respalda** (`<ruta>.bak-<ts>`), escribe **en sitio** (conserva inodo, dueño y modo: un montaje de archivo sigue el inodo), **verifica el sha** en el host y **espera a que el nodo lo tome** (`pending=false` con el sha local). Si el nodo no lo toma, sale 1 y **no dice «publicado»**.
+5. `vo publish <archivo> --pretest "<qué corriste y qué dio>"` — clasifica, aplica el gate, **respalda** (`<ruta>.bak-<ts>`), escribe **en sitio** (conserva inodo, dueño y modo: un montaje de archivo sigue el inodo), **verifica el sha** en el host y **espera a que el nodo lo tome** (`pending=false` con el sha local). **No dice «publicado» sin esa confirmación**: si el nodo no lo toma sale **1**; si no pudo preguntarle (el contrato no respondió) sale **2**, y si el anillo no devolvió el estado del artefacto, **5** — en esos dos el archivo está en el host y el despliegue **no está confirmado**: `vo contract wait <archivo>` antes de seguir.
 6. `vo smoke` — **todos** los Lets, no solo el tocado (un cambio rompe colateralmente).
 7. `vo parity --family <familia>` hasta 0.
 8. El rollback que `publish` imprimió queda en tu reporte.
@@ -88,7 +88,7 @@ En una plataforma en GA típica, **lo que no corta no pide permiso** (se desplie
 1. Editar **el espejo** y commitearlo. Nunca editar el host a mano.
 2. `vo publish <archivo>` (el compose o el archivo del servicio).
 3. Si el servicio declara `prevalidate`: `vo exec service <nombre> prevalidate` (contenedor efímero; no toca el vivo).
-4. `service-interrupting` en un gate `window`: declarar el impacto, tener la ventana autorizada, **arrancar el poller** (`vo poller start`, con su `vo poller cn1 --ring <anillo en espera>`) y recién entonces actuar.
+4. `service-interrupting` en un gate `window`: declarar el impacto, tener la ventana autorizada, **arrancar el poller** (`vo poller start`) con su control negativo **contra el anillo previo si existe** (`vo poller cn1 --ring <previo>`: uno en espera o retenido, nunca el activo), y recién entonces actuar. **Con un solo anillo no hay control negativo posible** (cn1 contra el activo, o sin anillo, sale 2): se actúa igual, y la fila del corte lo declara — «sin CN-1: la instalación tiene un solo anillo».
 5. `vo exec service <nombre> reload` (si declara recarga en caliente) o `recreate`. `reload` **compara lo que el contenedor VE** en cada montaje de archivo contra el host: un editor o un `sed -i` cambian el inodo y el contenedor sigue viendo lo viejo — recargar no es haber leído lo nuevo. Si sale 1 por eso, el camino es `recreate`, con su gate.
 6. `vo poller stop` da el corte. **La fila va a `governance.cuts_log` aunque diga «sin medir», y por qué**: una fila ausente hace creer que el corte no ocurrió.
 7. `vergis:verify`.
@@ -97,7 +97,7 @@ En una plataforma en GA típica, **lo que no corta no pide permiso** (se desplie
 
 ### `boot` — una variable de arranque, un montaje del nodo
 
-Lee **`deploy/rollout/RUNBOOK.md` §«Cambiar la configuración de arranque con anillos»** de la versión que corre la instalación. En corto: con anillos, un cambio de arranque entra en un **anillo nuevo** creado desde `ring.args` regenerado (`vo exec rollout ring-args --apply`), y se promueve con la ceremonia de **vergis:rollout** — eso es un acto `version`, instrumentado. Lo que ese camino no cubre (lo que comparten todos los anillos, como `VERGIS_OUT` o el lease) es `boot` de verdad: corte, ventana y medición.
+Lee el **RUNBOOK §7 «Cambiar la configuración de arranque con anillos»** de la versión que corre la instalación ([`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`](https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md): no viaja en la imagen, se lee del repo del Producto en su tag). En corto: con anillos, un cambio de arranque entra en un **anillo nuevo** creado desde `ring.args` regenerado (`vo exec rollout ring-args --apply`), y se promueve con la ceremonia de **vergis:rollout** — eso es un acto `version`, instrumentado. Lo que ese camino no cubre (lo que comparten todos los anillos, como `VERGIS_OUT` o el lease) es `boot` de verdad: corte, ventana y medición.
 
 ### `destructive`
 
