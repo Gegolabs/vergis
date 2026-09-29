@@ -102,7 +102,7 @@ function entorno(extra: Record<string, string> = {}) {
   }
 }
 const invocaciones = (log: string) => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('start')).length : 0)
-const volcados = (dir: string) => readdirSync(dir).filter((f) => f.startsWith('vergis-ops-spool.'))
+const volcados = (dir: string) => (existsSync(join(dir, 'vergis-ops-spool')) ? readdirSync(join(dir, 'vergis-ops-spool')) : [])
 
 describe('#369 · el contrato de tamaño real por az-run-command', () => {
   it('el fixture tiene el tamaño de la instalación medida: su resumen pasa de los 4 KB que az entrega', () => {
@@ -167,15 +167,15 @@ describe('#369 · el volcado por trozos, para cualquier verbo', () => {
 
   it('un volcado huérfano de más de 60 min lo barre la corrida siguiente; uno reciente no se toca', async () => {
     const e = entorno()
-    const viejo = join(e.hostTmp, 'vergis-ops-spool.viejo1')
-    const nuevo = join(e.hostTmp, 'vergis-ops-spool.nuevo1')
-    mkdirSync(viejo)
+    const viejo = join(e.hostTmp, 'vergis-ops-spool/s.viejo1')
+    const nuevo = join(e.hostTmp, 'vergis-ops-spool/s.nuevo1')
+    mkdirSync(viejo, { recursive: true })
     mkdirSync(nuevo)
     const { utimesSync } = await import('node:fs')
     const hace2h = new Date(Date.now() - 2 * 3600_000)
     utimesSync(viejo, hace2h, hace2h)
     const r = await cliAsync(eco(100), { cwd: decl(), env: e.env })
     expect(r.code, r.all).toBe(0)
-    expect(volcados(e.hostTmp)).toEqual(['vergis-ops-spool.nuevo1'])
+    expect(volcados(e.hostTmp)).toEqual(['s.nuevo1'])
   }, 30_000)
 })

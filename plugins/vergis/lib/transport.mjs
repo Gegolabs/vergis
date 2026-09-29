@@ -21,8 +21,8 @@
 // verbos, sin que ninguno tenga que diseñarse contra el recorte: si la salida del cuerpo cabe con margen
 // (`AZ_INLINE`), viaja en la misma invocación; si no, el host la VUELCA a un directorio propio (mktemp,
 // modo 700) y el CLI la baja por trozos de `AZ_CHUNK` bytes en base64 —cada trozo con su propio par
-// BEGIN/centinela— y la reensambla cotejando bytes y sha256 contra lo que el host declaró. El último
-// trozo borra el volcado; uno huérfano (el CLI murió a medias) lo barre la corrida siguiente a los 60
+// BEGIN/centinela— y la reensambla cotejando bytes y sha256 contra lo que el host declaró. Los volcados
+// viven bajo `$TMPDIR/vergis-ops-spool/` (modo 700). El último trozo borra el volcado; uno huérfano (el CLI murió a medias) lo barre la corrida siguiente a los 60
 // min. Presupuesto explícito: más de `AZ_MAX_CHUNKS` trozos no se baja —la corrida sale 7 diciendo
 // cuántos bytes emitió el host—, porque una medición de media hora por un canal de ~30 s por invocación
 // no es una medición que alguien espere.
@@ -121,14 +121,17 @@ export function wrap(ins, body, n, { mute = false, sentinelNonce, spool = null }
   const delim = `VO_BODY_${n}`
   const emit = spool
     ? [
-        // Barrer volcados huérfanos de corridas que murieron a medias (el CLI los borra al bajar el último trozo).
-        `find "\${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'vergis-ops-spool.*' -mmin +60 -exec rm -rf {} + 2>/dev/null`,
+        // Los volcados viven en un directorio PROPIO: barrer los huérfanos (corridas que murieron a medias; el
+        // CLI los borra al bajar el último trozo) recorre solo ese directorio, no todo el temporal del host
+        // (medido: un `find` sobre un TMPDIR de 63 mil entradas tardaba 1,5 s en cada corrida).
+        'VO_SP="${TMPDIR:-/tmp}/vergis-ops-spool"',
+        `[ -d "$VO_SP" ] && find "$VO_SP" -mindepth 1 -maxdepth 1 -type d -mmin +60 -exec rm -rf {} + 2>/dev/null`,
         `VO_B=$(wc -c < "$VO_T/out" | tr -d ' ')`,
         'VO_X=""',
         `if [ "$VO_B" -le ${spool.inline} ]; then`,
         `  awk '1' "$VO_T/out"`,
         `elif [ "$VO_B" -le ${spool.chunk * spool.maxChunks} ]; then`,
-        `  if VO_S=$(mktemp -d "\${TMPDIR:-/tmp}/vergis-ops-spool.XXXXXX") && mv "$VO_T/out" "$VO_S/out"; then`,
+        `  if mkdir -p "$VO_SP" && chmod 700 "$VO_SP" && VO_S=$(mktemp -d "$VO_SP/s.XXXXXX") && mv "$VO_T/out" "$VO_S/out"; then`,
         `    VO_H=$( (sha256sum "$VO_S/out" 2>/dev/null || shasum -a 256 "$VO_S/out") | cut -d' ' -f1)`,
         '    VO_X=" spool=$VO_S bytes=$VO_B sha=$VO_H"',
         '  else',
@@ -304,7 +307,7 @@ async function exchange(ins, build, { spooled = false } = {}) {
  * que el host declaró salen 7 — lo que falta no se da por visto.
  */
 async function fetchSpool(ins, spool) {
-  assertToken(spool.dir, 'volcado del host', /^\/[A-Za-z0-9._/-]*\/vergis-ops-spool\.[A-Za-z0-9]+$/)
+  assertToken(spool.dir, 'volcado del host', /^\/[A-Za-z0-9._/-]*\/vergis-ops-spool\/s\.[A-Za-z0-9]+$/)
   const k = Math.ceil(spool.bytes / AZ_CHUNK)
   const parts = []
   for (let i = 0; i < k; i++) {
