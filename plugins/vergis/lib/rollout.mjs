@@ -188,7 +188,7 @@ export async function execRollout(decl, ins, args, o) {
  */
 async function toolMatchesCandidate(decl, ins, v, o) {
   const body = String.raw`REF="$RINGS_IMAGE:${v}"
-${o['no-pull'] ? '' : `$DOCKER pull -q "$REF" >/dev/null 2>&1 || true`}
+${o['no-pull'] ? '' : `$DOCKER pull -q "$REF" >/dev/null 2>&1 && echo PULLED`}
 if ! $DOCKER image inspect "$REF" >/dev/null 2>&1; then echo "NOIMAGE $REF"; exit 0; fi
 LBL=$($DOCKER image inspect --format '{{index .Config.Labels "vergis.rollout.sha256"}}' "$REF" 2>/dev/null)
 case "$LBL" in ""|"<no value>") echo "NOLABEL"; exit 0 ;; esac
@@ -197,14 +197,17 @@ W=$(printf '%s' "$LBL" | tr ',' '
 G=$([ -f "$VO_TOOL" ] && vo_sha "$VO_TOOL")
 echo "TOOLSHA ${'$'}{W:--} ${'$'}{G:--}"`
   const r = await runRemote(decl, ins, body)
+  // El cotejo tiene un efecto aunque termine en negativa: el `pull` ya dejó la imagen en el host. Se
+  // dice en TODAS las salidas, para que un 2 no se lea como «no se tocó nada».
+  const pulled = r.lines.includes('PULLED') ? ` La imagen ${v} quedó descargada en el host para el cotejo (no se instaló ni se registró nada; el próximo install la reutiliza).` : ''
   if (r.lines.some((l) => l.startsWith('NOIMAGE '))) return `sin cotejar — la imagen ${v} no está en el host todavía (la trae el install)`
-  if (r.lines.includes('NOLABEL')) return `sin cotejar — la imagen ${v} no declara vergis.rollout.sha256 (anterior a que la herramienta viajara en la imagen: tómala del repo del Producto en su tag)`
+  if (r.lines.includes('NOLABEL')) return `sin cotejar — la imagen ${v} no declara vergis.rollout.sha256 (anterior a que la herramienta viajara en la imagen: tómala del repo del Producto en su tag).${pulled}`
   const t = r.lines.find((l) => l.startsWith('TOOLSHA '))
   if (!t) fail(EXIT.MUTE, 'el host no devolvió el sha de la herramienta')
   const [, want, got] = t.split(' ')
-  if (want !== '-' && want === got) return `la del host es la de ${v} (sha ${got.slice(0, 16)}…, cotejado contra el label de la imagen)`
-  if (o['keep-tool']) return `⚠ la del host NO es la de ${v} (host ${got.slice(0, 16)} · imagen ${want.slice(0, 16)}) y se conserva por --keep-tool: instalar una versión anterior con la herramienta más nueva`
-  fail(EXIT.NOT_RUN, `la herramienta del host no es la de ${v} (host ${got === '-' ? 'ausente' : got.slice(0, 16) + '…'} · label de la imagen ${want === '-' ? 'sin botler-rollout' : want.slice(0, 16) + '…'}). Herramienta y nodo son el mismo objeto: \`vergis-ops exec rollout tool ${v}\` y reintenta. (Para instalar una versión ANTERIOR con la herramienta más nueva: --keep-tool.)`)
+  if (want !== '-' && want === got) return `la del host es la de ${v} (sha ${got.slice(0, 16)}…, cotejado contra el label de la imagen).${pulled}`
+  if (o['keep-tool']) return `⚠ la del host NO es la de ${v} (host ${got.slice(0, 16)} · imagen ${want.slice(0, 16)}) y se conserva por --keep-tool: instalar una versión anterior con la herramienta más nueva.${pulled}`
+  fail(EXIT.NOT_RUN, `la herramienta del host no es la de ${v} (host ${got === '-' ? 'ausente' : got.slice(0, 16) + '…'} · label de la imagen ${want === '-' ? 'sin botler-rollout' : want.slice(0, 16) + '…'}). Herramienta y nodo son el mismo objeto: \`vergis-ops exec rollout tool ${v}\` y reintenta. (Para instalar una versión ANTERIOR con la herramienta más nueva: --keep-tool.)${pulled}`)
 }
 
 // ─── D9 · la herramienta sale de la imagen, por digest ───────────────────────────────────────────

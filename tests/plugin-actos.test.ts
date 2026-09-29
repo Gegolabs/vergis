@@ -194,6 +194,12 @@ describe('exec rollout: la promoción va instrumentada por construcción', () =>
     expect(mal.all).toMatch(/la herramienta del host no es la de 1\.0\.1/)
     expect(mal.all).toMatch(/exec rollout tool 1\.0\.1/)
     expect(mal.all).not.toMatch(/TOOL install/)
+    expect(mal.all).not.toMatch(/quedó descargada/) // --no-pull: no se descargó nada, y no se dice
+    // sin --no-pull el cotejo descarga la candidata: la negativa lo dice, para que un 2 no se lea como «no se tocó nada»
+    const conPull = await cliAsync(['exec', 'rollout', 'install', '1.0.1'], { cwd: dir, env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log } })
+    expect(conPull.code, conPull.all).toBe(2)
+    expect(conPull.all).toMatch(/La imagen 1\.0\.1 quedó descargada en el host para el cotejo \(no se instaló ni se registró nada/)
+    expect(conPull.all).not.toMatch(/TOOL install/)
     const guardado = await cliAsync(['exec', 'rollout', 'install', '1.0.1', '--no-pull', '--keep-tool'], { cwd: dir, env: { ...env(), FAKE_WORLD: w } })
     expect(guardado.code, guardado.all).toBe(0)
     expect(guardado.out).toMatch(/se conserva por --keep-tool/)
