@@ -24,7 +24,7 @@ claude plugin marketplace add Gegolabs/vergis --sparse .claude-plugin plugins
 claude plugin install vergis@vergis
 ```
 
-- **`--sparse` es obligatorio**: sin él, el marketplace clona el repo entero del Producto y lo vuelve a bajar en cada actualización.
+- **`--sparse` es obligatorio**: sin él, el marketplace clona el repo entero del Producto y lo vuelve a bajar en cada actualización. (Solo vale para fuentes git o GitHub: un checkout local del Producto se agrega como directorio, sin `--sparse`.)
 - Si el repo de operación es **compartido**, los **dos** comandos llevan `--scope project`. Con uno solo, otra máquina con el clon tendría el plugin habilitado y el marketplace desconocido.
 - El plugin va **fijado al tag** de la versión del Producto: el de la versión v conoce el contrato hasta v, y lo posterior lo lee del nodo. Actualizarlo es `claude plugin marketplace update vergis` + `claude plugin update vergis@vergis`.
 

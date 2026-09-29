@@ -33,6 +33,27 @@ Nace el plugin (issue #366, diseño `lab/work/285` v1.1 de R.O.B.L.E., primer ad
   `dash -n` sobre cada script generado); y la trampa `TERM` del poller, que limpiaba sin terminar el
   proceso (un `poller stop` no lo paraba).
 
+### ¿Qué se midió de la instalación, y cómo?
+
+Con Claude Code 2.1.284, el 2026-09-29 (V9 del diseño):
+
+- **El marketplace instala el TAG, no `main` — medido contra GitHub.** Un repo de prueba efímero con el
+  plugin en un tag (`SENTINEL=TAG`) y otro contenido en `main` (`SENTINEL=MAIN`), marketplace `git-subdir`
+  con `ref` al tag: `marketplace add <owner>/<repo> --sparse .claude-plugin plugins` + `install` dejan en
+  la caché `SENTINEL=TAG`, y `installed_plugins.json` registra el commit del tag. El clon del
+  marketplace con `--sparse` trae `.claude-plugin/`, `plugins/` y los archivos de la raíz, y **no** los
+  demás directorios.
+- **`--sparse` solo vale para fuentes git o GitHub**: `marketplace add <directorio>` lo rechaza. Para
+  probar un checkout local se agrega el directorio sin `--sparse`.
+- **`${CLAUDE_PLUGIN_ROOT}` llega sustituido con el plugin INSTALADO** (no solo con `--plugin-dir`): la
+  skill `vergis:setup` recibió `node <home>/.claude/plugins/cache/vergis/vergis/<versión>/bin/vergis-ops.mjs
+  check`, y esa línea corrió (`--help`, exit 0).
+- **`bin/` del plugin entra al `PATH` del Bash de la sesión**: `command -v vergis-ops.mjs` lo encuentra.
+  Las skills igual invocan `node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs`: no dependen del shebang ni de
+  que el `node` del `PATH` sea ≥ 22.
+- **El filtro `v[0-9]*` de GitHub Actions**, medido en el mismo repo de prueba: el push del tag `v0.0.1`
+  disparó el workflow; el de `vergis--v0.0.0`, no.
+
 ## Historia heredada (de la skill del primer adoptante)
 
 **Límites medidos el 2026-08-18 sobre el CHANGELOG dentro de la imagen**, que `vergis:rollout` conserva
