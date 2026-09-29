@@ -177,7 +177,12 @@ export async function smokeAll(decl, ins, o, { quiet = false } = {}) {
   for (const l of r.lines) if (/^(LET|MAL|ERR|NOTA|SPECS-ERROR) /.test(l)) say(`   ${l}`)
   say(`   -- ${N} Let(s) · ${V} vista(s) · ok ${OK} · mal ${MAL} · err ${ERR} · drill no medidas ${DRILL} · /healthz total=${HZT} serving=${kv.hz_serving} (${kv.hz_block}) --`)
   say('   (mide el tramo del NODO con identidad forjada por detrás del borde: el login real del borde queda fuera)')
-  if (N === 0 || N !== HZT || ERR > 0) {
+  // Un motor sin servibilidad por Let publica /healthz SIN bloque de conteos (el predicado de anillos lo
+  // admite: queda en la fase). Ahí no hay contra qué reconciliar: se dice, y el inventario es el de los
+  // specs montados. Un /healthz ilegible, en cambio, sigue siendo medición a medias.
+  const sinConteos = kv.hz_block === '-' && HZT === -1 && !r.lines.some((l) => l.startsWith('ERR healthz'))
+  if (sinConteos) say('   ℹ el nodo no publica conteos de Lets en /healthz (motor sin servibilidad por Let): la reconciliación no aplica; el inventario es el de los specs montados.')
+  if (N === 0 || (!sinConteos && N !== HZT) || ERR > 0) {
     say(`⚠ MEDICIÓN PARCIAL (exit 7): se probaron ${N} Let(s) y /healthz declara ${HZT}${ERR ? `, con ${ERR} vista(s) que no se pudieron pedir` : ''}. Lo no medido no cuenta como OK.`)
     return EXIT.PARTIAL
   }

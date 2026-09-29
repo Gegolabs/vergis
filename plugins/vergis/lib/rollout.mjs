@@ -25,7 +25,8 @@ import { pollerStatus } from './poller.mjs'
 import { gate, evidenceLine } from './exec.mjs'
 import { pluginVersion } from './declaration.mjs'
 
-const VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+(-r[0-9]+)?$/
+// Lo mismo que acepta botler-rollout: una versión exacta (y su `-rN` de --redigest) o un commit exacto `sha-…`.
+const VERSION_RE = /^([0-9]+\.[0-9]+\.[0-9]+(-r[0-9]+)?|sha-[A-Za-z0-9]+)$/
 const CN1_MAX_AGE_MS = 30 * 60_000
 
 const ringName = (v) => `vergis-${v.replace(/\./g, '-')}`
@@ -130,7 +131,7 @@ export async function execRollout(decl, ins, args, o) {
     }
     case 'install': {
       if (!v) fail(EXIT.NOT_RUN, 'exec rollout install <versión exacta>')
-      if (ins.min_version && cmpVer(v, ins.min_version) < 0) fail(EXIT.NOT_RUN, `${v} es menor que el piso que la instalación admite (min_version ${ins.min_version})`)
+      if (ins.min_version && /^[0-9]/.test(v) && cmpVer(v, ins.min_version) < 0) fail(EXIT.NOT_RUN, `${v} es menor que el piso que la instalación admite (min_version ${ins.min_version})`)
       const g = await gate(decl, ins, 'version', o)
       out(`== vergis-ops exec rollout install ${v} · ${ins.id} ==`)
       out(`   ${evidenceLine(g)}`)

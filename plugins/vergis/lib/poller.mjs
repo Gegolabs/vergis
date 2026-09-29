@@ -154,7 +154,7 @@ export async function cn1(decl, ins, o) {
   if (!Number.isFinite(secs) || secs < 5 || secs > 600) fail(EXIT.NOT_RUN, '--seconds entre 5 y 600')
   const body = String.raw`${whereSh(ins, null)}
 VO_RING=${shq(ringArg)}
-case "$VO_RING" in vergis-*) : ;; [0-9]*) VO_RING=$(vo_ring_name "$VO_RING") ;; esac
+case "$VO_RING" in vergis-*) : ;; *) VO_RING=$(vo_ring_name "$VO_RING") ;; esac
 if ! $DOCKER inspect "$VO_RING" >/dev/null 2>&1; then echo "NORING $VO_RING"; exit 0; fi
 VO_ACT=$(vo_active_ring || true)
 if [ "$VO_ACT" = "$VO_RING" ]; then echo "ISACTIVE $VO_RING"; exit 0; fi

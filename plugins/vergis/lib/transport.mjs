@@ -103,7 +103,10 @@ export function wrap(ins, body, n, { mute = false, sentinelNonce } = {}) {
     body,
     delim,
     `printf 'VERGIS-OPS-BEGIN %s\\n' '${n}'`,
-    'sh "$VO_T/body.sh" > "$VO_T/out" 2>&1',
+    // stdin del cuerpo = /dev/null: con `sh -s` (local, ssh) el script llega por stdin, y un comando del
+    // cuerpo que lee stdin (`docker compose exec`, `docker exec -i` sin heredoc) se tragaba el resto del
+    // envoltorio — centinela incluido — y la corrida salía «muda» (medido en el banco, V10).
+    'sh "$VO_T/body.sh" > "$VO_T/out" 2>&1 </dev/null',
     'VO_RC=$?',
     "awk '1' \"$VO_T/out\"",
     `VO_N=$(awk 'END{print NR}' "$VO_T/out")`,
