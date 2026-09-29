@@ -255,6 +255,39 @@ describe('poller cn1 contra un anillo retenido (detenido)', () => {
     expect(iWait).toBeGreaterThan(iStart)
     expect(iPoll).toBeGreaterThan(iWait)
     expect(r.out).toMatch(/estaba RETENIDO \(detenido\): lo arranqué y declaró phase=standby/)
+    // llegó a standby: queda caliente, NO se detiene, y la salida dice cómo devolverlo a retenido
+    expect(calls).not.toMatch(/^docker stop /m)
+    expect(readFileSync(join(w, 'containers/vergis-1-0-1'), 'utf8')).not.toMatch(/running=0/)
+    expect(r.out).toMatch(/si NO sigues con el acto, devuélvelo a retenido: `vergis-ops exec run --class version -- 'docker stop vergis-1-0-1'`/)
+  }, 20_000)
+
+  it('si el retenido que arrancó NO llega a standby, lo vuelve a detener: no deja un tercer anillo compitiendo por el lease', async () => {
+    const w = mundoRetenido()
+    // el anillo arranca pero nunca declara standby (queda en `booting`)
+    writeFileSync(join(w, 'bin', 'wget'), '#!/bin/sh\nprintf \'{"ok":true,"phase":"booting"}\'\n', { mode: 0o755 })
+    const log = join(w, 'docker.log')
+    const r = await cliAsync(['poller', 'cn1', '--ring', '1.0.1', '--seconds', '5', '--standby-timeout', '2'], { cwd: repo(), env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log } })
+    expect(r.code, r.all).toBe(1)
+    const calls = readFileSync(log, 'utf8')
+    expect(calls, r.all).toMatch(/^docker start vergis-1-0-1$/m)
+    expect(calls, r.all).toMatch(/^docker stop vergis-1-0-1$/m)
+    expect(calls.indexOf('docker stop vergis-1-0-1')).toBeGreaterThan(calls.indexOf('docker start vergis-1-0-1'))
+    expect(readFileSync(join(w, 'containers/vergis-1-0-1'), 'utf8')).toMatch(/running=0/)
+    expect(r.out).toMatch(/lo volví a detener/)
+    expect(r.out).toMatch(/CN-1 NO CORRIÓ/)
+    // y el control no llegó a medir
+    expect(calls).not.toMatch(/vergis-ops-poller\.sh http:\/\/vergis-1-0-1/)
+  }, 20_000)
+
+  it('un anillo que YA corría y no llega a standby NO se detiene: no lo arrancó este verbo', async () => {
+    const w = mundoRetenido()
+    writeFileSync(join(w, 'containers/vergis-1-0-1'), 'ring=1\n')
+    writeFileSync(join(w, 'bin', 'wget'), '#!/bin/sh\nprintf \'{"ok":true,"phase":"booting"}\'\n', { mode: 0o755 })
+    const log = join(w, 'docker.log')
+    const r = await cliAsync(['poller', 'cn1', '--ring', '1.0.1', '--seconds', '5', '--standby-timeout', '2'], { cwd: repo(), env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log } })
+    expect(r.code, r.all).toBe(1)
+    const calls = readFileSync(log, 'utf8')
+    expect(calls).not.toMatch(/^docker (start|stop) /m)
   }, 20_000)
 })
 
