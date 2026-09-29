@@ -61,6 +61,56 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### El plugin `vergis`: operar cualquier instalación desde Claude Code (#366)
+
+**Qué es.** Un plugin de Claude Code que el Producto distribuye desde este repo como marketplace de un
+solo plugin, **fijado al tag de la versión**: el plugin de la versión v conoce el contrato del nodo hasta
+v, y lo posterior lo lee del nodo (`/contrato`). Trae cuatro skills —`vergis:ops`, `vergis:rollout`,
+`vergis:verify`, `vergis:setup`— y el CLI `vergis-ops` (Node ≥ 22, sin dependencias), con transportes
+`local`, `ssh` y `az-run-command`, un centinela por corrida y un vocabulario de salida único que distingue
+«medí» de «no pude medir».
+
+**Qué cambia para el operador.** Nada, hasta que lo instale:
+
+```sh
+claude plugin marketplace add Gegolabs/vergis --sparse .claude-plugin plugins   # --scope project en los dos
+claude plugin install vergis@vergis                                               # comandos si el repo es compartido
+```
+
+y declare su instalación en un `vergis-ops.json` en el repo desde el que opera (esquema en
+`plugins/vergis/schema/`; lo mínimo es `id`, `transport`, `host.root` y `rings`). El plugin **no trae
+ningún hecho de ninguna instalación** —una prueba del suite lo garantiza—, y **se niega a promover** sin
+un poller corriendo, sin línea base y sin un control negativo (CN-1) rojo-como-debe contra el anillo
+destino: la promoción verificada deja de ser una disciplina y pasa a ser la única forma de promover con
+él. Cada acto se clasifica contra el contrato vivo del nodo y lleva el gate que la instalación declara.
+
+### La herramienta de anillos viaja en la imagen de su versión (#366)
+
+La imagen trae `botler-rollout`, `vergis-rollout` y el generador de `ring.args` en `/app/deploy/rollout/`,
+con el sha256 de cada uno en el label **`vergis.rollout.sha256`**. **Qué cambia para el operador:** la
+herramienta de la versión v ya no tiene que salir de un clon del repo (que puede no estar en el tag v):
+sale de la imagen, por digest, y se verifica contra el label antes de instalarla
+(`docker create` + `docker cp`, o `vergis-ops exec rollout tool <v>`).
+
+### `ring.args` se deriva del compose vivo (#366)
+
+`deploy/rollout/ring-args-from-compose.mjs` genera `ring.args` desde
+`docker compose config --no-env-resolution --format json`; viaja en la imagen, así que el host no
+necesita `node`. El README de anillos deja de decir que «nada verifica» `ring.args`: **el diff contra
+el vigente es la verificación**. Aborta ante un secreto inlineado o un `VERGIS_OUT` sin montar en
+escritura.
+
+### Los tags de versión son `v[0-9]*` (#366)
+
+El workflow de build, el tag `latest` y el cotejo del corte reaccionan solo a tags con un dígito después
+de la `v`. Un tag `vergis--vX.Y.Z` (el que crea `claude plugin tag`) ya no dispara el build ni mueve
+`latest` (medido en un repo de prueba: `v0.0.1` disparó el workflow; `vergis--v0.0.0`, no).
+
+**Qué exige esta versión, en lo de esta sección.** Nada: sin migración, sin variable nueva, sin cambio de
+contrato del nodo. No rompe rollback.
+
 ## 0.39.0 — 2026-09-24
 
 ### Corregido: «Cargando» falso de hasta 60 minutos cuando la corrida pasó por cola (frente roble, `work/281` P; PR #361)
