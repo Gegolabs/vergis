@@ -113,7 +113,8 @@ async function moveTraffic(decl, ins, act, version, o) {
     return EXIT.FINDING
   }
   const bad = c ? (c.mal ?? 0) + (c.sinmedir ?? 0) : null
-  out(`✓ ${act} hecho (exit 0)${bad === 0 ? ': 0 muestras fuera de predicado.' : `: ${bad} muestra(s) fuera de predicado — ESE es el corte.`}`)
+  const sm = c?.sinmedir ? ` (${c.sinmedir} de ellas SINMEDIR: van en la fila como «sin medir», no como corte — timeout de 2 s, no mide retención: #367)` : ''
+  out(`✓ ${act} hecho (exit 0)${bad === 0 ? ': 0 muestras fuera de predicado.' : `: ${bad} muestra(s) fuera de predicado${sm} — las MAL son el corte.`}`)
   return EXIT.OK
 }
 

@@ -364,3 +364,41 @@ describe('recon', () => {
     expect(existsSync(join(host, 'specs'))).toBe(true)
   })
 })
+
+/**
+ * La cuenta del poller: el exit y el texto dicen lo mismo. Un SINMEDIR sale 7 («medí a medias»), y el
+ * texto no lo llama corte: con timeout de 2 s es compatible con una retención de la sala de espera > 2 s
+ * (#367). El inyector: un registro de poller con un log escrito a mano, contra el mundo falso.
+ */
+describe('poller count: SINMEDIR no se llama corte', () => {
+  async function conLog(dir: string, stateDir: string, log: string) {
+    const { writeRecord } = await (await import('./plugin-helpers')).lib('state.mjs')
+    const prev = process.env.VERGIS_OPS_STATE_DIR
+    process.env.VERGIS_OPS_STATE_DIR = stateDir
+    const t = tmp('vergis-actos-count-')
+    writeFileSync(join(t, 'p.log'), log)
+    writeRecord(join(realpathSync(dir), 'vergis-ops.json'), 'prueba', 'poller', { id: 'p-cuenta', state: 'running', container: 'borde', target: 'x', pidFile: join(t, 'p.pid'), logFile: join(t, 'p.log'), interval: '0.25', startedAt: 'ahora', instrument: 'inyector' })
+    if (prev === undefined) delete process.env.VERGIS_OPS_STATE_DIR
+    else process.env.VERGIS_OPS_STATE_DIR = prev
+  }
+  const ok = (t: number) => `${t.toFixed(2)} 12:00:00 OK status=2xx phase=serving lets=1/1`
+
+  it('1 SINMEDIR entre OK → 7, «medí a medias», y los SINMEDIR van como «sin medir»', async () => {
+    const dir = repo()
+    const st = tmp()
+    await conLog(dir, st, [ok(1), ok(1.25), '1.50 12:00:01 SINMEDIR wget:_download_timed_out_', ok(3.75)].join('\n') + '\n')
+    const r = await cliAsync(['poller', 'count'], { cwd: dir, env: { ...env(), VERGIS_OPS_STATE_DIR: st } })
+    expect(r.code, r.all).toBe(7)
+    expect(r.out).toMatch(/MEDÍ A MEDIAS \(exit 7\): 0 muestra\(s\) MAL .* y 1 SINMEDIR, que en la fila van como «sin medir», no como corte/)
+    expect(r.out).not.toMatch(/MEDÍ \(exit 1\)/)
+  })
+
+  it('1 MAL sin SINMEDIR → 1, y ESE es el corte', async () => {
+    const dir = repo()
+    const st = tmp()
+    await conLog(dir, st, [ok(1), '1.25 12:00:01 MAL status=503 phase=- lets=-', ok(1.5)].join('\n') + '\n')
+    const r = await cliAsync(['poller', 'count'], { cwd: dir, env: { ...env(), VERGIS_OPS_STATE_DIR: st } })
+    expect(r.code, r.all).toBe(1)
+    expect(r.out).toMatch(/MEDÍ \(exit 1\): 1 muestra\(s\) fuera de predicado — ESE es el corte/)
+  })
+})

@@ -136,8 +136,14 @@ $DOCKER exec "$VO_CT" cat ${rec.logFile} | ${COUNT_AWK}`
   out(`   fila para ${cuts ?? 'el registro de cortes (la instalación no declara governance.cuts_log: no hay dónde registrarla — la fila queda en esta salida)'}: ` +
     `${new Date().toISOString().slice(0, 10)} · ${c.n} muestras · ${bad} fuera de predicado · tramo máximo ${c.maxrun.toFixed(2)} s · instrumento ${rec.instrument} en ${rec.container} · CN-1 ${cn1Line(decl, ins)}`)
   if (bad === 0) { out(`✓ MEDÍ (exit 0): 0 muestras fuera de predicado en ${c.n}.`); return EXIT.OK }
+  if (c.sinmedir) {
+    // El exit es 7, y el texto lo dice: «medí a medias» no es «medí un corte». Con timeout de 2 s, un
+    // SINMEDIR es compatible con una retención de la sala de espera > 2 s (#367) — va como «sin medir».
+    out(`⚠ MEDÍ A MEDIAS (exit 7): ${c.mal ?? 0} muestra(s) MAL — ESE es el corte, no la duración del comando — y ${c.sinmedir} SINMEDIR, que en la fila van como «sin medir», no como corte (el poller consulta con timeout de 2 s y no mide retención: #367).`)
+    return EXIT.PARTIAL
+  }
   out(`⚠ MEDÍ (exit 1): ${bad} muestra(s) fuera de predicado — ESE es el corte, no la duración del comando.`)
-  return c.sinmedir ? EXIT.PARTIAL : EXIT.FINDING
+  return EXIT.FINDING
 }
 
 function cn1Line(decl, ins) {
