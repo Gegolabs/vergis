@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { runSpec } from '@vergis/cli'
 import type { Capability } from '@vergis/botler'
-import { cli, cliAsync, declarar, FIX, minima, tmp } from './plugin-helpers'
+import { cli, cliAsync, declarar, FIX, lib, minima, tmp } from './plugin-helpers'
 
 const DOCKER = join(FIX, 'fake-docker.sh')
 const sha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex')
@@ -233,6 +233,27 @@ describe('contract: lo que el nodo declara, y la clasificación que se deriva', 
     estado.artifactOverride = null
     expect(mal.code, mal.all).toBe(1)
     expect(mal.all).toMatch(/NO lo tomó/)
+  })
+  it('env discrimina por la lista del contrato vivo: de arranque → version (anillo nuevo); ruta recargable → version + content; ausente → nada', async () => {
+    const dir = declarar(decl({ governance: { gates: { read: 'free', content: 'operator', version: 'operator', boot: 'window' } } }))
+    const boot = await cliAsync(['contract', 'env', 'VERGIS_ENGINE'], { cwd: dir, env: env(mundo()) })
+    expect(boot.code, boot.all).toBe(0)
+    expect(boot.out).toMatch(/VERGIS_ENGINE: bootOnly — .*ANILLO NUEVO/)
+    expect(boot.out).toMatch(/clase del acto: version — gate: operator/)
+    const ruta = await cliAsync(['contract', 'env', 'VERGIS_SPECS_DIR'], { cwd: dir, env: env(mundo()) })
+    expect(ruta.code, ruta.all).toBe(0)
+    expect(ruta.out).toMatch(/clase del acto: version — gate: operator · el CONTENIDO .* clase content/)
+    const nada = await cliAsync(['contract', 'env', 'VERGIS_NO_EXISTE'], { cwd: dir, env: env(mundo()) })
+    expect(nada.code, nada.all).toBe(0)
+    expect(nada.out).toMatch(/VERGIS_NO_EXISTE: absent — esta versión del nodo no la consume/)
+    expect(nada.out).not.toMatch(/clase del acto/)
+  })
+  it('env: lo que comparten todos los anillos es boot; lo presente y no consumido es hallazgo', async () => {
+    const { envVerdict } = await lib('contract.mjs')
+    expect(envVerdict('VERGIS_OUT', 'bootOnly')).toMatchObject({ cls: 'boot', code: 0 })
+    expect(envVerdict('VERGIS_ENGINE', 'bootOnly')).toMatchObject({ cls: 'version', code: 0 })
+    expect(envVerdict('VERGIS_TYPO', 'unknown')).toMatchObject({ cls: null, code: 1 })
+    expect(envVerdict('VERGIS_X', 'absent')).toMatchObject({ cls: null, code: 0 })
   })
 })
 
