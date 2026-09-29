@@ -127,6 +127,24 @@ describe('check · la declaración mínima es usable', () => {
     expect(r.all).toMatch(/usa un tag móvil/)
   })
 
+  function conCompose(compose: string) {
+    const d = minima({
+      host: { root: '/srv/x', compose_file: '/srv/x/compose.yml' },
+      mirror: { families: [{ id: 'compose', kind: 'fixed', local: 'compose.yml', remote: 'compose.yml' }] },
+    })
+    return cli(['check'], { cwd: declarar(d, { 'compose.yml': compose }) })
+  }
+
+  it('#370 · una imagen construida localmente (build:) no tiene tag móvil; la misma imagen sin build sí', () => {
+    const local = conCompose('services:\n  proxy:\n    build: ./proxy\n    image: proxy-local:1\n')
+    expect(local.code, local.all).toBe(0)
+    expect(local.all).not.toMatch(/tag móvil/)
+    const registro = conCompose('services:\n  proxy:\n    image: proxy-local:1\n')
+    expect(registro.all).toMatch(/«proxy» usa un tag móvil \(proxy-local:1: serie 1\)/)
+    const despues = conCompose('services:\n  proxy:\n    image: proxy-local:1\n    build:\n      context: ./proxy\n')
+    expect(despues.all).not.toMatch(/tag móvil/)
+  })
+
   it('el transporte que nombra un host ausente de RESOURCES.md es defecto', () => {
     const d = minima({ transport: { kind: 'az-run-command', resource_group: 'rg-x', vm: 'vm-x', expected_account: 'op@x' } })
     const r = cli(['check'], { cwd: declarar(d, { 'RESOURCES.md': '# Accesos\n\n| rg-x | … |\n' }) })

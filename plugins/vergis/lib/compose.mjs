@@ -2,7 +2,8 @@
 //
 // No es un parser de YAML: extrae lo que necesita con reglas de sangría que el compose de referencia del
 // Producto cumple (dos espacios por nivel): los nombres de servicio, la línea `image:` y `container_name:`
-// de cada uno, el `name:` del proyecto, y los montajes del host (binds relativos, binds bajo la raíz de la instalación, `env_file`, `context`).
+// de cada uno, si se construye localmente (`build:`), el `name:` del proyecto, y los montajes del host
+// (binds relativos, binds bajo la raíz de la instalación, `env_file`, `context`).
 // Si un compose no calza con esas reglas, lo que devuelve es MENOS, nunca inventado — y los que lo
 // consumen (check, G1) lo dicen en vez de aprobar por omisión.
 
@@ -21,10 +22,11 @@ export function composeServices(text) {
     const m = /^ {2}([A-Za-z0-9._-]+):\s*(#.*)?$/.exec(ln)
     if (m) {
       cur = m[1]
-      services[cur] = { image: null, profiles: [], containerName: null }
+      services[cur] = { image: null, profiles: [], containerName: null, build: false }
       continue
     }
     if (!cur) continue
+    if (/^ {4}build:/.test(ln)) services[cur].build = true
     const im = /^ {4}image:\s*["']?([^"'\s#]+)/.exec(ln)
     if (im) services[cur].image = im[1]
     const cn = /^ {4}container_name:\s*["']?([^"'\s#]+)/.exec(ln)
@@ -54,9 +56,13 @@ export function serviceOfContainer(services, ct, project) {
   return null
 }
 
-/** ¿El tag de la imagen es móvil? (`latest`, `main`, sin tag, o una serie `X.Y`). */
-export function movableTag(image) {
-  if (!image) return null
+/**
+ * ¿El tag de la imagen es móvil? (`latest`, `main`, sin tag, o una serie `X.Y`). Una imagen que el propio
+ * servicio construye (`build:`) no tiene tag móvil (#370): su tag no lo mueve un registro sino el `build`
+ * del operador, y la advertencia sería ruido.
+ */
+export function movableTag(image, { built = false } = {}) {
+  if (!image || built) return null
   if (image.includes('@sha256:')) return null
   const slash = image.lastIndexOf('/')
   const colon = image.lastIndexOf(':')
