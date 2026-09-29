@@ -257,6 +257,50 @@ pierde.
 
 ---
 
+## 7 · Cambiar la configuración de arranque con anillos
+
+Una variable de entorno que el nodo lee **al arrancar** (las que `/contrato` lista en `env.bootOnly`), o
+un montaje del nodo, no se recargan en caliente: el proceso tiene que nacer con ellas. Con anillos, eso
+no obliga a cortar. **Lo que dice el código** (`botler-rollout`, `cmd_install`):
+
+- Cada anillo se crea con `docker create` desde `rings/ring.args` **en el momento del `install`**. Cambiar
+  `ring.args` no toca a ningún anillo ya creado.
+- `install` es **idempotente por versión**: re-instalar la misma versión con la misma imagen no recrea
+  el contenedor. El guard de digest impide un segundo anillo de la misma versión con el mismo digest
+  (`--redigest` solo aplica si el digest cambió). El activo y el previo no se recrean nunca.
+- `install` acepta, además de una versión exacta, un **commit exacto** `sha-<commit>` — el tag que el CI
+  publica para cada commit. Es el mismo código bajo otro nombre de anillo.
+
+**El camino sin corte**, entonces, es **un anillo nuevo que nace con la configuración nueva, promovido
+con la ceremonia de siempre**:
+
+1. Cambia el compose (espejo primero) y **regenera `ring.args`** con el generador
+   (`ring-args-from-compose.mjs`, que viaja en la imagen) — diffea contra el vigente antes de reemplazarlo,
+   con respaldo.
+2. `botler-rollout install <ref>` con un ref que **no** sea el del activo: la versión siguiente, o el
+   **mismo código** bajo su `sha-<commit>`. El anillo nuevo arranca con la configuración nueva y queda
+   en espera; verifica en su `/contrato` que la variable está como esperas.
+3. §3–§5: poller, control negativo contra el anillo nuevo, `promote`, el corte contado.
+4. El rollback vuelve al anillo anterior **con la configuración anterior**: es la reversa del cambio.
+
+Con el plugin `vergis`: `vergis-ops exec rollout ring-args --apply`, `exec rollout install <ref>`,
+`poller start` + `poller cn1 --ring <ref>`, `exec rollout promote <ref>`. Es un acto de clase **`version`**,
+instrumentado, no un `boot`.
+
+**Medido en el banco** (`deploy/rollout/bench`, 2026-09-29, V10 de #366): con una variable nueva en
+`ring.args`, `install sha-bench` (la misma imagen bajo un ref de commit) y `promote sha-bench` con el
+poller en el borde y su CN-1: **0 muestras fuera de predicado**, y el `/contrato` del anillo activo la
+declara (`env.unknown` la lista: el proceso nació con ella). El rollback volvió al anillo anterior, también
+sin muestras fuera de predicado.
+
+**Lo que este camino NO cubre, y entonces sí corta:** lo que **comparten** todos los anillos. `VERGIS_OUT`
+(ahí viven el lease del plano de control y los stores: dos anillos con `VERGIS_OUT` distintos no se ven
+entre sí, y el lease solo ordena a quien ve el archivo — sería abrir la puerta a dos controladores), los
+montajes de los stores, y la red del borde. Cambiar eso es detener los anillos, cambiar y arrancar:
+**corte**, con ventana, impacto declarado antes y el corte medido (§0). Y un cambio en el **contenido**
+de un `env_file` que el nodo lee al arrancar entra por el mismo camino del anillo nuevo: el archivo es
+compartido, pero cada proceso lo lee al nacer.
+
 ## Límites declarados
 
 - **Un solo host, con FS local.** El plano de control se ordena por **rename atómico** y por relojes
@@ -294,9 +338,13 @@ promoción: la imagen `caddy:2` trae `/bin/sh`, `/usr/bin/wget` y `/bin/sed`, y 
 `--long-flag` de GNU no existe ahí. Si cambias la imagen del borde, **verifica las herramientas antes
 de la ventana, no durante**.
 
-**No medido, y por qué no se disfraza:** el poller de §0.4 está escrito contra el shape real de
-`/healthz` y con flags verificados, pero **no se ejecutó contra un borde vivo desde este runbook**. Y
-las tres vías sanas del inodo (`docker cp`, editar dentro, montar el **directorio**) son la lectura
+**Medido sobre el poller** (`plugins/vergis/instruments/poller.sh`, en el borde `caddy:2` del banco,
+2026-09-29, V10 de #366): contra un anillo en espera da todo `MAL phase=standby` (el control negativo);
+un cuerpo vacío, uno HTML con el literal de la fase y uno con conteos fuera de bloque dan `MAL`; un
+nodo degradado (`lets=8/9`) da `MAL`; un 404 da `MAL status=404`; un host inexistente da `SINMEDIR`; y
+`serving` con `lets` o con el `pis` viejo da `OK`, diciendo cuál leyó.
+
+**No medido, y por qué no se disfraza:** las tres vías sanas del inodo (`docker cp`, editar dentro, montar el **directorio**) son la lectura
 mecánica correcta del problema: **lo medido fue el fallo, no la cura**. La primera vez que las uses,
 comprueba con §0.5 que la config llegó — que es justamente lo que §0.5 existe para no dar por
 supuesto.
