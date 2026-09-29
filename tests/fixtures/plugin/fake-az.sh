@@ -10,6 +10,8 @@
 #   headcut   corta la salida por el PRINCIPIO (llega el centinela, faltan líneas)
 #   conflict  «(Conflict) Run command extension execution is in progress», rc=1
 #   slow      como ok, pero tarda FAKE_AZ_SLEEP segundos (para el candado)
+# En TODOS los modos que entregan salida, el stdout se recorta como lo recorta az: se conservan solo los
+# ÚLTIMOS FAKE_AZ_CAP bytes (default 4096; #369: un contrato de 4,1 KB perdía la cabeza y el BEGIN).
 # `az account show` devuelve FAKE_AZ_ACCOUNT. Cada invocación de run-command deja inicio y fin en FAKE_LOG.
 set -u
 ms() { node -p 'Date.now()'; }
@@ -30,6 +32,7 @@ case "$mode" in
   truncate) n=$(printf '%s' "$o" | wc -c); o=$(printf '%s' "$o" | head -c $((n / 2))) ;;
   headcut) n=$(printf '%s' "$o" | wc -c); o=$(printf '%s' "$o" | tail -c $((n / 2))) ;;
 esac
+o=$(printf '%s\n' "$o" | tail -c "${FAKE_AZ_CAP:-4096}")
 printf 'Enable succeeded: \n[stdout]\n%s\n[stderr]\n\n' "$o"
 [ -n "${FAKE_LOG:-}" ] && echo "end $(ms) $$" >> "$FAKE_LOG"
 exit 0
