@@ -135,7 +135,7 @@ function checkInstallation(decl, ins, errors, warnings, notes) {
       if (!(s.name in svcs)) errors.push(`${tag} services «${s.name}»: no está en el compose del espejo (${compose.family.local}; servicios: ${Object.keys(svcs).join(' · ') || 'ninguno reconocido'})`)
     }
     for (const [name, s] of Object.entries(svcs)) {
-      const why = movableTag(s.image)
+      const why = movableTag(s.image, { built: s.build })
       if (why) warnings.push(`${tag} el servicio «${name}» usa un tag móvil (${s.image}: ${why}): lo que corre no se puede nombrar`)
     }
   } else if (ins.services?.length) {
