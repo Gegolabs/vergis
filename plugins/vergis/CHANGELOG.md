@@ -7,7 +7,7 @@ implementación del CLI y de las skills, y la historia que las skills heredaron.
 
 ## Sin publicar
 
-Nace el plugin (issue #366, diseño `lab/work/285` v1.1 de A.R.B.O.L., primer adoptante).
+Nace el plugin (issue #366).
 
 - **Cuatro skills**: `vergis:ops` · `vergis:rollout` · `vergis:verify` · `vergis:setup`.
 - **El CLI `vergis-ops`** (Node ≥ 22, sin dependencias): `check` · `recon` · `health` · `contract` ·
