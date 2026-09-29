@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { EXIT, out } from './util.mjs'
 import { loadDeclaration, localPath, mirrorRoot } from './declaration.mjs'
-import { composeServices, movableTag } from './compose.mjs'
+import { composeServices, composeProjectName, movableTag, serviceOfContainer } from './compose.mjs'
 
 function git(cwd, ...args) {
   return spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
@@ -147,4 +147,34 @@ function checkInstallation(decl, ins, errors, warnings, notes) {
       if (v && !txt.includes(v)) errors.push(`${tag} ${v}: el transporte lo nombra y RESOURCES.md no — el acceso tiene que estar en el inventario del repo`)
     }
   }
+
+  instrumentHost(ins, compose, notes, tag)
+}
+
+/**
+ * ¿Qué servicio aloja el poller? `instrument.container` si se declara; si no, el borde (`RINGS_EDGE`,
+ * con el default de la herramienta). Recrear ese servicio mata la medición, y `exec service … recreate`
+ * se niega mientras el poller corra ahí: acá se dice ANTES, para que no se descubra en la ventana.
+ */
+function instrumentHost(ins, compose, notes, tag) {
+  const declared = ins.instrument?.container
+  const edgeEnv = ins.rings?.env?.RINGS_EDGE
+  const ct = declared ?? edgeEnv ?? (ins.rings?.env_file ? null : 'caddy')
+  const origin = declared ? 'instrument.container' : edgeEnv ? 'RINGS_EDGE, por omisión' : 'el borde por omisión de la herramienta'
+  if (!ct) {
+    notes.push(`${tag} instrumento: vive en el borde (RINGS_EDGE), definido en rings.env_file, que check no lee (vive en el host). La guardia de \`exec service … recreate\` lo averigua en el host.`)
+    return
+  }
+  if (!compose) {
+    notes.push(`${tag} instrumento: vive en «${ct}» (${origin}); sin el compose en el espejo no sé qué servicio es. La guardia de \`exec service … recreate\` lo averigua en el host.`)
+    return
+  }
+  const svcs = composeServices(compose.text)
+  const svc = serviceOfContainer(svcs, ct, ins.host?.compose_project ?? composeProjectName(compose.text))
+  if (!svc) {
+    notes.push(`${tag} instrumento: vive en «${ct}» (${origin}), que no es un contenedor de ningún servicio del compose del espejo: ningún \`exec service … recreate\` lo toca.`)
+    return
+  }
+  const moveHint = declared ? '' : ' Para recrearlo con el corte medido, mueve antes el instrumento a un contenedor de vida larga que ese acto no recree (instrument.container).'
+  notes.push(`${tag} instrumento: vive en «${ct}» (${origin}) = servicio «${svc}». \`exec service ${svc} recreate\` se niega mientras el poller corra ahí.${moveHint}`)
 }

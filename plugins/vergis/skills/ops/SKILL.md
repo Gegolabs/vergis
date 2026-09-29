@@ -93,7 +93,7 @@ En una plataforma en GA típica, **lo que no corta no pide permiso** (se desplie
 6. `vo poller stop` da el corte. **La fila va a `governance.cuts_log` aunque diga «sin medir», y por qué**: una fila ausente hace creer que el corte no ocurrió.
 7. `vergis:verify`.
 
-El contenedor que **aloja el poller** no se recrea mientras el poller corra (el CLI se niega): sería matar la medición a mitad de serie.
+**El contenedor que aloja el poller no se recrea mientras el poller corra**: sería matar la medición a mitad de serie y dejar la fila del corte «sin medir». El CLI se niega (2), y lo averigua **en el host** (el contenedor donde corre el poller contra los del servicio), no en una clave declarada. **Por omisión el poller vive en el borde** (`RINGS_EDGE`), así que recrear el borde con su ventana exige **moverlo primero**: `instrument.container` en la declaración apuntando a otro contenedor de vida larga que ese acto no recree, `vo poller stop`, `vo poller start` (ya en el nuevo) con su CN-1, y recién entonces `recreate`. `vo check` dice de antemano qué servicio aloja el instrumento.
 
 ### `boot` — una variable de arranque, un montaje del nodo
 

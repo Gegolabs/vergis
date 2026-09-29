@@ -93,7 +93,7 @@
         },
         "instrument": {
           "type": "object",
-          "description": "Dónde vive el poller de corte. Si falta, en el borde (`RINGS_EDGE`), que toda instalación con anillos tiene y que ningún acto de anillos recrea (RUNBOOK §0.3).",
+          "description": "Dónde vive el poller de corte. Si falta, en el borde (`RINGS_EDGE`), que toda instalación con anillos tiene y que ningún acto de anillos recrea (RUNBOOK §0.3) — pero sí un recreate del propio borde: `exec service <borde> recreate` se niega mientras el poller corra ahí (la guardia lo averigua en el host), y `check` dice qué servicio aloja el instrumento. Para recrear el borde medido, declara acá otro contenedor.",
           "additionalProperties": false,
           "properties": {
             "container": {
@@ -214,8 +214,7 @@
                 "pattern": "^(none|exec:[^'`$\\\\]+)$",
                 "description": "`none`, o `exec:<comando>` que recarga en caliente DENTRO del contenedor (p. ej. `exec:caddy reload --config /etc/caddy/Caddyfile`)."
               },
-              "prevalidate": { "type": "string", "pattern": "^[^'`$\\\\]+$", "description": "Comando que valida el cambio antes de aplicarlo, dentro de un contenedor efímero de la misma imagen." },
-              "hosts_instrument": { "type": "boolean", "description": "`true` si aloja el poller (`instrument.container`): recrearlo corta la medición." }
+              "prevalidate": { "type": "string", "pattern": "^[^'`$\\\\]+$", "description": "Comando que valida el cambio antes de aplicarlo, dentro de un contenedor efímero de la misma imagen." }
             }
           }
         },

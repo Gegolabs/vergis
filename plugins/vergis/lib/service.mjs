@@ -11,7 +11,10 @@
 //
 // La clase la da la declaración: `interrupting: true` ⇒ service-interrupting (en GA, ventana del
 // operador y corte medido); `false` ⇒ service. Recrear el contenedor que ALOJA el poller corta la
-// medición: se niega mientras el poller corra ahí.
+// medición: se niega mientras el poller corra ahí. «Ahí» se le pregunta al HOST —el contenedor donde el
+// poller registrado está corriendo contra los contenedores del servicio en el compose—, no a una clave de
+// la declaración: por omisión el poller vive en el borde (`RINGS_EDGE`), y una guardia que dependiera de
+// que alguien lo hubiera declarado dejaría pasar justo el caso normal.
 
 import { EXIT, fail, out, shq } from './util.mjs'
 import { runRemote } from './transport.mjs'
@@ -28,9 +31,18 @@ export async function execService(decl, ins, args, o) {
   const F = shq(ins.host.compose_file)
   const S = shq(name)
   let cls = act === 'prevalidate' ? 'read' : svc.interrupting ? 'service-interrupting' : 'service'
-  if (act === 'recreate' && svc.hosts_instrument) {
+  if (act === 'recreate') {
     const st = await pollerStatus(decl, ins)
-    if (st.running) fail(EXIT.NOT_RUN, `«${name}» aloja el poller que está corriendo: recrearlo mataría la medición a mitad de serie. Detén el poller o muévelo (instrument.container) antes.`)
+    if (st.running) {
+      const h = await runRemote(decl, ins, String.raw`VO_PID=$($DOCKER inspect --format '{{.Id}}' ${shq(st.rec.container)} 2>/dev/null)
+for c in $($DOCKER ps -a --filter label=com.docker.compose.project=${P} --filter label=com.docker.compose.service=${S} --format '{{.Names}}'); do
+  [ -n "$VO_PID" ] && [ "$($DOCKER inspect --format '{{.Id}}' "$c" 2>/dev/null)" = "$VO_PID" ] && echo "HOSTS $c"
+done
+echo HOSTCHECK`)
+      if (!h.lines.includes('HOSTCHECK')) fail(EXIT.MUTE, `no pude averiguar si «${name}» aloja el poller: el host no completó la consulta. Sin saberlo no se recrea.`)
+      const hosts = h.lines.find((l) => l.startsWith('HOSTS '))
+      if (hosts) fail(EXIT.NOT_RUN, `«${name}» aloja el poller que está corriendo (${st.rec.id} en «${hosts.slice(6)}»): recrearlo mataría la medición a mitad de serie, y la fila del corte quedaría «sin medir». Mueve primero el instrumento a un contenedor de vida larga que este acto no recree —\`instrument.container\` en la declaración, \`poller stop\` y \`poller start\` de nuevo, con su CN-1— y recién entonces recrea.`)
+    }
   }
   if (act === 'reload' && svc.reload === 'none') fail(EXIT.NOT_RUN, `«${name}» no declara recarga en caliente (reload: none): el camino es recreate, con su clase y su gate`)
   if (act === 'prevalidate' && !svc.prevalidate) fail(EXIT.NOT_RUN, `«${name}» no declara prevalidate`)

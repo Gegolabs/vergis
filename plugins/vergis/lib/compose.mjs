@@ -1,8 +1,8 @@
 // compose.mjs — lectura MÍNIMA de un compose espejado, sin dependencias.
 //
-// No es un parser de YAML: extrae tres cosas con reglas de sangría que el compose de referencia del
-// Producto cumple (dos espacios por nivel): los nombres de servicio, la línea `image:` de cada uno, y
-// los montajes del host (binds relativos, binds bajo la raíz de la instalación, `env_file`, `context`).
+// No es un parser de YAML: extrae lo que necesita con reglas de sangría que el compose de referencia del
+// Producto cumple (dos espacios por nivel): los nombres de servicio, la línea `image:` y `container_name:`
+// de cada uno, el `name:` del proyecto, y los montajes del host (binds relativos, binds bajo la raíz de la instalación, `env_file`, `context`).
 // Si un compose no calza con esas reglas, lo que devuelve es MENOS, nunca inventado — y los que lo
 // consumen (check, G1) lo dicen en vez de aprobar por omisión.
 
@@ -21,16 +21,37 @@ export function composeServices(text) {
     const m = /^ {2}([A-Za-z0-9._-]+):\s*(#.*)?$/.exec(ln)
     if (m) {
       cur = m[1]
-      services[cur] = { image: null, profiles: [] }
+      services[cur] = { image: null, profiles: [], containerName: null }
       continue
     }
     if (!cur) continue
     const im = /^ {4}image:\s*["']?([^"'\s#]+)/.exec(ln)
     if (im) services[cur].image = im[1]
+    const cn = /^ {4}container_name:\s*["']?([^"'\s#]+)/.exec(ln)
+    if (cn) services[cur].containerName = cn[1]
     const pr = /^ {4}profiles:\s*\[([^\]]*)\]/.exec(ln)
     if (pr) services[cur].profiles = pr[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean)
   }
   return services
+}
+
+/** El `name:` de primer nivel del compose (el proyecto), o `null`. */
+export function composeProjectName(text) {
+  const m = /^name:\s*["']?([^"'\s#]+)/m.exec(text)
+  return m ? m[1] : null
+}
+
+/**
+ * ¿Qué servicio del compose es el contenedor `ct`? Por `container_name`, o por el nombre que compose le
+ * da cuando no lo declara (`<proyecto>-<servicio>-1`, o el viejo `<proyecto>_<servicio>_1`). `null` si
+ * ninguno calza: lo que el compose espejado no dice, no se inventa.
+ */
+export function serviceOfContainer(services, ct, project) {
+  for (const [name, s] of Object.entries(services)) {
+    if (s.containerName === ct) return name
+    if (!s.containerName && project && (ct === `${project}-${name}-1` || ct === `${project}_${name}_1`)) return name
+  }
+  return null
 }
 
 /** ¿El tag de la imagen es móvil? (`latest`, `main`, sin tag, o una serie `X.Y`). */
