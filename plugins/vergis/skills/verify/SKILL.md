@@ -37,7 +37,7 @@ vo marks contar --html <f> --forma <forma> --esperado <n>
 vo marks ruta <slug>[?page=<id>]       # reporta, en el anillo activo; NO juzga
 ```
 
-Dos documentos de la misma forma con cardinalidades conocidas y **distintas**: el contador vive si devuelve exactamente esos dos números. La calibración es por (versión del motor × forma) y **caduca sola** al cambiar el motor: `contar --esperado` sin calibración vigente sale 4 («no pude medir»), no un número. Un cero con el selector vivo es un gráfico vacío (hallazgo); un cero sin discriminante es ambiguo, y se dice así.
+Dos documentos de la misma forma con cardinalidades conocidas y **distintas**: el contador vive si devuelve exactamente esos dos números. La calibración es por (versión del motor × forma) y **caduca sola** al cambiar el motor: `contar --esperado` sin calibración vigente sale **2** (no juzga: le falta su precondición, como un gate sin su evidencia), no un número. Una calibración cuyo contador devuelve el mismo número para las dos cardinalidades sale **1**: el instrumento está ciego, igual que un CN-1 verde. Un cero con el selector vivo es un gráfico vacío (hallazgo); un cero sin discriminante es ambiguo, y se dice así.
 
 ## ¿Qué dice el reporte?
 

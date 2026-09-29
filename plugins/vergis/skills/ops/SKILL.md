@@ -16,7 +16,7 @@ Un solo vocabulario para todos los verbos. Lo que importa es no confundir **«me
 | Exit | Significa | Qué se hace |
 |--|--|--|
 | 0 | medí, sin hallazgo | seguir |
-| 1 | medí, **hay hallazgo** (del terreno, no del instrumento) | reportarlo; no repararlo de paso |
+| 1 | medí, **hay hallazgo** sobre lo medido: el terreno — o el instrumento, cuando es él lo medido (un CN-1 verde, una calibración con el selector muerto) | reportarlo; no repararlo de paso |
 | 2 | **no corrí**: uso, guardia, gate sin su evidencia, clave no declarada | leer el mensaje: dice qué falta |
 | 3 | respuesta **cruzada** (llegó la salida de otra corrida) | no se entrega; serializar y reintentar |
 | 4 | transporte **ocupado** (otro actor tiene el canal) | esperar y reintentar |

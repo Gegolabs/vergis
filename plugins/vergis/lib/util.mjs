@@ -11,7 +11,8 @@ import { readFileSync } from 'node:fs'
  */
 export const EXIT = Object.freeze({
   OK: 0, //         medí, sin hallazgo
-  FINDING: 1, //    medí, con hallazgo (del terreno, no del instrumento)
+  FINDING: 1, //    medí, con hallazgo sobre LO MEDIDO: el terreno — o el instrumento, cuando lo medido es él (un
+  //                control negativo que sale verde, una calibración con el selector muerto)
   NOT_RUN: 2, //    no corrí: uso, guardia, clave no declarada
   CROSSED: 3, //    respuesta cruzada: llegó el centinela de OTRA corrida
   BUSY: 4, //       transporte ocupado persistente (Conflict, candado)
