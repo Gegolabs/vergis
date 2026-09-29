@@ -70,11 +70,18 @@ export function manifest(decl, ins, only) {
     }
     const exc = new Map((f.exclude ?? []).map((x) => [x.path, x.reason]))
     let depth = 1
+    const seen = new Set()
     for (const p of walk(loc)) {
       const rel = relative(loc, p).split(sep).join('/')
-      if (exc.has(rel)) { excluded.push(`EXCL       ${f.remote}/${rel}  (${exc.get(rel)})`); continue }
+      if (exc.has(rel)) { seen.add(rel); continue }
       depth = Math.max(depth, rel.split('/').length)
       pairs.push({ sha: sha256File(p), host: `${hostBase}/${rel}`, kind: 'sweep', family: f.id, local: p })
+    }
+    // TODA exclusión declarada se lista, esté o no en el espejo (#371): la ruta entra igual en la lista
+    // que el barrido del host ignora, así que una exclusión sin archivo local silencia el host — y un
+    // silencio que no se lista es exactamente lo que EXCL existe para impedir.
+    for (const [rel, reason] of exc) {
+      excluded.push(`EXCL       ${f.remote}/${rel}  (${reason})${seen.has(rel) ? '' : ' — NO está en el espejo: en el host se ignora igual, sin medirse'}`)
     }
     // La profundidad del barrido del host es la del espejo: lo que el espejo no declara en un nivel
     // que él mismo no usa, no se le reclama al host.

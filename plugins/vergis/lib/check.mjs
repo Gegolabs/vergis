@@ -109,6 +109,11 @@ function checkInstallation(decl, ins, errors, warnings, notes) {
       if (f.kind === 'fixed' && !st.isFile()) errors.push(`${tag} familia «${f.id}» es fixed y «${f.local}» no es un archivo`)
       if (f.kind === 'sweep' && !st.isDirectory()) errors.push(`${tag} familia «${f.id}» es sweep y «${f.local}» no es un directorio`)
       if (f.kind === 'fixed' && f.exclude?.length) errors.push(`${tag} familia «${f.id}»: exclude solo tiene sentido en sweep`)
+      if (f.kind === 'sweep' && st.isDirectory()) {
+        for (const x of f.exclude ?? []) {
+          if (!existsSync(resolve(p, x.path))) warnings.push(`${tag} familia «${f.id}»: la exclusión «${x.path}» no está en el espejo — el barrido del host la ignora igual, así que un archivo con ese nombre en el host no se mide ni se reporta como SOLO-HOST. Si ya no existe, quítala de exclude`)
+        }
+      }
     }
   }
 
