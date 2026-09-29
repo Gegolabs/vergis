@@ -5,9 +5,20 @@ argument-hint: "<acto: status|install|promote|rollback> [<versión>] [--installa
 
 # vergis:rollout — promover y volver atrás por anillos, con el corte medido
 
-**Fuente canónica:** `deploy/rollout/README.md` y `deploy/rollout/RUNBOOK.md` **de la versión que corre la instalación** (ante una contradicción, gana ese RUNBOOK). Esta skill los convierte en pasos; el CLI convierte en **construcción** lo que el RUNBOOK exige: `promote` y `rollback` **se niegan** sin poller corriendo, sin línea base y sin un CN-1 rojo-como-debe contra el anillo destino. Así «promoción verificada» no es una disciplina: es la única forma de promover.
+**Fuente canónica:** el README y el RUNBOOK de anillos **de la versión que corre la instalación** — [`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md`](https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md) y [`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`](https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md), con `<versión>` la del anillo activo (no viajan en la imagen: se leen del repo del Producto en su tag). Ante una contradicción, gana ese RUNBOOK. Esta skill los convierte en pasos; el CLI convierte en **construcción** lo que el RUNBOOK exige: `promote` y `rollback` **se niegan** sin poller corriendo, sin línea base y sin un CN-1 rojo-como-debe contra el anillo destino. Así «promoción verificada» no es una disciplina: es la única forma de promover.
 
 El CLI es `node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs` (abajo, **`vo`**). El sombrero es de **operador** (ver vergis:ops).
+
+## ¿Qué gate tiene cada verbo?
+
+Todos los verbos de la ceremonia que **tocan el host** son actos de clase **`version`**, y pasan por el gate que la instalación declara para esa clase (`governance.gates.version`): `install`, `promote`, `rollback`, `retire`, `prune` (salvo `--dry-run`, que es `read`), `tool`, `ring-args --apply` (sin `--apply` es `read`), y `poller cn1` **cuando arranca un anillo retenido**. **Si la instalación no declara gate para `version`, rige `approval`**: lo que nadie clasificó sigue pidiendo aprobación. La evidencia va en la misma línea del verbo:
+
+```sh
+vo exec rollout promote 1.4.0 --approval "<quién · cuándo · sus palabras>"     # gate approval
+vo exec rollout promote 1.4.0 --impact "<qué cae y por cuánto>" --window "<quién · cuándo · sus palabras>"   # gate window
+```
+
+Con `operator` (lo típico en GA para lo que no corta: una promoción por anillos no corta) no se pide nada: la red la pone quien ejecuta. Nunca se escribe una evidencia que no existe.
 
 ## ¿Qué decide que un anillo está sano?
 
@@ -41,16 +52,16 @@ Lee el `CHANGELOG.md` de la versión destino **y de todas las intermedias**: se 
 
 Si las cuatro son «nada», se dice y se sigue. El CHANGELOG se lee del repo del Producto **en el tag**, o de la imagen (`docker run --rm --entrypoint cat <imagen:v> /app/CHANGELOG.md`). Los labels de esquema de la candidata (`docker image inspect … vergis.schema.stores`) descartan un rollback incompatible sin arrancar nada.
 
-### 2 · La herramienta de la versión
+### 2 · La herramienta de la versión — siempre
 
-Si el CHANGELOG dice que cambió el contrato del nodo o de la herramienta, instálala **desde la imagen candidata**:
+Antes de instalar, **siempre**, la herramienta de la candidata, **desde su imagen** (no depende de que el CHANGELOG diga que cambió):
 
 ```sh
 vo exec rollout tool <versión>     # pull, digest, extrae /app/deploy/rollout/, verifica el sha contra
                                    # el label vergis.rollout.sha256 y la instala con respaldo
 ```
 
-Herramienta y nodo quedan siendo el mismo objeto. Una imagen anterior a que la herramienta viajara adentro no trae el label: para esas, la herramienta sale del repo del Producto **en su tag**, nunca de un clon en otra rama.
+Herramienta y nodo quedan siendo el mismo objeto, y `install` **lo coteja**: si el sha de `botler-rollout` del host no es el del label de la candidata, se niega (2) y nombra este paso. La única excepción es instalar una versión **anterior** con la herramienta más nueva (`--keep-tool`: la herramienta no retrocede). Una imagen anterior a que la herramienta viajara adentro no trae el label: para esas no hay cotejo, y la herramienta sale del repo del Producto **en su tag**, nunca de un clon en otra rama.
 
 ### 3 · Instalar (no toca el tráfico)
 
@@ -70,6 +81,7 @@ vo poller cn1 --ring <versión destino>   # el mismo poller contra el anillo en 
 - **El poller vive en un contenedor que el acto no recrea.** Uno efímero muere durante el acto y acota el corte por abajo, sin decir que no pudo medir.
 - **El control negativo es obligatorio.** Si el CN-1 sale con alguna muestra OK, el instrumento está ciego: no se promueve con él. Si sale verde entero contra un standby, sospecha del **transporte** antes que del mecanismo (¿el poller apuntó adonde creías?).
 - **Línea base** de `instrument.baseline_seconds` (60 por omisión) antes del acto: sin baseline no hay intervalo que medir.
+- **El CN-1 caduca a los 30 minutos**: `promote` y `rollback` exigen uno contra el destino tomado en la última media hora. Si el acto se demora, se repite el CN-1 — el instrumento se prueba antes del acto, no de memoria.
 - Un cuerpo vacío o no-JSON es `MAL`; sin respuesta HTTP es `SINMEDIR`, que se cuenta aparte. «No pude medir» nunca es verde.
 
 ### 5 · Promover
