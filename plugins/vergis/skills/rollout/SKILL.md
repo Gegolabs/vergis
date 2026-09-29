@@ -82,7 +82,7 @@ vo poller cn1 --ring <versión destino>   # el mismo poller contra el anillo en 
 - **El control negativo es obligatorio.** Si el CN-1 sale con alguna muestra OK, el instrumento está ciego: no se promueve con él. Si sale verde entero contra un standby, sospecha del **transporte** antes que del mecanismo (¿el poller apuntó adonde creías?).
 - **Línea base** de `instrument.baseline_seconds` (60 por omisión) antes del acto: sin baseline no hay intervalo que medir.
 - **El CN-1 caduca a los 30 minutos**: `promote` y `rollback` exigen uno contra el destino tomado en la última media hora. Si el acto se demora, se repite el CN-1 — el instrumento se prueba antes del acto, no de memoria.
-- Un cuerpo vacío o no-JSON es `MAL`; sin respuesta HTTP es `SINMEDIR`, que se cuenta aparte. «No pude medir» nunca es verde.
+- Un cuerpo vacío o no-JSON es `MAL`; sin respuesta HTTP es `SINMEDIR`, que se cuenta aparte. «No pude medir» nunca es verde — y tampoco es «corte»: con el timeout de 2 s del poller, una retención de la sala de espera > 2 s sale `SINMEDIR` (ver §6 y #367).
 
 ### 5 · Promover
 
@@ -99,6 +99,7 @@ El CLI espera un cierre (`--tail`, 10 s) con el poller corriendo y **cuenta el c
 1. `vo poller stop` — la cuenta final. **Ese número es el corte, no la duración del comando** (el comando miente: un `restart` devuelve en milisegundos mientras las rutas no sirven por segundos).
 2. **vergis:verify**: smoke de todos los Lets y todas las vistas, y la paridad. El smoke de la herramienta mira conteos, no rutas.
 3. **La fila** en `governance.cuts_log`: fecha, acto, origen → destino con digests, corte medido, instrumento y versión, si corrió el CN-1. Si no se pudo medir, la fila va igual diciendo «sin medir» y por qué.
+   - **Límite conocido del poller del plugin** (issue #367): consulta con **timeout de 2 s** y **no mide latencia por muestra**. La sala de espera del borde **retiene** requests durante el relevo (retención máxima medida en producción: 2.011 ms), así que un `SINMEDIR` es compatible con una retención > 2 s —costo declarado del Producto, no necesariamente corte—. La cuenta del CLI lo suma a «fuera de predicado»; **en la fila, las muestras `SINMEDIR` van como «sin medir», no como «corte»**. Hipótesis no medida; el refutador y la condición están en #367: ninguna instalación retira su instrumento de medición de corte a favor de este poller hasta que mida retención.
 4. **Deja el previo caliente**: es la red del rollback y no cuesta nada.
 
 ## Volver atrás

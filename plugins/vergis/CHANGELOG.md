@@ -28,6 +28,15 @@ Nace el plugin (issue #366).
     el operador de la instalación) separado de `governance.approver` (quién aprueba lo destructivo),
     `governance.stage` y `governance.availability` (informativos), `instrument.baseline_seconds` y
     `mirror.unmirrored` (los montajes que el espejo no cubre, con su motivo, para la guardia G1).
+- **Limitación conocida — el poller no mide retención** (#367). `instruments/poller.sh` consulta con
+  `wget -T 2` y registra por muestra solo `OK | MAL | SINMEDIR`, sin latencia; la cuenta de `poller
+  count/stop` suma `SINMEDIR` a «fuera de predicado». Un request que la sala de espera del borde retiene
+  más de 2 s (retención máxima medida en producción: 2.011 ms; el instrumento de referencia del lab usa
+  10 s por eso) sale `SINMEDIR`. En el banco, 3 de 12 actos dieron 1 `SINMEDIR` ~1,4 s tras empezar el
+  acto, también con el plugin de `4d7fe95`. La hipótesis (es retención, no corte) **no está medida**; el
+  refutador es el mismo acto con un segundo poller a 10 s en paralelo. Mientras tanto: la fila del
+  corte dice «sin medir» para esas muestras, no «corte», y **ninguna instalación retira su instrumento
+  de medición de corte a favor de este poller hasta que mida retención**.
 - **Dos defectos que el arnés encontró al construirse**, y por qué quedan escritos: un `case` dentro de
   `$( … )` que `dash` no parsea — y el CLI lo leía como «/contrato no respondió» (hoy la suite pasa
   `dash -n` sobre cada script generado); y la trampa `TERM` del poller, que limpiaba sin terminar el
