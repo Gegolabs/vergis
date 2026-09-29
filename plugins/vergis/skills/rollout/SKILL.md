@@ -1,0 +1,131 @@
+---
+description: Promover, instalar o volver atrás una versión del Producto en una instalación de Vergis por ANILLOS, con la ceremonia completa — recon, qué exige la versión destino y todas las intermedias (leído del CHANGELOG), la herramienta de anillos extraída de la imagen candidata por digest, install, el poller de corte con su línea base y su control negativo (CN-1) obligatorios, promote, el corte contado por el poller y no por el comando, la fila en el registro de cortes y el previo caliente. Usar SIEMPRE que se pida «promueve la X.Y.Z», «instala la versión», «sube la versión nueva», «vuelve atrás», «rollback», «¿qué versión corre?», «estado de los anillos», o haya que medir una promoción o decidir si un anillo está sano. Para publicar contenido o tocar servicios, vergis:ops.
+argument-hint: "<acto: status|install|promote|rollback> [<versión>] [--installation <id>]"
+---
+
+# vergis:rollout — promover y volver atrás por anillos, con el corte medido
+
+**Fuente canónica:** el README y el RUNBOOK de anillos **de la versión que corre la instalación** — `https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md` y `https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`, con `<versión>` la del anillo activo (no viajan en la imagen: se leen del repo del Producto en su tag). Ante una contradicción, gana ese RUNBOOK. Esta skill los convierte en pasos; el CLI convierte en **construcción** lo que el RUNBOOK exige: `promote` y `rollback` **se niegan** sin poller corriendo, sin línea base y sin un CN-1 rojo-como-debe contra el anillo destino. Así «promoción verificada» no es una disciplina: es la única forma de promover.
+
+El CLI es `node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs` (abajo, **`vo`**). El sombrero es de **operador** (ver vergis:ops).
+
+## ¿Qué gate tiene cada verbo?
+
+Todos los verbos de la ceremonia que **tocan el host** son actos de clase **`version`**, y pasan por el gate que la instalación declara para esa clase (`governance.gates.version`): `install`, `promote`, `rollback`, `retire`, `prune` (salvo `--dry-run`, que es `read`), `tool`, `ring-args --apply` (sin `--apply` es `read`), y `poller cn1` **cuando arranca un anillo retenido**. **Si la instalación no declara gate para `version`, rige `approval`**: lo que nadie clasificó sigue pidiendo aprobación. La evidencia va en la misma línea del verbo:
+
+```sh
+vo exec rollout promote 1.4.0 --approval "<quién · cuándo · sus palabras>"     # gate approval
+vo exec rollout promote 1.4.0 --impact "<qué cae y por cuánto>" --window "<quién · cuándo · sus palabras>"   # gate window
+```
+
+Con `operator` (lo típico en GA para lo que no corta: una promoción por anillos no corta) no se pide nada: la red la pone quien ejecuta. Nunca se escribe una evidencia que no existe.
+
+## ¿Qué decide que un anillo está sano?
+
+```
+HTTP 200  ∧  "phase":"serving"  ∧  lets.serving == lets.total
+```
+
+**Nunca «responde», nunca `r.ok`, nunca «2xx».** Un nodo **en espera** responde 200 con `ok:true` por diseño: sirve lecturas, no tiene el plano de control, sus escrituras dan 409. Fases: `starting` (503) → `standby` (sano, no controla) → `degraded` (sirve N de M) → `serving`. Es el mismo predicado en el borde, en `botler-rollout` y en el poller. Un nodo anterior a 0.27.0 dice `pis` en vez de `lets`: el poller y `vo health` lo leen igual y **dicen** cuál leyeron.
+
+## La ceremonia
+
+### 0 · Recon, sin tocar nada
+
+```sh
+vo recon
+vo exec rollout status          # activo, previo, borde, fase viva de cada anillo
+```
+
+- **Anota el activo y su digest ANTES**: es el destino de tu rollback, y se escribe antes, no durante la emergencia.
+- `vo exec rollout prune --dry-run`: que la retención no te sorprenda después.
+- `vo exec rollout ring-args`: si el compose cambió y `ring.args` no se regeneró, el anillo nuevo nacería con otro contrato. Con drift, `--apply` lo regenera con respaldo (los anillos vivos no cambian).
+
+### 1 · ¿Qué exige la versión? — antes del `pull`
+
+Lee el `CHANGELOG.md` de la versión destino **y de todas las intermedias**: se salta de la que corre la instalación a la nueva, no de la anterior a la nueva, y es en las intermedias donde muerde. Dilo en voz alta antes de tocar el host:
+
+1. **¿Rompe un contrato?** (un campo retirado, una clave que cambia de forma).
+2. **¿Trae una fase o un campo que alguien consuma?** (un health check, un poller, un script de la instalación).
+3. **¿Hay migración o variable nueva** que haga falta para obtener el efecto?
+4. **¿Dice «rompe rollback a < X.Y»?** Esa frase acorta tu ventana de reversión: sábelo **antes**.
+
+Si las cuatro son «nada», se dice y se sigue. El CHANGELOG se lee del repo del Producto **en el tag**, o de la imagen (`docker run --rm --entrypoint cat <imagen:v> /app/CHANGELOG.md`). Los labels de esquema de la candidata (`docker image inspect … vergis.schema.stores`) descartan un rollback incompatible sin arrancar nada.
+
+### 2 · La herramienta de la versión — siempre
+
+Antes de instalar, **siempre**, la herramienta de la candidata, **desde su imagen** (no depende de que el CHANGELOG diga que cambió):
+
+```sh
+vo exec rollout tool <versión>     # pull, digest, extrae /app/deploy/rollout/, verifica el sha contra
+                                   # el label vergis.rollout.sha256 y la instala con respaldo
+```
+
+Herramienta y nodo quedan siendo el mismo objeto, y `install` **lo coteja**: si el sha de `botler-rollout` del host no es el del label de la candidata, se niega (2) y nombra este paso. La única excepción es instalar una versión **anterior** con la herramienta más nueva (`--keep-tool`: la herramienta no retrocede). Una imagen anterior a que la herramienta viajara adentro no trae el label: para esas no hay cotejo, y la herramienta sale del repo del Producto **en su tag**, nunca de un clon en otra rama.
+
+### 3 · Instalar (no toca el tráfico)
+
+```sh
+vo exec rollout install <versión exacta>
+```
+
+**Nunca un tag móvil** (`latest`, `main`, una serie): no identifica lo que quedaría corriendo. Queda en espera, verificado. Si el **guard de digest** se niega (la versión ya está registrada con otro digest), **no lo fuerces por inercia**: dos imágenes con el mismo número es un hecho que ya ocurrió; averigua cuál es la buena. Rollback de este paso: `vo exec rollout retire <versión> --rmi`.
+
+### 4 · El instrumento, ANTES del acto
+
+```sh
+vo poller start                          # en el borde (o en instrument.container), por el conmutador
+vo poller cn1 --ring <versión destino>   # el mismo poller contra el anillo en espera: TODO MAL phase=standby
+```
+
+- **El poller vive en un contenedor que el acto no recrea.** Uno efímero muere durante el acto y acota el corte por abajo, sin decir que no pudo medir.
+- **El control negativo es obligatorio.** Si el CN-1 sale con alguna muestra OK, el instrumento está ciego: no se promueve con él. Si sale verde entero contra un standby, sospecha del **transporte** antes que del mecanismo (¿el poller apuntó adonde creías?).
+- **Línea base** de `instrument.baseline_seconds` (60 por omisión) antes del acto: sin baseline no hay intervalo que medir.
+- **El CN-1 caduca a los 30 minutos**: `promote` y `rollback` exigen uno contra el destino tomado en la última media hora. Si el acto se demora, se repite el CN-1 — el instrumento se prueba antes del acto, no de memoria.
+- Un cuerpo vacío o no-JSON es `MAL`; sin respuesta HTTP es `SINMEDIR`, que se cuenta aparte. «No pude medir» nunca es verde — y tampoco es «corte»: con el timeout de 2 s del poller, una retención de la sala de espera > 2 s sale `SINMEDIR` (ver §6 y #367).
+
+### 5 · Promover
+
+```sh
+vo exec rollout promote <versión>
+```
+
+La herramienta hace, en orden: pre-flight (el candidato corre la imagen registrada y su `/contrato` declara soportar el esquema de **cada** store; el borde valida su config) → intent de handover → **flip del borde** → handover del plano de control → smoke por el borde → registro. El flip va antes a propósito: lo que entra mientras el candidato aún no sirve queda **retenido** en la sala de espera, no respondido con error. Si el pre-flight no logra medir, **se niega** y no se tocó nada.
+
+El CLI espera un cierre (`--tail`, 10 s) con el poller corriendo y **cuenta el corte**. El costo honesto: en el relevo, las **escrituras** responden 409 explícitos por segundos; las lecturas se sirven todo el tiempo.
+
+### 6 · Después — la parte que se olvida
+
+1. `vo poller stop` — la cuenta final. **Ese número es el corte, no la duración del comando** (el comando miente: un `restart` devuelve en milisegundos mientras las rutas no sirven por segundos).
+2. **vergis:verify**: smoke de todos los Lets y todas las vistas, y la paridad. El smoke de la herramienta mira conteos, no rutas.
+3. **La fila** en `governance.cuts_log`: fecha, acto, origen → destino con digests, corte medido, instrumento y versión, si corrió el CN-1. Si no se pudo medir, la fila va igual diciendo «sin medir» y por qué.
+   - **Límite conocido del poller del plugin** (issue #367): consulta con **timeout de 2 s** y **no mide latencia por muestra**. La sala de espera del borde **retiene** requests durante el relevo (retención máxima medida en producción: 2.011 ms), así que un `SINMEDIR` es compatible con una retención > 2 s —costo declarado del Producto, no necesariamente corte—. La cuenta del CLI lo suma a «fuera de predicado»; **en la fila, las muestras `SINMEDIR` van como «sin medir», no como «corte»**. Hipótesis no medida; el refutador y la condición están en #367: ninguna instalación retira su instrumento de medición de corte a favor de este poller hasta que mida retención.
+4. **Deja el previo caliente**: es la red del rollback y no cuesta nada.
+
+## Volver atrás
+
+```sh
+# al previo (caliente): flip puro
+vo poller start && vo poller cn1 --ring <versión previa>    # sí: también para el rollback
+vo exec rollout rollback
+
+# a un retenido (frío): el CN-1 lo arranca, espera su standby, y recién mide
+vo poller start && vo poller cn1 --ring <versión retenida>
+vo exec rollout rollback <versión retenida>
+```
+
+- La maniobra de emergencia es donde más cara sale una medición que no se hizo: **mismo instrumento**.
+- **A un retenido frío**: contra un contenedor detenido no hay control negativo posible (el poller no obtiene respuesta), así que `poller cn1` **lo arranca** —un acto de clase `version`, con el mismo gate que `install`— y espera a que declare `phase=standby` por la misma ruta que va a medir (`--standby-timeout`, 90 s por omisión). El arranque de un nodo cuesta segundos y ocurre **antes** del acto, fuera del tráfico. El anillo queda caliente: es el candidato. **Si no sigues con el rollback, devuélvelo tú a retenido** — `vo exec run --class version -- 'docker stop <anillo>'` —, porque vivo es un tercer aspirante al lease; la próxima promoción también lo haría, pero puede no haber una pronto. Si no llega a standby, el CN-1 **lo vuelve a detener él mismo** (lo arrancó él), sale 1 y el rollback no corre: el previo caliente sigue siendo la red. Un anillo que ya corría antes del CN-1 no se toca.
+- A un retenido frío, además: verifica antes su label de esquema; si un CHANGELOG intermedio dice «rompe rollback a < X.Y», ese es el piso y el pre-flight se va a negar.
+- **Cero controladores** (nadie tiene el plano de control): es la dirección segura del diseño, pero es un incidente. `vo exec rollout status` y el bloque `control` de `/contrato` de cada anillo. **No borres el lease** para «desatascar»: el relevo converge solo, y borrarlo abre la puerta a dos controladores. Si el candidato no arranca, rollback al previo.
+- **Un rollback jamás restaura stores.** Los datos van hacia adelante; un respaldo pre-migración lo toca solo un humano sabiendo qué escrituras pierde.
+
+## Lo que ninguna flag habilita
+
+Editar `ring.args` o `active.caddy` a mano · borrar o editar el lease · `docker compose down -v` · promover sin instrumento · `--no-schema-gate` desde el plugin (existe para instancias **sin** bloque de gobierno, y esa decisión se toma a mano, con la herramienta, gritándola en pantalla) · retirar el activo o el previo.
+
+## Límites declarados (del Producto)
+
+Un solo host con FS local (el lease se ordena por rename atómico y el reloj del mismo kernel; un volumen de red queda fuera de contrato) · la sala de espera no cubre la muerte del propio borde · el smoke de la herramienta no recorre rutas · el intent de handover **ordena la fila, no otorga el control** · la RAM de dos anillos calientes con carga real no está medida en general.
+
+• *Generado con Wingworking*

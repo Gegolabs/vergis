@@ -82,35 +82,35 @@ preservando el inodo.
 Corre **antes** del acto y sigue corriendo después. Vive en el borde (`docker exec`), que la
 promoción no recrea, y sondea **por el conmutador** (`:8079`), que es el camino del tráfico real.
 
+**El poller es un archivo, no un bloque para copiar:**
+[`plugins/vergis/instruments/poller.sh`](../../plugins/vergis/instruments/poller.sh). Viaja versionado
+con el Producto —con el mismo tag que la herramienta de anillos— y es el que corre el plugin `vergis`
+(`vergis-ops poller start` · `count` · `stop` · `cn1`). Un poller copiado a mano en un runbook se pudre
+en silencio el día que el contrato de `/healthz` cambia; el del archivo cambia en el mismo PR que el
+contrato.
+
+A mano, sin el plugin:
+
 ```sh
 EDGE=caddy   # el nombre de tu contenedor del borde (RINGS_EDGE)
-
-docker exec "$EDGE" sh -c '
-  fallos=0; total=0
-  while :; do
-    total=$((total+1))
-    b=$(wget -q -T 2 -O- http://127.0.0.1:8079/healthz 2>/dev/null) || b=""
-    ph=$(printf "%s" "$b" | sed -n "s/.*\"phase\":\"\([a-z-]*\)\".*/\1/p")
-    sv=$(printf "%s" "$b" | sed -n "s/.*\"serving\":\([0-9]*\).*/\1/p")
-    tt=$(printf "%s" "$b" | sed -n "s/.*\"total\":\([0-9]*\).*/\1/p")
-    # El predicado COMPLETO. Cuerpo vacío = no se pudo medir, y eso cuenta como fallo, no se omite.
-    if [ -n "$b" ] && [ "$ph" = serving ] && [ -n "$sv" ] && [ "$sv" = "$tt" ]; then
-      printf "%s ok  fase=%s lets=%s/%s\n" "$(date -u +%H:%M:%S)" "$ph" "$sv" "$tt"
-    else
-      fallos=$((fallos+1))
-      printf "%s NO-SERVIDA fase=%s lets=%s/%s (fallos=%s de %s)\n" \
-        "$(date -u +%H:%M:%S)" "${ph:-sin-respuesta}" "${sv:-?}" "${tt:-?}" "$fallos" "$total"
-    fi
-    sleep 0.25
-  done' | tee /tmp/poller-$(date +%Y%m%d-%H%M).log
+docker exec -i "$EDGE" sh -c 'cat > /tmp/poller.sh' < plugins/vergis/instruments/poller.sh
+docker exec "$EDGE" sh /tmp/poller.sh http://127.0.0.1:8079/healthz | tee /tmp/poller-$(date +%Y%m%d-%H%M).log
 ```
 
-- Resolución **0,25 s**: el corte que se busca acotar es de segundos.
-- `lets.serving == lets.total` importa tanto como la fase: un nodo que sirve la mitad de los Lets
-  responde `200` y `phase:degraded` — y eso **es** una respuesta no servida para la mitad de la gente.
-- **Un cuerpo vacío es un fallo, no un dato ausente.** «No pude medir» nunca se cuenta como verde.
-- Ajusta `sed`/`wget` a las herramientas de tu imagen del borde; lo que **no** se ajusta es el
-  predicado.
+Una línea por muestra: `<uptime> <HH:MM:SS> OK|MAL|SINMEDIR <detalle>`. Lo que el archivo garantiza:
+
+- Resolución **0,25 s**: el corte que se busca acotar es de segundos. El reloj es `/proc/uptime`
+  (centésimas), porque el `date` de BusyBox solo da segundos.
+- El predicado **completo**: `lets.serving == lets.total` importa tanto como la fase — un nodo que
+  sirve la mitad de los Lets responde `200` y `phase:degraded`, y eso **es** una respuesta no servida
+  para la mitad de la gente. Lee `lets` y, en un nodo anterior a 0.27.0, `pis`, **diciendo** cuál leyó.
+- **El cuerpo tiene que ser JSON.** La sala de espera del borde responde HTML, y un extractor por
+  `sed` que no lo exija le puede leer `"phase":"serving"` a un error (hallazgo del banco V-14).
+- **Un cuerpo vacío o no-JSON es `MAL`, no un dato ausente**; sin respuesta HTTP es `SINMEDIR`, que se
+  cuenta aparte. «No pude medir» nunca se cuenta como verde.
+- Está escrito contra BusyBox `wget` y `sed` (los de `caddy:2`). Si tu borde es otra imagen, verifica
+  las herramientas **antes** de la ventana —`vergis-ops poller start` se niega si faltan—; lo que no se
+  ajusta es el predicado.
 
 ### El control negativo, escrito
 
@@ -257,6 +257,50 @@ pierde.
 
 ---
 
+## 7 · Cambiar la configuración de arranque con anillos
+
+Una variable de entorno que el nodo lee **al arrancar** (las que `/contrato` lista en `env.bootOnly`), o
+un montaje del nodo, no se recargan en caliente: el proceso tiene que nacer con ellas. Con anillos, eso
+no obliga a cortar. **Lo que dice el código** (`botler-rollout`, `cmd_install`):
+
+- Cada anillo se crea con `docker create` desde `rings/ring.args` **en el momento del `install`**. Cambiar
+  `ring.args` no toca a ningún anillo ya creado.
+- `install` es **idempotente por versión**: re-instalar la misma versión con la misma imagen no recrea
+  el contenedor. El guard de digest impide un segundo anillo de la misma versión con el mismo digest
+  (`--redigest` solo aplica si el digest cambió). El activo y el previo no se recrean nunca.
+- `install` acepta, además de una versión exacta, un **commit exacto** `sha-<commit>` — el tag que el CI
+  publica para cada commit. Es el mismo código bajo otro nombre de anillo.
+
+**El camino sin corte**, entonces, es **un anillo nuevo que nace con la configuración nueva, promovido
+con la ceremonia de siempre**:
+
+1. Cambia el compose (espejo primero) y **regenera `ring.args`** con el generador
+   (`ring-args-from-compose.mjs`, que viaja en la imagen) — diffea contra el vigente antes de reemplazarlo,
+   con respaldo.
+2. `botler-rollout install <ref>` con un ref que **no** sea el del activo: la versión siguiente, o el
+   **mismo código** bajo su `sha-<commit>`. El anillo nuevo arranca con la configuración nueva y queda
+   en espera; verifica en su `/contrato` que la variable está como esperas.
+3. §3–§5: poller, control negativo contra el anillo nuevo, `promote`, el corte contado.
+4. El rollback vuelve al anillo anterior **con la configuración anterior**: es la reversa del cambio.
+
+Con el plugin `vergis`: `vergis-ops exec rollout ring-args --apply`, `exec rollout install <ref>`,
+`poller start` + `poller cn1 --ring <ref>`, `exec rollout promote <ref>`. Es un acto de clase **`version`**,
+instrumentado, no un `boot`.
+
+**Medido en el banco** (`deploy/rollout/bench`, 2026-09-29, V10 de #366): con una variable nueva en
+`ring.args`, `install sha-bench` (la misma imagen bajo un ref de commit) y `promote sha-bench` con el
+poller en el borde y su CN-1: **0 muestras fuera de predicado**, y el `/contrato` del anillo activo la
+declara (`env.unknown` la lista: el proceso nació con ella). El rollback volvió al anillo anterior, también
+sin muestras fuera de predicado.
+
+**Lo que este camino NO cubre, y entonces sí corta:** lo que **comparten** todos los anillos. `VERGIS_OUT`
+(ahí viven el lease del plano de control y los stores: dos anillos con `VERGIS_OUT` distintos no se ven
+entre sí, y el lease solo ordena a quien ve el archivo — sería abrir la puerta a dos controladores), los
+montajes de los stores, y la red del borde. Cambiar eso es detener los anillos, cambiar y arrancar:
+**corte**, con ventana, impacto declarado antes y el corte medido (§0). Y un cambio en el **contenido**
+de un `env_file` que el nodo lee al arrancar entra por el mismo camino del anillo nuevo: el archivo es
+compartido, pero cada proceso lo lee al nacer.
+
 ## Límites declarados
 
 - **Un solo host, con FS local.** El plano de control se ordena por **rename atómico** y por relojes
@@ -269,8 +313,9 @@ pierde.
   contenedor de Caddy — y ese corte sí es corte).
 - El **smoke no recorre las rutas de cada PI**: `/healthz` publica conteos, no slugs. El invariante
   que sí se exige es `lets.serving == lets.total`, y lo funcional lo verifica un humano (§5.2).
-- **`ring.args` es un espejo manual** del servicio `vergis` del compose. Nada verifica que estén
-  sincronizados: si cambias un env o un montaje en uno, cámbialo en el otro.
+- **`ring.args` se deriva del compose vivo** con `ring-args-from-compose.mjs` (viaja en la imagen); si
+  cambias un env o un montaje en el compose, **regenera y diffea** antes del próximo `install` — un anillo
+  nuevo se crea con lo que diga `ring.args`, no con lo que diga el compose (README §Límites).
 - **El handover es dirigido, con alcance parcial declarado**: la herramienta escribe un intent
   (`control.handover.json`) que **nombra al sucesor** antes de que el activo suelte, y los demás
   anillos se abstienen mientras esté vigente. El intent **ordena la fila; jamás otorga el control** —
@@ -293,9 +338,13 @@ promoción: la imagen `caddy:2` trae `/bin/sh`, `/usr/bin/wget` y `/bin/sed`, y 
 `--long-flag` de GNU no existe ahí. Si cambias la imagen del borde, **verifica las herramientas antes
 de la ventana, no durante**.
 
-**No medido, y por qué no se disfraza:** el poller de §0.4 está escrito contra el shape real de
-`/healthz` y con flags verificados, pero **no se ejecutó contra un borde vivo desde este runbook**. Y
-las tres vías sanas del inodo (`docker cp`, editar dentro, montar el **directorio**) son la lectura
+**Medido sobre el poller** (`plugins/vergis/instruments/poller.sh`, en el borde `caddy:2` del banco,
+2026-09-29, V10 de #366): contra un anillo en espera da todo `MAL phase=standby` (el control negativo);
+un cuerpo vacío, uno HTML con el literal de la fase y uno con conteos fuera de bloque dan `MAL`; un
+nodo degradado (`lets=8/9`) da `MAL`; un 404 da `MAL status=404`; un host inexistente da `SINMEDIR`; y
+`serving` con `lets` o con el `pis` viejo da `OK`, diciendo cuál leyó.
+
+**No medido, y por qué no se disfraza:** las tres vías sanas del inodo (`docker cp`, editar dentro, montar el **directorio**) son la lectura
 mecánica correcta del problema: **lo medido fue el fallo, no la cura**. La primera vez que las uses,
 comprueba con §0.5 que la config llegó — que es justamente lo que §0.5 existe para no dar por
 supuesto.

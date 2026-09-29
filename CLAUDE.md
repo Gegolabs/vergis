@@ -18,8 +18,10 @@ y ventanas de un tercero, y esa decisión no es del que escribe el código.
 | Declarar **qué trae y qué exige** — migraciones, env nuevo, capacidades sin verificar contra motor vivo | El `pull`, el recreate, la ventana, el rollback |
 | Avisar por el canal del cliente | Su control de cambio, su QA, su respaldo |
 
-**El sombrero se elige por el repo, no por la capacidad.** La skill `mira-ops` sabe desplegar y **es del
-operador**: se ejecuta desde el repo del lab de R.O.B.L.E., no desde acá. Una sesión de este repo que
+**El sombrero se elige por el repo, no por la capacidad.** Las skills de operador **se distribuyen desde
+el Producto** (el plugin `vergis`, en `plugins/vergis/`) y **se ejecutan desde el repo del operador**, donde
+vive la declaración de su instalación (`vergis-ops.json`); acá no hay ninguna, y el CLI se niega a operar
+sin ella. Una sesión de este repo que
 recibe «hay que desplegar esto» no despliega — **publica y avisa**. Si César pide explícitamente en la
 sesión que operemos la VM, ahí el sombrero cambia por su acto, y consta.
 
@@ -155,4 +157,4 @@ salida real va en el cuerpo del PR.
 
 ## Worktrees
 
-Los worktrees de este repo viven **bajo `../vergis-wt/<nombre>/`** (un directorio contenedor, hermano de `vergis/`), nunca sueltos en `productos/`: `git worktree add ../vergis-wt/<nombre> -b <rama>`. Decidido por César el 2026-09-07 (soveria-ai doc 040); los 12 existentes se movieron ese día con `git worktree move`.
+Los worktrees de este repo viven **en `wt/<frente>` dentro del propio repo**, ignorado por el `.gitignore` versionado: `git worktree add wt/<frente> -b <rama> <base>`. Nunca al lado del repo. Es la convención de la práctica (`ww:wingworking`, layout `wt/`; palabra de César del 2026-09-28), adoptada acá con el commit `b93d85a`; reemplaza al contenedor hermano `../vergis-wt/` del 2026-09-07. Quien abre un worktree lo retira (`git worktree remove`) al integrar su rama.

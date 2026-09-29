@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Declaración de instalaciones de Vergis (vergis-ops.json)",
+  "description": "Declara una o más instalaciones de Vergis para que el plugin `vergis` y su CLI `vergis-ops` puedan operarlas. Vive en la raíz del repo del OPERADOR, jamás en el del Producto. Es INVENTARIO OPERATIVO: no lleva secretos (solo punteros a archivos que los contienen), pero sí topología, cuentas técnicas e identidades de sondeo, así que NO es público — `vergis-ops check` advierte si el repo que la contiene lo es. Lo obligatorio es lo mínimo para operar (`id`, `transport`, `host.root`, `rings`); todo lo demás es opcional, y cada verbo que necesite una clave no declarada sale con 2 nombrándola.",
+  "type": "object",
+  "required": ["$schema", "schema_version", "installations"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "URL de este esquema EN EL TAG de la versión del plugin que se usa (https://raw.githubusercontent.com/Gegolabs/vergis/vX.Y.Z/plugins/vergis/schema/vergis-ops.schema.json). Le da autocompletado al editor."
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "Versión del formato de la declaración. Hoy, 1."
+    },
+    "installations": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Las instalaciones que opera este repo. Con más de una, todo verbo exige `--installation <id>`: no hay instalación por omisión.",
+      "items": { "$ref": "#/$defs/installation" }
+    }
+  },
+  "$defs": {
+    "installation": {
+      "type": "object",
+      "description": "Una instalación de Vergis: un host con su borde y sus anillos.",
+      "required": ["id", "transport", "host", "rings"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Identificador kebab-case, único en el archivo. Es lo que se pasa a `--installation`."
+        },
+        "name": { "type": "string", "description": "Nombre legible. Solo informativo." },
+        "public_url": { "type": "string", "description": "URL pública de la instalación. Solo informativa: el plugin sondea por dentro de la red del borde, nunca por esta URL." },
+        "min_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Piso de versión del Producto que esta instalación admite. `rollout` advierte si se intenta instalar una menor."
+        },
+        "transport": { "$ref": "#/$defs/transport" },
+        "host": {
+          "type": "object",
+          "description": "Dónde vive la instalación en su host.",
+          "required": ["root"],
+          "additionalProperties": false,
+          "properties": {
+            "root": {
+              "type": "string",
+              "pattern": "^/[^ ]*$",
+              "description": "Raíz de la instalación en el host (ruta absoluta, sin espacios). Todo script remoto corre parado acá, y las rutas `remote` del espejo son relativas a ella."
+            },
+            "compose_project": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]*$",
+              "description": "Nombre del proyecto compose vivo. Lo exigen los actos sobre servicios (`service`, `service-interrupting`, `boot`)."
+            },
+            "compose_file": {
+              "type": "string",
+              "pattern": "^/[^ ]*$",
+              "description": "Ruta absoluta del compose vivo en el host. Lo exigen los actos sobre servicios; la guardia G1 de `parity` lo usa para saber qué familia del espejo es el compose."
+            }
+          }
+        },
+        "rings": {
+          "type": "object",
+          "description": "Cómo encuentra el plugin la configuración de anillos (`RINGS_*`) de la instalación. Se declara el ARCHIVO del host que ya la tiene (`env_file`) o el mapa inline (`env`), nunca los dos: el plugin no duplica lo que el host ya declara.",
+          "additionalProperties": false,
+          "properties": {
+            "env_file": {
+              "type": "string",
+              "pattern": "^[^ ]+$",
+              "description": "Ruta en el host (absoluta, o relativa a `host.root`) del archivo con los `RINGS_*` que usa `botler-rollout` (se carga con `set -a; . <archivo>; set +a`)."
+            },
+            "env": {
+              "type": "object",
+              "description": "Los `RINGS_*` inline, cuando la instalación no tiene archivo. Sin secretos: el token del gate va por `RINGS_GATE_TOKEN_FILE`, que es una ruta.",
+              "propertyNames": { "pattern": "^RINGS_[A-Z_]+$" },
+              "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9._:/@+=-]*$" }
+            },
+            "tool": {
+              "type": "string",
+              "pattern": "^/[^ ]*$",
+              "description": "Ruta absoluta de `botler-rollout` en el host. Si falta, la que recomienda el README del Producto: `/usr/local/bin/botler-rollout` (convención del Producto, no un hecho de la instalación)."
+            }
+          },
+          "oneOf": [
+            { "required": ["env_file"] },
+            { "required": ["env"] }
+          ]
+        },
+        "instrument": {
+          "type": "object",
+          "description": "Dónde vive el poller de corte. Si falta, en el borde (`RINGS_EDGE`), que toda instalación con anillos tiene y que ningún acto de anillos recrea (RUNBOOK §0.3) — pero sí un recreate del propio borde: `exec service <borde> recreate` se niega mientras el poller corra ahí (la guardia lo averigua en el host), y `check` dice qué servicio aloja el instrumento. Para recrear el borde medido, declara acá otro contenedor.",
+          "additionalProperties": false,
+          "properties": {
+            "container": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+              "description": "Contenedor de VIDA LARGA, en la red interna, que el acto no toca. Nunca uno efímero: un poller que muere durante el acto acota el corte por abajo."
+            },
+            "baseline_seconds": {
+              "type": "integer",
+              "minimum": 10,
+              "description": "Línea base mínima del poller antes de promover o volver atrás. Por omisión, 60."
+            }
+          }
+        },
+        "probe_identities": {
+          "type": "array",
+          "description": "Identidades con que se FORJA la sonda (`X-Forwarded-Email`/`X-Forwarded-Groups`) para `smoke`, `marks` y `rls_checks`. La sonda entra por detrás del borde: eso solo es seguro donde el nodo no está expuesto sin borde. Nunca personas reales sin su acuerdo. La identidad admin de `contract` sale de `RINGS_ADMIN_EMAIL`, no de acá.",
+          "items": {
+            "type": "object",
+            "required": ["id", "email", "groups"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "description": "Nombre corto con que la cita `rls_checks` o `--identity`." },
+              "email": { "type": "string", "pattern": "^[^\\s'\"`$\\\\]+@[^\\s'\"`$\\\\]+$", "description": "Correo forjado en `X-Forwarded-Email`." },
+              "groups": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[^\\s,'\"`$\\\\]+$" },
+                "description": "Grupos forjados en `X-Forwarded-Groups`."
+              }
+            }
+          }
+        },
+        "rls_checks": {
+          "type": "array",
+          "description": "Comprobaciones de RLS por identidad: la ruta, con esa identidad, TIENE que contener `present` y NO contener `absent`. Sin ellas, `verify` dice «RLS no verificada».",
+          "items": {
+            "type": "object",
+            "required": ["route", "identity"],
+            "additionalProperties": false,
+            "properties": {
+              "route": { "type": "string", "pattern": "^[a-z0-9][a-z0-9/_-]*(\\?page=[A-Za-z0-9_-]+)?$", "description": "Slug del Let (y a lo sumo `?page=<id>`)." },
+              "identity": { "type": "string", "description": "`id` de una de `probe_identities`." },
+              "present": { "type": "array", "items": { "type": "string", "pattern": "^[^'\"`$\\\\]+$" }, "description": "Textos que deben aparecer." },
+              "absent": { "type": "array", "items": { "type": "string", "pattern": "^[^'\"`$\\\\]+$" }, "description": "Textos que NO deben aparecer (la comprobación fail-closed)." }
+            }
+          }
+        },
+        "mirror": {
+          "type": "object",
+          "description": "El espejo: lo que el repo del operador dice que corre en el host. Espejo primero — la fuente es el repo, el host es copia.",
+          "required": ["families"],
+          "additionalProperties": false,
+          "properties": {
+            "root": {
+              "type": "string",
+              "description": "Raíz local del espejo, relativa al directorio de esta declaración. Por omisión, `.`."
+            },
+            "families": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Familias de artefactos. Un mismo `id` puede repetirse para agrupar varios pares fijos.",
+              "items": {
+                "type": "object",
+                "required": ["id", "kind", "local", "remote"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "description": "Nombre de la familia (`parity --family <id>`)." },
+                  "kind": {
+                    "enum": ["fixed", "sweep"],
+                    "description": "`fixed`: un archivo ↔ un archivo. `sweep`: un directorio completo, barrido en las dos direcciones (lo que está solo en el host es SOLO-HOST)."
+                  },
+                  "local": { "type": "string", "pattern": "^[^ ]+$", "description": "Ruta local, relativa a `mirror.root`." },
+                  "remote": { "type": "string", "pattern": "^[^ /][^ ]*$", "description": "Ruta en el host, relativa a `host.root`." },
+                  "exclude": {
+                    "type": "array",
+                    "description": "Excepciones declaradas con su motivo (solo en `sweep`): se listan en la salida para que no sean un silencio.",
+                    "items": {
+                      "type": "object",
+                      "required": ["path", "reason"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": { "type": "string", "description": "Ruta relativa al directorio de la familia." },
+                        "reason": { "type": "string", "minLength": 1, "description": "Por qué no se mide." }
+                      }
+                    }
+                  },
+                  "optional": { "type": "boolean", "description": "Si el archivo local falta, la paridad lo dice y no lo mide, en vez de salir con 2 (p. ej. un archivo fuera de git)." }
+                }
+              }
+            },
+            "unmirrored": {
+              "type": "array",
+              "description": "Montajes del compose espejado que el espejo NO cubre, cada uno con su motivo (estado de runtime, datos). Los `env_file` se excluyen solos: son secretos. La guardia G1 de `parity` se niega a medir si un montaje no está cubierto por una familia ni declarado acá.",
+              "items": {
+                "type": "object",
+                "required": ["path", "reason"],
+                "additionalProperties": false,
+                "properties": {
+                  "path": { "type": "string", "description": "Primer componente del montaje, relativo a `host.root` (p. ej. `governance`)." },
+                  "reason": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        },
+        "services": {
+          "type": "array",
+          "description": "Servicios de la instalación que no son anillos (borde, proxy de identidad, sidecars). Lo exigen los actos `service` y `service-interrupting`.",
+          "items": {
+            "type": "object",
+            "required": ["name", "interrupting", "reload"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$", "description": "Nombre del servicio en el compose." },
+              "interrupting": { "type": "boolean", "description": "`true` si recrearlo o recargarlo corta rutas servidas. Ante la duda, `true`." },
+              "reload": {
+                "type": "string",
+                "pattern": "^(none|exec:[^'`$\\\\]+)$",
+                "description": "`none`, o `exec:<comando>` que recarga en caliente DENTRO del contenedor (p. ej. `exec:caddy reload --config /etc/caddy/Caddyfile`)."
+              },
+              "prevalidate": { "type": "string", "pattern": "^[^'`$\\\\]+$", "description": "Comando que valida el cambio antes de aplicarlo, dentro de un contenedor efímero de la misma imagen." }
+            }
+          }
+        },
+        "governance": {
+          "type": "object",
+          "description": "Los gates de la instalación por clase de acto. La declaración CITA la norma que los funda (`source`) y no la reemplaza: si difieren, gana la norma y la declaración se corrige.",
+          "additionalProperties": false,
+          "properties": {
+            "source": { "type": "string", "description": "Ruta (relativa a esta declaración) de la norma que funda los gates. `check` exige que exista." },
+            "stage": {
+              "enum": ["alpha", "beta", "ga"],
+              "description": "Etapa declarada de la plataforma. Informativa: los gates que rigen son los de `gates`."
+            },
+            "availability": { "type": "string", "description": "Disponibilidad comprometida (p. ej. «horario de oficina»): dice cuándo caen las ventanas naturales. Informativa." },
+            "window_approver": { "type": "string", "description": "Quién autoriza una ventana de mantenimiento (gate `window`): el OPERADOR de la instalación, que sabe qué usuarios dependen de ella en ese momento." },
+            "approver": { "type": "string", "description": "Quién da el OK explícito de un acto con gate `approval` (lo destructivo o irreversible)." },
+            "gates": {
+              "type": "object",
+              "description": "Clase de acto → gate. Una clase sin declarar es `approval`: lo que nadie clasificó sigue pidiendo aprobación.",
+              "additionalProperties": false,
+              "properties": {
+                "read": { "$ref": "#/$defs/gate" },
+                "content": { "$ref": "#/$defs/gate" },
+                "version": { "$ref": "#/$defs/gate" },
+                "boot": { "$ref": "#/$defs/gate" },
+                "service": { "$ref": "#/$defs/gate" },
+                "service-interrupting": { "$ref": "#/$defs/gate" },
+                "destructive": { "$ref": "#/$defs/gate" }
+              }
+            },
+            "pretest": { "type": "string", "description": "Pre-test que la instalación exige antes de un acto `content`, con puntero a su norma. `publish` exige su evidencia (`--pretest`)." },
+            "acts_log": { "type": "string", "description": "Dónde registra la instalación sus actos (ruta relativa a esta declaración)." },
+            "cuts_log": { "type": "string", "description": "Dónde registra sus cortes medidos. Sin él, la medición se imprime y el verbo dice que no hay dónde registrarla." }
+          }
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Lo que la instalación opera y no es del Producto.",
+          "properties": {
+            "data": { "type": "string", "description": "Skill que atiende los datos y el motor de datos de la instalación. Sin ella, todo acto sobre datos es «fuera del Producto: no cubierto por esta instalación»." }
+          }
+        }
+      }
+    },
+    "gate": {
+      "enum": ["free", "operator", "window", "approval"],
+      "description": "`free`: se ejecuta sin más. `operator`: lo decide quien ejecuta, con respaldo, plan de reversa y verificación medida (desplegar sin corte). `window`: exige una ventana de mantenimiento autorizada por `window_approver`, con el impacto declarado antes y el corte medido. `approval`: exige el OK explícito de `approver`."
+    },
+    "transport": {
+      "description": "Cómo llega el plugin al host. Contrato cerrado: un tipo nuevo es un PR al Producto. No existe un tipo que ejecute una plantilla de comando declarada acá.",
+      "oneOf": [
+        {
+          "type": "object",
+          "title": "local",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "local", "description": "Docker en la misma máquina que corre el plugin." }
+          }
+        },
+        {
+          "type": "object",
+          "title": "ssh",
+          "required": ["kind", "host", "user"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "ssh" },
+            "host": { "type": "string", "pattern": "^[A-Za-z0-9.:_-]+$", "description": "Host o IP." },
+            "user": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "identity_file": { "type": "string", "pattern": "^[^ ]+$", "description": "Ruta LOCAL de la llave (con `~` permitido). `check` exige que esté fuera de git." },
+            "sudo": { "type": "boolean", "description": "`true` si docker exige root en el host: el script corre con `sudo sh`." }
+          }
+        },
+        {
+          "type": "object",
+          "title": "az-run-command",
+          "required": ["kind", "resource_group", "vm", "expected_account"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "az-run-command" },
+            "resource_group": { "type": "string", "pattern": "^[A-Za-z0-9._()-]+$" },
+            "vm": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "expected_account": { "type": "string", "description": "La cuenta con que `az account show` debe estar. Una diferencia sale con 2 sin tocar nada." }
+          }
+        }
+      ]
+    }
+  }
+}
