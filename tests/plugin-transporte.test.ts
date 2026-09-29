@@ -135,3 +135,14 @@ describe('el remoto no existe como la declaración dice', () => {
     expect(r.all).toMatch(/no existe en el host/)
   })
 })
+
+describe('un comando del cuerpo que lee stdin no se traga el centinela', () => {
+  // Medido en el banco (V10): `docker compose exec` leía stdin, y con `sh -s` el stdin del cuerpo era el
+  // RESTO del envoltorio — la corrida salía «muda» (5). El cuerpo corre con stdin = /dev/null.
+  it('local: `cat` en el cuerpo no deja al remoto mudo', () => {
+    const dir = declarar(minima({ governance: { gates: { read: 'free' } } }, tmp()))
+    const r = cli(['exec', 'run', '--class', 'read', '--', 'cat > /dev/null; echo despues-del-cat'], { cwd: dir, env: { VERGIS_OPS_STATE_DIR: tmp() } })
+    expect(r.code, r.all).toBe(0)
+    expect(r.out).toMatch(/despues-del-cat/)
+  })
+})
