@@ -212,7 +212,8 @@ export async function runRemote(decl, ins, body, { mute = false, allowPartial = 
         try {
           const p = parse(a.raw, n)
           if (!p.complete && !allowPartial) {
-            fail(EXIT.PARTIAL, `salida cortada por el transporte: llegó el centinela (rc=${p.rc}) pero no las ${p.expected} línea(s) que el remoto emitió (llegaron ${p.lines.length}${p.lines.length && !a.raw.includes(`VERGIS-OPS-BEGIN ${n}`) ? ', sin el inicio' : ''}). Lo que falta no se da por visto.`)
+            const how = a.raw.includes(`VERGIS-OPS-BEGIN ${n}`) ? `llegaron ${p.lines.length} de las ${p.expected} línea(s) que el remoto emitió` : `no llegó el inicio de la salida (el remoto emitió ${p.expected} línea(s))`
+            fail(EXIT.PARTIAL, `salida cortada por el transporte: llegó el centinela (rc=${p.rc}) pero ${how}. Lo que falta no se da por visto.`)
           }
           return p
         } catch (e) {
