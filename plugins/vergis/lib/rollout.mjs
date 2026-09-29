@@ -4,7 +4,8 @@
 //   status                       el registro + la fase viva (botler-rollout status)
 //   tool <versión> [--no-pull]   extrae botler-rollout DE LA IMAGEN candidata, por digest, verifica su sha
 //                                contra el label `vergis.rollout.sha256` y lo instala con respaldo (D9)
-//   install <versión> [--no-pull] [--redigest]
+//   install <versión> [--no-pull] [--redigest] [--keep-tool]
+//                                coteja la herramienta del host contra el label de la candidata: distinta → 2
 //   promote <versión> [--timeout s] [--tail s]
 //   rollback [<versión>] [--tail s]
 //   retire <versión> [--rmi] · prune [--retain N] [--dry-run] [--rmi]
@@ -133,8 +134,10 @@ export async function execRollout(decl, ins, args, o) {
       if (!v) fail(EXIT.NOT_RUN, 'exec rollout install <versión exacta>')
       if (ins.min_version && /^[0-9]/.test(v) && cmpVer(v, ins.min_version) < 0) fail(EXIT.NOT_RUN, `${v} es menor que el piso que la instalación admite (min_version ${ins.min_version})`)
       const g = await gate(decl, ins, 'version', o)
+      const ts = await toolMatchesCandidate(decl, ins, v, o)
       out(`== vergis-ops exec rollout install ${v} · ${ins.id} ==`)
       out(`   ${evidenceLine(g)}`)
+      out(`   herramienta: ${ts}`)
       const flags = [o['no-pull'] ? '--no-pull' : '', o.redigest ? '--redigest' : ''].filter(Boolean).join(' ')
       const lines = []
       const r = await tool(decl, ins, `install ${shq(v)} ${flags}`, { lines })
@@ -173,6 +176,35 @@ export async function execRollout(decl, ins, args, o) {
       err('uso: exec rollout status|tool <v>|install <v>|promote <v>|rollback [<v>]|retire <v>|prune|ring-args [<v>] [--apply]')
       return EXIT.NOT_RUN
   }
+}
+
+/**
+ * ¿La herramienta del host es la de la candidata? Se coteja el sha de `botler-rollout` en el host contra
+ * el label `vergis.rollout.sha256` de la imagen que se va a instalar: herramienta y nodo tienen que ser el
+ * mismo objeto, y «instálala si el CHANGELOG dice que cambió» dependía de que alguien lo leyera bien.
+ * Distinta → 2, nombrando `exec rollout tool <v>`. `--keep-tool` existe para instalar una versión
+ * ANTERIOR con la herramienta más nueva (la herramienta no retrocede); sin label (imagen anterior a que
+ * la herramienta viajara adentro) no hay contra qué cotejar, y se dice.
+ */
+async function toolMatchesCandidate(decl, ins, v, o) {
+  const body = String.raw`REF="$RINGS_IMAGE:${v}"
+${o['no-pull'] ? '' : `$DOCKER pull -q "$REF" >/dev/null 2>&1 || true`}
+if ! $DOCKER image inspect "$REF" >/dev/null 2>&1; then echo "NOIMAGE $REF"; exit 0; fi
+LBL=$($DOCKER image inspect --format '{{index .Config.Labels "vergis.rollout.sha256"}}' "$REF" 2>/dev/null)
+case "$LBL" in ""|"<no value>") echo "NOLABEL"; exit 0 ;; esac
+W=$(printf '%s' "$LBL" | tr ',' '
+' | sed -n 's/^botler-rollout=//p')
+G=$([ -f "$VO_TOOL" ] && vo_sha "$VO_TOOL")
+echo "TOOLSHA ${'$'}{W:--} ${'$'}{G:--}"`
+  const r = await runRemote(decl, ins, body)
+  if (r.lines.some((l) => l.startsWith('NOIMAGE '))) return `sin cotejar — la imagen ${v} no está en el host todavía (la trae el install)`
+  if (r.lines.includes('NOLABEL')) return `sin cotejar — la imagen ${v} no declara vergis.rollout.sha256 (anterior a que la herramienta viajara en la imagen: tómala del repo del Producto en su tag)`
+  const t = r.lines.find((l) => l.startsWith('TOOLSHA '))
+  if (!t) fail(EXIT.MUTE, 'el host no devolvió el sha de la herramienta')
+  const [, want, got] = t.split(' ')
+  if (want !== '-' && want === got) return `la del host es la de ${v} (sha ${got.slice(0, 16)}…, cotejado contra el label de la imagen)`
+  if (o['keep-tool']) return `⚠ la del host NO es la de ${v} (host ${got.slice(0, 16)} · imagen ${want.slice(0, 16)}) y se conserva por --keep-tool: instalar una versión anterior con la herramienta más nueva`
+  fail(EXIT.NOT_RUN, `la herramienta del host no es la de ${v} (host ${got === '-' ? 'ausente' : got.slice(0, 16) + '…'} · label de la imagen ${want === '-' ? 'sin botler-rollout' : want.slice(0, 16) + '…'}). Herramienta y nodo son el mismo objeto: \`vergis-ops exec rollout tool ${v}\` y reintenta. (Para instalar una versión ANTERIOR con la herramienta más nueva: --keep-tool.)`)
 }
 
 // ─── D9 · la herramienta sale de la imagen, por digest ───────────────────────────────────────────
