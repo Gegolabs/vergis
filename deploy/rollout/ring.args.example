@@ -17,10 +17,11 @@
 # del anillo (versión + digest) que después declara `/contrato`.
 
 # --- Red e integración con el stack ----------------------------------------------------------------
-# La red del compose de la instancia (`docker network ls` para verla; suele ser <proyecto>_default).
-# El borde alcanza al anillo por su NOMBRE de contenedor dentro de esta red.
+# La red del compose de la instancia (`docker network ls` para verla; suele ser <proyecto>_default, y el
+# proyecto es el directorio del compose si no declara `name:` — con las rutas de esta plantilla,
+# /opt/vergis → vergis_default). El borde alcanza al anillo por su NOMBRE de contenedor dentro de esta red.
 --network
-mira_default
+vergis_default
 --restart
 unless-stopped
 --init
