@@ -8,6 +8,7 @@
 #       mount=<origen>|<destino>  un montaje (uno por línea)
 #       env=<K>=<V>               env del contenedor (lo ve lo que corre con `exec`)
 #       running=0                 el contenedor está DETENIDO (un anillo retenido); `start` lo arranca
+#                                 y `stop` lo vuelve a detener
 #
 #   $FAKE_WORLD/images/<ref con / y : cambiados por _>   una imagen; su línea `sha256label=<v>` es el
 #       label vergis.rollout.sha256 (lo que coteja `exec rollout install`)
@@ -53,6 +54,12 @@ case "$cmd" in
     f="$W/containers/${1:-}"
     [ -f "$f" ] || { echo "Error response from daemon: No such container: ${1:-}" >&2; exit 1; }
     grep -v '^running=' "$f" > "$f.t"; mv "$f.t" "$f"
+    echo "${1:-}"
+    ;;
+  stop)
+    f="$W/containers/${1:-}"
+    [ -f "$f" ] || { echo "Error response from daemon: No such container: ${1:-}" >&2; exit 1; }
+    grep -v '^running=' "$f" > "$f.t"; echo 'running=0' >> "$f.t"; mv "$f.t" "$f"
     echo "${1:-}"
     ;;
   ps)

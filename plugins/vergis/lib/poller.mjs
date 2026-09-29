@@ -155,8 +155,14 @@ function cn1Line(decl, ins) {
  * que es quien lo habría arrancado en su pre-flight. Así que el arranque es de este verbo: un retenido se
  * arranca (acto de clase `version`, con su gate, el mismo que `install`, que también deja un anillo en
  * espera) y se espera a que declare `phase=standby` por la MISMA ruta que se va a medir. Queda caliente:
- * es el candidato del acto que sigue, y al cerrar la próxima promoción la herramienta devuelve a retenido
- * todo lo que no sea activo ni previo.
+ * es el candidato del acto que sigue. Si el operador NO sigue con el acto, lo devuelve a retenido él
+ * (`exec run --class version -- 'docker stop <anillo>'`); la próxima promoción también lo haría, pero no
+ * se puede prometer que haya una.
+ *
+ * Si el retenido que ESTE verbo arrancó no llega a standby, lo vuelve a detener en el mismo viaje: un
+ * tercer anillo vivo es un aspirante más al lease, una carrera cuyo ganador nadie eligió (la misma razón
+ * por la que la herramienta deja CALIENTES = 2 al cerrar una promoción). Un anillo que ya estaba corriendo
+ * no se toca: no lo arrancó este verbo.
  */
 export async function cn1(decl, ins, o) {
   const ringArg = o.ring ?? o._[1]
@@ -177,9 +183,10 @@ case "$VO_RING" in vergis-*) : ;; *) VO_RING=$(vo_ring_name "$VO_RING") ;; esac
 if ! $DOCKER inspect "$VO_RING" >/dev/null 2>&1; then echo "NORING $VO_RING"; exit 0; fi
 VO_ACT=$(vo_active_ring || true)
 if [ "$VO_ACT" = "$VO_RING" ]; then echo "ISACTIVE $VO_RING"; exit 0; fi
+VO_STARTED=0
 if [ "$($DOCKER inspect --format '{{.State.Running}}' "$VO_RING" 2>/dev/null)" != true ]; then
   ${startGate ? String.raw`$DOCKER start "$VO_RING" >/dev/null 2>&1 || { echo "STARTFAIL $VO_RING"; exit 0; }
-  echo "STARTED $VO_RING"` : String.raw`echo "STOPPED $VO_RING"; exit 0`}
+  VO_STARTED=1; echo "STARTED $VO_RING"` : String.raw`echo "STOPPED $VO_RING"; exit 0`}
 fi
 # La fase, por la MISMA ruta que va a medir el control (el contenedor del instrumento → el anillo).
 i=0; VO_PH=
@@ -188,7 +195,14 @@ while [ $i -lt ${standbyWait} ]; do
   [ "$VO_PH" = standby ] && break
   i=$((i+1)); sleep 1
 done
-if [ "$VO_PH" != standby ]; then echo "NOTSTANDBY $VO_RING ${'$'}{VO_PH:-sin-respuesta} $i"; exit 0; fi
+if [ "$VO_PH" != standby ]; then
+  echo "NOTSTANDBY $VO_RING ${'$'}{VO_PH:-sin-respuesta} $i"
+  # Lo arrancó este verbo y no sirve de candidato: vuelve a retenido, no queda compitiendo por el lease.
+  if [ "$VO_STARTED" = 1 ]; then
+    if $DOCKER stop "$VO_RING" >/dev/null 2>&1; then echo "RESTOPPED $VO_RING"; else echo "RESTOPFAIL $VO_RING"; fi
+  fi
+  exit 0
+fi
 echo "STANDBY $VO_RING $i"
 $DOCKER exec -i "$VO_CT" sh -c 'cat > /tmp/vergis-ops-poller.sh' <<'VO_POLLER_EOF'
 ${POLLER()}
@@ -216,6 +230,8 @@ $DOCKER exec "$VO_CT" rm -f "$L"`
     writeRecord(decl.path, ins.id, 'cn1', { ring, passed: false, at: new Date().toISOString(), notStandby: ph, instrument: POLLER_VERSION })
     out(`== vergis-ops poller cn1 · ${ins.id} · → ${ring} ==`)
     if (started) out(`   ${ring} estaba retenido: lo arranqué (${evidenceLine(startGate)}).`)
+    if (r.lines.some((l) => l.startsWith('RESTOPPED '))) out(`   y lo volví a detener (\`docker stop ${ring}\`): queda RETENIDO como estaba — un tercer anillo vivo sería un aspirante más al lease.`)
+    if (r.lines.some((l) => l.startsWith('RESTOPFAIL '))) out(`   ⚠ \`docker stop ${ring}\` FALLÓ: el anillo que arranqué sigue vivo y compite por el lease. Detenlo: \`vergis-ops exec run --class version -- 'docker stop ${ring}'\`, y confirma con \`vergis-ops exec rollout status\`.`)
     out(`✗ CN-1 NO CORRIÓ (exit 1): ${ring} no declaró phase=standby en ${waited} s (última fase vista: ${ph}). Sin un standby no hay rojo que exigirle al instrumento — y la herramienta tampoco lo promovería.`)
     return EXIT.FINDING
   }
@@ -234,7 +250,8 @@ $DOCKER exec "$VO_CT" rm -f "$L"`
   if (started) {
     const sb = r.lines.find((l) => l.startsWith('STANDBY '))?.split(' ')[2]
     out(`   ${where[2]} estaba RETENIDO (detenido): lo arranqué y declaró phase=standby a los ${sb ?? '?'} s · ${evidenceLine(startGate)}`)
-    out('   queda caliente: es el candidato del acto que sigue (la herramienta lo habría arrancado igual en su pre-flight); al cerrar la próxima promoción vuelve a retenido si no es activo ni previo.')
+    out('   queda caliente: es el candidato del acto que sigue (la herramienta lo habría arrancado igual en su pre-flight).')
+    out(`   si NO sigues con el acto, devuélvelo a retenido: \`vergis-ops exec run --class version -- 'docker stop ${where[2]}'\` — vivo, es un aspirante más al lease.`)
   }
   out(`   ${report('control negativo', c)}`)
   for (const e of c.examples) out(`   | ${e}`)
