@@ -66,7 +66,7 @@ async function instrumented(decl, ins, targetVersion) {
   if (c.ok === 0) fail(EXIT.NOT_RUN, `la línea base del poller no tiene NI UNA muestra OK: el punto de partida no está sano. No es una promoción: es un incidente.`)
   const cn = readRecord(decl.path, ins.id, 'cn1')
   const want = ringName(targetVersion)
-  if (!cn || cn.ring !== want) fail(EXIT.NOT_RUN, `falta el CN-1 contra el anillo destino ${want}: \`vergis-ops poller cn1 --ring ${targetVersion}\`. Sin el rojo del control negativo, «no vi el corte» y «no puedo ver el corte» son indistinguibles.`)
+  if (!cn || cn.ring !== want) fail(EXIT.NOT_RUN, `falta el CN-1 contra el anillo destino ${want}: \`vergis-ops poller cn1 --ring ${targetVersion}\` (si está retenido, cn1 lo arranca con el gate de la clase version y espera su standby). Sin el rojo del control negativo, «no vi el corte» y «no puedo ver el corte» son indistinguibles.`)
   if (!cn.passed) fail(EXIT.NOT_RUN, `el último CN-1 contra ${want} NO salió rojo-como-debe (${cn.at}): el instrumento no demostró saber ver el fallo. No se promueve con él.`)
   const age = Date.now() - Date.parse(cn.at)
   if (age > CN1_MAX_AGE_MS) fail(EXIT.NOT_RUN, `el CN-1 contra ${want} tiene ${Math.round(age / 60000)} min: se exige uno de la última media hora (el instrumento se prueba antes del acto, no de memoria).`)
