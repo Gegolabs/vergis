@@ -82,35 +82,35 @@ preservando el inodo.
 Corre **antes** del acto y sigue corriendo después. Vive en el borde (`docker exec`), que la
 promoción no recrea, y sondea **por el conmutador** (`:8079`), que es el camino del tráfico real.
 
+**El poller es un archivo, no un bloque para copiar:**
+[`plugins/vergis/instruments/poller.sh`](../../plugins/vergis/instruments/poller.sh). Viaja versionado
+con el Producto —con el mismo tag que la herramienta de anillos— y es el que corre el plugin `vergis`
+(`vergis-ops poller start` · `count` · `stop` · `cn1`). Un poller copiado a mano en un runbook se pudre
+en silencio el día que el contrato de `/healthz` cambia; el del archivo cambia en el mismo PR que el
+contrato.
+
+A mano, sin el plugin:
+
 ```sh
 EDGE=caddy   # el nombre de tu contenedor del borde (RINGS_EDGE)
-
-docker exec "$EDGE" sh -c '
-  fallos=0; total=0
-  while :; do
-    total=$((total+1))
-    b=$(wget -q -T 2 -O- http://127.0.0.1:8079/healthz 2>/dev/null) || b=""
-    ph=$(printf "%s" "$b" | sed -n "s/.*\"phase\":\"\([a-z-]*\)\".*/\1/p")
-    sv=$(printf "%s" "$b" | sed -n "s/.*\"serving\":\([0-9]*\).*/\1/p")
-    tt=$(printf "%s" "$b" | sed -n "s/.*\"total\":\([0-9]*\).*/\1/p")
-    # El predicado COMPLETO. Cuerpo vacío = no se pudo medir, y eso cuenta como fallo, no se omite.
-    if [ -n "$b" ] && [ "$ph" = serving ] && [ -n "$sv" ] && [ "$sv" = "$tt" ]; then
-      printf "%s ok  fase=%s lets=%s/%s\n" "$(date -u +%H:%M:%S)" "$ph" "$sv" "$tt"
-    else
-      fallos=$((fallos+1))
-      printf "%s NO-SERVIDA fase=%s lets=%s/%s (fallos=%s de %s)\n" \
-        "$(date -u +%H:%M:%S)" "${ph:-sin-respuesta}" "${sv:-?}" "${tt:-?}" "$fallos" "$total"
-    fi
-    sleep 0.25
-  done' | tee /tmp/poller-$(date +%Y%m%d-%H%M).log
+docker exec -i "$EDGE" sh -c 'cat > /tmp/poller.sh' < plugins/vergis/instruments/poller.sh
+docker exec "$EDGE" sh /tmp/poller.sh http://127.0.0.1:8079/healthz | tee /tmp/poller-$(date +%Y%m%d-%H%M).log
 ```
 
-- Resolución **0,25 s**: el corte que se busca acotar es de segundos.
-- `lets.serving == lets.total` importa tanto como la fase: un nodo que sirve la mitad de los Lets
-  responde `200` y `phase:degraded` — y eso **es** una respuesta no servida para la mitad de la gente.
-- **Un cuerpo vacío es un fallo, no un dato ausente.** «No pude medir» nunca se cuenta como verde.
-- Ajusta `sed`/`wget` a las herramientas de tu imagen del borde; lo que **no** se ajusta es el
-  predicado.
+Una línea por muestra: `<uptime> <HH:MM:SS> OK|MAL|SINMEDIR <detalle>`. Lo que el archivo garantiza:
+
+- Resolución **0,25 s**: el corte que se busca acotar es de segundos. El reloj es `/proc/uptime`
+  (centésimas), porque el `date` de BusyBox solo da segundos.
+- El predicado **completo**: `lets.serving == lets.total` importa tanto como la fase — un nodo que
+  sirve la mitad de los Lets responde `200` y `phase:degraded`, y eso **es** una respuesta no servida
+  para la mitad de la gente. Lee `lets` y, en un nodo anterior a 0.27.0, `pis`, **diciendo** cuál leyó.
+- **El cuerpo tiene que ser JSON.** La sala de espera del borde responde HTML, y un extractor por
+  `sed` que no lo exija le puede leer `"phase":"serving"` a un error (hallazgo del banco V-14).
+- **Un cuerpo vacío o no-JSON es `MAL`, no un dato ausente**; sin respuesta HTTP es `SINMEDIR`, que se
+  cuenta aparte. «No pude medir» nunca se cuenta como verde.
+- Está escrito contra BusyBox `wget` y `sed` (los de `caddy:2`). Si tu borde es otra imagen, verifica
+  las herramientas **antes** de la ventana —`vergis-ops poller start` se niega si faltan—; lo que no se
+  ajusta es el predicado.
 
 ### El control negativo, escrito
 
