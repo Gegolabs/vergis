@@ -8,7 +8,7 @@
 //   promote <versión> [--timeout s] [--tail s]
 //   rollback [<versión>] [--tail s]
 //   retire <versión> [--rmi] · prune [--retain N] [--dry-run] [--rmi]
-//   ring-args [<versión>] [--service s] [--apply]
+//   ring-args [<versión>] [--service s] [--memory 2g] [--apply]
 //                                deriva `ring.args` del compose VIVO con el generador de la imagen, y lo
 //                                muestra contra el vigente; `--apply` lo instala con respaldo
 //
@@ -237,7 +237,7 @@ ${v ? `IMG="$RINGS_IMAGE:${v}"` : 'IMG=$($DOCKER inspect --format "{{.Image}}" "
 PROF=""; for p in $($DOCKER compose -p "$P" -f "$F" config --profiles 2>/dev/null); do PROF="$PROF --profile $p"; done
 # shellcheck disable=SC2086
 $DOCKER compose -p "$P" -f "$F" $PROF config --no-env-resolution --format json > "$VO_T/compose.json" 2>"$VO_T/e" || { echo "NOCONFIG"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
-$DOCKER run --rm -i --entrypoint node "$IMG" /app/deploy/rollout/ring-args-from-compose.mjs --host-root ${shq(ins.host.root)} --service ${shq(svc)} < "$VO_T/compose.json" > "$VO_T/ring.args.new" 2>"$VO_T/e" || { echo "GENFAIL"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
+$DOCKER run --rm -i --entrypoint node "$IMG" /app/deploy/rollout/ring-args-from-compose.mjs --host-root ${shq(ins.host.root)} --service ${shq(svc)}${o.memory ? ` --memory ${shq(assertToken(o.memory, '--memory', /^[0-9]+[kmgKMG]?$/))}` : ''} < "$VO_T/compose.json" > "$VO_T/ring.args.new" 2>"$VO_T/e" || { echo "GENFAIL"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
 if [ -f "$RINGS_DIR/ring.args" ] && diff "$RINGS_DIR/ring.args" "$VO_T/ring.args.new" | grep -v '^[<>] # Generado:' | grep '^[<>]' > "$VO_T/d"; then
   echo "DRIFT $(wc -l < "$VO_T/d" | tr -d ' ')"; head -20 "$VO_T/d"
 elif [ -f "$RINGS_DIR/ring.args" ]; then echo "NODRIFT"; else echo "NOCURRENT"; fi
