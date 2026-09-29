@@ -55,6 +55,13 @@ COPY examples ./examples
 # invalidar las capas caras de arriba, y pesa lo que pesa un texto.
 #   docker run --rm --entrypoint cat <imagen> /app/CHANGELOG.md
 COPY CHANGELOG.md ./CHANGELOG.md
+# LA HERRAMIENTA DE ANILLOS VIAJA EN LA IMAGEN DE SU VERSIÓN (diseño lab/work/285, D9 · #366). Antes, la
+# herramienta de la versión v llegaba al host copiada del clon del Producto que tuviera la estación del
+# operador — y ese clon podía no estar en el tag v. Acá herramienta y nodo son el MISMO objeto: el plugin
+# `vergis` (`vergis-ops exec rollout tool <v>`) la extrae de la imagen candidata por digest y verifica su
+# sha contra el label de abajo antes de instalarla. El generador de `ring.args` viaja con ella y corre con
+# el `node` de la imagen: el host no necesita `node`.
+COPY deploy/rollout/botler-rollout deploy/rollout/vergis-rollout deploy/rollout/ring-args-from-compose.mjs ./deploy/rollout/
 
 # ═══ CONTRATO PÚBLICO DEL ANILLO (issue #210 · I9) ═════════════════════════════════════════════════
 #
@@ -82,6 +89,12 @@ COPY CHANGELOG.md ./CHANGELOG.md
 # server cablea. Si alguien sube una constante y no el label —o agrega un store—, la suite se pone roja.
 LABEL vergis.schema="1" \
       vergis.schema.stores="gobierno=1,notas=1,data-maestra=1,evaluaciones=1"
+
+# El sha256 de cada herramienta que la imagen lleva en `/app/deploy/rollout/`. Es lo que verifica quien la
+# extrae antes de instalarla en un host. No se mantiene a mano con la esperanza de acordarse:
+# `tests/plugin-imagen.test.ts` lo compara contra los archivos del repo, y editar una herramienta sin
+# actualizar su sha pone la suite en rojo.
+LABEL vergis.rollout.sha256="botler-rollout=cc972e3d9e8e88b7d21789ef63d1fd78839d2c0e4105526eda03d16c6365ca99,vergis-rollout=1b55f9f5ec106b2e5e6cce28abae268fd611bcc3f46a7cd1ac0012a74b09fca0,ring-args-from-compose.mjs=42f3ad58691b87693f401914136faf49d9bec16b3f20c2fbdab3d50486496567"
 
 USER node
 EXPOSE 8080

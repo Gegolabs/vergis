@@ -11,7 +11,10 @@ out
 .env
 .env.*
 *.env
-# Contexto innecesario para el runtime (achica la imagen y la superficie).
+# Contexto innecesario para el runtime (achica la imagen y la superficie). El plugin `vergis` de Claude
+# Code se instala desde el marketplace del repo, no desde la imagen: no viaja en ella.
+plugins
+.claude-plugin
 docs
 tests
 .github
