@@ -45,6 +45,9 @@ cp <repo>/deploy/rings/active.caddy.example ./rings/active.caddy
 cp <repo>/deploy/edge/espera.html           ./edge/espera.html
 cp <repo>/deploy/rollout/ring.args.example  ./rings/ring.args    # y ajusta rutas/red/envs
 cp <repo>/deploy/rollout/botler-rollout     /usr/local/bin/botler-rollout && chmod +x $_
+# …o, mejor, la herramienta DE LA VERSIÓN que vas a instalar, sacada de su imagen (viaja en
+# /app/deploy/rollout/ con su sha256 en el label vergis.rollout.sha256):
+#   docker create --name t ghcr.io/gegolabs/vergis:<versión> && docker cp t:/app/deploy/rollout/botler-rollout /usr/local/bin/ && docker rm t
 
 docker compose up -d           # el borde queda con :8079 y la sala de espera
 ```
@@ -119,6 +122,23 @@ Conserva los `N` anillos más recientes por fecha de instalación. **El activo y
 siempre**, cuenten o no dentro de la ventana, con **cualquier** combinación de flags: `--force` no los
 toca, `--retain 1` no los toca. Es la línea que este comando no cruza.
 
+## ¿Operas la instancia con Claude Code?
+
+El Producto distribuye un plugin, **`vergis`**, que opera una instalación con esta misma ceremonia y con
+los instrumentos del [`RUNBOOK.md`](RUNBOOK.md) —el poller, su control negativo, el smoke de todas las
+vistas, la paridad espejo↔host— convertidos en construcción: `promote` se niega sin poller corriendo, sin
+línea base y sin un CN-1 rojo-como-debe contra el anillo destino. El plugin no trae ningún hecho de tu
+instalación: la declaras tú, en un `vergis-ops.json` en el repo desde el que operas (esquema:
+[`plugins/vergis/schema/vergis-ops.schema.json`](../../plugins/vergis/schema/vergis-ops.schema.json)).
+
+```sh
+claude plugin marketplace add Gegolabs/vergis --sparse .claude-plugin plugins   # --scope project si el repo es compartido
+claude plugin install vergis@vergis                                               # (en los dos comandos)
+```
+
+El plugin va fijado al tag de la versión del Producto: el de la versión v conoce el contrato hasta v, y lo
+posterior lo lee del nodo (`/contrato`). Detalle: skill `vergis:setup`.
+
 ## Lo que esta herramienta no hace
 
 - No usa `latest` ni tags móviles: un anillo se instala por versión exacta y se registra por digest.
@@ -146,8 +166,12 @@ toca, `--retain 1` no los toca. Es la línea que este comando no cruza.
 - El smoke por el borde verifica el predicado de salud y el índice. **No** recorre las rutas de cada PI:
   `/healthz` publica **conteos**, no slugs, y adivinar los slugs o forjar una identidad para listarlos
   sería peor que no medirlo. El invariante que sí se exige es `lets.serving == lets.total`.
-- `ring.args` es un espejo manual del servicio `vergis` del compose. Nada verifica que estén
-  sincronizados.
+- `ring.args` **se deriva** del servicio del nodo en el compose vivo, no se mantiene a mano:
+  [`ring-args-from-compose.mjs`](ring-args-from-compose.mjs) —que viaja en la imagen, así que el host no
+  necesita `node`— genera el archivo desde `docker compose config --no-env-resolution --format json`, y el
+  **diff contra el vigente es la verificación** (cabecera del script). Lo que sigue sin verificarse solo es
+  lo que nadie regenera: un compose que cambió y un `ring.args` que no se volvió a derivar. El plugin
+  `vergis` lo mide (`vergis-ops exec rollout ring-args`, sale 1 si hay drift).
 - **El handover es DIRIGIDO, y su alcance es parcial.** Antes del flip, la herramienta escribe
   `${VERGIS_OUT}/control.handover.json` = `{successor, expiresAt}`: el anillo nombrado adquiere sin
   esperar su ventana de gracia y los demás se abstienen mientras el intent esté vigente. **El intent

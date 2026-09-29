@@ -269,8 +269,9 @@ pierde.
   contenedor de Caddy — y ese corte sí es corte).
 - El **smoke no recorre las rutas de cada PI**: `/healthz` publica conteos, no slugs. El invariante
   que sí se exige es `lets.serving == lets.total`, y lo funcional lo verifica un humano (§5.2).
-- **`ring.args` es un espejo manual** del servicio `vergis` del compose. Nada verifica que estén
-  sincronizados: si cambias un env o un montaje en uno, cámbialo en el otro.
+- **`ring.args` se deriva del compose vivo** con `ring-args-from-compose.mjs` (viaja en la imagen); si
+  cambias un env o un montaje en el compose, **regenera y diffea** antes del próximo `install` — un anillo
+  nuevo se crea con lo que diga `ring.args`, no con lo que diga el compose (README §Límites).
 - **El handover es dirigido, con alcance parcial declarado**: la herramienta escribe un intent
   (`control.handover.json`) que **nombra al sucesor** antes de que el activo suelte, y los demás
   anillos se abstienen mientras esté vigente. El intent **ordena la fila; jamás otorga el control** —
