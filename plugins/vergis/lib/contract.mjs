@@ -4,7 +4,8 @@
 //   contract classify <archivo>    la clase del acto de publicar ese archivo del espejo, y su gate
 //   contract wait <archivo> [--timeout s]
 //                                  ¿el nodo TOMÓ el archivo? sha cargado == sha local y pending=false
-//   contract env <VARIABLE>        ¿cambiarla exige arranque?
+//   contract env <VARIABLE>        ¿qué exige cambiarla? (por la lista del contrato en que aparece: anillo
+//                                  nuevo `version`, `boot` si la comparten todos los anillos, o nada)
 //
 // `/contrato` es admin-only: la sonda forja `X-Forwarded-Email` con `RINGS_ADMIN_EMAIL` y entra POR
 // DETRÁS DEL BORDE, desde dentro del anillo. Eso es un privilegio que se ejerce en cada consulta, y solo
@@ -208,12 +209,13 @@ export async function runContract(common, o) {
     assertToken(arg, 'variable', /^[A-Z][A-Z0-9_]*$/)
     const r = await ask(decl, ins, shq(`env ${arg}`))
     if (r.error) fail(EXIT.NOT_RUN, r.error)
-    const l = r.lines.find((x) => x.startsWith('ENVCLASS '))?.split(' ')
-    const where = l?.[2]
-    out(`${arg}: ${where} — cambiar su VALOR exige recrear el anillo (clase boot)${where === 'reloadableContent' ? '; lo que se recarga en caliente es el CONTENIDO del archivo al que apunta' : ''}`)
-    const g = gateFor(ins, 'boot')
-    out(`gate de la clase boot: ${g.gate}`)
-    return EXIT.OK
+    const where = r.lines.find((x) => x.startsWith('ENVCLASS '))?.split(' ')?.[2]
+    if (!where) fail(EXIT.MUTE, 'el anillo no devolvió la clase de la variable')
+    const v = envVerdict(arg, where)
+    out(`== vergis-ops contract env ${arg} · ${ins.id} · anillo ${r.active ?? '—'} ==`)
+    out(`   ${arg}: ${where} — ${v.what}`)
+    if (v.cls) out(`   clase del acto: ${v.cls} — gate: ${gateFor(ins, v.cls).gate}${v.also ? ` · ${v.also}` : ''}`)
+    return v.code
   }
   if (sub) fail(EXIT.NOT_RUN, 'uso: contract [classify <archivo> | wait <archivo> | env <VAR>]')
   const s = await contractSummary(decl, ins)
@@ -221,6 +223,33 @@ export async function runContract(common, o) {
   for (const l of s.lines) out(l)
   if (s.code === EXIT.OK) out('✓ LEÍDO (exit 0).')
   return s.code
+}
+
+/**
+ * Lo que COMPARTEN todos los anillos, y que por eso un anillo nuevo no puede traer distinto: el lease del
+ * plano de control y los stores viven bajo `VERGIS_OUT`, y dos anillos con `VERGIS_OUT` distintos no se ven
+ * entre sí (se abriría la puerta a dos controladores). Cambiarla es detener, cambiar y arrancar: corte.
+ * Invariante del Producto, escrito en deploy/rollout/RUNBOOK.md §7 de esta misma versión.
+ */
+const SHARED_BY_RINGS = new Set(['VERGIS_OUT'])
+
+/**
+ * ¿Qué exige cambiar esta variable, según la lista del contrato vivo en que aparece? El ruteo es el de
+ * RUNBOOK §7: lo que el proceso lee al nacer entra en un ANILLO NUEVO (ring-args --apply + install +
+ * promote), y eso es un acto de clase `version`, instrumentado; solo lo compartido por todos los anillos
+ * es `boot` de verdad.
+ */
+export function envVerdict(name, where) {
+  const ringPath = 'se entra en un ANILLO NUEVO que nace con el valor nuevo (`exec rollout ring-args --apply`, `install <ref>`, `poller cn1`, `promote`: RUNBOOK §7), sin corte'
+  if (SHARED_BY_RINGS.has(name) && (where === 'bootOnly' || where === 'reloadableContent')) {
+    return { code: EXIT.OK, cls: 'boot', what: `el nodo la lee al arrancar y la COMPARTEN todos los anillos (ahí viven el lease y los stores): un anillo nuevo con otro valor no vería al activo. Cambiarla es detener, cambiar y arrancar — corte, con ventana, impacto declarado antes y el corte medido.` }
+  }
+  if (where === 'bootOnly') return { code: EXIT.OK, cls: 'version', what: `el nodo la lee al arrancar y no tiene vía de recarga: cambiar su VALOR exige un proceso que nazca con ella — ${ringPath}.` }
+  if (where === 'reloadableContent') {
+    return { code: EXIT.OK, cls: 'version', what: `su VALOR (la ruta) se lee al arrancar: cambiarlo ${ringPath.replace(/^se entra/, 'entra')}.`, also: 'el CONTENIDO del archivo al que apunta se recarga en caliente: publicarlo es clase content (`vergis-ops contract classify <archivo>`)' }
+  }
+  if (where === 'unknown') return { code: EXIT.FINDING, cls: null, what: 'está en el entorno del anillo activo y el nodo NO la consume (¿un typo, una variable retirada?). Cambiarla no cambia nada en esta versión: es un hallazgo, no un acto.' }
+  return { code: EXIT.OK, cls: null, what: 'esta versión del nodo no la consume ni está en su entorno: definirla no cambia nada acá. Si es de una versión posterior, entra con esa versión (su CHANGELOG dice qué exige).' }
 }
 
 /** El resumen del contrato como líneas listas para imprimir (lo usa también `recon`). */

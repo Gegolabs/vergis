@@ -43,7 +43,7 @@ vo recon      # check + health + contrato + anillos + paridad, sin tocar nada
 
 ```sh
 vo contract classify <archivo del espejo>   # la clase, por qué, y el gate que le toca
-vo contract env <VARIABLE>                  # ¿cambiar su valor exige arranque?
+vo contract env <VARIABLE>                  # ¿qué exige cambiarla? anillo nuevo (version) · boot si la comparten todos los anillos · nada
 vo contract                                 # watches, envs de arranque, artefactos pendientes
 ```
 
