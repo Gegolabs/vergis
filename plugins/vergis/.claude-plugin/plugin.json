@@ -1,0 +1,12 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "vergis",
+  "version": "0.39.0",
+  "description": "Operar cualquier instalación de Vergis desde Claude Code: skills vergis:ops, vergis:rollout, vergis:verify y vergis:setup, y el CLI vergis-ops. La instalación se declara en vergis-ops.json, en el repo del operador; el plugin no trae hechos de ninguna",
+  "author": {
+    "name": "Gegolabs"
+  },
+  "homepage": "https://github.com/Gegolabs/vergis",
+  "repository": "https://github.com/Gegolabs/vergis",
+  "license": "AGPL-3.0-or-later"
+}
