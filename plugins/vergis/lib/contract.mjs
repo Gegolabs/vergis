@@ -216,20 +216,28 @@ export async function runContract(common, o) {
     return EXIT.OK
   }
   if (sub) fail(EXIT.NOT_RUN, 'uso: contract [classify <archivo> | wait <archivo> | env <VAR>]')
+  const s = await contractSummary(decl, ins)
+  out(`== vergis-ops contract · ${ins.id} · anillo ${s.active ?? '—'} ==`)
+  for (const l of s.lines) out(l)
+  if (s.code === EXIT.OK) out('✓ LEÍDO (exit 0).')
+  return s.code
+}
+
+/** El resumen del contrato como líneas listas para imprimir (lo usa también `recon`). */
+export async function contractSummary(decl, ins) {
   const r = await ask(decl, ins, '"summary"')
-  out(`== vergis-ops contract · ${ins.id} · anillo ${r.active ?? '—'} ==`)
+  const lines = []
   if (r.error) {
-    out(`✗ ${r.error}`)
-    out('   Sin contrato vivo, todo acto sobre lo que el nodo monta se clasifica como interrupción (ante la duda, corte).')
-    return EXIT.NOT_RUN
+    lines.push(`   ✗ ${r.error}`)
+    lines.push('   Sin contrato vivo, todo acto sobre lo que el nodo monta se clasifica como interrupción (ante la duda, corte).')
+    return { code: EXIT.NOT_RUN, lines, active: r.active }
   }
   for (const l of r.lines) {
-    if (l.startsWith('CVERSION ')) out(`   versión del nodo: ${l.slice(9)}`)
-    else if (l.startsWith('WATCH ')) { const w = JSON.parse(b(l.slice(6))); out(`   watch ${(w.envs ?? []).join(',') || '(sin env)'} · ${(w.paths ?? []).join(' ')} → ${w.reloads}`) }
-    else if (l.startsWith('ENV ') || l.startsWith('ARTS ') || l.startsWith('PENDING ') || l.startsWith('CAVEATS ') || l.startsWith('DELTA ')) out(`   ${l.toLowerCase().startsWith('pending') ? '⚠ ' : ''}${l}`)
+    if (l.startsWith('CVERSION ')) lines.push(`   versión del nodo: ${l.slice(9)}`)
+    else if (l.startsWith('WATCH ')) { const w = JSON.parse(b(l.slice(6))); lines.push(`   watch ${(w.envs ?? []).join(',') || '(sin env)'} · ${(w.paths ?? []).join(' ')} → ${w.reloads}`) }
+    else if (/^(ENV|ARTS|PENDING|CAVEATS|DELTA) /.test(l)) lines.push(`   ${l.startsWith('PENDING') ? '⚠ ' : ''}${l}`)
   }
-  out('   (la sonda entró por detrás del borde con la identidad admin forjada: solo es seguro donde el nodo no está expuesto sin borde)')
-  out('✓ LEÍDO (exit 0).')
-  return EXIT.OK
+  lines.push('   (la sonda entró por detrás del borde con la identidad admin forjada: solo es seguro donde el nodo no está expuesto sin borde)')
+  return { code: EXIT.OK, lines, active: r.active }
 }
 

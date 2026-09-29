@@ -1,0 +1,200 @@
+/**
+ * PLUGIN `vergis` — los ACTOS: publish, exec run, exec rollout (sus negativas) y recon, contra el mundo
+ * falso de `plugin-instrumentos.test.ts` (docker falso + nodo falso). Lo que se afirma es la parte que
+ * ningún gate humano puede recordar por sí solo:
+ *
+ *  · publish clasifica contra el contrato vivo, respalda, escribe EN SITIO (mismo inodo), verifica el sha
+ *    y espera a que el NODO tome el archivo — y si no lo toma, no dice «publicado»;
+ *  · un gate `window` sin evidencia, sin impacto declarado o sin poller corriendo NO ejecuta;
+ *  · lo que no está en el espejo no se publica; el estado del rollout nunca se publica;
+ *  · promote y rollback se niegan sin poller, sin línea base y sin CN-1 (D10: la promoción va
+ *    instrumentada por construcción). El camino feliz se mide en el banco real (V10).
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import { createHash } from 'node:crypto'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { cli, cliAsync, declarar, FIX, minima, tmp } from './plugin-helpers'
+
+const DOCKER = join(FIX, 'fake-docker.sh')
+const sha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex')
+
+let server: Server
+let base = ''
+let host = ''
+let stale = false
+
+beforeAll(async () => {
+  host = tmp('vergis-actos-host-')
+  mkdirSync(join(host, 'specs'))
+  mkdirSync(join(host, 'rings'))
+  writeFileSync(join(host, 'specs/pi-01.yaml'), 'identity:\n  code: "PI-01"\n')
+  writeFileSync(join(host, 'compose.yml'), 'services:\n  caddy:\n    image: caddy:2.8.4\n')
+  writeFileSync(join(host, 'rings/active.caddy'), 'reverse_proxy vergis-1-0-0:8080 {\n}\n')
+  server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://x')
+    if (url.pathname === '/healthz') { res.writeHead(200); return res.end(JSON.stringify({ phase: 'serving', lets: { total: 1, serving: 1 } })) }
+    if (url.pathname === '/contrato') {
+      if (req.headers['x-forwarded-email'] !== 'admin@ejemplo.test') { res.writeHead(403); return res.end('{}') }
+      const arts = readdirSync(join(host, 'specs')).filter((f) => !f.includes('.bak-')).map((f) => {
+        const s = sha(join(host, 'specs', f))
+        const loaded = stale ? 'e'.repeat(64) : s
+        return { source: 'specs', path: `/specs/${f}`, sha256: loaded, diskSha256: s, pending: loaded !== s, loadedAt: 'ahora' }
+      })
+      res.writeHead(200)
+      return res.end(JSON.stringify({ version: '1.0.0', watches: [{ envs: ['VERGIS_SPECS_DIR'], paths: ['/specs'], reloads: 'specs' }], env: { bootOnly: [], reloadableContent: [], unknown: [] }, artifacts: arts, caveats: [] }))
+    }
+    res.writeHead(200)
+    res.end('<html>ok</html>')
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+  const a = server.address()
+  base = `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}`
+})
+afterAll(() => server?.close())
+
+function mundo() {
+  const w = tmp('vergis-actos-mundo-')
+  mkdirSync(join(w, 'containers'))
+  writeFileSync(join(w, 'containers/vergis-1-0-0'), [`ring=1`, `mount=${host}/specs|/specs`, `env=VERGIS_SPECS_DIR=${host}/specs`].join('\n') + '\n')
+  writeFileSync(join(w, 'containers/borde'), ['service=caddy', 'env=PATH=/usr/bin:/bin:/usr/sbin:/sbin'].join('\n') + '\n')
+  return w
+}
+
+const GA = { read: 'free', content: 'operator', version: 'operator', service: 'operator', boot: 'window', 'service-interrupting': 'window', destructive: 'approval' }
+
+function repo(over: Record<string, unknown> = {}) {
+  const d = minima(
+    {
+      host: { root: host, compose_project: 'x', compose_file: `${host}/compose.yml` },
+      rings: { env: { RINGS_EDGE: 'borde', RINGS_EDGE_URL: base, RINGS_ADMIN_EMAIL: 'admin@ejemplo.test' } },
+      mirror: { families: [{ id: 'specs', kind: 'sweep', local: 'specs', remote: 'specs' }, { id: 'compose', kind: 'fixed', local: 'compose.yml', remote: 'compose.yml' }] },
+      governance: { source: 'NORMA.md', window_approver: 'Operador', approver: 'Principal', gates: GA, pretest: 'render local contra el dato real (NORMA.md §5)' },
+      ...over,
+    },
+    host,
+  )
+  const dir = declarar(d, { 'NORMA.md': '# norma\n' })
+  cpSync(join(host, 'specs'), join(dir, 'specs'), { recursive: true })
+  cpSync(join(host, 'compose.yml'), join(dir, 'compose.yml'))
+  return dir
+}
+const env = (x: Record<string, string> = {}) => ({ VERGIS_OPS_DOCKER: DOCKER, FAKE_WORLD: mundo(), VO_NODE_BASE: base, VERGIS_OPS_STATE_DIR: tmp(), ...x })
+
+describe('publish', () => {
+  it('sin la evidencia del pre-test que la instalación exige → 2, sin tocar el host', async () => {
+    const dir = repo()
+    writeFileSync(join(dir, 'specs/pi-01.yaml'), 'identity:\n  code: "PI-01"\n# cambio A\n')
+    const antes = readFileSync(join(host, 'specs/pi-01.yaml'), 'utf8')
+    const r = await cliAsync(['publish', 'specs/pi-01.yaml'], { cwd: dir, env: env() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/exige un pre-test/)
+    expect(readFileSync(join(host, 'specs/pi-01.yaml'), 'utf8')).toBe(antes)
+  })
+
+  it('contenido: respalda, escribe en sitio (mismo inodo), verifica el sha y espera a que el nodo lo tome → 0', async () => {
+    const dir = repo()
+    writeFileSync(join(dir, 'specs/pi-01.yaml'), 'identity:\n  code: "PI-01"\n# cambio B\n')
+    const ino = statSync(join(host, 'specs/pi-01.yaml')).ino
+    const r = await cliAsync(['publish', 'specs/pi-01.yaml', '--pretest', 'render local ok, 9 barras'], { cwd: dir, env: env() })
+    expect(r.code, r.all).toBe(0)
+    expect(r.out).toMatch(/clase: content/)
+    expect(r.out).toMatch(/PUBLICADO Y TOMADO/)
+    expect(sha(join(host, 'specs/pi-01.yaml'))).toBe(sha(join(dir, 'specs/pi-01.yaml')))
+    expect(statSync(join(host, 'specs/pi-01.yaml')).ino).toBe(ino)
+    expect(readdirSync(join(host, 'specs')).some((f) => f.startsWith('pi-01.yaml.bak-'))).toBe(true)
+    expect(r.out).toMatch(/rollback: vergis-ops exec run --class content -- 'cat .*pi-01\.yaml\.bak-\d+ > /)
+  })
+
+  it('si el nodo no lo toma, no dice «publicado» → 1', async () => {
+    const dir = repo()
+    writeFileSync(join(dir, 'specs/pi-01.yaml'), 'identity:\n  code: "PI-01"\n# cambio C\n')
+    stale = true
+    const r = await cliAsync(['publish', 'specs/pi-01.yaml', '--pretest', 'x', '--timeout', '2'], { cwd: dir, env: env() })
+    stale = false
+    expect(r.code, r.all).toBe(1)
+    expect(r.out).toMatch(/NO quedó desplegado/)
+  })
+
+  it('un archivo que ningún contenedor monta es clase service (sin corte, sin espera)', async () => {
+    const dir = repo()
+    writeFileSync(join(dir, 'compose.yml'), 'services:\n  caddy:\n    image: caddy:2.8.5\n')
+    const r = await cliAsync(['publish', 'compose.yml'], { cwd: dir, env: env() })
+    expect(r.code, r.all).toBe(0)
+    expect(r.out).toMatch(/clase: service/)
+    expect(readFileSync(join(host, 'compose.yml'), 'utf8')).toMatch(/2\.8\.5/)
+  })
+
+  it('lo que no está en el espejo no se publica; el estado del rollout, nunca', async () => {
+    const dir = repo()
+    writeFileSync(join(dir, 'suelto.yaml'), 'x: 1\n')
+    const a = await cliAsync(['publish', 'suelto.yaml'], { cwd: dir, env: env() })
+    expect(a.code, a.all).toBe(2)
+    expect(a.all).toMatch(/no pertenece a ninguna familia del espejo/)
+    writeFileSync(join(dir, 'specs/active.caddy'), 'x\n')
+    const b = await cliAsync(['publish', 'specs/active.caddy'], { cwd: dir, env: env() })
+    expect(b.code, b.all).toBe(2)
+    expect(b.all).toMatch(/estado del rollout/)
+  })
+
+  it('una clase sin gate declarado pide aprobación: sin --approval no se publica', async () => {
+    const dir = repo({ governance: { source: 'NORMA.md', approver: 'Principal', gates: { read: 'free' } } })
+    writeFileSync(join(dir, 'specs/pi-01.yaml'), 'identity:\n  code: "PI-01"\n# cambio D\n')
+    const r = await cliAsync(['publish', 'specs/pi-01.yaml'], { cwd: dir, env: env() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/Lo aprueba Principal/)
+  })
+})
+
+describe('exec run y los gates que cortan', () => {
+  it('un invariante del Producto no corre aunque el gate lo permita', () => {
+    const r = cli(['exec', 'run', '--class', 'destructive', '--approval', 'Principal · hoy · «sí»', '--impact', 'x', '--', 'docker compose down -v'], { cwd: repo(), env: env() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/invariante del Producto/)
+  })
+  it('boot en GA: sin impacto, sin ventana o sin poller corriendo → 2 (y dice qué falta)', async () => {
+    const dir = repo()
+    const a = await cliAsync(['exec', 'run', '--class', 'boot', '--', 'echo recreo'], { cwd: dir, env: env() })
+    expect(a.code, a.all).toBe(2)
+    expect(a.all).toMatch(/declara el impacto/)
+    const b = await cliAsync(['exec', 'run', '--class', 'boot', '--impact', 'caen 1 Let ~8 s', '--', 'echo recreo'], { cwd: dir, env: env() })
+    expect(b.code, b.all).toBe(2)
+    expect(b.all).toMatch(/La ventana la autoriza Operador/)
+    const c = await cliAsync(['exec', 'run', '--class', 'boot', '--impact', 'caen 1 Let ~8 s', '--window', 'Operador · 21:00 · «dale»', '--', 'echo recreo'], { cwd: dir, env: env() })
+    expect(c.code, c.all).toBe(2)
+    expect(c.all).toMatch(/se MIDE/)
+  })
+  it('read en GA es libre', async () => {
+    const r = await cliAsync(['exec', 'run', '--class', 'read', '--', 'echo mirar'], { cwd: repo(), env: env() })
+    expect(r.code, r.all).toBe(0)
+  })
+})
+
+describe('exec rollout: la promoción va instrumentada por construcción', () => {
+  it('promote sin poller corriendo → 2, sin tocar la herramienta', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'promote', '1.0.1'], { cwd: repo(), env: env() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/no hay un poller corriendo/)
+  })
+  it('una versión que no es exacta se rechaza → 2', () => {
+    const r = cli(['exec', 'rollout', 'install', 'latest'], { cwd: repo(), env: env() })
+    expect(r.code, r.all).toBe(2)
+  })
+  it('una versión menor que min_version se rechaza → 2', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'install', '0.0.1'], { cwd: repo({ min_version: '0.1.0' }), env: env() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/menor que el piso/)
+  })
+})
+
+describe('recon', () => {
+  it('reporta sin tocar nada; sin herramienta en el host es medición a medias (7), no verde', async () => {
+    const r = await cliAsync(['recon'], { cwd: repo({ rings: { env: { RINGS_EDGE: 'borde', RINGS_EDGE_URL: base, RINGS_ADMIN_EMAIL: 'admin@ejemplo.test' }, tool: '/no/existe/botler-rollout' } }), env: env() })
+    expect(r.code, r.all).toBe(7)
+    expect(r.out).toMatch(/health: borde OK/)
+    expect(r.out).toMatch(/watch VERGIS_SPECS_DIR/)
+    expect(r.out).toMatch(/NOTOOL/)
+    expect(existsSync(join(host, 'specs'))).toBe(true)
+  })
+})
