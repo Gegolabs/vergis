@@ -10,10 +10,14 @@
 // distintas; el contador vive si y solo si devuelve exactamente esos dos números— guardada por
 // (versión del motor × forma), que caduca sola al cambiar el motor.
 //
-// Códigos propios, dentro del vocabulario del plugin: 0 medí y cuadra · 1 hallazgo (incluye el 0 con
-// el selector VIVO: gráfico vacío) · 2 no corrí · 3 selector muerto · 4 sin calibración vigente (aquí
-// el 4 no es «transporte ocupado»: es «no pude medir» por falta de discriminante) · 5 sin asidero.
-// Inyector `MARCAS_FAULT` (solo puede dañar): mismo → 3 · sin-aria → 5 · motor → 4.
+// Los códigos son los del vocabulario ÚNICO del plugin (util.mjs, D7), sin acepciones propias:
+//   0 medí y cuadra · 1 hallazgo — del render (un conteo que no cuadra, un 0 con el selector vivo:
+//   gráfico vacío) o del INSTRUMENTO en la calibración (selector muerto: el contador demostró estar
+//   ciego, igual que un CN-1 que sale verde contra un standby) · 2 no corrí — uso, o el juicio sin su
+//   PRECONDICIÓN: `contar --esperado` sin calibración vigente no juzga, como un gate sin su evidencia ·
+//   5 sin asidero — el documento no trae la señal que lo hace legible (ni `aria-roledescription=` ni
+//   `role-mark`), la misma lectura que un remoto sin centinela: no hubo medición.
+// Inyector `MARCAS_FAULT` (solo puede dañar): mismo → 1 · sin-aria → 5 · motor → 2.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -21,7 +25,7 @@ import { EXIT, fail, out, err } from './util.mjs'
 import { FORMAS, medir, tieneAsidero, motorDeHtml, nucleoTexto } from './marks-core.mjs'
 import { stateDir } from './state.mjs'
 
-const X = { OK: 0, HALLAZGO: 1, NO_CORRI: 2, MUERTO: 3, SIN_CAL: 4, SIN_ASIDERO: 5 }
+const X = { OK: EXIT.OK, HALLAZGO: EXIT.FINDING, NO_CORRI: EXIT.NOT_RUN, MUERTO: EXIT.FINDING, SIN_CAL: EXIT.NOT_RUN, SIN_ASIDERO: EXIT.MUTE }
 const FAULT = () => process.env.MARCAS_FAULT || ''
 const muere = (code, msg) => { throw Object.assign(new Error(msg), { opsCode: code }) }
 
@@ -76,15 +80,15 @@ function calibrar(o) {
   const mB = total(fB)
   const motorA = motorDe(htmlA, o.motor)
   const motorB = motorDe(htmlB, o.motor)
-  if (motorA !== motorB) muere(X.MUERTO, `✗ NO PUDE MEDIR: los dos HTML son de motores distintos (A=${motorA} · B=${motorB}).`)
+  if (motorA !== motorB) muere(X.NO_CORRI, `✗ NO CORRÍ: los dos HTML son de motores distintos (A=${motorA} · B=${motorB}); una discriminante compara dos documentos del MISMO motor.`)
   if (!motorA) muere(X.NO_CORRI, '✗ NO CORRÍ: no pude leer la versión del motor del pie del render («Vergis v…») y no se pasó --motor. Una calibración sin motor no caduca nunca.')
   const selector = `aria-roledescription="${FORMAS[forma]}"`
   err(`discriminante · forma=${forma} · selector=${selector} · motor=${motorA}`)
   err(`  A: esperado ${nA} · medido ${mA}`)
   err(`  B: esperado ${nB} · medido ${mB}${FAULT() === 'mismo' ? '   ← MARCAS_FAULT=mismo' : ''}`)
   err(`  (contenedores «mark-rect role-mark», el contador MUERTO: ${fA.reduce((a, f) => a + f.contenedores_rect, 0)} y ${fB.reduce((a, f) => a + f.contenedores_rect, 0)})`)
-  if (mA === mB) muere(X.MUERTO, `✗ NO PUDE MEDIR (selector muerto): el contador devolvió el MISMO número (${mA}) para dos cardinalidades distintas (${nA} y ${nB}). NO se escribió calibración.`)
-  if (mA !== nA || mB !== nB) muere(X.MUERTO, `✗ NO PUDE MEDIR (selector muerto): números distintos pero no los correctos (esperaba ${nA} y ${nB}; midió ${mA} y ${mB}). NO se escribió calibración.`)
+  if (mA === mB) muere(X.MUERTO, `✗ EL INSTRUMENTO ESTÁ CIEGO (exit 1, selector muerto): el contador devolvió el MISMO número (${mA}) para dos cardinalidades distintas (${nA} y ${nB}). NO se escribió calibración.`)
+  if (mA !== nA || mB !== nB) muere(X.MUERTO, `✗ EL INSTRUMENTO ESTÁ CIEGO (exit 1, selector muerto): números distintos pero no los correctos (esperaba ${nA} y ${nB}; midió ${mA} y ${mB}). NO se escribió calibración.`)
   const ruta = calPath(o)
   const cal = cargaCal(ruta)
   cal.calibraciones[clave(motorA, forma)] = { motor: motorA, forma, selector, pares: [[nA, mA], [nB, mB]], origen: typeof o.origen === 'string' ? o.origen : 'local', fecha: new Date().toISOString() }
@@ -112,7 +116,7 @@ function contar(o) {
   const salida = filas.map((f, i) => ({ ...f, esperado: juzga ? (esperados.length === 1 ? esperados[0] : esperados[i]) : null, motor, calibracion: { vigente: !!vig }, veredicto: null }))
   if (juzga && !vig) {
     for (const s of salida) { s.veredicto = 'NO-PUDE-MEDIR'; out(JSON.stringify(s)) }
-    muere(X.SIN_CAL, `✗ NO PUDE MEDIR (sin calibración): no hay discriminante vigente para (motor=${motor} · forma=${forma}) en ${ruta}. Los números NO son un veredicto: un selector muerto y un gráfico vacío se ven igual.`)
+    muere(X.SIN_CAL, `✗ NO JUZGUÉ (exit 2, sin calibración): no hay discriminante vigente para (motor=${motor} · forma=${forma}) en ${ruta} — calibra primero (\`marks calibrar\`). Los números NO son un veredicto: un selector muerto y un gráfico vacío se ven igual.`)
   }
   let hallazgo = false
   for (const s of salida) {
@@ -131,7 +135,7 @@ function contar(o) {
 function vigencia(o) {
   const ruta = calPath(o)
   const ks = Object.keys(cargaCal(ruta).calibraciones)
-  if (!ks.length) { err(`(sin calibraciones en ${ruta}) — ningún conteo es juzgable todavía.`); return X.SIN_CAL }
+  if (!ks.length) { err(`✗ sin calibraciones en ${ruta} (exit 2): ningún conteo es juzgable todavía — \`marks calibrar\` primero.`); return X.SIN_CAL }
   for (const k of ks.sort()) out(JSON.stringify(cargaCal(ruta).calibraciones[k]))
   return X.OK
 }

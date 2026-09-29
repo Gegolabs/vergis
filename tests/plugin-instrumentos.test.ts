@@ -384,21 +384,22 @@ delivery: { render: [{ format: html, target: web }] }
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/son iguales/)
   })
-  it('MARCAS_FAULT=mismo → 3 (selector muerto) y no escribe calibración', () => {
+  it('MARCAS_FAULT=mismo → 1 (el instrumento está ciego, como un CN-1 verde) y no escribe calibración', () => {
     const c2 = join(tmp(), 'cal.json')
     const r = cli(['marks', 'calibrar', '--html-a', join(dir, 's3.html'), '--n-a', '3', '--html-b', join(dir, 's7.html'), '--n-b', '7', '--forma', 'singular', '--calibracion', c2], { env: { MARCAS_FAULT: 'mismo' } })
-    expect(r.code, r.all).toBe(3)
-    expect(cli(['marks', 'vigencia', '--calibracion', c2]).code).toBe(4)
+    expect(r.code, r.all).toBe(1)
+    expect(r.all).toMatch(/EL INSTRUMENTO ESTÁ CIEGO/)
+    expect(cli(['marks', 'vigencia', '--calibracion', c2]).code).toBe(2)
   })
   it('MARCAS_FAULT=sin-aria → 5 (no es «cero marcas»)', () => {
     const r = cli(['marks', 'contar', '--html', join(dir, 's3.html'), ...base], { env: { MARCAS_FAULT: 'sin-aria' } })
     expect(r.code, r.all).toBe(5)
   })
-  it('contar con calibración vigente: cuadra → 0; no cuadra → 1; motor falseado → 4', () => {
+  it('contar con calibración vigente: cuadra → 0; no cuadra → 1; motor falseado (sin calibración vigente para él) → 2, no juzga', () => {
     cli(['marks', 'calibrar', '--html-a', join(dir, 's3.html'), '--n-a', '3', '--html-b', join(dir, 's7.html'), '--n-b', '7', ...base])
     expect(cli(['marks', 'contar', '--html', join(dir, 's7.html'), '--esperado', '7', ...base]).code).toBe(0)
     expect(cli(['marks', 'contar', '--html', join(dir, 's7.html'), '--esperado', '6', ...base]).code).toBe(1)
-    expect(cli(['marks', 'contar', '--html', join(dir, 's7.html'), '--esperado', '7', ...base], { env: { MARCAS_FAULT: 'motor' } }).code).toBe(4)
+    expect(cli(['marks', 'contar', '--html', join(dir, 's7.html'), '--esperado', '7', ...base], { env: { MARCAS_FAULT: 'motor' } }).code).toBe(2)
   })
 })
 
