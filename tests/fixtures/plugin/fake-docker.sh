@@ -15,6 +15,10 @@
 #
 # `exec` corre el comando EN ESTA MÁQUINA con el env del contenedor: el nodo real lo reemplaza un
 # servidor HTTP de la prueba, al que el programa llega por VO_NODE_BASE / RINGS_EDGE_URL.
+#
+# `run --rm -i --entrypoint node <imagen> <args…>` corre `node <args…>` EN ESTA MÁQUINA, con `/app/` de la
+# imagen mapeado a $FAKE_APP (el generador de ring.args que la prueba quiera: el del repo, o uno viejo).
+# `compose … config --format json` devuelve $FAKE_COMPOSE_JSON; `config --profiles`, nada.
 set -u
 W=${FAKE_WORLD:?FAKE_WORLD}
 [ -n "${FAKE_LOG:-}" ] && echo "docker $*" >> "$FAKE_LOG"
@@ -76,9 +80,24 @@ case "$cmd" in
     # Solo lo que los actos de servicio necesitan: `config -q` valida, `up -d` «recrea» (queda en FAKE_LOG).
     case "$*" in
       *" config -q"*) exit 0 ;;
+      *" config --profiles"*) exit 0 ;;
+      *" config "*"--format json"*) cat "${FAKE_COMPOSE_JSON:?FAKE_COMPOSE_JSON}" ;;
       *" up -d "*) exit 0 ;;
       *) echo "fake-docker: compose no sabe «$*»" >&2; exit 2 ;;
     esac
+    ;;
+  run)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --rm|-i|-t) shift ;;
+        --entrypoint) ep=$2; shift 2 ;;
+        *) break ;;
+      esac
+    done
+    shift # la imagen
+    [ "${ep:-}" = node ] || { echo "fake-docker: run solo sabe --entrypoint node" >&2; exit 2; }
+    [ $# -gt 0 ] && case "$1" in /app/*) a=${FAKE_APP:?FAKE_APP}/${1#/app/}; shift; set -- "$a" "$@" ;; esac
+    exec node "$@"
     ;;
   exec)
     detach=0

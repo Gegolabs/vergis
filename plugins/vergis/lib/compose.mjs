@@ -2,8 +2,9 @@
 //
 // No es un parser de YAML: extrae lo que necesita con reglas de sangría que el compose de referencia del
 // Producto cumple (dos espacios por nivel): los nombres de servicio, la línea `image:` y `container_name:`
-// de cada uno, si se construye localmente (`build:`), el `name:` del proyecto, y los montajes del host
-// (binds relativos, binds bajo la raíz de la instalación, `env_file`, `context`).
+// de cada uno, si se construye localmente (`build:`), su límite de memoria (`mem_limit:` o
+// `deploy.resources.limits.memory`), el `name:` del proyecto, y los montajes del host (binds relativos,
+// binds bajo la raíz de la instalación, `env_file`, `context`).
 // Si un compose no calza con esas reglas, lo que devuelve es MENOS, nunca inventado — y los que lo
 // consumen (check, G1) lo dicen en vez de aprobar por omisión.
 
@@ -12,6 +13,7 @@ export function composeServices(text) {
   const services = {}
   let inServices = false
   let cur = null
+  let inDeploy = false
   for (const ln of lines) {
     if (/^\S/.test(ln) && !ln.startsWith('#')) {
       inServices = /^services:\s*(#.*)?$/.test(ln)
@@ -22,11 +24,17 @@ export function composeServices(text) {
     const m = /^ {2}([A-Za-z0-9._-]+):\s*(#.*)?$/.exec(ln)
     if (m) {
       cur = m[1]
-      services[cur] = { image: null, profiles: [], containerName: null, build: false }
+      services[cur] = { image: null, profiles: [], containerName: null, build: false, memLimit: null }
+      inDeploy = false
       continue
     }
     if (!cur) continue
+    if (/^ {4}\S/.test(ln)) inDeploy = /^ {4}deploy:\s*(#.*)?$/.test(ln)
     if (/^ {4}build:/.test(ln)) services[cur].build = true
+    const ml = /^ {4}mem_limit:\s*["']?([^"'\s#]+)/.exec(ln)
+    if (ml) services[cur].memLimit = ml[1]
+    const dm = inDeploy && /^ {10,}memory:\s*["']?([^"'\s#]+)/.exec(ln)
+    if (dm && !services[cur].memLimit) services[cur].memLimit = dm[1]
     const im = /^ {4}image:\s*["']?([^"'\s#]+)/.exec(ln)
     if (im) services[cur].image = im[1]
     const cn = /^ {4}container_name:\s*["']?([^"'\s#]+)/.exec(ln)

@@ -9,6 +9,9 @@ import { EXIT, out } from './util.mjs'
 import { loadDeclaration, localPath, mirrorRoot } from './declaration.mjs'
 import { composeServices, composeProjectName, movableTag, serviceOfContainer } from './compose.mjs'
 
+/** El servicio del compose del que se derivan los anillos: el mismo que `exec rollout ring-args` toma por omisión. */
+const RING_TEMPLATE = 'vergis'
+
 function git(cwd, ...args) {
   return spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
 }
@@ -137,6 +140,12 @@ function checkInstallation(decl, ins, errors, warnings, notes) {
     for (const [name, s] of Object.entries(svcs)) {
       const why = movableTag(s.image, { built: s.build })
       if (why) warnings.push(`${tag} el servicio «${name}» usa un tag móvil (${s.image}: ${why}): lo que corre no se puede nombrar`)
+    }
+    // La memoria de los anillos sale del servicio plantilla del compose (#372). Advertencia y no defecto:
+    // no bloquea ninguna lectura, y el acto donde importa —`exec rollout ring-args`— se niega sin ella.
+    const tpl = svcs[RING_TEMPLATE]
+    if (tpl && !tpl.memLimit) {
+      warnings.push(`${tag} el servicio plantilla «${RING_TEMPLATE}» no declara la memoria del anillo (mem_limit, o deploy.resources.limits.memory): \`exec rollout ring-args\` se negará hasta que el compose la declare — sin ella, los anillos nuevos nacerían con un valor que nadie decidió`)
     }
   } else if (ins.services?.length) {
     notes.push(`${tag} services: no pude cotejarlos contra el compose — el compose (host.compose_file) no está en el espejo`)

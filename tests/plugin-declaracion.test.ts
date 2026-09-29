@@ -145,6 +145,17 @@ describe('check · la declaración mínima es usable', () => {
     expect(despues.all).not.toMatch(/tag móvil/)
   })
 
+  it('#372 · el servicio plantilla sin memoria declarada es advertencia; con mem_limit o deploy.resources.limits.memory, no', () => {
+    const sin = conCompose('services:\n  vergis:\n    image: reg/vergis:1.0.0\n')
+    expect(sin.code, sin.all).toBe(0)
+    expect(sin.all).toMatch(/servicio plantilla «vergis» no declara la memoria del anillo/)
+    expect(conCompose('services:\n  vergis:\n    image: reg/vergis:1.0.0\n    mem_limit: 2g\n').all).not.toMatch(/memoria del anillo/)
+    const dep = conCompose('services:\n  vergis:\n    image: reg/vergis:1.0.0\n    deploy:\n      resources:\n        limits:\n          memory: 2g\n')
+    expect(dep.all).not.toMatch(/memoria del anillo/)
+    // `memory:` fuera de deploy (p. ej. en otro bloque) no cuenta
+    expect(conCompose('services:\n  vergis:\n    image: reg/vergis:1.0.0\n    labels:\n      x:\n        y:\n          memory: 2g\n').all).toMatch(/memoria del anillo/)
+  })
+
   it('el transporte que nombra un host ausente de RESOURCES.md es defecto', () => {
     const d = minima({ transport: { kind: 'az-run-command', resource_group: 'rg-x', vm: 'vm-x', expected_account: 'op@x' } })
     const r = cli(['check'], { cwd: declarar(d, { 'RESOURCES.md': '# Accesos\n\n| rg-x | … |\n' }) })

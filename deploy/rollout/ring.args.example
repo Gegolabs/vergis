@@ -25,8 +25,8 @@ vergis_default
 --restart
 unless-stopped
 --init
-# Presupuesto de RAM por nodo, el mismo que declara el Producto. Dos anillos calientes (activo +
-# previo) caben en 8 GB con holgura.
+# Presupuesto de RAM por nodo. El generador la toma del `mem_limit` del servicio del compose y se niega
+# si falta (no hay valor por omisión). Dos anillos calientes (activo + previo) de 1g caben en 8 GB con holgura.
 --memory
 1g
 # Rotación de logs: el driver por defecto crece sin tope y llena el disco de una VM chica.

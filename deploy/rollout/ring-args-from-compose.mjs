@@ -20,8 +20,13 @@
 // (o, con el plugin `vergis`: `vergis-ops exec rollout ring-args [<versión>] [--apply]`).
 //
 // Opciones: --host-root <ruta> (OBLIGATORIA: dónde vive la instalación en el host) · --service <nombre>
-// (default `vergis`) · --memory <límite> (si el servicio no declara `mem_limit`; default `1g`, el
-// presupuesto por nodo que declara el Producto en `ring.args.example`).
+// (default `vergis`).
+//
+// La MEMORIA del anillo sale del compose y de ningún otro lado (#372): `mem_limit` del servicio, o
+// `deploy.resources.limits.memory`. Si el compose no la declara, el generador se niega (2) en vez de
+// caer a un valor por omisión: un default silencioso bajaba a 1 GB los anillos nuevos de una instalación
+// que corre con más, y un `--memory` a mano en cada corrida dependía de la memoria de quien opera — el
+// mismo espejo sin verificación que este generador existe para cerrar.
 //
 // `--no-env-resolution` es obligatorio: sin él, `compose config` INLINEA el contenido de los `env_file`
 // (secretos) dentro de `environment`, y `ring.args` terminaría con secretos en claro. Con el flag, el
@@ -79,7 +84,11 @@ for (const k of ['VERGIS_RING', 'VERGIS_RING_DIGEST']) delete env[k]
 if (!('VERGIS_CONTROL' in env)) env.VERGIS_CONTROL = 'lease' // explícito: con dos anillos, `single` serían dos escritores
 if (env.VERGIS_CONTROL !== 'lease') die(`ABORTADO: VERGIS_CONTROL='${env.VERGIS_CONTROL}' — con anillos tiene que ser 'lease'`)
 
-const memory = svc.mem_limit ?? svc.deploy?.resources?.limits?.memory ?? opt('--memory', '1g')
+if (argv.includes('--memory')) die('--memory ya no existe: la memoria del anillo se declara en el compose (mem_limit del servicio, o deploy.resources.limits.memory) y se deriva de ahí, como todo lo demás')
+const memory = svc.mem_limit ?? svc.deploy?.resources?.limits?.memory
+if (memory === undefined || memory === null || memory === '') {
+  die(`el servicio '${SERVICE}' no declara su memoria (mem_limit, o deploy.resources.limits.memory): declárala en el compose. No hay valor por omisión — un default silencioso cambiaría la memoria de los anillos nuevos sin que nadie lo decidiera`)
+}
 const network = Object.keys(svc.networks ?? {})[0]
 const networkName = network ? (doc.networks?.[network]?.name ?? `${project}_${network}`) : `${project}_default`
 

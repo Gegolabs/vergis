@@ -94,7 +94,7 @@ LABEL vergis.schema="1" \
 # extrae antes de instalarla en un host. No se mantiene a mano con la esperanza de acordarse:
 # `tests/plugin-imagen.test.ts` lo compara contra los archivos del repo, y editar una herramienta sin
 # actualizar su sha pone la suite en rojo.
-LABEL vergis.rollout.sha256="botler-rollout=cc972e3d9e8e88b7d21789ef63d1fd78839d2c0e4105526eda03d16c6365ca99,vergis-rollout=1b55f9f5ec106b2e5e6cce28abae268fd611bcc3f46a7cd1ac0012a74b09fca0,ring-args-from-compose.mjs=42f3ad58691b87693f401914136faf49d9bec16b3f20c2fbdab3d50486496567"
+LABEL vergis.rollout.sha256="botler-rollout=cc972e3d9e8e88b7d21789ef63d1fd78839d2c0e4105526eda03d16c6365ca99,vergis-rollout=1b55f9f5ec106b2e5e6cce28abae268fd611bcc3f46a7cd1ac0012a74b09fca0,ring-args-from-compose.mjs=1e93cce7fe72b71bbb793e020e39e63d0fe9e015bcd7ad3d2ff87cd060281478"
 
 USER node
 EXPOSE 8080
