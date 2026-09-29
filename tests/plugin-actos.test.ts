@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cli, cliAsync, declarar, FIX, minima, tmp } from './plugin-helpers'
 
@@ -234,6 +234,63 @@ describe('poller cn1 contra un anillo retenido (detenido)', () => {
     expect(iPoll).toBeGreaterThan(iWait)
     expect(r.out).toMatch(/estaba RETENIDO \(detenido\): lo arranqué y declaró phase=standby/)
   }, 20_000)
+})
+
+/**
+ * La guardia que impide recrear el contenedor que ALOJA el poller se deriva del HOST, no de una clave de
+ * la declaración: por omisión el poller vive en el borde (`RINGS_EDGE`), y recrear el borde con su
+ * ventana mataba la medición a mitad de serie. El inyector: un registro de poller «corriendo» (pid vivo)
+ * en el contenedor que se pide, contra el mundo falso.
+ */
+describe('exec service recreate: la guardia del contenedor que aloja el poller', () => {
+  const SVC = [{ name: 'caddy', interrupting: true, reload: 'none' }]
+  const W = { impact: 'el borde se recrea: caen todos los Lets ~8 s', window: 'Operador · 21:00 · «dale»' }
+
+  async function conPoller(dir: string, stateDir: string, container: string) {
+    const { writeRecord } = await (await import('./plugin-helpers')).lib('state.mjs')
+    const prev = process.env.VERGIS_OPS_STATE_DIR
+    process.env.VERGIS_OPS_STATE_DIR = stateDir
+    const t = tmp('vergis-actos-poller-')
+    writeFileSync(join(t, 'p.pid'), String(process.pid))
+    writeFileSync(join(t, 'p.log'), '')
+    writeRecord(join(realpathSync(dir), 'vergis-ops.json'), 'prueba', 'poller', { id: 'p-inyectado', state: 'running', container, target: 'x', pidFile: join(t, 'p.pid'), logFile: join(t, 'p.log'), interval: '0.25', startedAt: 'ahora', instrument: 'inyector' })
+    if (prev === undefined) delete process.env.VERGIS_OPS_STATE_DIR
+    else process.env.VERGIS_OPS_STATE_DIR = prev
+  }
+
+  it('poller corriendo en el borde por omisión (sin instrument.container) → recreate del borde se niega (2) y no toca compose', async () => {
+    const dir = repo({ services: SVC })
+    const st = tmp()
+    await conPoller(dir, st, 'borde')
+    const w = mundo()
+    const log = join(w, 'docker.log')
+    const r = await cliAsync(['exec', 'service', 'caddy', 'recreate', '--impact', W.impact, '--window', W.window], { cwd: dir, env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log, VERGIS_OPS_STATE_DIR: st } })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/aloja el poller que está corriendo \(p-inyectado en «borde»\)/)
+    expect(r.all).toMatch(/instrument\.container/)
+    expect(readFileSync(log, 'utf8')).not.toMatch(/ up -d /)
+  })
+
+  it('control: con el poller en otro contenedor, el mismo recreate pasa la guardia y recrea (0)', async () => {
+    const dir = repo({ services: SVC, instrument: { container: 'relay' } })
+    const st = tmp()
+    await conPoller(dir, st, 'relay')
+    const w = mundo()
+    writeFileSync(join(w, 'containers/relay'), ['service=relay', 'env=PATH=/usr/bin:/bin'].join('\n') + '\n')
+    const log = join(w, 'docker.log')
+    const r = await cliAsync(['exec', 'service', 'caddy', 'recreate', '--impact', W.impact, '--window', W.window], { cwd: dir, env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log, VERGIS_OPS_STATE_DIR: st } })
+    expect(r.code, r.all).toBe(0)
+    expect(readFileSync(log, 'utf8')).toMatch(/compose -p x -f .* up -d --no-deps caddy/)
+  })
+
+  it('check dice qué servicio aloja el instrumento, derivado del default', () => {
+    const dir = repo({ services: SVC })
+    writeFileSync(join(dir, 'compose.yml'), 'services:\n  caddy:\n    image: caddy:2.8.4\n    container_name: borde\n')
+    const r = cli(['check'], { cwd: dir })
+    expect(r.code, r.all).toBe(0)
+    expect(r.out).toMatch(/instrumento: vive en «borde» \(RINGS_EDGE, por omisión\) = servicio «caddy»/)
+    expect(r.out).toMatch(/exec service caddy recreate` se niega mientras el poller corra ahí/)
+  })
 })
 
 describe('recon', () => {

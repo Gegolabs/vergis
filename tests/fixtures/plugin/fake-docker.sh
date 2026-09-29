@@ -17,6 +17,8 @@ W=${FAKE_WORLD:?FAKE_WORLD}
 cmd=${1:-}; [ $# -gt 0 ] && shift
 case "$cmd" in
   inspect)
+    # El nombre puede ir antes o después de `--format <plantilla>` (docker acepta los dos órdenes).
+    if [ "${1:-}" = --format ]; then fmt=$2; shift 2; set -- "$@" --format "$fmt"; fi
     name=${1:-}; [ $# -gt 0 ] && shift
     f="$W/containers/$name"
     [ -f "$f" ] || { echo "Error: No such object: $name" >&2; exit 1; }
