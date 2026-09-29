@@ -58,7 +58,7 @@ export function parseArgs(argv, flags = new Set()) {
   return o
 }
 
-const FLAGS = new Set(['dry-run', 'json', 'rls', 'help', 'no-pull', 'redigest', 'rmi', 'apply', 'no-schema-gate'])
+const FLAGS = new Set(['dry-run', 'json', 'rls', 'help', 'no-pull', 'redigest', 'rmi', 'apply', 'no-schema-gate', 'keep-tool'])
 
 async function main() {
   const argv = process.argv.slice(2)

@@ -9,6 +9,9 @@
 #       env=<K>=<V>               env del contenedor (lo ve lo que corre con `exec`)
 #       running=0                 el contenedor está DETENIDO (un anillo retenido); `start` lo arranca
 #
+#   $FAKE_WORLD/images/<ref con / y : cambiados por _>   una imagen; su línea `sha256label=<v>` es el
+#       label vergis.rollout.sha256 (lo que coteja `exec rollout install`)
+#
 # `exec` corre el comando EN ESTA MÁQUINA con el env del contenedor: el nodo real lo reemplaza un
 # servidor HTTP de la prueba, al que el programa llega por VO_NODE_BASE / RINGS_EDGE_URL.
 set -u
@@ -28,6 +31,22 @@ case "$cmd" in
       *State.Running*) if grep -q '^running=0' "$f"; then echo false; else echo true; fi ;;
       *.Id*) echo "id-$name" ;;
       *) echo '[{}]' ;;
+    esac
+    ;;
+  pull) exit 0 ;;
+  image)
+    [ "${1:-}" = inspect ] || { echo "fake-docker: image no sabe «$*»" >&2; exit 2; }
+    shift
+    ref='' fmt=''
+    while [ $# -gt 0 ]; do
+      case "$1" in --format) fmt=$2; shift 2 ;; *) ref=$1; shift ;; esac
+    done
+    f="$W/images/$(printf '%s' "$ref" | tr '/:' '__')"
+    [ -f "$f" ] || { echo "Error: No such image: $ref" >&2; exit 1; }
+    case "$fmt" in
+      *vergis.rollout.sha256*) v=$(sed -n 's/^sha256label=//p' "$f"); echo "${v:-<no value>}" ;;
+      '') echo '[{}]' ;;
+      *) echo '' ;;
     esac
     ;;
   start)
