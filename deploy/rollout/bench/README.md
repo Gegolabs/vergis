@@ -33,6 +33,15 @@ sh scripts/bench.sh v12          # V12 sala de espera (+ CN: `lb_try_duration 1m
 npx tsx experimentos/v10-fencing.ts   # V10 el fencing delata al doble escritor (nativo, sin docker)
 ```
 
+**El plugin `vergis` de punta a punta** (V10 de #366: cada verbo de `vergis-ops` contra este banco, con
+transporte local, incluidos el rollback a un anillo retenido y la guardia del contenedor que aloja el
+poller) tiene su propio arnés; `VERGIS_E2E_PLUGIN=<otro checkout>/plugins/vergis` lo corre contra un
+plugin anterior, que es el control negativo de un arreglo:
+
+```sh
+sh scripts/plugin-e2e.sh
+```
+
 **V4, V7 y V13 no tienen comando propio**: son propiedades del acto, y las mide `v14`/`carrera` con su
 poller y su loop de mutaciones. `v4-conf` en `CORRIDAS.md` es una corrida de confirmación de `v14`.
 **V5 y V6 son de producción y están gated**; el banco no los corre.
