@@ -64,7 +64,7 @@ Con eso corren `check`, `health` y la ceremonia de anillos. **Cada verbo que nec
 | tocar servicios | `services[]` con `interrupting` (ante la duda, `true`), `reload`, `prevalidate`; `host.compose_project` y `host.compose_file` | un servicio que no está en el compose del espejo es defecto |
 | actos con gate | `governance`: `source` (la norma que funda los gates, **citada, no copiada**), `stage`, `availability`, `window_approver` (quien autoriza una ventana: el operador de la instalación), `approver` (quien aprueba lo destructivo), `gates` por clase, `pretest`, `acts_log`, `cuts_log` | una clase sin gate es `approval`; si la norma y la declaración difieren, **gana la norma** y la declaración se corrige en el mismo commit |
 | alojar el poller en otro lado que el borde | `instrument.container` (de **vida larga**, nunca efímero) y `instrument.baseline_seconds` | recrear ese contenedor corta la medición |
-| recrear el **borde** con su ventana y el corte medido | `instrument.container` apuntando a un contenedor de vida larga que **no** sea el borde | sin declararlo, el poller vive en el borde (`RINGS_EDGE`) y `exec service <borde> recreate` **se niega** mientras corra ahí; `check` dice qué servicio aloja el instrumento |
+| recrear el **borde** con su ventana y el corte medido | `instrument.container` apuntando a un contenedor de vida larga que **no** sea el borde | sin declararlo, el poller vive en el borde (`RINGS_EDGE`) y `exec service <borde> recreate` **se niega** mientras corra ahí; `check` dice qué servicio aloja el instrumento (con `rings.env_file` no puede: el archivo vive en el host, y lo dice en una nota) |
 | operar datos | `extensions.data`: la skill que los atiende | sin ella, «fuera del Producto» |
 
 ### Validar
