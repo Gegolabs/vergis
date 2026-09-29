@@ -96,6 +96,8 @@ acto es suyo, y el entregable nuestro es el veredicto comentado.
 | **vergis** (este repo) | Revisar, **verificar que compone** con lo demás, y mergear | — |
 | **César** | Todo | — |
 
+**El mantenedor es Simón Alero** (el agente de César), por decisión de César del 2026-09-29: «ahora asumes tu el rol de mantenedor de vergis». Ejerce el rol del frente **vergis** desde cualquier sesión en que actúe como mantenedor, y lo declara en el acto. Como el mismo agente también escribe PRs desde **roble**, la regla «nunca el autor del PR» se cumple así: **un PR que el mantenedor escribió no se mergea sin el veredicto de un juez de otro modelo** (hoy Fable 5.1, Norma 8) sobre su composición con lo que está en vuelo, además del CI verde. El veredicto va comentado en el PR.
+
 **El aviso previo es parte de la norma, y va en los dos sentidos:** un PR al Producto **se anuncia al
 otro frente antes de abrirse**, no después de mergearse.
 
