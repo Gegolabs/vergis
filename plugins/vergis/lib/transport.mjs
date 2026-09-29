@@ -92,7 +92,7 @@ export VERGIS_OPS_GATE_TOKEN
 vo_node() { _c=$1; _p=$2; printf '%s' "$_p" | base64 -d 2>/dev/null | $DOCKER exec -i -e VERGIS_OPS_GATE_TOKEN "$_c" node --input-type=module - ; }`
 
 /** El script completo: el cuerpo en un archivo, su salida enmarcada entre BEGIN y el centinela. */
-export function wrap(ins, body, n, { mute = false } = {}) {
+export function wrap(ins, body, n, { mute = false, sentinelNonce } = {}) {
   const delim = `VO_BODY_${n}`
   return [
     mute ? 'exit 0   # fault=mute — simula el descarte silencioso del canal' : '',
@@ -108,7 +108,7 @@ export function wrap(ins, body, n, { mute = false } = {}) {
     "awk '1' \"$VO_T/out\"",
     `VO_N=$(awk 'END{print NR}' "$VO_T/out")`,
     'rm -rf "$VO_T"',
-    `printf 'VERGIS-OPS %s rc=%s lines=%s\\n' '${n}' "$VO_RC" "$VO_N"`,
+    `printf 'VERGIS-OPS %s rc=%s lines=%s\\n' '${sentinelNonce ?? n}' "$VO_RC" "$VO_N"`,
     '',
   ].join('\n')
 }
@@ -190,7 +190,7 @@ async function attempt(ins, script) {
  * Corre `body` en el host de la instalación, bajo su candado, y devuelve `{ rc, lines }`.
  * Una salida incompleta sale con 7 salvo `allowPartial` (y entonces `complete:false` viaja).
  */
-export async function runRemote(decl, ins, body, { mute = false, allowPartial = false, lock = true } = {}) {
+export async function runRemote(decl, ins, body, { mute = false, crossed = false, allowPartial = false, lock = true } = {}) {
   const go = async () => {
     const t = ins.transport
     // La identidad del transporte, ANTES de cualquier acto: una cuenta distinta sale con 2 sin tocar nada.
@@ -204,13 +204,17 @@ export async function runRemote(decl, ins, body, { mute = false, allowPartial = 
     let last = null
     for (let i = 0; i <= waits.length; i++) {
       const n = mkNonce()
-      const script = wrap(ins, body, n, { mute })
+      // `crossed` (solo inyector de fallas): el remoto firma con OTRO nonce — solo puede dañar la medición.
+      const script = wrap(ins, body, n, { mute, sentinelNonce: crossed ? 'deadbeefdeadbeefdead' : undefined })
+      // Solo para la suite del Producto: deja cada script generado para pasarle `dash -n` y shellcheck.
+      if (process.env.VERGIS_OPS_DUMP_DIR) writeFileSync(join(process.env.VERGIS_OPS_DUMP_DIR, `${n}.sh`), script)
       const a = await attempt(ins, script)
       if (a.retry === 'conflict') {
         last = new OpsExit(EXIT.BUSY, `transporte ocupado: «Conflict» persistente tras ${waits.length + 1} intento(s) — el canal de run-command se serializa en el host y otro actor lo tiene tomado.`)
       } else {
         try {
           const p = parse(a.raw, n)
+          if (process.env.VERGIS_OPS_DEBUG) for (const l of p.lines) err(`[debug] ${l}`)
           if (!p.complete && !allowPartial) {
             const how = a.raw.includes(`VERGIS-OPS-BEGIN ${n}`) ? `llegaron ${p.lines.length} de las ${p.expected} línea(s) que el remoto emitió` : `no llegó el inicio de la salida (el remoto emitió ${p.expected} línea(s))`
             fail(EXIT.PARTIAL, `salida cortada por el transporte: llegó el centinela (rc=${p.rc}) pero ${how}. Lo que falta no se da por visto.`)
