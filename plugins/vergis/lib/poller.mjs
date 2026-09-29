@@ -11,7 +11,8 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { EXIT, fail, out, shq, assertToken, worst } from './util.mjs'
+import { EXIT, OpsExit, fail, out, shq, assertToken, worst } from './util.mjs'
+import { gate, evidenceLine } from './exec.mjs'
 import { resolveInstallation, PLUGIN_ROOT } from './declaration.mjs'
 import { runRemote } from './transport.mjs'
 import { readRecord, writeRecord } from './state.mjs'
@@ -145,19 +146,50 @@ function cn1Line(decl, ins) {
   return `${cn.passed ? 'rojo-como-debe' : 'FALLÓ'} contra ${cn.ring} (${cn.at})`
 }
 
-/** Control negativo del instrumento: el poller contra un anillo EN ESPERA debe dar todo MAL phase=standby. */
+/**
+ * Control negativo del instrumento: el poller contra un anillo EN ESPERA debe dar todo MAL phase=standby.
+ *
+ * El anillo destino puede estar RETENIDO (detenido): es el caso del rollback a un anillo frío, la maniobra
+ * de emergencia. Contra un contenedor detenido no hay control negativo posible —el poller no obtiene
+ * respuesta y cuenta SINMEDIR—, y `promote`/`rollback` exigen el CN-1 ANTES de invocar a la herramienta,
+ * que es quien lo habría arrancado en su pre-flight. Así que el arranque es de este verbo: un retenido se
+ * arranca (acto de clase `version`, con su gate, el mismo que `install`, que también deja un anillo en
+ * espera) y se espera a que declare `phase=standby` por la MISMA ruta que se va a medir. Queda caliente:
+ * es el candidato del acto que sigue, y al cerrar la próxima promoción la herramienta devuelve a retenido
+ * todo lo que no sea activo ni previo.
+ */
 export async function cn1(decl, ins, o) {
   const ringArg = o.ring ?? o._[1]
   if (!ringArg) fail(EXIT.NOT_RUN, 'cn1: nombra el anillo en espera con --ring <versión> (o <contenedor>). Es el que vas a promover.')
   assertToken(ringArg, '--ring', /^[A-Za-z0-9._-]+$/)
   const secs = Number(o.seconds ?? 20)
   if (!Number.isFinite(secs) || secs < 5 || secs > 600) fail(EXIT.NOT_RUN, '--seconds entre 5 y 600')
+  const standbyWait = Number(o['standby-timeout'] ?? 90)
+  if (!Number.isInteger(standbyWait) || standbyWait < 1 || standbyWait > 600) fail(EXIT.NOT_RUN, '--standby-timeout: segundos enteros entre 1 y 600')
+  // El gate del arranque se evalúa ANTES del viaje (la clase `version` no mide nada en el host): si falta
+  // su evidencia, el cuerpo remoto no arranca nada y el CLI lo dice después, sin un segundo viaje.
+  let startGate = null
+  let startRefusal = null
+  try { startGate = await gate(decl, ins, 'version', o) } catch (e) { if (e instanceof OpsExit) startRefusal = e; else throw e }
   const body = String.raw`${whereSh(ins, null)}
 VO_RING=${shq(ringArg)}
 case "$VO_RING" in vergis-*) : ;; *) VO_RING=$(vo_ring_name "$VO_RING") ;; esac
 if ! $DOCKER inspect "$VO_RING" >/dev/null 2>&1; then echo "NORING $VO_RING"; exit 0; fi
 VO_ACT=$(vo_active_ring || true)
 if [ "$VO_ACT" = "$VO_RING" ]; then echo "ISACTIVE $VO_RING"; exit 0; fi
+if [ "$($DOCKER inspect --format '{{.State.Running}}' "$VO_RING" 2>/dev/null)" != true ]; then
+  ${startGate ? String.raw`$DOCKER start "$VO_RING" >/dev/null 2>&1 || { echo "STARTFAIL $VO_RING"; exit 0; }
+  echo "STARTED $VO_RING"` : String.raw`echo "STOPPED $VO_RING"; exit 0`}
+fi
+# La fase, por la MISMA ruta que va a medir el control (el contenedor del instrumento → el anillo).
+i=0; VO_PH=
+while [ $i -lt ${standbyWait} ]; do
+  VO_PH=$($DOCKER exec "$VO_CT" wget -q -T 2 -O- "http://$VO_RING:8080/healthz" 2>/dev/null | tr -d '\r\n' | sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([a-z-]*\)".*/\1/p')
+  [ "$VO_PH" = standby ] && break
+  i=$((i+1)); sleep 1
+done
+if [ "$VO_PH" != standby ]; then echo "NOTSTANDBY $VO_RING ${'$'}{VO_PH:-sin-respuesta} $i"; exit 0; fi
+echo "STANDBY $VO_RING $i"
 $DOCKER exec -i "$VO_CT" sh -c 'cat > /tmp/vergis-ops-poller.sh' <<'VO_POLLER_EOF'
 ${POLLER()}
 VO_POLLER_EOF
@@ -173,6 +205,20 @@ $DOCKER exec "$VO_CT" rm -f "$L"`
   if (ia) fail(EXIT.NOT_RUN, `cn1: «${ia.slice(9)}» es el anillo ACTIVO. El control negativo se corre contra uno EN ESPERA: contra el activo daría verde y no probaría nada.`)
   const nt = r.lines.find((l) => l.startsWith('NOTOOLS '))
   if (nt) fail(EXIT.NOT_RUN, `el contenedor del instrumento «${nt.slice(8)}» no trae wget y sed.`)
+  const stopped = r.lines.find((l) => l.startsWith('STOPPED '))
+  if (stopped) fail(EXIT.NOT_RUN, `cn1: «${stopped.slice(8)}» está RETENIDO (detenido), y contra un contenedor detenido no hay control negativo. Arrancarlo es un acto de clase «version» y su gate no se cumplió: ${startRefusal?.message ?? 'sin evidencia'}. Nada se arrancó.`)
+  const sf = r.lines.find((l) => l.startsWith('STARTFAIL '))
+  if (sf) fail(EXIT.FINDING, `cn1: \`docker start ${sf.slice(10)}\` falló: el anillo retenido no arranca. Tampoco se podría promover; el previo caliente sigue siendo la red.`)
+  const started = r.lines.find((l) => l.startsWith('STARTED '))
+  const ns = r.lines.find((l) => l.startsWith('NOTSTANDBY '))
+  if (ns) {
+    const [, ring, ph, waited] = ns.split(' ')
+    writeRecord(decl.path, ins.id, 'cn1', { ring, passed: false, at: new Date().toISOString(), notStandby: ph, instrument: POLLER_VERSION })
+    out(`== vergis-ops poller cn1 · ${ins.id} · → ${ring} ==`)
+    if (started) out(`   ${ring} estaba retenido: lo arranqué (${evidenceLine(startGate)}).`)
+    out(`✗ CN-1 NO CORRIÓ (exit 1): ${ring} no declaró phase=standby en ${waited} s (última fase vista: ${ph}). Sin un standby no hay rojo que exigirle al instrumento — y la herramienta tampoco lo promovería.`)
+    return EXIT.FINDING
+  }
   const where = r.lines.find((l) => l.startsWith('WHERE '))?.split(' ') ?? []
   const c = parseCount(r.lines)
   if (!c) fail(EXIT.MUTE, 'cn1: el host no devolvió la cuenta.')
@@ -185,6 +231,11 @@ $DOCKER exec "$VO_CT" rm -f "$L"`
   else { code = EXIT.OK; verdict = `✓ CN-1 ROJO-COMO-DEBE (exit 0): ${c.n}/${c.n} muestras MAL phase=standby. El instrumento sabe ver el fallo.` }
   writeRecord(decl.path, ins.id, 'cn1', { ring: where[2], container: where[1], passed: code === EXIT.OK, at: new Date().toISOString(), count: c, instrument: POLLER_VERSION })
   out(`== vergis-ops poller cn1 · ${ins.id} · ${where[1]} → ${where[2]} (${secs} s) ==`)
+  if (started) {
+    const sb = r.lines.find((l) => l.startsWith('STANDBY '))?.split(' ')[2]
+    out(`   ${where[2]} estaba RETENIDO (detenido): lo arranqué y declaró phase=standby a los ${sb ?? '?'} s · ${evidenceLine(startGate)}`)
+    out('   queda caliente: es el candidato del acto que sigue (la herramienta lo habría arrancado igual en su pre-flight); al cerrar la próxima promoción vuelve a retenido si no es activo ni previo.')
+  }
   out(`   ${report('control negativo', c)}`)
   for (const e of c.examples) out(`   | ${e}`)
   out(verdict)
@@ -203,6 +254,6 @@ export async function runPoller(common, o) {
     out(s.running ? `corriendo: ${s.rec.id} en «${s.rec.container}» desde ${s.rec.startedAt} · ${report('hasta ahora', s.count)}` : 'no hay poller corriendo para esta instalación')
     return EXIT.OK
   }
-  fail(EXIT.NOT_RUN, 'uso: vergis-ops poller start [--target <url>] [--interval s] · count · stop · status · cn1 --ring <versión> [--seconds n]')
+  fail(EXIT.NOT_RUN, 'uso: vergis-ops poller start [--target <url>] [--interval s] · count · stop · status · cn1 --ring <versión> [--seconds n] [--standby-timeout s] [--approval|--window|--impact …]')
   return worst([])
 }

@@ -92,13 +92,18 @@ El CLI espera un cierre (`--tail`, 10 s) con el poller corriendo y **cuenta el c
 ## Volver atrás
 
 ```sh
+# al previo (caliente): flip puro
 vo poller start && vo poller cn1 --ring <versión previa>    # sí: también para el rollback
-vo exec rollout rollback                                     # al previo, flip puro
-vo exec rollout rollback <versión>                           # a un retenido frío: arranca primero
+vo exec rollout rollback
+
+# a un retenido (frío): el CN-1 lo arranca, espera su standby, y recién mide
+vo poller start && vo poller cn1 --ring <versión retenida>
+vo exec rollout rollback <versión retenida>
 ```
 
 - La maniobra de emergencia es donde más cara sale una medición que no se hizo: **mismo instrumento**.
-- A un retenido frío: verifica antes su label de esquema; si un CHANGELOG intermedio dice «rompe rollback a < X.Y», ese es el piso y el pre-flight se va a negar.
+- **A un retenido frío**: contra un contenedor detenido no hay control negativo posible (el poller no obtiene respuesta), así que `poller cn1` **lo arranca** —un acto de clase `version`, con el mismo gate que `install`— y espera a que declare `phase=standby` por la misma ruta que va a medir (`--standby-timeout`, 90 s por omisión). El arranque de un nodo cuesta segundos y ocurre **antes** del acto, fuera del tráfico. El anillo queda caliente: es el candidato; si no sigues, la próxima promoción lo devuelve a retenido. Si no llega a standby, el CN-1 sale 1 y el rollback no corre: el previo caliente sigue siendo la red.
+- A un retenido frío, además: verifica antes su label de esquema; si un CHANGELOG intermedio dice «rompe rollback a < X.Y», ese es el piso y el pre-flight se va a negar.
 - **Cero controladores** (nadie tiene el plano de control): es la dirección segura del diseño, pero es un incidente. `vo exec rollout status` y el bloque `control` de `/contrato` de cada anillo. **No borres el lease** para «desatascar»: el relevo converge solo, y borrarlo abre la puerta a dos controladores. Si el candidato no arranca, rollback al previo.
 - **Un rollback jamás restaura stores.** Los datos van hacia adelante; un respaldo pre-migración lo toca solo un humano sabiendo qué escrituras pierde.
 

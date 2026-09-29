@@ -7,6 +7,7 @@
 #       service=<svc>             label com.docker.compose.service
 #       mount=<origen>|<destino>  un montaje (uno por línea)
 #       env=<K>=<V>               env del contenedor (lo ve lo que corre con `exec`)
+#       running=0                 el contenedor está DETENIDO (un anillo retenido); `start` lo arranca
 #
 # `exec` corre el comando EN ESTA MÁQUINA con el env del contenedor: el nodo real lo reemplaza un
 # servidor HTTP de la prueba, al que el programa llega por VO_NODE_BASE / RINGS_EDGE_URL.
@@ -22,15 +23,34 @@ case "$cmd" in
     case "$*" in
       *Mounts*) sed -n 's/^mount=//p' "$f" ;;
       *compose.service*) sed -n 's/^service=//p' "$f" ;;
+      *State.Running*) if grep -q '^running=0' "$f"; then echo false; else echo true; fi ;;
+      *.Id*) echo "id-$name" ;;
       *) echo '[{}]' ;;
     esac
+    ;;
+  start)
+    f="$W/containers/${1:-}"
+    [ -f "$f" ] || { echo "Error response from daemon: No such container: ${1:-}" >&2; exit 1; }
+    grep -v '^running=' "$f" > "$f.t"; mv "$f.t" "$f"
+    echo "${1:-}"
     ;;
   ps)
     case "$*" in
       *vergis.ring*) for f in "$W"/containers/*; do [ -f "$f" ] && grep -q '^ring=1' "$f" && basename "$f"; done ;;
+      *com.docker.compose.service=*)
+        svc=$(printf '%s\n' "$*" | sed -n 's/.*com\.docker\.compose\.service=\([^ ]*\).*/\1/p')
+        for f in "$W"/containers/*; do [ -f "$f" ] && grep -qx "service=$svc" "$f" && basename "$f"; done ;;
       *) for f in "$W"/containers/*; do [ -f "$f" ] && basename "$f"; done ;;
     esac
     exit 0
+    ;;
+  compose)
+    # Solo lo que los actos de servicio necesitan: `config -q` valida, `up -d` «recrea» (queda en FAKE_LOG).
+    case "$*" in
+      *" config -q"*) exit 0 ;;
+      *" up -d "*) exit 0 ;;
+      *) echo "fake-docker: compose no sabe «$*»" >&2; exit 2 ;;
+    esac
     ;;
   exec)
     detach=0

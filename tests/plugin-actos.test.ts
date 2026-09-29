@@ -188,6 +188,54 @@ describe('exec rollout: la promoción va instrumentada por construcción', () =>
   })
 })
 
+/**
+ * El rollback a un anillo RETENIDO (frío) es la maniobra de emergencia, y promote/rollback exigen el CN-1
+ * antes de invocar a la herramienta —que es quien arrancaría el retenido—. Contra un contenedor detenido
+ * no hay control negativo posible, así que `poller cn1` arranca el retenido, con el gate de la clase
+ * `version`, y espera su standby. El camino completo (retenido → CN-1 → rollback medido) se mide en el
+ * banco (`deploy/rollout/bench/scripts/plugin-e2e.sh`, caso M1); acá, las dos ramas del gate.
+ */
+describe('poller cn1 contra un anillo retenido (detenido)', () => {
+  function mundoRetenido() {
+    const w = mundo()
+    const bin = join(w, 'bin')
+    mkdirSync(bin)
+    // wget falso: el anillo en espera responde standby (lo único que la espera y el control miran).
+    writeFileSync(join(bin, 'wget'), '#!/bin/sh\nprintf \'{"ok":true,"phase":"standby","lets":{"total":1,"serving":1}}\'\n', { mode: 0o755 })
+    writeFileSync(join(w, 'containers/borde'), ['service=caddy', `env=PATH=${bin}:/usr/bin:/bin:/usr/sbin:/sbin`].join('\n') + '\n')
+    writeFileSync(join(w, 'containers/vergis-1-0-1'), ['ring=1', 'running=0'].join('\n') + '\n')
+    return w
+  }
+
+  it('sin la evidencia del gate de la clase version → 2, y NO arranca nada', async () => {
+    const w = mundoRetenido()
+    const log = join(w, 'docker.log')
+    const dir = repo({ governance: { source: 'NORMA.md', approver: 'Principal', gates: { read: 'free' } } })
+    const r = await cliAsync(['poller', 'cn1', '--ring', '1.0.1', '--seconds', '5'], { cwd: dir, env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log } })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/RETENIDO/)
+    expect(r.all).toMatch(/Lo aprueba Principal/)
+    expect(readFileSync(log, 'utf8')).not.toMatch(/^docker start /m)
+    expect(readFileSync(join(w, 'containers/vergis-1-0-1'), 'utf8')).toMatch(/running=0/)
+  })
+
+  it('con el gate cumplido lo arranca, espera su standby por la ruta del instrumento y recién mide', async () => {
+    const w = mundoRetenido()
+    const log = join(w, 'docker.log')
+    const r = await cliAsync(['poller', 'cn1', '--ring', '1.0.1', '--seconds', '5'], { cwd: repo(), env: { ...env(), FAKE_WORLD: w, FAKE_LOG: log } })
+    const calls = readFileSync(log, 'utf8')
+    expect(calls, r.all).toMatch(/^docker start vergis-1-0-1$/m)
+    // la espera del standby va ANTES de la medición, y por el contenedor del instrumento
+    const iStart = calls.indexOf('docker start vergis-1-0-1')
+    const iWait = calls.indexOf('docker exec borde wget -q -T 2 -O- http://vergis-1-0-1:8080/healthz')
+    const iPoll = calls.indexOf('vergis-ops-poller.sh http://vergis-1-0-1:8080/healthz')
+    expect(iStart).toBeGreaterThanOrEqual(0)
+    expect(iWait).toBeGreaterThan(iStart)
+    expect(iPoll).toBeGreaterThan(iWait)
+    expect(r.out).toMatch(/estaba RETENIDO \(detenido\): lo arranqué y declaró phase=standby/)
+  }, 20_000)
+})
+
 describe('recon', () => {
   it('reporta sin tocar nada; sin herramienta en el host es medición a medias (7), no verde', async () => {
     const r = await cliAsync(['recon'], { cwd: repo({ rings: { env: { RINGS_EDGE: 'borde', RINGS_EDGE_URL: base, RINGS_ADMIN_EMAIL: 'admin@ejemplo.test' }, tool: '/no/existe/botler-rollout' } }), env: env() })
