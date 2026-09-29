@@ -31,6 +31,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { pluginLockstep } from './plugin-lockstep'
 
 /** Tipos de commit que NO exigen entrada de CHANGELOG: no cambian lo que el operador consume. */
 const SIN_ENTRADA = new Set(['docs', 'chore', 'test', 'ci', 'style', 'refactor'])
@@ -48,7 +49,11 @@ function git(...args: string[]): string {
 // este árbol tiene tags que no son versiones (los `sov-preclose-*` del aparato de cierre de sesión).
 // El primer uso real de este script cotejó contra uno de ésos — o sea que el instrumento arrancó
 // midiendo el rango equivocado, y lo delató su propia salida. Queda escrito para que nadie lo quite.
-const desde = arg('desde') ?? git('describe', '--tags', '--abbrev=0', '--match', 'v*')
+//
+// Y el patrón es `v[0-9]*`, no `v*` (lab/work/285 D11 · #366): `claude plugin tag` crea tags
+// `vergis--vX.Y.Z`, que empiezan con `v` sin ser versiones del Producto. Con `v*`, un tag así se
+// tomaría por el último corte.
+const desde = arg('desde') ?? git('describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*')
 const hasta = arg('hasta') ?? 'HEAD'
 const seccion = arg('seccion') ?? 'Sin publicar'
 
@@ -120,4 +125,11 @@ if (!sinDeclarar.length) console.log('✓ Ninguna referencia del código quedó 
 console.log('\n  Esto NO dice que la sección esté completa: coteja por número, y un cambio que nadie')
 console.log('  referenció le es invisible. Es insumo para el cotejo a mano, no un veredicto.')
 
-process.exit(sinDeclarar.length ? 1 : 0)
+// El lockstep del plugin `vergis` (D11): su versión es la del Producto y el marketplace lo fija al tag.
+const lockstep = pluginLockstep(process.cwd())
+if (lockstep.length) {
+  console.log('\n✗ LOCKSTEP DEL PLUGIN — el corte subiría la versión sin mover el plugin con ella:')
+  for (const e of lockstep) console.log(`    ${e}`)
+} else console.log('\n✓ Plugin vergis en lockstep: plugin.json y el ref del marketplace siguen a package.json.')
+
+process.exit(sinDeclarar.length || lockstep.length ? 1 : 0)

@@ -3,7 +3,11 @@ name: build
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    # `v[0-9]*` y NO `v*` (lab/work/285 D11 · #366): `claude plugin tag` crea tags `vergis--vX.Y.Z` que
+    # empiezan con `v` sin ser versiones del Producto. Con `v*` un tag así dispararía el build, publicaría
+    # una imagen y MOVERÍA `latest`. El mismo patrón rige el `enable` de `latest` (abajo) y el `--match`
+    # de `scripts/corte-cotejo.ts`: tres lugares, un solo hecho.
+    tags: ['v[0-9]*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -95,8 +99,32 @@ jobs:
       - run: shellcheck --version
       - run: npm run lint:shell
 
+  # El plugin `vergis` (lab/work/285 · #366): sus manifiestos se validan con el validador de Claude Code en
+  # modo estricto (una advertencia es error). Job hermano: no necesita las deps del Producto.
+  #
+  # LA VERSIÓN VA PINNEADA y respeta el cooldown de 14 días del ADR-001: 2.1.272 se publicó el
+  # 2026-09-14. Medido en local con esa versión: los dos manifiestos validan (rc=0), y un plugin.json con
+  # un campo desconocido o JSON roto sale rc=1 — el gate sabe reprobar. `claude plugin validate` no pide
+  # credenciales (no llama al modelo).
+  plugin:
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_VERSION: 2.1.272
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      # CON su postinstall, a diferencia de las deps del Producto (ADR-001): el postinstall de Claude Code es
+      # el que coloca su binario nativo por plataforma — con `--ignore-scripts` el CLI no arranca (medido en
+      # local: «claude native binary not installed»). El job no tiene secretos y su token es de lectura.
+      - run: npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+      - run: claude --version
+      - run: claude plugin validate --strict plugins/vergis
+      - run: claude plugin validate --strict .
+
   image:
-    needs: [test, shell]
+    needs: [test, shell, plugin]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -106,6 +134,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      # ¿Es este ref una VERSIÓN del Producto? Las expresiones de Actions no tienen regex, y
+      # `startsWith(github.ref, 'refs/tags/v')` también es verdad para `refs/tags/vergis--v0.0.0`: se decide
+      # acá, con el mismo patrón `v[0-9]*` del disparador. Sin esto, un tag no-versión movería `latest`.
+      - id: ref
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v[0-9]*) echo "version=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "version=false" >> "$GITHUB_OUTPUT" ;;
+          esac
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -123,7 +160,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ steps.ref.outputs.version == 'true' }}
             type=raw,value=main,enable={{is_default_branch}}
             type=sha
           # Labels que contestan «¿qué es esto y qué exige?» desde un `docker inspect`, sin salir de
