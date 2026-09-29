@@ -97,7 +97,7 @@ En una plataforma en GA típica, **lo que no corta no pide permiso** (se desplie
 
 ### `boot` — una variable de arranque, un montaje del nodo
 
-Lee el **RUNBOOK §7 «Cambiar la configuración de arranque con anillos»** de la versión que corre la instalación ([`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`](https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md): no viaja en la imagen, se lee del repo del Producto en su tag). En corto: con anillos, un cambio de arranque entra en un **anillo nuevo** creado desde `ring.args` regenerado (`vo exec rollout ring-args --apply`), y se promueve con la ceremonia de **vergis:rollout** — eso es un acto `version`, instrumentado. Lo que ese camino no cubre (lo que comparten todos los anillos, como `VERGIS_OUT` o el lease) es `boot` de verdad: corte, ventana y medición.
+Lee el **RUNBOOK §7 «Cambiar la configuración de arranque con anillos»** de la versión que corre la instalación (`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`: no viaja en la imagen, se lee del repo del Producto en su tag). En corto: con anillos, un cambio de arranque entra en un **anillo nuevo** creado desde `ring.args` regenerado (`vo exec rollout ring-args --apply`), y se promueve con la ceremonia de **vergis:rollout** — eso es un acto `version`, instrumentado. Lo que ese camino no cubre (lo que comparten todos los anillos, como `VERGIS_OUT` o el lease) es `boot` de verdad: corte, ventana y medición.
 
 ### `destructive`
 

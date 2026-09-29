@@ -15,7 +15,7 @@ argument-hint: "[instalar | declarar | validar]"
 
 ## 1 · La instancia (una vez, si es nueva)
 
-Sigue el README de anillos §«Preparar la instancia» **de la versión que se va a instalar** ([`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md`](https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md): el README y el RUNBOOK no viajan en la imagen, se leen del repo del Producto en su tag): el compose y el Caddyfile de referencia, `rings/` con `active.caddy` y `ring.args`, la sala de espera, y la herramienta de anillos. La herramienta y el generador de `ring.args` viajan **en la imagen** de cada versión (`/app/deploy/rollout/`, con su sha256 en el label `vergis.rollout.sha256`): tómalos de ahí, no de un clon del repo en otra rama.
+Sigue el README de anillos §«Preparar la instancia» **de la versión que se va a instalar** (`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md`: el README y el RUNBOOK no viajan en la imagen, se leen del repo del Producto en su tag): el compose y el Caddyfile de referencia, `rings/` con `active.caddy` y `ring.args`, la sala de espera, y la herramienta de anillos. La herramienta y el generador de `ring.args` viajan **en la imagen** de cada versión (`/app/deploy/rollout/`, con su sha256 en el label `vergis.rollout.sha256`): tómalos de ahí, no de un clon del repo en otra rama.
 
 ## 2 · El plugin
 
