@@ -5,7 +5,7 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
-## Sin publicar
+## 0.41.0 — 2026-09-30
 
 - **`vergis:rollout` pasa a llamarse `vergis:upgrade` (#382)**, por palabra de César: el nombre de la
   skill dice el acto del operador, y «rollout» queda para el mecanismo (verbo del CLI, `deploy/rollout/`,

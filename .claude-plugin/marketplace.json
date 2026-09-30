@@ -17,7 +17,7 @@
         "source": "git-subdir",
         "url": "https://github.com/Gegolabs/vergis.git",
         "path": "plugins/vergis",
-        "ref": "v0.40.0"
+        "ref": "v0.41.0"
       },
       "homepage": "https://github.com/Gegolabs/vergis"
     }
