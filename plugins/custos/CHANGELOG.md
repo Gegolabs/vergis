@@ -4,7 +4,7 @@ El plugin tiene **la versión del Producto** (lockstep: `plugin.json` sigue a `p
 marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versión está en el
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**.
 
-## Sin publicar
+## 0.42.0 — 2026-09-30
 
 Nace el plugin (#387, diseño `lab/work/288`): gobernar el dato de una instalación —quién ve qué dato,
 quién pertenece a qué grupo, quién responde por qué dato—, que tiene dueño propio y no es el operador
