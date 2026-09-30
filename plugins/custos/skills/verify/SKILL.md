@@ -7,6 +7,15 @@ argument-hint: "[--installation <id>] [--identity <id>]"
 
 Usa el CLI `vergis-ops` y la declaración `vergis-ops.json` del plugin `vergis` (ver `vergis:setup`). **Salida del CLI:** 0 medí sin hallazgo · 1 medí y hay hallazgo · 2 no corrí · 3 a 7 **no hubo medición completa**; un 3–7 **no es un verde**, y un «verificado» con uno de ellos es falso (tabla completa en `vergis:verify`).
 
+## Paso 0 · ¿Desde dónde parto?
+
+```sh
+vergis-ops recon      # check + health + contrato + anillos + paridad, sin tocar nada
+vergis-ops contract   # watches y artefactos pendientes: una política publicada y no tomada no está vigente
+```
+
+Un nodo no sano o un drift previo invalidan lo que se mida después: se reportan antes de seguir (detalle en `vergis:setup` §«Paso 0»).
+
 ## 1 · RLS por identidad
 
 ```sh

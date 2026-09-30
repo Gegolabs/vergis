@@ -31,9 +31,10 @@ Un drift previo se reporta antes de seguir (detalle en `vergis:setup` §«Paso 0
 
 1. `vergis-ops contract classify <archivo del espejo>` → tiene que decir `content`. Si dice otra cosa, **no es este flujo**: se reporta y se deriva a `vergis:setup`.
 2. **Espejo primero:** el archivo está en el repo del operador, commiteado.
-3. `vergis-ops publish <archivo>` — aplica el gate, respalda, escribe en sitio, verifica el sha y **espera a que el nodo lo tome**. El nodo valida antes de reemplazar: un archivo malformado no se toma, la política vigente sigue viva, y `publish` sale **1**. Sin la confirmación del nodo (2 o 5), no está aplicado: `vergis-ops contract wait <archivo>`.
-4. `vergis-ops parity --family <familia>` hasta 0, y **custos:verify**.
-5. El rollback que `publish` imprimió y la entrada en `governance.acts_log` quedan en el reporte.
+3. Si la instalación declara `governance.pretest`, correrlo y tener su evidencia.
+4. `vergis-ops publish <archivo> [--pretest "<qué corriste y qué dio>"]` — aplica el gate, respalda, escribe en sitio, verifica el sha y **espera a que el nodo lo tome**. El nodo valida antes de reemplazar: un archivo malformado no se toma, la política vigente sigue viva, y `publish` sale **1**. Sin la confirmación del nodo (2 o 5), no está aplicado: `vergis-ops contract wait <archivo>`.
+5. `vergis-ops parity --family <familia>` hasta 0, y **custos:verify**.
+6. El rollback que `publish` imprimió y la entrada en `governance.acts_log` quedan en el reporte.
 
 **Un cambio de grupos o de identidad no llega al login real enseguida:** en el borde de referencia (oauth2-proxy) se ve recién con un login fresco, porque la cookie de sesión dura días. La sonda de `custos:verify` forja la identidad por detrás del borde y lo ve de inmediato; la persona, no.
 

@@ -26,14 +26,15 @@ implementación del CLI y de las skills, y la historia que las skills heredaron.
   `${CLAUDE_PLUGIN_ROOT}` es la raíz del plugin que corre la skill, y las de `custos` y `mira` no tienen
   cómo nombrar la de `vergis`. `bin/vergis-ops` (ejecutable, `#!/usr/bin/env node`) solo hace
   `import('./vergis-ops.mjs')`. El costo: depende del shebang y de que el `node` del `PATH` sea ≥ 22 (el
-  CLI lo comprueba y sale 2), y solo funciona en macOS y Linux (anthropics/claude-code#68896).
+  CLI lo comprueba y sale 2), y queda para macOS y Linux: en Windows con PowerShell no hay equivalente
+  según anthropics/claude-code#68896 (informado por el issue; no medido en Windows).
   **Medido** con Claude Code 2.1.285 y `claude -p --plugin-dir plugins/vergis --plugin-dir plugins/custos
   --allowedTools "Bash(vergis-ops:*)"`: `vergis-ops --help` devolvió la ayuda del CLI; el control sin
   `--plugin-dir plugins/vergis` dio «command not found: vergis-ops» (exit 127).
 - **`vergis:connect` no publica un archivo de conexiones con un secreto en claro** (perfil `secret` con
   `clientSecret`): `publish` lleva el contenido en base64 dentro del script remoto, y el espejo lo
-  versiona. Solo publica perfiles `federated` o `imds`; el resto lo coloca el mecanismo de secretos de la
-  instalación, y la skill retoma con `contract wait`.
+  versiona. Solo publica perfiles `federated` o `imds`; los perfiles `secret` quedan fuera de los plugins
+  hasta que puedan referenciar su secreto en un almacén (#394, decisión del mantenedor).
 - **`mira:validate` sella su veredicto en `mira-veredictos.jsonl`**, junto a `vergis-ops.json` (una línea
   JSON por veredicto, con el sha256 del spec), mientras el nodo no exponga el punto de validación
   (#388); `mira:specialize` se niega a publicar un sha sin una línea «acepta». El nombre y la forma del

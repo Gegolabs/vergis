@@ -54,15 +54,16 @@ vergis-ops contract classify <archivo de conexiones> # si es archivo: su clase y
 |--|--|--|
 | `federated` (con `federatedTokenFile`: la ruta del token en el host) | No: lleva una referencia | Lo publica (paso 3) |
 | `imds` (identidad administrada del host) | No | Lo publica (paso 3) |
-| `secret` (con `clientSecret`) | **Sí** | **No lo publica.** Lo dice así: «el perfil lleva un secreto en claro; los plugins no lo transportan». El archivo lo coloca en el host el mecanismo de secretos de la instalación, fuera de los plugins; la skill retoma en el paso 4 con una copia local idéntica en su ruta del espejo, **ignorada por git** (`contract wait` compara el sha de esa copia con el que cargó el nodo) |
+| `secret` (con `clientSecret`) | **Sí** | **Queda fuera de los plugins** hasta que el perfil pueda referenciar su secreto en un almacén en vez de llevarlo (#394). La skill lo dice así: **«el perfil lleva un secreto en claro; los plugins no lo transportan ni lo declaran hasta #394»**, y se detiene |
 
 Antes de publicar, **lee el archivo** y confirma que ningún perfil lleva `clientSecret` (ni en su sub-perfil `consola`). Si lo lleva, es la tercera fila.
 
 ## Paso 3 · Publicar
 
 1. **Espejo primero:** el archivo está en el repo del operador, commiteado (sin secretos: paso 2).
-2. `vergis-ops publish <archivo de conexiones>` — clasifica, aplica el gate, respalda, escribe en sitio, verifica el sha y **espera a que el nodo lo tome**. El nodo valida la forma de cada credencial al cargar (fail-closed): un perfil con un campo faltante no se toma y la configuración vigente sigue viva, y `publish` sale **1**. Sin la confirmación del nodo (2 o 5) no está publicado: `vergis-ops contract wait <archivo>`.
-3. El rollback que `publish` imprimió queda en tu reporte, con su entrada en `governance.acts_log` (detalle en `vergis:setup` §«¿Dónde queda el registro?»).
+2. Si la instalación declara `governance.pretest`, correrlo y tener su evidencia.
+3. `vergis-ops publish <archivo de conexiones> [--pretest "<qué corriste y qué dio>"]` — clasifica, aplica el gate, respalda, escribe en sitio, verifica el sha y **espera a que el nodo lo tome**. El nodo valida la forma de cada credencial al cargar (fail-closed): un perfil con un campo faltante no se toma y la configuración vigente sigue viva, y `publish` sale **1**. Sin la confirmación del nodo (2 o 5) no está publicado: `vergis-ops contract wait <archivo>`.
+4. El rollback que `publish` imprimió queda en tu reporte, con su entrada en `governance.acts_log` (detalle en `vergis:setup` §«¿Dónde queda el registro?»).
 
 ## Paso 4 · ¿El Conector alcanza su fuente?
 
@@ -79,7 +80,7 @@ Un «conectó» sin su falla esperada no mide nada: jamás se reporta «el Conec
 ## ¿Qué no hace esta skill?
 
 - No crea tipos de Conector: es código del Producto, y llega en una versión que publica el mantenedor.
-- No transporta secretos (paso 2). No cambia la versión de Vergis (→ **vergis:rollout**).
+- No transporta secretos ni opera perfiles `secret` (paso 2; #394). No cambia la versión de Vergis (→ **vergis:rollout**).
 - No escribe specs ni decide qué fuente necesita un PI (→ **mira**).
 - No opera el almacén de datos ni su ingesta (fuera de los plugins; ver `vergis:setup` §«Datos y motor de datos»).
 

@@ -11,17 +11,18 @@ argument-hint: "[<intención en lenguaje natural> | rúbricas] [--installation <
 
 ## Precondición · ¿Miranda está encendida en el nodo?
 
-Miranda se enciende en la instalación con `MIRANDA_ENABLED`; el nodo declara su estado en el bloque `miranda` de `/contrato` (con `disabledReason` si quedó apagada pese a pedirse) y su ruta `/miranda` responde 503 cuando está apagada.
+Miranda se enciende en la instalación con `MIRANDA_ENABLED`. Con la variable apagada, el nodo no monta la ruta y `/miranda` cae al 404 normal (`server/routes.ts`, `server/miranda.ts`). Encendida pero con la configuración incompleta —falta `ANTHROPIC_API_KEY`, o `MIRANDA_API_BASE_URL` no es una URL absoluta—, el nodo sigue sirviendo, `/miranda` responde **503** con la razón, y `/contrato` la declara en `miranda.disabledReason` (`server/config.ts`).
 
 ```sh
-vergis-ops smoke miranda --identity <identidad de sondeo con acceso a Miranda>
+vergis-ops smoke miranda --identity <identidad de sondeo con el scope miranda>
 ```
 
 | Resultado | Qué significa | Qué se hace |
 |--|--|--|
 | exit 0 (200) | Miranda responde | seguir |
-| exit 1 con 503 | Miranda está apagada en el nodo | decirlo así: **«Miranda no está encendida en esta instalación»**, y detenerse. Encenderla es un cambio de arranque: `vergis:rollout` |
-| cualquier otro resultado | No se pudo comprobar | **«No pude verificar que Miranda esté encendida»**, y detenerse |
+| exit 1 con **404** | Miranda está **apagada**: `MIRANDA_ENABLED` no está encendido | decirlo así: **«Miranda no está encendida en esta instalación»**, y detenerse. Encenderla es un cambio de arranque: `vergis:rollout` si exige anillo nuevo, o `vergis:setup` §`boot` |
+| exit 1 con **503** | Miranda está **pedida pero degradada**: falta configuración | decirlo así: **«Miranda está pedida pero degradada»**, con la razón que declara `disabledReason` en `/contrato`, y detenerse. Lo que falta es **configuración** del nodo (la key o la URL base), no una versión ni un anillo |
+| cualquier otro resultado (403: la identidad no tiene el scope `miranda`; 2 a 7) | No se pudo comprobar | **«No pude verificar que Miranda esté encendida»**, y detenerse |
 
 No se simula: **si Miranda no está, esta skill no especifica por su cuenta.**
 
@@ -43,8 +44,9 @@ No se simula: **si Miranda no está, esta skill no especifica por su cuenta.**
 Las rúbricas con que Miranda juzga lo que especifica son contenido de la instalación, y se mantienen aquí:
 
 1. `vergis-ops contract classify <rúbrica del espejo>` → tiene que decir `content`; si dice otra cosa, no es este flujo (`vergis:setup`).
-2. **Espejo primero**, commiteado; `vergis-ops publish <rúbrica>` — respalda, escribe en sitio, verifica el sha y **espera a que el nodo la tome**. Sin esa confirmación (2 o 5) no está publicada: `vergis-ops contract wait <rúbrica>`.
-3. `vergis-ops parity --family <familia de rúbricas>` hasta 0. El rollback que `publish` imprimió y la entrada en `governance.acts_log` quedan en el reporte (ver `vergis:setup`).
+2. **Espejo primero**, commiteado. Si la instalación declara `governance.pretest`, correrlo y pasar su evidencia con `--pretest "<qué corriste y qué dio>"`: el CLI la exige y sin ella sale 2.
+3. `vergis-ops publish <rúbrica> [--pretest "…"]` — respalda, escribe en sitio, verifica el sha y **espera a que el nodo la tome**. Sin esa confirmación (2 o 5) no está publicada: `vergis-ops contract wait <rúbrica>`.
+4. `vergis-ops parity --family <familia de rúbricas>` hasta 0. El rollback que `publish` imprimió y la entrada en `governance.acts_log` quedan en el reporte (ver `vergis:setup`).
 
 ## ¿Qué no hace esta skill?
 

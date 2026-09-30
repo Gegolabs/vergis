@@ -89,7 +89,8 @@ según **quién opera** (diseño `lab/work/288`, aprobado por César el 2026-09-
   Vergis (tag e imagen) no es de ningún plugin: es del mantenedor.
 - **El CLI se invoca como `vergis-ops`** en las skills de los tres plugins: `plugins/vergis/bin/vergis-ops`
   carga el `vergis-ops.mjs` de siempre, y Claude Code pone el `bin/` de un plugin habilitado en el `PATH`
-  de su herramienta Bash. **Solo macOS o Linux** (anthropics/claude-code#68896).
+  de su herramienta Bash (documentado por Claude Code; medido en macOS con su control negativo). **macOS o
+  Linux**: en Windows con PowerShell no hay equivalente según anthropics/claude-code#68896, no medido.
 - **Lo que las skills declaran en vez de simular**, mientras falte el soporte del Producto: la prueba de
   alcance de un Conector (#391: «no pude medir el alcance»), el punto de validación de Mira en el nodo
   (#388: `mira:validate` valida en local y sella el sha aceptado en `mira-veredictos.jsonl`, junto a la
@@ -99,7 +100,8 @@ según **quién opera** (diseño `lab/work/288`, aprobado por César el 2026-09-
   `retire` responden «no disponible»).
 - `vergis:connect` **no transporta secretos**: publica un archivo de conexiones solo si ningún perfil
   lleva el valor de una credencial (modos `federated` o `imds`), porque `publish` lleva el contenido
-  dentro del script que corre en el host.
+  dentro del script que corre en el host. Los perfiles `secret` quedan fuera de los plugins hasta que
+  puedan referenciar su secreto en un almacén (#394).
 - El mensaje de `vergis-ops publish` cuando el nodo no toma un archivo dice «Revisa /contrato» (decía
   «Mira /contrato», que se leía como el Botlet).
 

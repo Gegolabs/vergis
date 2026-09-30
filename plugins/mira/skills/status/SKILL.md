@@ -7,6 +7,15 @@ argument-hint: "<slug del PI> [--identity <id>] [--installation <id>]"
 
 Usa el CLI `vergis-ops` y la declaración `vergis-ops.json` del plugin `vergis` (ver `vergis:setup`). **Verificar es medir con un instrumento que sabe fallar:** «medí y salió mal» (exit 1) no es «no pude medir» (3 a 7), y un 3–7 **no es un verde** (tabla completa en `vergis:verify`).
 
+## Paso 0 · ¿Desde dónde parto?
+
+```sh
+vergis-ops recon      # check + health + contrato + anillos + paridad, sin tocar nada
+vergis-ops contract   # artefactos pendientes: un spec publicado y no tomado no es el que se sirve
+```
+
+Un nodo no sano o un drift previo invalidan lo que se mida después: se reportan antes de seguir (detalle en `vergis:setup` §«Paso 0»).
+
 ## `status` · ¿cómo se ve el PI?
 
 ```sh

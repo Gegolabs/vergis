@@ -142,7 +142,8 @@ claude plugin install mira@vergis                                               
 
 Los plugins van fijados al tag de la versión del Producto: el de la versión v conoce el contrato hasta v, y
 lo posterior lo lee del nodo (`/contrato`). Sus skills invocan el CLI como `vergis-ops`, que el plugin
-`vergis` pone en el `PATH` de la herramienta Bash de Claude Code: solo macOS y Linux. Detalle: skill
+`vergis` pone en el `PATH` de la herramienta Bash de Claude Code (documentado por Claude Code; medido en
+macOS). En Windows con PowerShell no hay equivalente según anthropics/claude-code#68896 (no medido). Detalle: skill
 `vergis:setup`.
 
 ## Lo que esta herramienta no hace

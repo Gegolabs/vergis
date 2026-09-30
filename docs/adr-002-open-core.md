@@ -52,6 +52,8 @@ todo open-core (el patrón «SSO-tax»).
 | `server/` (serving RLS, admin de instancia, intake) | Abierta | 1 y 2 |
 | `deploy/` (compose de referencia, pdf-sidecar) | Abierta | 2 |
 | Plugin `vergis` de Claude Code (`plugins/vergis/`: skills `vergis:*`, CLI `vergis-ops`, esquema de `vergis-ops.json`; marketplace `.claude-plugin/`) | Abierta — cada acto opera **una sola** instalación; agregar, recorrer u orquestar varias es la fila «control plane de flota» | 2 |
+| Plugin `custos` de Claude Code (`plugins/custos/`: skills `custos:*`; usa el CLI y la declaración del plugin `vergis`) | Abierta — gobierna el dato de **una sola** instalación; es la operación de Custos, cuyo kernel ya es abierto por el test 1. Agregar, recorrer u orquestar varias es la fila «control plane de flota» | 2 |
+| Plugin `mira` de Claude Code (`plugins/mira/`: skills `mira:*`; usa el CLI y la declaración del plugin `vergis`) | Abierta — opera el ciclo del spec de los PIs de **una sola** instalación. Agregar, recorrer u orquestar varias es la fila «control plane de flota» | 2 |
 | `schema/` · `examples/` · `docs/` · `tests/` | Abiertas | 2 |
 | Canales de salida email/Slack (futuros) | Abiertas | 2 |
 | HA / K8s / operator / carrier-grade (no existe) | Comercial | 3 |
