@@ -154,6 +154,8 @@ describe('check · la declaración mínima es usable', () => {
     expect(dep.all).not.toMatch(/memoria del anillo/)
     // `memory:` fuera de deploy (p. ej. en otro bloque) no cuenta
     expect(conCompose('services:\n  vergis:\n    image: reg/vergis:1.0.0\n    labels:\n      x:\n        y:\n          memory: 2g\n').all).toMatch(/memoria del anillo/)
+    // `reservations.memory` es un piso, no un límite: no cuenta (juez PR #378, m1)
+    expect(conCompose('services:\n  vergis:\n    image: reg/vergis:1.0.0\n    deploy:\n      resources:\n        reservations:\n          memory: 2g\n').all).toMatch(/memoria del anillo/)
   })
 
   it('el transporte que nombra un host ausente de RESOURCES.md es defecto', () => {
