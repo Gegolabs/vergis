@@ -160,7 +160,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-75` | Fondo y theme por tipo de PI, conmutables por la instancia | `VERGIS_THEME_REPORT` / `VERGIS_THEME_DASHBOARD` (`theme[@paleta]`) | 0.10.0 | [catalogo-elementos.md §4](catalogo-elementos.md) |
 | `CAP-76` | Render de gráficos **sin E/S**: gate declarativo y loader que niega red y disco | gate del render de charts | 0.16.0 | [CHANGELOG 0.16.0](../CHANGELOG.md) |
 | `CAP-208` | **Total de cada barra apilada**, rotulado fuera de la barra en la punta de su signo (sobre/bajo en vertical, derecha/izquierda en horizontal): Σ de los segmentos, incluida «(otras)», con el formato del chart (si no `abbr`), siempre visible (carriles, lienzo que se ensancha) y repetido en el tooltip de cada segmento | encendido por defecto en `distribution.stacked: true`; `distribution.totals: false` lo apaga | 0.38.0 | [catalogo-elementos.md §2 · «Total de cada barra apilada»](catalogo-elementos.md) |
-| `CAP-216` | **Rótulo de columna de tabla derivado del dato**, resuelto por request con el `ctx` vigente desde la primera fila del dataset; resuelto vacío cae al literal sin llaves o al `field`, nunca a un `{{…}}` crudo | `table.columns[].label: "{{data.<dataset>.<campo>}}"` | Sin publicar (#377) | [catalogo-elementos.md §4·sexies](catalogo-elementos.md) |
+| `CAP-216` | **Rótulo de columna de tabla derivado del dato**, resuelto por request con el `ctx` vigente desde la primera fila del dataset; resuelto vacío cae al literal sin llaves o al `field`, nunca a un `{{data.…}}` crudo | `table.columns[].label: "{{data.<dataset>.<campo>}}"` | Sin publicar (#377) | [catalogo-elementos.md §4·sexies](catalogo-elementos.md) |
 
 ## Notas
 

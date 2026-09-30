@@ -369,8 +369,9 @@ data:
 
 - **El valor sale de la primera fila** del dataset, cualquiera sea su `shape`: un rótulo es un valor,
   no una lista.
-- **Nunca un `{{…}}` crudo.** Si el valor resuelve vacío (dataset sin filas, campo nulo), queda el
-  literal sin llaves (`+`); si no queda nada, el `field`.
+- **Nunca un `{{data.…}}` crudo.** Si el valor resuelve vacío (dataset sin filas, campo nulo), queda
+  el literal sin llaves (`+`); si no queda nada, el `field`. Solo se interpola `data.`: una llave de
+  otra forma (`{{ctx.semana}}`, `{{foo}}`) no se reconoce y pasa tal cual, como en `markdown_block`.
 - **El dataset del rótulo es un dataset más**: se recupera por la misma ejecución gobernada que los
   demás, y uno no declarado en `data:` rechaza la spec (`dangling-data-reference`).
 - El rótulo interpolado es el que llevan la cabecera, el filtro de columna, la agrupación y el CSV.
