@@ -1,5 +1,5 @@
 ---
-description: Verificar una instalación de Vergis distinguiendo «medí» de «no pude medir» — salud por el borde con el predicado canónico, smoke de TODOS los Lets en TODAS sus vistas con la identidad de sondeo, comprobaciones de RLS por identidad, marcas de dato con su corrida discriminante, y paridad espejo↔host por sha256 (completa si el acto tocó infraestructura, por familia si no), con el estado del espejo declarado. Usar SIEMPRE después de cualquier acto sobre una instalación (publicar, recargar, promover, volver atrás), y cuando se pregunte «¿está sano?», «¿quedó desplegado?», «¿sirve lo que el repo dice?», «corre el smoke», «¿el gráfico dibuja lo que debe?». No repara nada: un drift se reporta.
+description: Verificar una instalación de Vergis, sin cambiar nada en ella (desplegar es vergis:deploy; cambiar la versión, vergis:upgrade), distinguiendo «medí» de «no pude medir» — salud por el borde con el predicado canónico, smoke de TODOS los Lets en TODAS sus vistas con la identidad de sondeo, comprobaciones de RLS por identidad, marcas de dato con su corrida discriminante, y paridad espejo↔host por sha256 (completa si el acto tocó infraestructura, por familia si no), con el estado del espejo declarado. Usar SIEMPRE después de cualquier acto sobre una instalación (publicar, recargar, promover, volver atrás), y cuando se pregunte «¿está sano?», «¿quedó desplegado?», «¿sirve lo que el repo dice?», «corre el smoke», «¿el gráfico dibuja lo que debe?». No repara nada: un drift se reporta.
 argument-hint: "[--installation <id>] [--family <familia>]"
 ---
 
@@ -48,6 +48,6 @@ Dos documentos de la misma forma con cardinalidades conocidas y **distintas**: e
 
 ## ¿Qué no hace?
 
-**No repara.** Un drift se reporta con su exit y se decide aparte, con vergis:ops y el gate de su clase. Corregir «de paso» mezcla el cambio propio con el ajeno y borra la evidencia de qué estaba mal.
+**No repara.** Un drift se reporta con su exit y se decide aparte, con vergis:deploy y el gate de su clase. Corregir «de paso» mezcla el cambio propio con el ajeno y borra la evidencia de qué estaba mal.
 
 • *Generado con Wingworking*

@@ -7,6 +7,11 @@ implementación del CLI y de las skills, y la historia que las skills heredaron.
 
 ## Sin publicar
 
+- **`vergis:ops` pasa a llamarse `vergis:deploy` (#385)**, por palabra de César, y la primera frase de
+  cada descripción separa deploy (EN la instalación), upgrade (la versión DE Vergis) y release (del
+  mantenedor, fuera del plugin). En los textos del plugin, el objeto es «la instalación», nunca
+  «Mira»: Mira es un Botlet.
+
 - **`vergis:rollout` pasa a llamarse `vergis:upgrade` (#382)**, por palabra de César: el nombre de la
   skill dice el acto del operador, y «rollout» queda para el mecanismo (verbo del CLI, `deploy/rollout/`,
   label de la imagen). Sin alias: el plugin llevaba horas publicado y ninguna instalación lo usaba.

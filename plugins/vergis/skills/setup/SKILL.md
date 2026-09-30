@@ -1,11 +1,11 @@
 ---
-description: Preparar la operación de una instalación de Vergis — la preparación única del RUNBOOK (compose y borde de referencia, rings/, la herramienta de anillos), instalar el plugin vergis desde el marketplace del Producto, y AUTORAR la declaración vergis-ops.json con su esquema hasta que `vergis-ops check` salga 0. Usar cuando se instale Vergis por primera vez, se sume una instalación a un repo de operación, se pida «valida la declaración», «declara la instalación», «instala el plugin de vergis», o cualquier verbo de vergis-ops se niegue por falta de una clave de la declaración.
+description: Preparar una instalación de Vergis para operarla con este plugin; no despliega contenido (vergis:deploy) ni cambia la versión de Vergis (vergis:upgrade) — la preparación única del RUNBOOK (compose y borde de referencia, rings/, la herramienta de anillos), instalar el plugin vergis desde el marketplace del Producto, y AUTORAR la declaración vergis-ops.json con su esquema hasta que `vergis-ops check` salga 0. Usar cuando se instale Vergis por primera vez, se sume una instalación a un repo de operación, se pida «valida la declaración», «declara la instalación», «instala el plugin de vergis», o cualquier verbo de vergis-ops se niegue por falta de una clave de la declaración.
 argument-hint: "[instalar | declarar | validar]"
 ---
 
 # vergis:setup — preparar la operación de una instalación
 
-**Lo que esta skill no hace:** crear infraestructura cloud, gastar, ni decidir la política de la instalación. Eso es del operador y de su gobierno. Esta skill deja el terreno listo para que **vergis:ops**, **vergis:upgrade** y **vergis:verify** operen, y deja escrito en la declaración lo que el operador ya decidió.
+**Lo que esta skill no hace:** crear infraestructura cloud, gastar, ni decidir la política de la instalación. Eso es del operador y de su gobierno. Esta skill deja el terreno listo para que **vergis:deploy**, **vergis:upgrade** y **vergis:verify** operen, y deja escrito en la declaración lo que el operador ya decidió.
 
 ## ¿Qué hace falta en la estación del operador?
 
@@ -73,7 +73,7 @@ Con eso corren `check`, `health` y la ceremonia de anillos. **Cada verbo que nec
 node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs check
 ```
 
-Sale 0 o 2 y **nombra cada defecto**: clave obligatoria ausente, `id` repetido, ruta del espejo inexistente, llave versionada, norma citada inexistente, servicio fuera del compose, transporte ausente del `RESOURCES.md`. Los tags móviles del compose y un repo público son **advertencias** que no suben el exit. Se itera hasta 0; recién entonces `vo recon` (vergis:ops).
+Sale 0 o 2 y **nombra cada defecto**: clave obligatoria ausente, `id` repetido, ruta del espejo inexistente, llave versionada, norma citada inexistente, servicio fuera del compose, transporte ausente del `RESOURCES.md`. Los tags móviles del compose y un repo público son **advertencias** que no suben el exit. Se itera hasta 0; recién entonces `vo recon` (vergis:deploy).
 
 ## ¿Qué queda escrito al terminar?
 

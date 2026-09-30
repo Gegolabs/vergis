@@ -1,5 +1,5 @@
 ---
-description: Promover, instalar o volver atrás una versión del Producto en una instalación de Vergis por ANILLOS, con la ceremonia completa — recon, qué exige la versión destino y todas las intermedias (leído del CHANGELOG), la herramienta de anillos extraída de la imagen candidata por digest, install, el poller de corte con su línea base y su control negativo (CN-1) obligatorios, promote, el corte contado por el poller y no por el comando, la fila en el registro de cortes y el previo caliente. Usar SIEMPRE que se pida «upgrade», «actualiza a la X.Y.Z», «promueve la X.Y.Z», «instala la versión», «sube la versión nueva», «vuelve atrás», «rollback», «¿qué versión corre?», «estado de los anillos», o haya que medir una promoción o decidir si un anillo está sano. Para publicar contenido o tocar servicios, vergis:ops.
+description: Cambiar la versión DE Vergis que corre una instalación, en ambas direcciones, por ANILLOS; no despliega contenido en la instalación: para eso, vergis:deploy. Promover, instalar o volver atrás, con la ceremonia completa — recon, qué exige la versión destino y todas las intermedias (leído del CHANGELOG), la herramienta de anillos extraída de la imagen candidata por digest, install, el poller de corte con su línea base y su control negativo (CN-1) obligatorios, promote, el corte contado por el poller y no por el comando, la fila en el registro de cortes y el previo caliente. Usar SIEMPRE que se pida «upgrade», «actualiza a la X.Y.Z», «promueve la X.Y.Z», «instala la versión», «sube la versión nueva», «vuelve atrás», «rollback», «¿qué versión corre?», «estado de los anillos», o haya que medir una promoción o decidir si un anillo está sano. Para desplegar contenido o tocar servicios en la instalación, vergis:deploy. Publicar una versión de Vergis (tag e imagen) no es del plugin: es del mantenedor del Producto.
 argument-hint: "<acto: status|install|promote|rollback> [<versión>] [--installation <id>]"
 ---
 
@@ -9,7 +9,7 @@ argument-hint: "<acto: status|install|promote|rollback> [<versión>] [--installa
 
 **Fuente canónica:** el README y el RUNBOOK de anillos **de la versión que corre la instalación** — `https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/README.md` y `https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`, con `<versión>` la del anillo activo (no viajan en la imagen: se leen del repo del Producto en su tag). Ante una contradicción, gana ese RUNBOOK. Esta skill los convierte en pasos; el CLI convierte en **construcción** lo que el RUNBOOK exige: `promote` y `rollback` **se niegan** sin poller corriendo, sin línea base y sin un CN-1 rojo-como-debe contra el anillo destino. Así «promoción verificada» no es una disciplina: es la única forma de promover.
 
-El CLI es `node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs` (abajo, **`vo`**). El sombrero es de **operador** (ver vergis:ops).
+El CLI es `node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs` (abajo, **`vo`**). El sombrero es de **operador** (ver vergis:deploy).
 
 ## ¿Qué gate tiene cada verbo?
 

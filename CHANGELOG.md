@@ -63,6 +63,16 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### La skill `vergis:ops` pasa a llamarse `vergis:deploy` (#385)
+
+Con eso, los cuatro nombres del plugin dicen qué hace cada skill: **setup** (preparar) · **deploy**
+(desplegar EN una instalación su contenido y sus servicios: specs, policies, compose, borde) ·
+**upgrade** (cambiar la versión DE Vergis que corre la instalación, por anillos) · **verify**
+(verificar). La primera frase de cada descripción lo dice y remite a la skill vecina. Publicar una
+versión de Vergis (tag e imagen) no es del plugin: es del mantenedor. Los verbos del CLI (`publish`,
+`exec`, `check`…) no cambian: son el mecanismo. **Qué exige:** quien invocaba `vergis:ops` invoca
+`vergis:deploy`. No hay alias. Nada cambia en la instancia.
+
 ### La skill `vergis:rollout` pasa a llamarse `vergis:upgrade` (#382)
 
 El acto de cambiar la versión del Producto por anillos (install → CN-1 → promote, con rollback) se

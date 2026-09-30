@@ -87,7 +87,7 @@ printf 'SHA %s\n' "$(vo_sha "$T")"`
   const w = await waitTaken(decl, ins, file, c.containerPath, Number(o.timeout ?? 30))
   out(`   ${w.msg}`)
   if (w.code !== EXIT.OK) {
-    if (w.code === EXIT.FINDING) out(`⚠ (exit 1) el archivo está en el host pero el nodo NO lo tomó: el cambio NO quedó desplegado. Mira /contrato (reloads.last) antes de reintentar; el rollback está arriba.`)
+    if (w.code === EXIT.FINDING) out(`⚠ (exit 1) el archivo está en el host pero el nodo NO lo tomó: el cambio NO quedó desplegado. Revisa /contrato (reloads.last) antes de reintentar; el rollback está arriba.`)
     else out(`⚠ (exit ${w.code}) el archivo está en el host y NO pude confirmar si el nodo lo tomó (${w.code === EXIT.NOT_RUN ? 'el contrato del nodo no respondió' : 'el anillo no devolvió el estado del artefacto'}): no se afirma desplegado. Reintenta \`vergis-ops contract wait <archivo>\`; el rollback está arriba.`)
     return w.code
   }
