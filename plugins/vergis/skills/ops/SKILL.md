@@ -1,5 +1,5 @@
 ---
-description: Operar una instalación de Vergis con el sombrero de operador — resolver la instalación declarada en vergis-ops.json, correr el recon, CLASIFICAR el acto contra el contrato vivo del nodo (content · boot · service · service-interrupting · destructive), aplicar el gate que la instalación declara para esa clase, ejecutar el flujo de la clase con respaldo, verificación medida y rollback escrito, y dejar el registro. Usar SIEMPRE que haya que desplegar o publicar algo en una instalación de Vergis — subir o actualizar un spec, una policy o cualquier archivo del espejo, cambiar el compose, el borde o un servicio, recargar o recrear un contenedor, cambiar una variable de arranque — o cuando se pida «despliega», «sube el spec», «aplica la policy», «cambia el compose», «recarga el borde», «publica el instrumento». Para promover o volver atrás una versión del Producto, vergis:rollout; para verificar, vergis:verify; para declarar la instalación, vergis:setup.
+description: Operar una instalación de Vergis con el sombrero de operador — resolver la instalación declarada en vergis-ops.json, correr el recon, CLASIFICAR el acto contra el contrato vivo del nodo (content · boot · service · service-interrupting · destructive), aplicar el gate que la instalación declara para esa clase, ejecutar el flujo de la clase con respaldo, verificación medida y rollback escrito, y dejar el registro. Usar SIEMPRE que haya que desplegar o publicar algo en una instalación de Vergis — subir o actualizar un spec, una policy o cualquier archivo del espejo, cambiar el compose, el borde o un servicio, recargar o recrear un contenedor, cambiar una variable de arranque — o cuando se pida «despliega», «sube el spec», «aplica la policy», «cambia el compose», «recarga el borde», «publica el instrumento». Para promover o volver atrás una versión del Producto, vergis:upgrade; para verificar, vergis:verify; para declarar la instalación, vergis:setup.
 argument-hint: "<qué se quiere cambiar> [--installation <id>]"
 ---
 
@@ -54,7 +54,7 @@ vo contract                                 # watches, envs de arranque, artefac
 | `boot` | lo que el nodo lee al arrancar | montado en el nodo y sin `watch`; **o sin contrato que responda** (ante la duda, corte) |
 | `service` | un servicio de la instalación, sin corte | lo monta un servicio con `interrupting: false`; o nada vivo lo monta |
 | `service-interrupting` | un servicio cuya recarga corta rutas servidas | `interrupting: true`, o un servicio que la declaración no describe |
-| `version` | promover o volver atrás por anillos | → **vergis:rollout** |
+| `version` | promover o volver atrás por anillos | → **vergis:upgrade** |
 | `destructive` | borrar datos, volúmenes, anillos | siempre explícito |
 
 **El gate lo declara la instalación** (`governance.gates`), citando la norma que lo funda (`governance.source`); si la declaración y la norma difieren, **gana la norma** y la declaración se corrige. Una clase sin gate declarado pide **aprobación**.
@@ -90,14 +90,14 @@ En una plataforma en GA típica, **lo que no corta no pide permiso** (se desplie
 3. Si el servicio declara `prevalidate`: `vo exec service <nombre> prevalidate` (contenedor efímero; no toca el vivo).
 4. `service-interrupting` en un gate `window`: declarar el impacto, tener la ventana autorizada, **arrancar el poller** (`vo poller start`) con su control negativo **contra el anillo previo si existe** (`vo poller cn1 --ring <previo>`: uno en espera o retenido, nunca el activo), y recién entonces actuar. **Con un solo anillo no hay control negativo posible** (cn1 contra el activo, o sin anillo, sale 2): se actúa igual, y la fila del corte lo declara — «sin CN-1: la instalación tiene un solo anillo».
 5. `vo exec service <nombre> reload` (si declara recarga en caliente) o `recreate`. `reload` **compara lo que el contenedor VE** en cada montaje de archivo contra el host: un editor o un `sed -i` cambian el inodo y el contenedor sigue viendo lo viejo — recargar no es haber leído lo nuevo. Si sale 1 por eso, el camino es `recreate`, con su gate.
-6. `vo poller stop` da el corte. **La fila va a `governance.cuts_log` aunque diga «sin medir», y por qué**: una fila ausente hace creer que el corte no ocurrió. Las muestras `SINMEDIR` van en la fila como «sin medir», no como «corte»: el poller del plugin usa timeout de 2 s y no mide latencia, así que una retención de la sala de espera > 2 s también sale `SINMEDIR` (límite conocido, #367; `vergis:rollout` §6).
+6. `vo poller stop` da el corte. **La fila va a `governance.cuts_log` aunque diga «sin medir», y por qué**: una fila ausente hace creer que el corte no ocurrió. Las muestras `SINMEDIR` van en la fila como «sin medir», no como «corte»: el poller del plugin usa timeout de 2 s y no mide latencia, así que una retención de la sala de espera > 2 s también sale `SINMEDIR` (límite conocido, #367; `vergis:upgrade` §6).
 7. `vergis:verify`.
 
 **El contenedor que aloja el poller no se recrea mientras el poller corra**: sería matar la medición a mitad de serie y dejar la fila del corte «sin medir». El CLI se niega (2), y lo averigua **en el host** (el contenedor donde corre el poller contra los del servicio), no en una clave declarada. **Por omisión el poller vive en el borde** (`RINGS_EDGE`), así que recrear el borde con su ventana exige **moverlo primero**: `instrument.container` en la declaración apuntando a otro contenedor de vida larga que ese acto no recree, `vo poller stop`, `vo poller start` (ya en el nuevo) con su CN-1, y recién entonces `recreate`. `vo check` dice de antemano qué servicio aloja el instrumento — salvo que el borde venga de `rings.env_file`: ese archivo vive en el host y `check` no lo lee, así que no puede nombrar el servicio y lo dice en una nota (la guardia del `recreate` sigue averiguándolo en el host).
 
 ### `boot` — una variable de arranque, un montaje del nodo
 
-Lee el **RUNBOOK §7 «Cambiar la configuración de arranque con anillos»** de la versión que corre la instalación (`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`: no viaja en la imagen, se lee del repo del Producto en su tag). En corto: con anillos, un cambio de arranque entra en un **anillo nuevo** creado desde `ring.args` regenerado (`vo exec rollout ring-args --apply`), y se promueve con la ceremonia de **vergis:rollout** — eso es un acto `version`, instrumentado. Lo que ese camino no cubre (lo que comparten todos los anillos, como `VERGIS_OUT` o el lease) es `boot` de verdad: corte, ventana y medición.
+Lee el **RUNBOOK §7 «Cambiar la configuración de arranque con anillos»** de la versión que corre la instalación (`https://github.com/Gegolabs/vergis/blob/v<versión>/deploy/rollout/RUNBOOK.md`: no viaja en la imagen, se lee del repo del Producto en su tag). En corto: con anillos, un cambio de arranque entra en un **anillo nuevo** creado desde `ring.args` regenerado (`vo exec rollout ring-args --apply`), y se promueve con la ceremonia de **vergis:upgrade** — eso es un acto `version`, instrumentado. Lo que ese camino no cubre (lo que comparten todos los anillos, como `VERGIS_OUT` o el lease) es `boot` de verdad: corte, ventana y medición.
 
 ### `destructive`
 
@@ -119,7 +119,7 @@ No son del Producto. Si la instalación declara `extensions.data`, esa skill ati
 
 ## ¿Qué no hace esta skill?
 
-- No promueve versiones (→ **vergis:rollout**). No verifica por su cuenta (→ **vergis:verify**).
+- No promueve versiones (→ **vergis:upgrade**). No verifica por su cuenta (→ **vergis:verify**).
 - No decide gates: los lee. No inventa evidencia de una aprobación.
 - No repara un drift de paso: lo reporta.
 - No opera datos ni el motor de datos.

@@ -61,6 +61,16 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### La skill `vergis:rollout` pasa a llamarse `vergis:upgrade` (#382)
+
+El acto de cambiar la versión del Producto por anillos (install → CN-1 → promote, con rollback) se
+nombra por lo que quiere el operador: **upgrade**. El mecanismo conserva «rollout»: el verbo
+`vergis-ops exec rollout …`, `deploy/rollout/` y el label `vergis.rollout.sha256`, que ya viaja dentro
+de las imágenes publicadas. **Qué exige:** quien invocaba `vergis:rollout` invoca `vergis:upgrade`. No
+hay alias. Nada cambia en la instancia.
+
 ## 0.40.0 — 2026-09-30
 
 ### Corregido: `vergis-ops` truncaba su propia salida al terminar (PR #381)

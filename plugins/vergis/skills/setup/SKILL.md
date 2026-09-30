@@ -5,7 +5,7 @@ argument-hint: "[instalar | declarar | validar]"
 
 # vergis:setup — preparar la operación de una instalación
 
-**Lo que esta skill no hace:** crear infraestructura cloud, gastar, ni decidir la política de la instalación. Eso es del operador y de su gobierno. Esta skill deja el terreno listo para que **vergis:ops**, **vergis:rollout** y **vergis:verify** operen, y deja escrito en la declaración lo que el operador ya decidió.
+**Lo que esta skill no hace:** crear infraestructura cloud, gastar, ni decidir la política de la instalación. Eso es del operador y de su gobierno. Esta skill deja el terreno listo para que **vergis:ops**, **vergis:upgrade** y **vergis:verify** operen, y deja escrito en la declaración lo que el operador ya decidió.
 
 ## ¿Qué hace falta en la estación del operador?
 
