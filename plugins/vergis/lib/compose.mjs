@@ -14,6 +14,7 @@ export function composeServices(text) {
   let inServices = false
   let cur = null
   let inDeploy = false
+  let inLimits = false
   for (const ln of lines) {
     if (/^\S/.test(ln) && !ln.startsWith('#')) {
       inServices = /^services:\s*(#.*)?$/.test(ln)
@@ -26,14 +27,17 @@ export function composeServices(text) {
       cur = m[1]
       services[cur] = { image: null, profiles: [], containerName: null, build: false, memLimit: null }
       inDeploy = false
+      inLimits = false
       continue
     }
     if (!cur) continue
-    if (/^ {4}\S/.test(ln)) inDeploy = /^ {4}deploy:\s*(#.*)?$/.test(ln)
+    if (/^ {4}\S/.test(ln)) { inDeploy = /^ {4}deploy:\s*(#.*)?$/.test(ln); inLimits = false }
+    // solo `deploy.resources.limits.memory` es límite; `reservations.memory` es un piso y no cuenta
+    if (inDeploy && /^ {8}\S/.test(ln)) inLimits = /^ {8}limits:\s*(#.*)?$/.test(ln)
     if (/^ {4}build:/.test(ln)) services[cur].build = true
     const ml = /^ {4}mem_limit:\s*["']?([^"'\s#]+)/.exec(ln)
     if (ml) services[cur].memLimit = ml[1]
-    const dm = inDeploy && /^ {10,}memory:\s*["']?([^"'\s#]+)/.exec(ln)
+    const dm = inDeploy && inLimits && /^ {10,}memory:\s*["']?([^"'\s#]+)/.exec(ln)
     if (dm && !services[cur].memLimit) services[cur].memLimit = dm[1]
     const im = /^ {4}image:\s*["']?([^"'\s#]+)/.exec(ln)
     if (im) services[cur].image = im[1]
