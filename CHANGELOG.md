@@ -68,7 +68,7 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 `table.columns[].label` interpola `{{data.<dataset>.<campo>}}` por request, desde la primera fila del
 dataset: el nombre de la columna puede seguir al contexto elegido (el caso de PI-39: con la semana 24
 elegida, `W25 … W36` y `+W36`). Resuelto vacío, queda el literal sin llaves o el `field`; nunca un
-`{{…}}` crudo. Un rótulo que nombra un dataset no declarado rechaza la spec. Ver
+`{{data.…}}` crudo (una llave que no empieza por `data.` pasa tal cual, como en `markdown_block`). Un rótulo que nombra un dataset no declarado rechaza la spec. Ver
 `docs/catalogo-elementos.md` §4·sexies. **Qué exige:** nada — sin migración, sin variable nueva; un
 rótulo sin llaves se sirve exactamente como antes.
 
