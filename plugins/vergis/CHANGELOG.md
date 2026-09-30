@@ -5,7 +5,7 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
-## Sin publicar
+## 0.42.0 — 2026-09-30
 
 - **El plugin se reparte en tres (#387, diseño `lab/work/288`)**: `vergis` queda con `setup` · `connect` ·
   `publish` · `rollout` · `verify`, y nacen `custos` y `mira`, que dependen de éste. Sin alias.
