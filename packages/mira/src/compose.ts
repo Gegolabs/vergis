@@ -437,7 +437,14 @@ export function composePiece(
       // (run.ts) y cualquier enriquecimiento posterior sobre la referencia mutaría el spec cacheado.
       // `total: true` es alias de `sum` (#314): se normaliza ACÁ, en el único punto por el que pasa
       // toda columna, para que el render y el runtime lean un vocabulario cerrado.
-      columnsSpec: (t.columns ?? []).map((c) => (c.total === true ? { ...c, total: 'sum' as const } : { ...c })),
+      // El rótulo admite `{{data.<dataset>.<campo>}}` (#377): se resuelve por request contra la primera
+      // fila del dataset, así el nombre de la columna puede seguir al contexto elegido (p.ej. la semana
+      // real). Resuelto vacío, queda el literal sin llaves; si no queda nada, el `field`.
+      columnsSpec: (t.columns ?? []).map((c) => {
+        const col: TableColumn = c.total === true ? { ...c, total: 'sum' as const } : { ...c }
+        if (typeof col.label === 'string' && col.label.includes('{{')) col.label = interpolateLabel(col.label, results, spec) || col.field
+        return col
+      }),
       title: t.title,
       interactive: t.interactive,
       drills: drills.length ? drills : undefined,
@@ -562,6 +569,20 @@ function sortRows(rows: Record<string, unknown>[], token?: string, metricField?:
 
 function stripData(ref: string): string {
   return ref.startsWith('data.') ? ref.slice('data.'.length) : ref
+}
+
+/** Interpola un rótulo de columna: como `interpolate`, pero un dataset de varias filas aporta su
+ *  PRIMERA fila (un rótulo es un valor, no una lista). */
+function interpolateLabel(text: string, results: Record<string, DatasetResult>, spec: MiraSpec): string {
+  return text
+    .replace(/\{\{\s*data\.([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, p: string) => {
+      const r = resolvePath(p, results, spec)
+      const v = Array.isArray(r) ? r[0] : r
+      if (v == null || typeof v === 'object' && !(v instanceof Date)) return ''
+      if (v instanceof Date) return v.toISOString().slice(0, 10)
+      return String(v)
+    })
+    .trim()
 }
 
 function interpolate(text: string, results: Record<string, DatasetResult>, spec: MiraSpec): string {
