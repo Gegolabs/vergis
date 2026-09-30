@@ -5,7 +5,7 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
-## Sin publicar
+## 0.40.0 — 2026-09-30
 
 - **El CLI sale por `salir(code)`** (`lib/util.mjs`), que espera a que se vacíen stdout y stderr antes
   de `process.exit`. Con `process.exit` a secas, lo encolado en stdout se perdía por la cola con exit 0

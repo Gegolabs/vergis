@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.40.0 — 2026-09-30
 
-### Corregido: `vergis-ops` truncaba su propia salida al terminar
+### Corregido: `vergis-ops` truncaba su propia salida al terminar (PR #381)
 
 El CLI terminaba con `process.exit()`, que descarta lo que sigue en la cola de escritura de stdout.
 Cuando el lector no drena al ritmo del CLI, esa cola existe: bajo `spawn` el stdout es un socket que se
