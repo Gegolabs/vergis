@@ -28,6 +28,23 @@ Nace el plugin (issue #366).
     el operador de la instalación) separado de `governance.approver` (quién aprueba lo destructivo),
     `governance.stage` y `governance.availability` (informativos), `instrument.baseline_seconds` y
     `mirror.unmirrored` (los montajes que el espejo no cubre, con su motivo, para la guardia G1).
+- **Lo que corrigió la primera sombra sobre una instalación real** (frente L2, en solo lectura):
+  - **El presupuesto de salida de `az` (#369).** El centinela BEGIN/fin detectaba el recorte por la cabeza,
+    pero con eso ningún verbo de salida > 4 KB se podía medir por `az-run-command`. Se resolvió en el
+    TRANSPORTE y no en cada verbo: la alternativa —resumir en el host para caber— obligaba a diseñar cada
+    verbo contra el recorte y seguía rompiéndose con el primer contrato más grande. La salida que no cabe
+    en `AZ_INLINE` (3.072 B) se vuelca en el host (mktemp, borrado al bajar el último trozo; los huérfanos
+    de más de 60 min los barre la corrida siguiente) y se baja en trozos de `AZ_CHUNK` (2.304 B, 3.072 en
+    base64), cada uno con su par BEGIN/centinela, cotejando bytes y sha256. Techo: `AZ_MAX_CHUNKS` = 24.
+    El `az` falso de la suite recorta ahora como el real (los últimos 4.096 B) en todos sus modos.
+  - **Las exclusiones sin archivo (#371)** se listan siempre, y `check` las advierte.
+  - **La memoria de los anillos (#372)**: de las dos salidas que el issue ofrecía, una clave del esquema
+    (`rings.memory`) o exigir `mem_limit` en el compose, se eligió la segunda. `ring.args` existe para
+    DERIVARSE del compose vivo; una clave en la declaración sería una segunda fuente de la misma verdad,
+    que puede divergir del compose sin que nada lo vea. `check` lo advierte (no lo bloquea: ninguna
+    lectura depende de ello) y el acto que sí depende —`ring-args`— se niega; el CLI lo coteja antes de
+    correr el generador porque el de las imágenes anteriores cae a 1g en silencio.
+  - **`build:` no es tag móvil (#370).**
 - **Limitación conocida — el poller no mide retención** (#367). `instruments/poller.sh` consulta con
   `wget -T 2` y registra por muestra solo `OK | MAL | SINMEDIR`, sin latencia; la cuenta de `poller
   count/stop` suma `SINMEDIR` a «fuera de predicado». Un request que la sala de espera del borde retiene

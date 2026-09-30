@@ -108,8 +108,24 @@ El workflow de build, el tag `latest` y el cotejo del corte reaccionan solo a ta
 de la `v`. Un tag `vergis--vX.Y.Z` (el que crea `claude plugin tag`) ya no dispara el build ni mueve
 `latest` (medido en un repo de prueba: `v0.0.1` disparó el workflow; `vergis--v0.0.0`, no).
 
-**Qué exige esta versión, en lo de esta sección.** Nada: sin migración, sin variable nueva, sin cambio de
-contrato del nodo. No rompe rollback.
+### El plugin, tras su primera sombra sobre una instalación real (#369, #370, #371, #372)
+
+- **`contract` y `recon` miden por `az-run-command` con un contrato de tamaño real (#369).** `az vm
+  run-command` entrega solo los últimos ~4 KB del stdout; un resumen de contrato de 4,1 KB perdía la cabeza
+  y salía 7. El transporte ahora vuelca en el host la salida que no cabe y la baja por trozos con su propio
+  centinela, cotejando bytes y sha256; vale para todo verbo. Presupuesto explícito: hasta 24 trozos
+  (≈ 55 KB); más, sale 7 diciendo cuántos bytes emitió el host.
+- **`parity` lista toda exclusión declarada (#371)**, esté o no en el espejo, y `check` advierte la que no
+  está: una exclusión sin archivo local silenciaba el host sin decirlo.
+- **La memoria de los anillos se declara en el compose (#372).** El generador de `ring.args` exige
+  `mem_limit` (o `deploy.resources.limits.memory`) en el servicio plantilla y se niega sin él; no hay más
+  default de 1g ni `--memory`. `vergis-ops exec rollout ring-args` lo coteja antes de correr el generador,
+  y `check` lo advierte.
+- **`check` no marca como tag móvil una imagen que el servicio construye (`build:`) (#370).**
+
+**Qué exige esta versión, en lo de esta sección.** Sin migración, sin variable nueva, sin cambio de
+contrato del nodo. No rompe rollback. **Para derivar `ring.args`, el servicio plantilla del compose tiene
+que declarar su memoria** (`mem_limit`): sin ella, el generador y `exec rollout ring-args` se niegan.
 
 ## 0.39.0 — 2026-09-24
 

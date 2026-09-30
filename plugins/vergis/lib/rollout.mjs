@@ -9,9 +9,10 @@
 //   promote <versión> [--timeout s] [--tail s]
 //   rollback [<versión>] [--tail s]
 //   retire <versión> [--rmi] · prune [--retain N] [--dry-run] [--rmi]
-//   ring-args [<versión>] [--service s] [--memory 2g] [--apply]
+//   ring-args [<versión>] [--service s] [--apply]
 //                                deriva `ring.args` del compose VIVO con el generador de la imagen, y lo
-//                                muestra contra el vigente; `--apply` lo instala con respaldo
+//                                muestra contra el vigente; `--apply` lo instala con respaldo. La memoria
+//                                del anillo sale del compose (mem_limit): sin ella se niega (#372)
 //
 // LA PROMOCIÓN VA INSTRUMENTADA POR CONSTRUCCIÓN (D10): `promote` y `rollback` se niegan sin un poller
 // corriendo hace ≥ baseline_seconds y sin un CN-1 rojo-como-debe contra el anillo destino, tomado en la
@@ -263,10 +264,13 @@ echo "INSTALLED $VO_TOOL $(vo_sha "$VO_TOOL")"`
 }
 
 // ─── ring.args derivado del compose vivo, con el generador de la imagen ──────────────────────────
+// ¿El servicio declara su memoria? Lee el JSON de `compose config` por stdin; sale 0 sí · 3 no.
+const MEM_JS = 'let d="";process.stdin.on("data",(c)=>(d+=c)).on("end",()=>{const s=(JSON.parse(d).services||{})[process.argv[1]]||{};const m=s.mem_limit??(((s.deploy||{}).resources||{}).limits||{}).memory;process.exit(m===undefined||m===null||m===""?3:0)})'
 async function ringArgs(decl, ins, v, o) {
   if (!ins.host.compose_project || !ins.host.compose_file) fail(EXIT.NOT_RUN, 'ring-args: la instalación no declara host.compose_project y host.compose_file, y el generador los necesita para leer el compose vivo')
   const svc = o.service ?? 'vergis'
   assertToken(svc, '--service', /^[A-Za-z0-9._-]+$/)
+  if (o.memory !== undefined) fail(EXIT.NOT_RUN, '--memory no existe: la memoria de los anillos se declara en el compose (mem_limit del servicio plantilla, o deploy.resources.limits.memory) — espejo primero — y el generador la deriva de ahí. Un valor a mano en cada corrida depende de la memoria de quien opera (#372)')
   const g = await gate(decl, ins, o.apply ? 'version' : 'read', o)
   const body = String.raw`P=${shq(ins.host.compose_project)}; F=${shq(ins.host.compose_file)}
 ${v ? `IMG="$RINGS_IMAGE:${v}"` : 'IMG=$($DOCKER inspect --format "{{.Image}}" "$(vo_active_ring)" 2>/dev/null)'}
@@ -274,7 +278,13 @@ ${v ? `IMG="$RINGS_IMAGE:${v}"` : 'IMG=$($DOCKER inspect --format "{{.Image}}" "
 PROF=""; for p in $($DOCKER compose -p "$P" -f "$F" config --profiles 2>/dev/null); do PROF="$PROF --profile $p"; done
 # shellcheck disable=SC2086
 $DOCKER compose -p "$P" -f "$F" $PROF config --no-env-resolution --format json > "$VO_T/compose.json" 2>"$VO_T/e" || { echo "NOCONFIG"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
-$DOCKER run --rm -i --entrypoint node "$IMG" /app/deploy/rollout/ring-args-from-compose.mjs --host-root ${shq(ins.host.root)} --service ${shq(svc)}${o.memory ? ` --memory ${shq(assertToken(o.memory, '--memory', /^[0-9]+[kmgKMG]?$/))}` : ''} < "$VO_T/compose.json" > "$VO_T/ring.args.new" 2>"$VO_T/e" || { echo "GENFAIL"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
+# La memoria del anillo, declarada en el compose (#372). Se coteja ACÁ y no solo en el generador: el de
+# las imágenes anteriores a este arreglo cae a 1g en silencio si el compose no la trae.
+$DOCKER run --rm -i --entrypoint node "$IMG" -e ${shq(MEM_JS)} ${shq(svc)} < "$VO_T/compose.json"
+VO_M=$?
+if [ "$VO_M" = 3 ]; then echo "NOMEM"; exit 0; fi
+if [ "$VO_M" != 0 ]; then echo "GENFAIL no pude cotejar la memoria del servicio (rc=$VO_M)"; exit 0; fi
+$DOCKER run --rm -i --entrypoint node "$IMG" /app/deploy/rollout/ring-args-from-compose.mjs --host-root ${shq(ins.host.root)} --service ${shq(svc)} < "$VO_T/compose.json" > "$VO_T/ring.args.new" 2>"$VO_T/e" || { echo "GENFAIL"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
 if [ -f "$RINGS_DIR/ring.args" ] && diff "$RINGS_DIR/ring.args" "$VO_T/ring.args.new" | grep -v '^[<>] # Generado:' | grep '^[<>]' > "$VO_T/d"; then
   echo "DRIFT $(wc -l < "$VO_T/d" | tr -d ' ')"; head -20 "$VO_T/d"
 elif [ -f "$RINGS_DIR/ring.args" ]; then echo "NODRIFT"; else echo "NOCURRENT"; fi
@@ -285,6 +295,7 @@ cat "$VO_T/ring.args.new" > "$RINGS_DIR/ring.args" && echo "APPLIED"` : ''}`
   out(`== vergis-ops exec rollout ring-args · ${ins.id} · servicio ${svc} ==`)
   out(`   ${evidenceLine(g)}`)
   for (const l of r.lines) out(`   | ${l}`)
+  if (r.lines.includes('NOMEM')) fail(EXIT.NOT_RUN, `el servicio «${svc}» del compose vivo no declara la memoria del anillo (mem_limit, o deploy.resources.limits.memory). No se derivó nada: sin ella, el anillo nuevo nacería con un valor que nadie decidió. Declárala en el compose del espejo y publícalo (espejo primero) (#372)`)
   const bad = r.lines.find((l) => /^(NOIMG|NOCONFIG|GENFAIL)/.test(l))
   if (bad) { out(`✗ no se pudo derivar (${bad}).`); return EXIT.FINDING }
   if (o.apply) return r.lines.includes('APPLIED') ? EXIT.OK : EXIT.MUTE

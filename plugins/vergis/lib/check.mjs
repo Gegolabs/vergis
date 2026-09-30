@@ -9,6 +9,9 @@ import { EXIT, out } from './util.mjs'
 import { loadDeclaration, localPath, mirrorRoot } from './declaration.mjs'
 import { composeServices, composeProjectName, movableTag, serviceOfContainer } from './compose.mjs'
 
+/** El servicio del compose del que se derivan los anillos: el mismo que `exec rollout ring-args` toma por omisión. */
+const RING_TEMPLATE = 'vergis'
+
 function git(cwd, ...args) {
   return spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
 }
@@ -109,6 +112,11 @@ function checkInstallation(decl, ins, errors, warnings, notes) {
       if (f.kind === 'fixed' && !st.isFile()) errors.push(`${tag} familia «${f.id}» es fixed y «${f.local}» no es un archivo`)
       if (f.kind === 'sweep' && !st.isDirectory()) errors.push(`${tag} familia «${f.id}» es sweep y «${f.local}» no es un directorio`)
       if (f.kind === 'fixed' && f.exclude?.length) errors.push(`${tag} familia «${f.id}»: exclude solo tiene sentido en sweep`)
+      if (f.kind === 'sweep' && st.isDirectory()) {
+        for (const x of f.exclude ?? []) {
+          if (!existsSync(resolve(p, x.path))) warnings.push(`${tag} familia «${f.id}»: la exclusión «${x.path}» no está en el espejo — el barrido del host la ignora igual, así que un archivo con ese nombre en el host no se mide ni se reporta como SOLO-HOST. Si ya no existe, quítala de exclude`)
+        }
+      }
     }
   }
 
@@ -130,8 +138,14 @@ function checkInstallation(decl, ins, errors, warnings, notes) {
       if (!(s.name in svcs)) errors.push(`${tag} services «${s.name}»: no está en el compose del espejo (${compose.family.local}; servicios: ${Object.keys(svcs).join(' · ') || 'ninguno reconocido'})`)
     }
     for (const [name, s] of Object.entries(svcs)) {
-      const why = movableTag(s.image)
+      const why = movableTag(s.image, { built: s.build })
       if (why) warnings.push(`${tag} el servicio «${name}» usa un tag móvil (${s.image}: ${why}): lo que corre no se puede nombrar`)
+    }
+    // La memoria de los anillos sale del servicio plantilla del compose (#372). Advertencia y no defecto:
+    // no bloquea ninguna lectura, y el acto donde importa —`exec rollout ring-args`— se niega sin ella.
+    const tpl = svcs[RING_TEMPLATE]
+    if (tpl && !tpl.memLimit) {
+      warnings.push(`${tag} el servicio plantilla «${RING_TEMPLATE}» no declara la memoria del anillo (mem_limit, o deploy.resources.limits.memory): \`exec rollout ring-args\` se negará hasta que el compose la declare — sin ella, los anillos nuevos nacerían con un valor que nadie decidió`)
     }
   } else if (ins.services?.length) {
     notes.push(`${tag} services: no pude cotejarlos contra el compose — el compose (host.compose_file) no está en el espejo`)

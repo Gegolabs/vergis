@@ -217,6 +217,48 @@ describe('exec rollout: la promoción va instrumentada por construcción', () =>
 })
 
 /**
+ * #372 · la memoria de los anillos sale del compose y de ningún otro lado. El CLI coteja el compose vivo
+ * ANTES de correr el generador de la imagen, porque el de las imágenes anteriores al arreglo cae a 1g en
+ * silencio: el control es un generador «viejo» que siempre escribe `--memory 1g`.
+ */
+describe('exec rollout ring-args: la memoria del anillo (#372)', () => {
+  const REPO_APP = join(__dirname, '..')
+  function composeJson(mem: Record<string, unknown>) {
+    const f = join(tmp('vergis-ringargs-'), 'compose.json')
+    writeFileSync(f, JSON.stringify({ name: 'x', services: { vergis: { environment: { VERGIS_OUT: '/gov' }, volumes: [{ type: 'bind', source: `${host}/gov`, target: '/gov' }], ...mem } } }))
+    return f
+  }
+  const viejo = () => {
+    const d = tmp('vergis-gen-viejo-')
+    mkdirSync(join(d, 'deploy/rollout'), { recursive: true })
+    writeFileSync(join(d, 'deploy/rollout/ring-args-from-compose.mjs'), 'process.stdout.write("--memory\\n1g\\n")\n')
+    return d
+  }
+  const e = (json: string, app: string) => ({ ...env(), FAKE_COMPOSE_JSON: json, FAKE_APP: app })
+
+  it('--memory ya no existe → 2, sin tocar el host', () => {
+    const r = cli(['exec', 'rollout', 'ring-args', '1.0.0', '--memory', '2g'], { cwd: repo(), env: env() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/--memory no existe: la memoria de los anillos se declara en el compose/)
+  })
+  it('el compose sin mem_limit → 2, aunque el generador de la imagen caiga a 1g en silencio (b1b6ecf: 0 con --memory 1g)', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'ring-args', '1.0.0'], { cwd: repo(), env: e(composeJson({}), viejo()) })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/no declara la memoria del anillo/)
+    expect(r.all).not.toMatch(/1g/)
+  })
+  it('con mem_limit en el compose deriva con ESA memoria (generador del repo)', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'ring-args', '1.0.0'], { cwd: repo(), env: e(composeJson({ mem_limit: '2g' }), REPO_APP) })
+    expect(r.code, r.all).toBe(0)
+    expect(r.all).toMatch(/NOCURRENT/)
+  })
+  it('deploy.resources.limits.memory también la declara', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'ring-args', '1.0.0'], { cwd: repo(), env: e(composeJson({ deploy: { resources: { limits: { memory: '3g' } } } }), REPO_APP) })
+    expect(r.code, r.all).toBe(0)
+  })
+})
+
+/**
  * El rollback a un anillo RETENIDO (frío) es la maniobra de emergencia, y promote/rollback exigen el CN-1
  * antes de invocar a la herramienta —que es quien arrancaría el retenido—. Contra un contenedor detenido
  * no hay control negativo posible, así que `poller cn1` arranca el retenido, con el gate de la clase

@@ -59,6 +59,7 @@ const COMPOSE = {
       profiles: ['plantilla'],
       restart: 'unless-stopped',
       env_file: ['/estacion/deploy/vergis.env'],
+      mem_limit: '2g',
       environment: { VERGIS_ENGINE: 'fabric', VERGIS_SPECS_DIR: '/specs', VERGIS_OUT: '/governance', VERGIS_RING: 'no-va' },
       volumes: [
         { type: 'bind', source: '/estacion/deploy/specs', target: '/specs', read_only: true },
@@ -79,13 +80,25 @@ describe('el generador de ring.args desde el compose vivo', () => {
     expect(l).toContain('/srv/instancia/governance:/governance')
     expect(l).toContain('VERGIS_CONTROL=lease')
     expect(r.out).not.toMatch(/VERGIS_RING/)
-    expect(l[l.indexOf('--memory') + 1]).toBe('1g')
+    expect(l[l.indexOf('--memory') + 1]).toBe('2g')
   })
-  it('respeta el mem_limit del servicio o el --memory dado', () => {
-    expect(gen(COMPOSE, ['--host-root', '/srv/instancia', '--memory', '2g']).out.split('\n')).toContain('2g')
-    const c = structuredClone(COMPOSE) as typeof COMPOSE & { services: { vergis: { mem_limit?: string } } }
+  it('#372 · la memoria sale del compose: mem_limit o deploy.resources.limits.memory; sin ella → 2 (b1b6ecf: 0 con 1g)', () => {
+    const c = structuredClone(COMPOSE) as any
     c.services.vergis.mem_limit = '3g'
     expect(gen(c).out.split('\n')).toContain('3g')
+    delete c.services.vergis.mem_limit
+    c.services.vergis.deploy = { resources: { limits: { memory: '4g' } } }
+    expect(gen(c).out.split('\n')).toContain('4g')
+    delete c.services.vergis.deploy
+    const sin = gen(c)
+    expect(sin.code).toBe(2)
+    expect(sin.out).toBe('')
+    expect(sin.err).toMatch(/no declara su memoria/)
+  })
+  it('#372 · --memory ya no existe → 2', () => {
+    const r = gen(COMPOSE, ['--host-root', '/srv/instancia', '--memory', '2g'])
+    expect(r.code).toBe(2)
+    expect(r.err).toMatch(/--memory ya no existe/)
   })
   it('un secreto inlineado (compose config sin --no-env-resolution) aborta → 2, sin generar nada', () => {
     const c = structuredClone(COMPOSE) as any

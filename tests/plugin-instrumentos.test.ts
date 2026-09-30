@@ -329,6 +329,21 @@ describe('parity: espejo↔host por sha256, con la guardia G1 y sus cinco inyect
     expect(r.code, r.all).toBe(0)
     expect(r.out).toMatch(/EXCL .*legado\.yaml .*jamás desplegado/)
   })
+  it('#371 · una exclusión cuyo archivo NO está en el espejo se lista igual (dry-run y medición), y check lo advierte', () => {
+    const { dir, host } = espejo()
+    const doc = JSON.parse(readFileSync(join(dir, 'vergis-ops.json'), 'utf8'))
+    doc.installations[0].mirror.families[1].exclude = [{ path: 'no-existe-en-el-espejo.yaml', reason: 'retirado' }]
+    writeFileSync(join(dir, 'vergis-ops.json'), JSON.stringify(doc))
+    writeFileSync(join(host, 'specs/no-existe-en-el-espejo.yaml'), 'x: 1\n') // en el host SÍ está: la exclusión lo silencia
+    const d = cli(['parity', '--dry-run'], { cwd: dir, env: e() })
+    expect(d.code, d.all).toBe(0)
+    expect(d.out).toMatch(/EXCL +specs\/no-existe-en-el-espejo\.yaml +\(retirado\) — NO está en el espejo/)
+    const r = cli(['parity'], { cwd: dir, env: e() })
+    expect(r.out).toMatch(/EXCL +specs\/no-existe-en-el-espejo\.yaml .*NO está en el espejo/)
+    const c = cli(['check'], { cwd: dir, env: e() })
+    expect(c.code, c.all).toBe(0)
+    expect(c.out).toMatch(/la exclusión «no-existe-en-el-espejo\.yaml» no está en el espejo/)
+  })
   it('--family acota; --dry-run no toca el host', () => {
     const { dir } = espejo()
     expect(cli(['parity', '--family', 'specs'], { cwd: dir, env: e() }).code).toBe(0)
