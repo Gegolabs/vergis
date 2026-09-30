@@ -1,14 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "vergis",
-  "description": "Marketplace del Producto Vergis: un solo plugin, `vergis`, para operar cualquier instalación de Vergis, fijado al tag de la versión del Producto",
+  "description": "Marketplace del Producto Vergis: tres plugins para operar cualquier instalación —vergis (la plataforma y su contenido), custos (el gobierno del dato) y mira (el ciclo del spec de un PI del Botlet Mira)—, fijados al tag de la versión del Producto",
   "owner": {
     "name": "Gegolabs"
   },
   "plugins": [
     {
       "name": "vergis",
-      "description": "Operar una instalación de Vergis: clasificar cada acto contra el contrato vivo del nodo, publicar contenido, promover por anillos con el corte medido, y verificar salud, smoke, marcas y paridad distinguiendo «medí» de «no pude medir»",
+      "description": "Operar la plataforma de una instalación de Vergis: preparar y ajustar su infraestructura, declarar Conectores, publicar contenido, cambiar la versión de Vergis por anillos con el corte medido, y verificar salud, smoke y paridad distinguiendo «medí» de «no pude medir». Trae el CLI vergis-ops",
       "author": {
         "name": "Gegolabs"
       },
@@ -17,6 +17,36 @@
         "source": "git-subdir",
         "url": "https://github.com/Gegolabs/vergis.git",
         "path": "plugins/vergis",
+        "ref": "v0.41.0"
+      },
+      "homepage": "https://github.com/Gegolabs/vergis"
+    },
+    {
+      "name": "custos",
+      "description": "Gobernar el dato en una instalación de Vergis: compilar las políticas al DDL de RLS, validarlas antes de aplicarlas, hacerlas valer en el nodo y en la fuente, y verificar quién ve qué por identidad. Depende de vergis",
+      "author": {
+        "name": "Gegolabs"
+      },
+      "category": "security",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/Gegolabs/vergis.git",
+        "path": "plugins/custos",
+        "ref": "v0.41.0"
+      },
+      "homepage": "https://github.com/Gegolabs/vergis"
+    },
+    {
+      "name": "mira",
+      "description": "El ciclo del spec de un Producto de Información del Botlet Mira en una instalación de Vergis: compilar o especificar el spec, validarlo, especializar el Botlet del PI y verificar cómo se ve. Depende de vergis",
+      "author": {
+        "name": "Gegolabs"
+      },
+      "category": "deployment",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/Gegolabs/vergis.git",
+        "path": "plugins/mira",
         "ref": "v0.41.0"
       },
       "homepage": "https://github.com/Gegolabs/vergis"

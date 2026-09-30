@@ -124,20 +124,26 @@ toca, `--retain 1` no los toca. Es la línea que este comando no cruza.
 
 ## ¿Operas la instancia con Claude Code?
 
-El Producto distribuye un plugin, **`vergis`**, que opera una instalación con esta misma ceremonia y con
+El Producto distribuye tres plugins desde el mismo marketplace: **`vergis`** (la plataforma y su
+contenido), **`custos`** (el gobierno del dato) y **`mira`** (el ciclo del spec de un PI del Botlet Mira).
+La skill `vergis:rollout` opera una instalación con esta misma ceremonia y con
 los instrumentos del [`RUNBOOK.md`](RUNBOOK.md) —el poller, su control negativo, el smoke de todas las
 vistas, la paridad espejo↔host— convertidos en construcción: `promote` se niega sin poller corriendo, sin
-línea base y sin un CN-1 rojo-como-debe contra el anillo destino. El plugin no trae ningún hecho de tu
+línea base y sin un CN-1 rojo-como-debe contra el anillo destino. Ningún plugin trae hechos de tu
 instalación: la declaras tú, en un `vergis-ops.json` en el repo desde el que operas (esquema:
 [`plugins/vergis/schema/vergis-ops.schema.json`](../../plugins/vergis/schema/vergis-ops.schema.json)).
 
 ```sh
 claude plugin marketplace add Gegolabs/vergis --sparse .claude-plugin plugins   # --scope project si el repo es compartido
-claude plugin install vergis@vergis                                               # (en los dos comandos)
+claude plugin install vergis@vergis                                               # (en todos los comandos)
+claude plugin install custos@vergis                                               # si lo usas; instala también vergis
+claude plugin install mira@vergis                                                 # si lo usas; instala también vergis
 ```
 
-El plugin va fijado al tag de la versión del Producto: el de la versión v conoce el contrato hasta v, y lo
-posterior lo lee del nodo (`/contrato`). Detalle: skill `vergis:setup`.
+Los plugins van fijados al tag de la versión del Producto: el de la versión v conoce el contrato hasta v, y
+lo posterior lo lee del nodo (`/contrato`). Sus skills invocan el CLI como `vergis-ops`, que el plugin
+`vergis` pone en el `PATH` de la herramienta Bash de Claude Code: solo macOS y Linux. Detalle: skill
+`vergis:setup`.
 
 ## Lo que esta herramienta no hace
 

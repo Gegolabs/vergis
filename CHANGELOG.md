@@ -61,6 +61,54 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Tres plugins de operación: `vergis`, `custos` y `mira` (`CAP-209`, `CAP-217`, `CAP-218`; #387)
+
+El plugin único se reparte en tres, publicados desde el mismo marketplace y en lockstep con el Producto,
+según **quién opera** (diseño `lab/work/288`, aprobado por César el 2026-09-30):
+
+| Plugin | Para quién | Skills |
+|--|--|--|
+| `vergis` | Operador de la plataforma | `setup` · `connect` · `publish` · `rollout` · `verify` |
+| `custos` (depende de `vergis`) | Dueño del gobierno del dato | `compile` · `validate` · `enforce` · `verify` |
+| `mira` (depende de `vergis`) | Quien construye Productos de Información | `compile` · `specify` · `validate` · `specialize` · `status` |
+
+- **`vergis:ops` se reparte** por lo que contiene cada acto: infraestructura y servicios → `vergis:setup`;
+  conexiones → `vergis:connect`; menú, casillas de carga, data maestra, guías, ayuda y datadoc →
+  `vergis:publish`; políticas, grupos, identidad, dominios, fuentes y dueños → `custos:enforce`; specs →
+  `mira:specialize`; rúbricas de Miranda → `mira:specify`. `vergis:verify` se reparte igual: la
+  plataforma queda en `vergis:verify`, la RLS pasa a `custos:verify` y las vistas, drills y marcas de un
+  PI a `mira:status`.
+- **`vergis:upgrade` vuelve a llamarse `vergis:rollout`** y suma `retire`, `prune` y los cambios de
+  arranque que exigen anillo nuevo (`ring-args`). Lo que motivó sacar el nombre en 0.41.0 —que se
+  confundiera con publicar el spec de un PI— queda resuelto: eso es `mira:specialize`.
+- **La primera frase de cada descripción** dice el acto y su preposición —se publica **EN** la
+  instalación; `rollout` cambia la versión **DE** Vergis— y remite a la skill vecina. En los textos de
+  los plugins el objeto es «la instalación»: «Mira» nombra solo al Botlet. Publicar una versión de
+  Vergis (tag e imagen) no es de ningún plugin: es del mantenedor.
+- **El CLI se invoca como `vergis-ops`** en las skills de los tres plugins: `plugins/vergis/bin/vergis-ops`
+  carga el `vergis-ops.mjs` de siempre, y Claude Code pone el `bin/` de un plugin habilitado en el `PATH`
+  de su herramienta Bash. **Solo macOS o Linux** (anthropics/claude-code#68896).
+- **Lo que las skills declaran en vez de simular**, mientras falte el soporte del Producto: la prueba de
+  alcance de un Conector (#391: «no pude medir el alcance»), el punto de validación de Mira en el nodo
+  (#388: `mira:validate` valida en local y sella el sha aceptado en `mira-veredictos.jsonl`, junto a la
+  declaración), Miranda en modo documento (#389: `mira:compile` responde «no disponible»), las
+  herramientas de Custos en el Producto (#390: `custos:compile`, `validate` y la aplicación en la fuente
+  responden «no pude…») y el ciclo de vida del Botlet de un PI (#392: `activate`, `deactivate` y
+  `retire` responden «no disponible»).
+- `vergis:connect` **no transporta secretos**: publica un archivo de conexiones solo si ningún perfil
+  lleva el valor de una credencial (modos `federated` o `imds`), porque `publish` lleva el contenido
+  dentro del script que corre en el host.
+- El mensaje de `vergis-ops publish` cuando el nodo no toma un archivo dice «Revisa /contrato» (decía
+  «Mira /contrato», que se leía como el Botlet).
+
+**Qué exige:** los nombres cambian **sin alias** —quien invocaba `vergis:ops` usa la skill de la tabla de
+arriba, y quien invocaba `vergis:upgrade` usa `vergis:rollout`—. El operador instala `custos@vergis` y
+`mira@vergis` **si los usa** (cada uno instala `vergis` como dependencia); el `settings.json` compartido de
+un repo de operación suma sus entradas. `node` ≥ 22 tiene que ser el del `PATH` de la sesión, porque el
+ejecutable arranca con `#!/usr/bin/env node`. Nada cambia en la instancia.
+
 ## 0.41.0 — 2026-09-30
 
 ### La skill `vergis:rollout` pasa a llamarse `vergis:upgrade` (#382, PR #383)

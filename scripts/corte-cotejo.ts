@@ -125,11 +125,12 @@ if (!sinDeclarar.length) console.log('✓ Ninguna referencia del código quedó 
 console.log('\n  Esto NO dice que la sección esté completa: coteja por número, y un cambio que nadie')
 console.log('  referenció le es invisible. Es insumo para el cotejo a mano, no un veredicto.')
 
-// El lockstep del plugin `vergis` (D11): su versión es la del Producto y el marketplace lo fija al tag.
+// El lockstep de los plugins `vergis`, `custos` y `mira` (D11 · #387): su versión es la del Producto y el
+// marketplace los fija al tag.
 const lockstep = pluginLockstep(process.cwd())
 if (lockstep.length) {
-  console.log('\n✗ LOCKSTEP DEL PLUGIN — el corte subiría la versión sin mover el plugin con ella:')
+  console.log('\n✗ LOCKSTEP DE LOS PLUGINS — el corte subiría la versión sin mover los plugins con ella:')
   for (const e of lockstep) console.log(`    ${e}`)
-} else console.log('\n✓ Plugin vergis en lockstep: plugin.json y el ref del marketplace siguen a package.json.')
+} else console.log('\n✓ Plugins vergis, custos y mira en lockstep: cada plugin.json y cada ref del marketplace siguen a package.json.')
 
 process.exit(sinDeclarar.length || lockstep.length ? 1 : 0)

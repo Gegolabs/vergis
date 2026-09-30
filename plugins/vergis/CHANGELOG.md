@@ -5,6 +5,41 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
+## Sin publicar
+
+- **El plugin se reparte en tres (#387, diseño `lab/work/288`)**: `vergis` queda con `setup` · `connect` ·
+  `publish` · `rollout` · `verify`, y nacen `custos` y `mira`, que dependen de éste. Sin alias.
+  - **`vergis:ops` se reparte** por lo que contiene cada acto (tabla de familias del diseño): los flujos
+    `service`, `service-interrupting`, `boot` y `destructive`, el paso 0, el modelo de clases y gates y el
+    registro quedan en `setup`; el flujo `content`, en `publish` (y en `connect`, `custos:enforce`,
+    `mira:specialize` y `mira:specify`, cada uno con su contenido).
+  - **`vergis:upgrade` vuelve a llamarse `vergis:rollout`** y suma «retirar y podar anillos» y «cambios de
+    arranque que exigen anillo nuevo» (del RUNBOOK §7).
+  - **`vergis:verify`** conserva la plataforma y la tabla completa de códigos de salida; la RLS pasa a
+    `custos:verify`, y las vistas por identidad, los drills y las marcas a `mira:status`.
+- **Repetir o remitir**: se repite lo corto que evita un error caro en el lugar donde se comete —la línea
+  de códigos de salida (un 3–7 no es un verde), el paso 0 y el sombrero de operador—; se remite lo largo
+  a un solo dueño —la tabla de códigos de salida y la sonda por detrás del borde a `vergis:verify`; las
+  clases, los gates, los flujos de servicio y el registro a `vergis:setup`—. Las skills de `custos` y
+  `mira` remiten por nombre de skill: no hay variable documentada para la raíz de otro plugin.
+- **Las skills invocan el CLI como `vergis-ops`**, no como `node ${CLAUDE_PLUGIN_ROOT}/bin/vergis-ops.mjs`:
+  `${CLAUDE_PLUGIN_ROOT}` es la raíz del plugin que corre la skill, y las de `custos` y `mira` no tienen
+  cómo nombrar la de `vergis`. `bin/vergis-ops` (ejecutable, `#!/usr/bin/env node`) solo hace
+  `import('./vergis-ops.mjs')`. El costo: depende del shebang y de que el `node` del `PATH` sea ≥ 22 (el
+  CLI lo comprueba y sale 2), y solo funciona en macOS y Linux (anthropics/claude-code#68896).
+  **Medido** con Claude Code 2.1.285 y `claude -p --plugin-dir plugins/vergis --plugin-dir plugins/custos
+  --allowedTools "Bash(vergis-ops:*)"`: `vergis-ops --help` devolvió la ayuda del CLI; el control sin
+  `--plugin-dir plugins/vergis` dio «command not found: vergis-ops» (exit 127).
+- **`vergis:connect` no publica un archivo de conexiones con un secreto en claro** (perfil `secret` con
+  `clientSecret`): `publish` lleva el contenido en base64 dentro del script remoto, y el espejo lo
+  versiona. Solo publica perfiles `federated` o `imds`; el resto lo coloca el mecanismo de secretos de la
+  instalación, y la skill retoma con `contract wait`.
+- **`mira:validate` sella su veredicto en `mira-veredictos.jsonl`**, junto a `vergis-ops.json` (una línea
+  JSON por veredicto, con el sha256 del spec), mientras el nodo no exponga el punto de validación
+  (#388); `mira:specialize` se niega a publicar un sha sin una línea «acepta». El nombre y la forma del
+  archivo los fija este corte.
+- `publish`: «Mira /contrato» pasa a «Revisa /contrato» (rescatado de #386).
+
 ## 0.41.0 — 2026-09-30
 
 - **`vergis:rollout` pasa a llamarse `vergis:upgrade` (#382)**, por palabra de César: el nombre de la
@@ -96,7 +131,7 @@ Con Claude Code 2.1.284, el 2026-09-29 (V9 del diseño):
 
 ## Historia heredada (de la skill del primer adoptante)
 
-**Límites medidos el 2026-08-18 sobre el CHANGELOG dentro de la imagen**, que `vergis:upgrade` conserva
+**Límites medidos el 2026-08-18 sobre el CHANGELOG dentro de la imagen**, que `vergis:rollout` conserva
 como historia: (a) las imágenes publicadas hasta `0.20.0` inclusive **no** traen el CHANGELOG ni los
 labels de documentación — para un salto que las involucre, el changelog se lee del repo en el tag, no de
 la imagen; (b) en ese momento la única imagen con el label de documentación era `:main`, y apuntaba a
