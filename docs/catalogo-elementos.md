@@ -347,6 +347,35 @@ queda exactamente como está, con su rótulo `Campo: valor (n)` a todo el ancho.
 - Es de la tabla **interactiva**: la agrupación vive en el navegador, así que la tabla estática y el
   papel no la tienen. El CSV exporta el dato, sin subtotales.
 
+## 4·sexies · Rótulo de columna derivado del dato
+
+El `label` de una columna de `table` admite `{{data.<dataset>.<campo>}}`, como `markdown_block`. Se
+resuelve **por request** con el `ctx` vigente, así que el nombre de la columna puede seguir al valor
+elegido en un control de cabecera:
+
+```yaml
+- table:
+    data: data.cartera
+    columns:
+      - { field: cliente, label: "Cliente" }
+      - { field: w01, label: "{{data.rotulos.l01}}" }   # con la semana 24 elegida: W25
+      - { field: w12p, label: "+{{data.rotulos.l12}}" } # +W36
+data:
+  rotulos:
+    capability: fabric-warehouse
+    params: { sql: "SELECT ... AS l01, ... AS l12 WHERE semana = :ctx.semana" }
+    shape: { type: single_row, fields: { l01: string, l12: string } }
+```
+
+- **El valor sale de la primera fila** del dataset, cualquiera sea su `shape`: un rótulo es un valor,
+  no una lista.
+- **Nunca un `{{data.…}}` crudo.** Si el valor resuelve vacío (dataset sin filas, campo nulo), queda
+  el literal sin llaves (`+`); si no queda nada, el `field`. Solo se interpola `data.`: una llave de
+  otra forma (`{{ctx.semana}}`, `{{foo}}`) no se reconoce y pasa tal cual, como en `markdown_block`.
+- **El dataset del rótulo es un dataset más**: se recupera por la misma ejecución gobernada que los
+  demás, y uno no declarado en `data:` rechaza la spec (`dangling-data-reference`).
+- El rótulo interpolado es el que llevan la cabecera, el filtro de columna, la agrupación y el CSV.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de
