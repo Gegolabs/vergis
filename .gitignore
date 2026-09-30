@@ -11,3 +11,7 @@ out/
 local/
 # worktrees del propio repo (ww:wingworking, layout: wt/)
 wt/
+
+# El kit de retome y el inventario operativo no viven en el repo público (soveria-ai doc 110 D3): NEXT.md viaja por cobach/kits.
+/NEXT.md
+/RESOURCES.md
