@@ -1,11 +1,13 @@
 /**
- * PLUGIN `vergis` · V5 — dos fronteras que una revisión no garantiza y una prueba sí.
+ * PLUGINS `vergis`, `custos` y `mira` · V5 — dos fronteras que una revisión no garantiza y una prueba sí.
  *
- * D5 · CERO LITERALES DE INSTALACIÓN EN EL PLUGIN. El plugin viaja a todo operador de Vergis: un hecho de
+ * D5 · CERO LITERALES DE INSTALACIÓN EN LOS PLUGINS (`plugins/**`: los tres desde #387). Un plugin viaja a
+ * todo operador de Vergis: un hecho de
  * una instalación escrito adentro (su VM, su raíz, sus contenedores, su cuenta técnica) es exactamente el
  * defecto que el plugin existe para cerrar — los instrumentos del primer adoptante nacieron con esos
  * hechos como valores por omisión. La lista es de HECHOS, no de prefijos: «Mira» es una familia de Let
- * del Producto y el plugin la nombra legítimamente, igual que `schema/mira-spec.schema.json`.
+ * del Producto —y el nombre de uno de los plugins— y se nombra legítimamente, igual que
+ * `schema/mira-spec.schema.json`.
  *
  * REGLA DE LA LISTA: no se acorta. Una instalación que se sume la alarga; una excepción nueva lleva su
  * razón, pasa por el orquestador y queda en el CHANGELOG.
@@ -18,7 +20,8 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { PLUGIN, RAIZ } from './plugin-helpers'
+import { PLUGINS_DIR, RAIZ } from './plugin-helpers'
+import { PLUGINS } from '../scripts/plugin-lockstep'
 
 /** Hechos de instalación, por instalación. `re` cuando la forma admite espaciado variable. */
 const LITERALES: { instalacion: string; literal: string; re?: RegExp }[] = [
@@ -45,7 +48,7 @@ const LITERALES: { instalacion: string; literal: string; re?: RegExp }[] = [
  */
 const EXCEPCIONES = [
   { que: '`schema/mira-spec.schema.json` y cualquier cita a él', razon: 'es el esquema del Let Mira, del Producto' },
-  { que: 'la palabra «Mira» y la familia `mira` en `lets`, `watch:specs` y afines', razon: 'familia de Let del Producto, no una instalación' },
+  { que: 'la palabra «Mira», la familia `mira` en `lets`, `watch:specs` y afines, y el plugin `mira` (`plugins/mira`, `mira:*`)', razon: 'familia de Let y plugin del Producto, no una instalación' },
   { que: 'los fixtures de `tests/fixtures/`', razon: 'existen para probar declaraciones y no viajan en el plugin' },
 ]
 
@@ -70,23 +73,38 @@ export function escanear(textos: { archivo: string; texto: string }[]) {
   return hallazgos
 }
 
-describe('D5 · cero literales de instalación en plugins/vergis/**', () => {
-  it('el árbol del plugin no trae ningún hecho de ninguna instalación', () => {
-    const textos = archivos(PLUGIN).filter((f) => statSync(f).size < 2_000_000).map((f) => ({ archivo: relative(RAIZ, f), texto: readFileSync(f, 'utf8') }))
+describe('D5 · cero literales de instalación en plugins/**', () => {
+  const textos = archivos(PLUGINS_DIR).filter((f) => statSync(f).size < 2_000_000).map((f) => ({ archivo: relative(RAIZ, f), texto: readFileSync(f, 'utf8') }))
+
+  it('el árbol de los plugins no trae ningún hecho de ninguna instalación', () => {
     expect(textos.length).toBeGreaterThan(10) // el escaneo miró algo: un árbol vacío pasaría verde
     expect(escanear(textos)).toEqual([])
   })
 
+  it('el escaneo miró los tres plugins, sus manifiestos y sus skills (un plugin fuera del barrido pasaría verde)', () => {
+    for (const { name } of PLUGINS) {
+      const suyos = textos.filter((t) => t.archivo.startsWith(`plugins/${name}/`))
+      expect(suyos.map((t) => t.archivo)).toContain(`plugins/${name}/.claude-plugin/plugin.json`)
+      expect(suyos.filter((t) => /\/skills\/[^/]+\/SKILL\.md$/.test(t.archivo)).length).toBeGreaterThanOrEqual(4)
+    }
+  })
+
+  it('sabe reprobar en un plugin que no es vergis: un literal en una skill de custos o de mira se detecta', () => {
+    for (const archivo of ['plugins/custos/skills/enforce/SKILL.md', 'plugins/mira/skills/specialize/SKILL.md']) {
+      expect(escanear([{ archivo, texto: 'publica en /opt/mira el spec' }]).map((h) => h.archivo)).toEqual([archivo])
+    }
+  })
+
   for (const l of LITERALES) {
     it(`sabe reprobar: «${l.literal}» (${l.instalacion}) inyectado en un archivo del plugin se detecta`, () => {
-      const h = escanear([{ archivo: 'plugins/vergis/skills/ops/SKILL.md', texto: `texto legítimo\nun paso con ${l.literal} adentro\n` }])
+      const h = escanear([{ archivo: 'plugins/vergis/skills/publish/SKILL.md', texto: `texto legítimo\nun paso con ${l.literal} adentro\n` }])
       expect(h.map((x) => x.literal)).toContain(l.literal)
     })
   }
 
-  it('pasa con las excepciones legítimas: el esquema del Let Mira citado en una skill, y la familia mira', () => {
-    const texto = 'Valida el spec contra `schema/mira-spec.schema.json`. La familia de Let `mira` recarga por `watch:specs` (Mira).'
-    expect(escanear([{ archivo: 'plugins/vergis/skills/ops/SKILL.md', texto }])).toEqual([])
+  it('pasa con las excepciones legítimas: el esquema del Let Mira citado en una skill, la familia mira y el plugin mira', () => {
+    const texto = 'Valida el spec contra `schema/mira-spec.schema.json`. La familia de Let `mira` recarga por `watch:specs` (Mira). Instala `mira@vergis` y usa `mira:specialize` desde `plugins/mira`.'
+    expect(escanear([{ archivo: 'plugins/mira/skills/validate/SKILL.md', texto }])).toEqual([])
     expect(EXCEPCIONES.length).toBe(3)
   })
 })

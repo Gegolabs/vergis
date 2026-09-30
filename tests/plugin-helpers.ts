@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 export const RAIZ = resolve(__dirname, '..')
-export const PLUGIN = join(RAIZ, 'plugins/vergis')
+export const PLUGINS_DIR = join(RAIZ, 'plugins')
+export const PLUGIN = join(PLUGINS_DIR, 'vergis')
 export const CLI = join(PLUGIN, 'bin/vergis-ops.mjs')
 export const FIX = join(RAIZ, 'tests/fixtures/plugin')
 

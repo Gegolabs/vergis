@@ -1,10 +1,12 @@
 /**
- * PLUGIN `vergis` · V7 — el plugin se publica fijado al tag de la versión (D11), y un tag que no es una
- * versión del Producto no dispara nada.
+ * PLUGINS `vergis`, `custos` y `mira` · V7 — cada plugin se publica fijado al tag de la versión (D11; tres
+ * plugins desde #387), y un tag que no es una versión del Producto no dispara nada.
  *
- *  · Lockstep: `plugin.json.version == package.json.version` y `marketplace.ref == "v" + version`, sin
- *    `sha`, con fuente `git-subdir`. Lo corre la suite y lo corre `npm run corte:cotejo`: el commit de
- *    corte que olvide mover el plugin sale rojo. Sabe reprobar: sobre copias alteradas, nombra el defecto.
+ *  · Lockstep, para CADA plugin: `plugin.json.name` es el publicado, `plugin.json.version ==
+ *    package.json.version` y su entrada del marketplace tiene `ref == "v" + version`, sin `sha`, con fuente
+ *    `git-subdir` y `path == plugins/<nombre>`. `custos` y `mira` declaran la dependencia `vergis` (trae el
+ *    CLI). Lo corre la suite y lo corre `npm run corte:cotejo`: el commit de corte que olvide mover un
+ *    plugin sale rojo. Sabe reprobar: sobre copias alteradas, nombra el defecto y el plugin.
  *  · `v[0-9]*` en los tres lugares donde era `v*`: el disparador del workflow, el `enable` de `latest` y el
  *    `--match` del cotejo. `claude plugin tag` crea `vergis--vX.Y.Z`: con `v*` dispararía el build y
  *    movería `latest`. El `git describe` se mide en un repo temporal (crear un tag en este repo lo crearía
@@ -14,39 +16,80 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pluginLockstep } from '../scripts/plugin-lockstep'
+import { PLUGINS, pluginLockstep } from '../scripts/plugin-lockstep'
 import { RAIZ, tmp } from './plugin-helpers'
 
-function copia(mut: (d: { pkg: any; plugin: any; mk: any }) => void): string {
+type Manifiestos = { pkg: any; plugins: Record<string, any>; mk: any }
+
+function copia(mut: (d: Manifiestos) => void): string {
   const dir = tmp('vergis-lockstep-')
-  mkdirSync(join(dir, 'plugins/vergis/.claude-plugin'), { recursive: true })
   mkdirSync(join(dir, '.claude-plugin'))
   const pkg = JSON.parse(readFileSync(join(RAIZ, 'package.json'), 'utf8'))
-  const plugin = JSON.parse(readFileSync(join(RAIZ, 'plugins/vergis/.claude-plugin/plugin.json'), 'utf8'))
   const mk = JSON.parse(readFileSync(join(RAIZ, '.claude-plugin/marketplace.json'), 'utf8'))
-  mut({ pkg, plugin, mk })
+  const plugins: Record<string, any> = {}
+  for (const { name } of PLUGINS) plugins[name] = JSON.parse(readFileSync(join(RAIZ, `plugins/${name}/.claude-plugin/plugin.json`), 'utf8'))
+  mut({ pkg, plugins, mk })
   writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg))
-  writeFileSync(join(dir, 'plugins/vergis/.claude-plugin/plugin.json'), JSON.stringify(plugin))
   writeFileSync(join(dir, '.claude-plugin/marketplace.json'), JSON.stringify(mk))
+  for (const [name, plugin] of Object.entries(plugins)) {
+    if (plugin === undefined) continue // un plugin borrado de la copia
+    mkdirSync(join(dir, `plugins/${name}/.claude-plugin`), { recursive: true })
+    writeFileSync(join(dir, `plugins/${name}/.claude-plugin/plugin.json`), JSON.stringify(plugin))
+  }
   return dir
 }
 
-describe('lockstep del plugin con el Producto (D11)', () => {
+const entrada = (mk: any, name: string) => mk.plugins.find((p: { name: string }) => p.name === name)
+const errores = (mut: (d: Manifiestos) => void) => pluginLockstep(copia(mut)).join('\n')
+
+describe('lockstep de los plugins con el Producto (D11 · #387)', () => {
   it('el repo está en lockstep', () => {
     expect(pluginLockstep(RAIZ)).toEqual([])
   })
-  it('un corte que sube package.json sin mover el plugin se detecta (versión y ref)', () => {
-    const e = pluginLockstep(copia(({ pkg }) => { pkg.version = '9.9.9' }))
-    expect(e.join('\n')).toMatch(/plugin\.json: version .* ≠ package\.json 9\.9\.9/)
-    expect(e.join('\n')).toMatch(/ref «v.*» ≠ «v9\.9\.9»/)
+
+  it('son tres plugins, y el marketplace los lista a los tres en ese orden', () => {
+    expect(PLUGINS.map((p) => p.name)).toEqual(['vergis', 'custos', 'mira'])
+    const mk = JSON.parse(readFileSync(join(RAIZ, '.claude-plugin/marketplace.json'), 'utf8'))
+    expect(mk.plugins.map((p: { name: string }) => p.name)).toEqual(['vergis', 'custos', 'mira'])
   })
-  it('una fuente relativa (instalaría main) o con sha se detecta', () => {
-    expect(pluginLockstep(copia(({ mk }) => { mk.plugins[0].source = './plugins/vergis' })).join('\n')).toMatch(/git-subdir/)
-    expect(pluginLockstep(copia(({ mk }) => { mk.plugins[0].source.sha = 'abc' })).join('\n')).toMatch(/no lleva sha/)
+
+  it('un corte que sube package.json sin mover los plugins se detecta en los tres (versión y ref)', () => {
+    const e = errores(({ pkg }) => { pkg.version = '9.9.9' })
+    for (const { name } of PLUGINS) {
+      expect(e).toMatch(new RegExp(`${name}/plugin\\.json: version .* ≠ package\\.json 9\\.9\\.9`))
+      expect(e).toMatch(new RegExp(`\\(${name}\\): ref «v.*» ≠ «v9\\.9\\.9»`))
+    }
   })
-  it('un renombre del plugin o del marketplace se detecta (los nombres publicados son inmutables)', () => {
-    expect(pluginLockstep(copia(({ plugin }) => { plugin.name = 'vergis-ops' })).join('\n')).toMatch(/inmutable/)
-    expect(pluginLockstep(copia(({ mk }) => { mk.name = 'gegolabs' })).join('\n')).toMatch(/vergis@vergis/)
+
+  for (const { name } of PLUGINS) {
+    it(`sabe reprobar sobre «${name}» solo: versión, ref, path, fuente, sha y nombre`, () => {
+      expect(errores(({ plugins }) => { plugins[name].version = '0.0.1' })).toMatch(new RegExp(`^${name}/plugin\\.json: version 0\\.0\\.1 ≠`, 'm'))
+      expect(errores(({ mk }) => { entrada(mk, name).source.ref = 'main' })).toMatch(new RegExp(`\\(${name}\\): ref «main»`))
+      expect(errores(({ mk }) => { entrada(mk, name).source.path = 'plugins/otro' })).toMatch(new RegExp(`\\(${name}\\): path «plugins/otro» ≠ «plugins/${name}»`))
+      expect(errores(({ mk }) => { entrada(mk, name).source = `./plugins/${name}` })).toMatch(new RegExp(`\\(${name}\\): la fuente es .*git-subdir`))
+      expect(errores(({ mk }) => { entrada(mk, name).source.source = 'github' })).toMatch(new RegExp(`\\(${name}\\): la fuente es «github»`))
+      expect(errores(({ mk }) => { entrada(mk, name).source.sha = 'abc' })).toMatch(new RegExp(`\\(${name}\\): la fuente no lleva sha`))
+      expect(errores(({ mk }) => { entrada(mk, name).source.url = 'https://github.com/otro/vergis.git' })).toMatch(new RegExp(`\\(${name}\\): url`))
+      expect(errores(({ plugins }) => { plugins[name].name = `${name}-ops` })).toMatch(new RegExp(`${name}/plugin\\.json: name .* inmutable`))
+    })
+
+    it(`sabe reprobar: «${name}» ausente del marketplace, o sin su plugin.json`, () => {
+      expect(errores(({ mk }) => { mk.plugins = mk.plugins.filter((p: { name: string }) => p.name !== name) })).toMatch(new RegExp(`no lista el plugin «${name}»`))
+      expect(errores(({ plugins }) => { plugins[name] = undefined })).toMatch(new RegExp(`plugins/${name}/\\.claude-plugin/plugin\\.json: no existe`))
+    })
+  }
+
+  it('custos y mira sin la dependencia vergis se detectan (sus skills invocan un CLI que no tendrían)', () => {
+    expect(errores(({ plugins }) => { delete plugins.custos.dependencies })).toMatch(/custos\/plugin\.json: no declara la dependencia «vergis»/)
+    expect(errores(({ plugins }) => { plugins.mira.dependencies = [] })).toMatch(/mira\/plugin\.json: no declara la dependencia «vergis»/)
+  })
+
+  it('un plugin en el marketplace fuera del lockstep se detecta (nadie cotejaría su versión)', () => {
+    expect(errores(({ mk }) => { mk.plugins.push({ ...entrada(mk, 'mira'), name: 'daftar' }) })).toMatch(/lista «daftar», que no está en el lockstep/)
+  })
+
+  it('un renombre del marketplace se detecta (los nombres publicados son inmutables)', () => {
+    expect(errores(({ mk }) => { mk.name = 'gegolabs' })).toMatch(/<plugin>@vergis/)
   })
 })
 

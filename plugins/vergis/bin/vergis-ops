@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+// vergis-ops — el nombre con que las skills de los plugins `vergis`, `custos` y `mira` invocan el CLI.
+// Claude Code pone el `bin/` de un plugin habilitado en el PATH de la herramienta Bash; este archivo
+// solo carga `vergis-ops.mjs`, que es el CLI entero (verbos, códigos de salida, guardia de Node ≥ 22).
+// No duplica código: si el CLI cambia, cambia allá.
+import('./vergis-ops.mjs')
