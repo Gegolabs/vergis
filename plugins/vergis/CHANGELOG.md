@@ -5,6 +5,12 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
+## Sin publicar
+
+- **`vergis:rollout` pasa a llamarse `vergis:upgrade` (#382)**, por palabra de César: el nombre de la
+  skill dice el acto del operador, y «rollout» queda para el mecanismo (verbo del CLI, `deploy/rollout/`,
+  label de la imagen). Sin alias: el plugin llevaba horas publicado y ninguna instalación lo usaba.
+
 ## 0.40.0 — 2026-09-30
 
 - **El CLI sale por `salir(code)`** (`lib/util.mjs`), que espera a que se vacíen stdout y stderr antes
@@ -90,7 +96,7 @@ Con Claude Code 2.1.284, el 2026-09-29 (V9 del diseño):
 
 ## Historia heredada (de la skill del primer adoptante)
 
-**Límites medidos el 2026-08-18 sobre el CHANGELOG dentro de la imagen**, que `vergis:rollout` conserva
+**Límites medidos el 2026-08-18 sobre el CHANGELOG dentro de la imagen**, que `vergis:upgrade` conserva
 como historia: (a) las imágenes publicadas hasta `0.20.0` inclusive **no** traen el CHANGELOG ni los
 labels de documentación — para un salto que las involucre, el changelog se lee del repo en el tag, no de
 la imagen; (b) en ese momento la única imagen con el label de documentación era `:main`, y apuntaba a
