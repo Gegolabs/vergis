@@ -99,8 +99,9 @@ jobs:
       - run: shellcheck --version
       - run: npm run lint:shell
 
-  # El plugin `vergis` (lab/work/285 · #366): sus manifiestos se validan con el validador de Claude Code en
-  # modo estricto (una advertencia es error). Job hermano: no necesita las deps del Producto.
+  # Los plugins `vergis`, `custos` y `mira` (lab/work/285 · #366; tres desde lab/work/288 · #387): sus
+  # manifiestos y el del marketplace se validan con el validador de Claude Code en modo estricto (una
+  # advertencia es error), uno por uno. Job hermano: no necesita las deps del Producto.
   #
   # LA VERSIÓN VA PINNEADA y respeta el cooldown de 14 días del ADR-001: 2.1.272 se publicó el
   # 2026-09-14. Medido en local con esa versión: los dos manifiestos validan (rc=0), y un plugin.json con
@@ -121,6 +122,8 @@ jobs:
       - run: npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
       - run: claude --version
       - run: claude plugin validate --strict plugins/vergis
+      - run: claude plugin validate --strict plugins/custos
+      - run: claude plugin validate --strict plugins/mira
       - run: claude plugin validate --strict .
 
   image:
