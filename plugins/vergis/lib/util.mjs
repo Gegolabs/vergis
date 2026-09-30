@@ -87,6 +87,25 @@ export function assertToken(value, what, re = /^[A-Za-z0-9._:/@+=-]+$/) {
 export const out = (s = '') => process.stdout.write(s + '\n')
 export const err = (s = '') => process.stderr.write(s + '\n')
 
+/**
+ * Termina el proceso DESPUÉS de vaciar stdout y stderr. `process.exit()` a secas descarta lo que sigue
+ * en la cola de escritura del stream: bajo `spawn` el stdout es un socket que se llenó hacia los ~18 KB,
+ * y una salida de ~20 KB llegaba cortada por la cola con exit 0 (node:22/Linux, entre 4 y 7 de cada 8
+ * corridas). Una escritura vacía al final de cada stream devuelve su callback cuando lo encolado antes
+ * ya salió, así que se sale recién cuando volvieron los dos.
+ *
+ * El costo es deliberado: el CLI espera a su lector en vez de truncar en silencio. Un lector que nunca
+ * lee lo deja esperando hasta que cierre el pipe (entonces EPIPE, y sale con el código pedido).
+ */
+export function salir(code) {
+  let pendientes = 2
+  const listo = () => {
+    if (--pendientes === 0) process.exit(code)
+  }
+  process.stdout.write('', listo)
+  process.stderr.write('', listo)
+}
+
 export function b64(text) {
   return Buffer.from(text, 'utf8').toString('base64')
 }
