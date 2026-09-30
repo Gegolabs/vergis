@@ -63,6 +63,18 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### Corregido: `vergis-ops` truncaba su propia salida al terminar
+
+El CLI terminaba con `process.exit()`, que descarta lo que sigue en la cola de escritura de stdout.
+Cuando el lector no drena al ritmo del CLI, esa cola existe: bajo `spawn` el stdout es un socket que se
+llenó hacia los ~18 KB, y la salida llegaba **cortada por la cola y con exit 0**. Se vio en el CI del
+corte (la prueba de #369 recibió 171 de 200 líneas), y en node:22 sobre Linux fallaba entre 4 y 7 de
+cada 8 corridas según la máquina. Ahora el CLI sale recién cuando stdout y stderr se vaciaron (`salir`
+en `lib/util.mjs`), y `tests/plugin-salida-drenada.test.ts` lo fija con un lector tardío y un control
+negativo. **El costo, declarado:** el CLI ya no trunca en silencio, sino que **espera a su lector**. Uno
+que nunca lee lo deja esperando hasta que cierre el pipe, y entonces sale con el código pedido.
+**Qué cambia para el operador:** una medición de `vergis-ops` leída por pipe con una versión sin
+publicar anterior a esta pudo ser un verde truncado, y se re-mide. **Qué exige:** nada.
 ### El rótulo de una columna de tabla puede derivarse del dato (#377)
 
 `table.columns[].label` interpola `{{data.<dataset>.<campo>}}` por request, desde la primera fila del

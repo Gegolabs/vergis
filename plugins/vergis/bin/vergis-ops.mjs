@@ -25,7 +25,7 @@
 // Salida (D7): 0 medí · 1 hallazgo · 2 no corrí · 3 respuesta cruzada · 4 transporte ocupado ·
 //              5 remoto mudo · 6 transporte · 7 medí a medias.
 
-import { EXIT, EXIT_NAME, OpsExit, err } from '../lib/util.mjs'
+import { EXIT, EXIT_NAME, OpsExit, err, salir } from '../lib/util.mjs'
 
 const [major] = process.versions.node.split('.').map(Number)
 if (major < 22) {
@@ -99,14 +99,15 @@ async function main() {
   }
 }
 
+// La salida pasa siempre por `salir`, que vacía stdout y stderr antes de terminar (ver util.mjs).
 main().then(
-  (code) => process.exit(code ?? EXIT.OK),
+  (code) => salir(code ?? EXIT.OK),
   (e) => {
     if (e instanceof OpsExit) {
       err(`✗ ${EXIT_NAME[e.code] ?? ''} (exit ${e.code}): ${e.message}`)
-      process.exit(e.code)
+      return salir(e.code)
     }
     err(`✗ NO CORRÍ (exit 2): error inesperado del CLI — ${e?.stack ?? e}`)
-    process.exit(EXIT.NOT_RUN)
+    salir(EXIT.NOT_RUN)
   },
 )

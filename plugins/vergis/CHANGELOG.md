@@ -7,6 +7,14 @@ implementación del CLI y de las skills, y la historia que las skills heredaron.
 
 ## Sin publicar
 
+- **El CLI sale por `salir(code)`** (`lib/util.mjs`), que espera a que se vacíen stdout y stderr antes
+  de `process.exit`. Con `process.exit` a secas, lo encolado en stdout se perdía por la cola con exit 0
+  (la prueba de #369 en el CI del corte; entre 4 y 7 de cada 8 corridas en Linux). **Toda medición de
+  `vergis-ops` leída por pipe con un CLI anterior a este arreglo se re-mide**: pudo ser un verde
+  truncado. El costo: el CLI espera a su lector en vez de truncar. Los `process.exit` de los scripts que
+  corren del lado del host (`contract.mjs`, `smoke.mjs`) emiten una sola línea corta antes de salir y
+  quedan como están.
+
 Nace el plugin (issue #366).
 
 - **Cuatro skills**: `vergis:ops` · `vergis:rollout` · `vergis:verify` · `vergis:setup`.
