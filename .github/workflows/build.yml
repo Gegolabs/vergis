@@ -128,7 +128,9 @@ jobs:
 
   image:
     needs: [test, shell, plugin]
-    if: github.event_name != 'pull_request'
+    # SIN `if:` por evento (#334): el Dockerfile consume el lockfile y fija su propio toolchain, así que
+    # tiene que medirse EN EL PR y no recién en un `main` roto. En un `pull_request` la imagen se
+    # CONSTRUYE (amd64, sin publicar) y los pasos de publicación quedan apagados por evento.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -146,7 +148,8 @@ jobs:
             refs/tags/v[0-9]*) echo "version=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "version=false" >> "$GITHUB_OUTPUT" ;;
           esac
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -183,9 +186,10 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          sbom: true
-          provenance: mode=max
+          # En un PR: solo amd64 (el gate del Dockerfile no necesita el costo de QEMU/arm64) y `push: false`.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
+          provenance: ${{ github.event_name == 'pull_request' && 'false' || 'mode=max' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
