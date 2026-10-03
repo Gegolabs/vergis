@@ -51,8 +51,8 @@ export interface ConjuntoDerivado {
 }
 
 export interface Hallazgo {
-  /** `numeracion` (IDs) o `cobertura` (algo declarado en máquina y no citado). */
-  clase: 'numeracion' | 'cobertura'
+  /** `numeracion` (IDs), `cobertura` (algo declarado en máquina y no citado) o `version` (la columna «Desde»). */
+  clase: 'numeracion' | 'cobertura' | 'version'
   detalle: string
 }
 
@@ -177,6 +177,28 @@ export interface Catalogo {
   citados: string[]
   /** IDs mal formados encontrados (p. ej. `CAP-7` en vez de `CAP-07`). */
   malFormados: string[]
+  /** La celda de la columna «Desde» (4.ª) de cada capacidad vigente, sin backticks. */
+  versiones: { id: number; celda: string }[]
+}
+
+// ── La columna «Desde» (#335) ────────────────────────────────────────────────────────────────────
+/** Marcador de trabajo aún no publicado; admite ` · <semver objetivo>` (la versión que se piensa cortar). */
+export const SIN_PUBLICAR = 'sin publicar'
+const SEMVER = String.raw`\d+\.\d+\.\d+`
+/**
+ * LA ORTOGRAFÍA de la celda, una sola: `≤0.9` (anterior al registro fino) · `—` (no construida) ·
+ * `sin publicar` (con ` · X.Y.Z` opcional) · una o más versiones `X.Y.Z` unidas por ` · `. Después de
+ * quitar los paréntesis (`(#123)`, `(desde 0.27.0: \`lets\`)`), no puede quedar nada más.
+ */
+export const RE_DESDE = new RegExp(
+  `^(≤0\\.9|—|${SIN_PUBLICAR}( · ${SEMVER})?|${SEMVER}( · ${SEMVER})*)$`,
+)
+
+/** Versiones cortadas, derivadas de los encabezados `## X.Y.Z` del CHANGELOG (falla ruidoso si no hay ninguna). */
+export function versionesPublicadas(changelog: string): string[] {
+  const v = [...changelog.matchAll(/^## (\d+\.\d+\.\d+)\b/gm)].map((m) => m[1] as string)
+  if (v.length === 0) throw new AnclaPerdida('encabezados «## X.Y.Z»', 'CHANGELOG.md')
+  return v
 }
 
 /**
@@ -187,9 +209,11 @@ export function parsearCatalogo(md: string): Catalogo {
   const ids: number[] = []
   const retiradas: number[] = []
   const malFormados: string[] = []
+  const versiones: { id: number; celda: string }[] = []
   for (const linea of md.split('\n')) {
     if (!linea.startsWith('|')) continue
-    const celdas = linea.split('|').slice(1, -1).map((c) => c.trim())
+    // `\\|` es un pipe LITERAL dentro de una celda (GFM), no un separador.
+    const celdas = linea.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.replace(/\\\|/g, '|').trim())
     const primera = celdas[0]
     if (!primera) continue
     const m = /^`?(CAP-(\d+))`?$/.exec(primera)
@@ -201,10 +225,13 @@ export function parsearCatalogo(md: string): Catalogo {
     // vale que la palabra aparezca dentro de una frase: `_retirado/` es una ruta del intake, no un
     // estado, y un reconocedor laxo convertiría esa fila en el permiso para un hueco.
     if (celdas.some((c) => c.replace(/`/g, '').trim().toLowerCase() === 'retirada')) retiradas.push(n)
-    else ids.push(n)
+    else {
+      ids.push(n)
+      versiones.push({ id: n, celda: (celdas[3] ?? '').replace(/`/g, '').trim() })
+    }
   }
   const citados = [...md.matchAll(/`([^`\n]+)`/g)].map((m) => m[1] as string)
-  return { ids, retiradas, citados, malFormados }
+  return { ids, retiradas, citados, malFormados, versiones }
 }
 
 /**
@@ -223,7 +250,7 @@ export function estaCitado(valor: string, citados: string[]): boolean {
  * El cotejo, puro: catálogo (texto) × conjuntos derivados → hallazgos. Sin I/O, para que el test
  * pueda alimentarlo con fixtures y comprobar que SABE reprobar.
  */
-export function cotejar(md: string, conjuntos: ConjuntoDerivado[]): Hallazgo[] {
+export function cotejar(md: string, conjuntos: ConjuntoDerivado[], publicadas?: string[]): Hallazgo[] {
   const cat = parsearCatalogo(md)
   const hallazgos: Hallazgo[] = []
 
@@ -258,6 +285,25 @@ export function cotejar(md: string, conjuntos: ConjuntoDerivado[]): Hallazgo[] {
     }
   }
 
+  for (const { id, celda } of cat.versiones) {
+    const cap = `CAP-${String(id).padStart(2, '0')}`
+    const sinParen = celda.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim()
+    if (!RE_DESDE.test(sinParen)) {
+      hallazgos.push({ clase: 'version', detalle: `${cap}: la celda «Desde» «${celda}» no respeta la ortografía (≤0.9 · — · ${SIN_PUBLICAR}[ · X.Y.Z] · X.Y.Z[ · X.Y.Z…])` })
+      continue
+    }
+    if (!publicadas) continue
+    const sinPublicar = sinParen.startsWith(SIN_PUBLICAR)
+    for (const v of celda.match(new RegExp(SEMVER, 'g')) ?? []) {
+      const existe = publicadas.includes(v)
+      if (sinPublicar && existe) {
+        hallazgos.push({ clase: 'version', detalle: `${cap}: dice «${SIN_PUBLICAR}» pero ${v} ya está en el CHANGELOG — la capacidad está publicada y la celda miente` })
+      } else if (!sinPublicar && !existe) {
+        hallazgos.push({ clase: 'version', detalle: `${cap}: la versión ${v} no está en el historial de releases del CHANGELOG (inventada o aún sin cortar)` })
+      }
+    }
+  }
+
   return hallazgos
 }
 
@@ -267,7 +313,7 @@ function main(): void {
   const conjuntos = derivarConjuntos()
   const md = leer('docs/capacidades.md')
   const cat = parsearCatalogo(md)
-  const hallazgos = cotejar(md, conjuntos)
+  const hallazgos = cotejar(md, conjuntos, versionesPublicadas(leer('CHANGELOG.md')))
 
   console.log('── Cotejo del catálogo de capacidades · docs/capacidades.md ──\n')
   console.log(`  capacidades vigentes: ${cat.ids.length}   ·   retiradas: ${cat.retiradas.length}`)
@@ -277,6 +323,7 @@ function main(): void {
 
   const numeracion = hallazgos.filter((h) => h.clase === 'numeracion')
   const cobertura = hallazgos.filter((h) => h.clase === 'cobertura')
+  const version = hallazgos.filter((h) => h.clase === 'version')
 
   if (numeracion.length) {
     console.log('✗ NUMERACIÓN:')
@@ -288,7 +335,12 @@ function main(): void {
     for (const h of cobertura) console.log(`    ${h.detalle}`)
     console.log('')
   }
-  if (!hallazgos.length) console.log('✓ Numeración sana y todo lo declarado en máquina está citado.\n')
+  if (version.length) {
+    console.log('✗ COLUMNA «DESDE»:')
+    for (const h of version) console.log(`    ${h.detalle}`)
+    console.log('')
+  }
+  if (!hallazgos.length) console.log('✓ Numeración sana y todo lo declarado en máquina está citado, y la columna «Desde» es coherente con el CHANGELOG.\n')
 
   console.log('  Esto NO dice que el catálogo esté completo: lo derivado mecánicamente son solo los')
   console.log('  conjuntos cerrados del DSL de arriba. El resto se barrió a mano sobre CHANGELOG,')

@@ -45,7 +45,11 @@ resolverse a «esto existió y ya no». Un número nunca se recicla para nombrar
 ## ¿Cómo se lee la columna «Desde»?
 
 La versión del `CHANGELOG.md` que publicó la capacidad. `≤0.9` cuando la capacidad es anterior al
-registro fino y su versión exacta no se puede afirmar.
+registro fino y su versión exacta no se puede afirmar. La ortografía es una sola y el cotejo la hace
+cumplir (#335): `≤0.9` · `—` (no construida) · `sin publicar` (con ` · X.Y.Z` si ya tiene versión
+objetivo) · una o más versiones `X.Y.Z` unidas por ` · `, con paréntesis libres (`(#123)`). Una
+versión debe existir como encabezado `## X.Y.Z` del `CHANGELOG.md`, y `sin publicar` no puede llevar
+una versión ya cortada.
 
 ---
 
@@ -101,7 +105,7 @@ registro fino y su versión exacta no se puede afirmar.
 | `CAP-36` | Rótulo del control en la banda de contexto | `controls[].label` | 0.2.0 | [superficie-de-estado.md §3](superficie-de-estado.md) |
 | `CAP-37` | Llaves alternativas del mismo alcance (dos sellos, un alcance) | `controls[].param` | 0.9.0 | [superficie-de-estado.md §7·1](superficie-de-estado.md) |
 | `CAP-38` | Etiqueta de la opción tomada de otro campo del mismo dataset | `controls[].display` | 0.9.0 | [superficie-de-estado.md §7](superficie-de-estado.md) |
-| `CAP-39` | Valor inicial del control: computado (`max` / `min` / `first`) o **literal del dominio** | `controls[].default` | 0.9.0 · literal alcanzable en 0.22.0 (#246) | [CHANGELOG 0.22.0](../CHANGELOG.md) |
+| `CAP-39` | Valor inicial del control: computado (`max` / `min` / `first`) o **literal del dominio** | `controls[].default` | 0.9.0 · 0.22.0 (#246: literal alcanzable) | [CHANGELOG 0.22.0](../CHANGELOG.md) |
 | `CAP-40` | Valor inicial designado **por el dato** (columna booleana del mismo dataset) | `controls[].defaultField` | 0.22.0 (#235) | [superficie-de-estado.md §7·3](superficie-de-estado.md) |
 | `CAP-41` | Control de selección múltiple | `controls[].single` (false ⇒ checkboxes en la bandeja) | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
 | `CAP-42` | Filtro de bandeja **server-side**: sustracción opcional que re-ancla el documento (`:flt.<id>`) | `filters[]`, con `filters[].id` y `filters[].source` | 0.18.0 (#82) | [superficie-de-estado.md §4·bis · «El bloque `filters:`»](superficie-de-estado.md) |
@@ -349,7 +353,7 @@ registro fino y su versión exacta no se puede afirmar.
 
 | ID | Capacidad | Cómo se llama / se declara | Desde | Dónde se explica |
 |--|--|--|--|--|
-| `CAP-209` | **Plugin `vergis` de Claude Code para operar la plataforma de cualquier instalación y su contenido**, distribuido desde este repo en un marketplace de tres plugins y fijado al tag de la versión (lockstep con `package.json`); trae el CLI `vergis-ops`, que su `bin/` pone en el `PATH` de la herramienta Bash (macOS/Linux; en Windows, sin equivalente según anthropics/claude-code#68896, no medido) | `claude plugin marketplace add Gegolabs/vergis --sparse .claude-plugin plugins` · `claude plugin install vergis@vergis`; skills `vergis:setup` · `vergis:connect` · `vergis:publish` · `vergis:rollout` · `vergis:verify`. Nombres anteriores: `vergis:ops` (0.40.0–0.41.0; se reparte entre `setup`, `connect`, `publish`, `custos:enforce`, `mira:specialize` y `mira:specify`; #387) · `vergis:upgrade` (0.41.0; #382) y `vergis:rollout` (0.40.0) → `vergis:rollout` (#387) | 0.40.0 (#366) · tres plugins desde 0.42.0 (#387) | [deploy/rollout/README.md · «¿Operas la instancia con Claude Code?»](../deploy/rollout/README.md) |
+| `CAP-209` | **Plugin `vergis` de Claude Code para operar la plataforma de cualquier instalación y su contenido**, distribuido desde este repo en un marketplace de tres plugins y fijado al tag de la versión (lockstep con `package.json`); trae el CLI `vergis-ops`, que su `bin/` pone en el `PATH` de la herramienta Bash (macOS/Linux; en Windows, sin equivalente según anthropics/claude-code#68896, no medido) | `claude plugin marketplace add Gegolabs/vergis --sparse .claude-plugin plugins` · `claude plugin install vergis@vergis`; skills `vergis:setup` · `vergis:connect` · `vergis:publish` · `vergis:rollout` · `vergis:verify`. Nombres anteriores: `vergis:ops` (0.40.0–0.41.0; se reparte entre `setup`, `connect`, `publish`, `custos:enforce`, `mira:specialize` y `mira:specify`; #387) · `vergis:upgrade` (0.41.0; #382) y `vergis:rollout` (0.40.0) → `vergis:rollout` (#387) | 0.40.0 (#366) · 0.42.0 (#387: tres plugins) | [deploy/rollout/README.md · «¿Operas la instancia con Claude Code?»](../deploy/rollout/README.md) |
 | `CAP-210` | **Declaración de la instalación** en el repo del operador, con JSON Schema publicado: el plugin no trae hechos de ninguna instalación (una prueba lo garantiza) | `vergis-ops.json` (obligatorio mínimo: `id`, `transport`, `host.root`, `rings`) · [`plugins/vergis/schema/vergis-ops.schema.json`](../plugins/vergis/schema/vergis-ops.schema.json) · `vergis-ops check` | 0.40.0 (#366) | [esquema](../plugins/vergis/schema/vergis-ops.schema.json) |
 | `CAP-211` | **CLI `vergis-ops`** (Node ≥ 22, sin dependencias): salud por el borde con el predicado canónico, contrato, smoke de todas las vistas con needles y RLS, marcas de dato con corrida discriminante, paridad espejo↔host con guardia de montajes, poller de corte con su control negativo, publicación y actos gobernados | `check` · `recon` · `health` · `contract` · `smoke` · `marks` · `parity` · `poller` · `publish` · `exec` | 0.40.0 (#366) | [plugins/vergis/bin/vergis-ops.mjs](../plugins/vergis/bin/vergis-ops.mjs) |
 | `CAP-212` | **Clasificación de cada acto contra el contrato vivo** y gate por clase declarado por la instalación; la promoción se niega sin poller, línea base y CN-1 | clases `read` · `content` · `version` · `boot` · `service` · `service-interrupting` · `destructive`; gates `free` · `operator` · `window` · `approval` (`governance.gates`); clase sin gate = `approval` | 0.40.0 (#366) | [esquema · `governance`](../plugins/vergis/schema/vergis-ops.schema.json) |

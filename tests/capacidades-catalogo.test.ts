@@ -14,6 +14,7 @@ import {
   parsearCatalogo,
   estaCitado,
   derivarConjuntos,
+  versionesPublicadas,
   type ConjuntoDerivado,
 } from '../scripts/capacidades-cotejo'
 
@@ -94,5 +95,50 @@ describe('el catálogo real', () => {
 
   it('no está vacío — un catálogo sin filas pasaría los checks de arriba por vacuidad', () => {
     expect(parsearCatalogo(md).ids.length).toBeGreaterThan(50)
+  })
+})
+
+describe('columna «Desde» (#335) — control negativo', () => {
+  const PUB = ['0.9.0', '0.32.0', '0.42.0']
+  const conDesde = (celda: string) =>
+    `| ID | Capacidad | Cómo | Desde | Dónde |\n|--|--|--|--|--|\n| \`CAP-01\` | Indicador | \`kpi\` | ${celda} | x |\n| \`CAP-02\` | Tabla | \`table\` | ≤0.9 | x |\n`
+  const versionHallazgos = (celda: string) =>
+    cotejar(conDesde(celda), FIXTURE_CONJUNTOS, PUB).filter((h) => h.clase === 'version')
+
+  it('acepta cada forma legítima (sin ellas, los rechazos de abajo no prueban nada)', () => {
+    for (const ok of ['0.32.0', '`0.32.0`', '≤0.9', '—', 'sin publicar', 'sin publicar · 0.43.0', '0.9.0 · 0.42.0', '0.32.0 (#12)', '0.9.0 (desde 0.42.0: `lets`)'])
+      expect(versionHallazgos(ok), ok).toEqual([])
+  })
+
+  it('reprueba una celda mal escrita', () => {
+    expect(versionHallazgos('v0.32').some((h) => /ortografía/.test(h.detalle))).toBe(true)
+    expect(versionHallazgos('pronto').length).toBe(1)
+  })
+
+  it('reprueba una versión inventada (no está en el CHANGELOG)', () => {
+    expect(versionHallazgos('0.31.0').some((h) => /no está en el historial/.test(h.detalle))).toBe(true)
+  })
+
+  it('reprueba «sin publicar» con una versión ya cortada — el caso de d32d421', () => {
+    expect(versionHallazgos('sin publicar · 0.42.0').some((h) => /ya está en el CHANGELOG/.test(h.detalle))).toBe(true)
+  })
+
+  it('un pipe escapado dentro de otra celda no corre la columna «Desde»', () => {
+    const md = '| `CAP-01` | Indicador | `a \\| b` | 0.32.0 | x |\n'
+    expect(cotejar(md, [], PUB)).toEqual([])
+    expect(parsearCatalogo(md).versiones[0]?.celda).toBe('0.32.0')
+  })
+
+  it('el historial de releases se deriva del CHANGELOG y falla ruidoso si no encuentra ninguno', () => {
+    expect(versionesPublicadas('## 0.42.0 — x\n## 0.41.0 — y')).toEqual(['0.42.0', '0.41.0'])
+    expect(() => versionesPublicadas('sin encabezados')).toThrow(/no encontró su ancla/)
+  })
+})
+
+describe('el catálogo real — columna «Desde»', () => {
+  it('es coherente con el historial de releases del CHANGELOG', () => {
+    const md = readFileSync(join(RAIZ, 'docs', 'capacidades.md'), 'utf8')
+    const pub = versionesPublicadas(readFileSync(join(RAIZ, 'CHANGELOG.md'), 'utf8'))
+    expect(cotejar(md, [], pub).filter((h) => h.clase === 'version')).toEqual([])
   })
 })
