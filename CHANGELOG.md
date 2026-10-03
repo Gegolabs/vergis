@@ -130,6 +130,15 @@ Agregar `entidades-cartera.yaml`, que no está en la lista, sí la tumbaría (`d
 `entidades-finanzas.yaml`). **No medido** contra los archivos montados en la VM: la medición usó la copia
 del lab.
 
+**Cómo se verifica en la VM, antes de `promote`:** no hay un verbo que cargue las políticas y salga. El
+instrumento del operador es el `install` del anillo candidato. Con una colisión, el nodo del candidato
+muere al arrancar con `dataset-duplicate-across-files` nombrando las dos rutas (medido: el test de
+arranque real de `serve-rls` sale 1 con el código y los dos archivos en su salida). Entonces `install`
+avisa que el anillo no llegó a responder y lo deja `instalado`, sin `standby`, y la causa con los dos
+archivos está en `docker logs <anillo>`. Un `promote` sobre ese anillo se niega («el candidato no está en
+condiciones de promoverse… Nada se tocó»). Esa cadena de `install` y `promote` está leída en
+`deploy/rollout/botler-rollout`, no ejecutada contra un nodo.
+
 ### Corregido: `ingestion_run` sin fila `NotStarted` fantasma tras la cola (#362)
 
 Es el mismo arreglo que 0.39.0 hizo en `intake_watch_run`, aplicado a la proyección de procesos. La corrida se identifica por su id de
