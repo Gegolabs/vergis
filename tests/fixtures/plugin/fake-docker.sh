@@ -7,17 +7,20 @@
 #       service=<svc>             label com.docker.compose.service
 #       mount=<origen>|<destino>  un montaje (uno por línea)
 #       env=<K>=<V>               env del contenedor (lo ve lo que corre con `exec`)
+#       image=<ref>               la imagen del contenedor (lo que devuelven {{.Image}} y {{.Config.Image}})
 #       running=0                 el contenedor está DETENIDO (un anillo retenido); `start` lo arranca
 #                                 y `stop` lo vuelve a detener
 #
 #   $FAKE_WORLD/images/<ref con / y : cambiados por _>   una imagen; su línea `sha256label=<v>` es el
-#       label vergis.rollout.sha256 (lo que coteja `exec rollout install`)
+#       label vergis.rollout.sha256 (lo que coteja `exec rollout install`); su línea `app=<dir>` es el
+#       `/app/` de ESA imagen en `run` (sin ella, $FAKE_APP)
 #
 # `exec` corre el comando EN ESTA MÁQUINA con el env del contenedor: el nodo real lo reemplaza un
 # servidor HTTP de la prueba, al que el programa llega por VO_NODE_BASE / RINGS_EDGE_URL.
 #
-# `run --rm -i --entrypoint node <imagen> <args…>` corre `node <args…>` EN ESTA MÁQUINA, con `/app/` de la
-# imagen mapeado a $FAKE_APP (el generador de ring.args que la prueba quiera: el del repo, o uno viejo).
+# `run --rm -i --entrypoint node <imagen> <args…>` corre `node <args…>` EN ESTA MÁQUINA, con cada argumento
+# `/app/…` mapeado al `app=` de la imagen o, sin él, a $FAKE_APP (el generador de ring.args que la prueba
+# quiera: el del repo, uno viejo, o ninguno).
 # `compose … config --format json` devuelve $FAKE_COMPOSE_JSON; `config --profiles`, nada.
 set -u
 W=${FAKE_WORLD:?FAKE_WORLD}
@@ -34,6 +37,7 @@ case "$cmd" in
       *Mounts*) sed -n 's/^mount=//p' "$f" ;;
       *compose.service*) sed -n 's/^service=//p' "$f" ;;
       *State.Running*) if grep -q '^running=0' "$f"; then echo false; else echo true; fi ;;
+      *'.Image}}'*) v=$(sed -n 's/^image=//p' "$f"); if [ -n "$v" ]; then echo "$v"; else echo '[{}]'; fi ;;
       *.Id*) echo "id-$name" ;;
       *) echo '[{}]' ;;
     esac
@@ -94,9 +98,16 @@ case "$cmd" in
         *) break ;;
       esac
     done
-    shift # la imagen
+    img=$1; shift
     [ "${ep:-}" = node ] || { echo "fake-docker: run solo sabe --entrypoint node" >&2; exit 2; }
-    [ $# -gt 0 ] && case "$1" in /app/*) a=${FAKE_APP:?FAKE_APP}/${1#/app/}; shift; set -- "$a" "$@" ;; esac
+    fi="$W/images/$(printf '%s' "$img" | tr '/:' '__')"
+    app=$( [ -f "$fi" ] && sed -n 's/^app=//p' "$fi")
+    n=$#
+    while [ "$n" -gt 0 ]; do
+      a=$1; shift
+      case "$a" in /app/*) a=${app:-${FAKE_APP:?FAKE_APP}}/${a#/app/} ;; esac
+      set -- "$@" "$a"; n=$((n - 1))
+    done
     exec node "$@"
     ;;
   exec)

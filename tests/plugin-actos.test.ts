@@ -259,6 +259,46 @@ describe('exec rollout ring-args: la memoria del anillo (#372)', () => {
 })
 
 /**
+ * #396 · sin versión, `ring-args` corre el generador con la imagen del ANILLO ACTIVO, y el generador viaja en
+ * la imagen recién desde 0.40.0 (#366). Contra una activa anterior, el CLI comprueba ANTES que la imagen lo
+ * traiga y sale 2 diciendo qué pasar; el GENFAIL con el stack de Node («Cannot find module») era lo de antes.
+ * El mundo: el anillo activo corre la 0.39.0 (un `/app` sin generador) y la 0.40.0 lo trae (el del repo).
+ */
+describe('exec rollout ring-args contra una imagen sin el generador (#396)', () => {
+  const REPO_APP = join(__dirname, '..')
+  function mundo396() {
+    const e = env()
+    const w = e.FAKE_WORLD
+    writeFileSync(join(w, 'containers/vergis-1-0-0'), readFileSync(join(w, 'containers/vergis-1-0-0'), 'utf8') + 'image=ghcr.io/gegolabs/vergis:0.39.0\n')
+    mkdirSync(join(w, 'images'), { recursive: true })
+    writeFileSync(join(w, 'images/ghcr.io_gegolabs_vergis_0.39.0'), `app=${tmp('vergis-app-0390-')}\n`)
+    writeFileSync(join(w, 'images/ghcr.io_gegolabs_vergis_0.40.0'), `app=${REPO_APP}\n`)
+    const json = join(tmp('vergis-ringargs-'), 'compose.json')
+    writeFileSync(json, JSON.stringify({ name: 'x', services: { vergis: { mem_limit: '2g', environment: { VERGIS_OUT: '/gov' }, volumes: [{ type: 'bind', source: `${host}/gov`, target: '/gov' }] } } }))
+    return { ...e, FAKE_COMPOSE_JSON: json }
+  }
+
+  it('sin versión, con la activa anterior a 0.40.0 → 2 con el mensaje accionable, sin GENFAIL', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'ring-args'], { cwd: repo(), env: mundo396() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/la imagen del anillo activo vergis-1-0-0 \(ghcr\.io\/gegolabs\/vergis:0\.39\.0\) es anterior a 0\.40\.0/)
+    expect(r.all).toMatch(/ring-args <versión>/)
+    expect(r.all).not.toMatch(/GENFAIL|Cannot find module/)
+  })
+  it('con la versión destino, cuya imagen sí lo trae → corre (0, NOCURRENT)', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'ring-args', '0.40.0'], { cwd: repo(), env: mundo396() })
+    expect(r.code, r.all).toBe(0)
+    expect(r.all).toMatch(/NOCURRENT/)
+  })
+  it('con una versión destino que tampoco lo trae → 2, pidiendo una ≥ 0.40.0', async () => {
+    const r = await cliAsync(['exec', 'rollout', 'ring-args', '0.39.0'], { cwd: repo(), env: mundo396() })
+    expect(r.code, r.all).toBe(2)
+    expect(r.all).toMatch(/la imagen de la versión destino \(ghcr\.io\/gegolabs\/vergis:0\.39\.0\) no trae el generador/)
+    expect(r.all).not.toMatch(/GENFAIL/)
+  })
+})
+
+/**
  * El rollback a un anillo RETENIDO (frío) es la maniobra de emergencia, y promote/rollback exigen el CN-1
  * antes de invocar a la herramienta —que es quien arrancaría el retenido—. Contra un contenedor detenido
  * no hay control negativo posible, así que `poller cn1` arranca el retenido, con el gate de la clase

@@ -265,6 +265,8 @@ echo "INSTALLED $VO_TOOL $(vo_sha "$VO_TOOL")"`
 
 // ─── ring.args derivado del compose vivo, con el generador de la imagen ──────────────────────────
 // ¿El servicio declara su memoria? Lee el JSON de `compose config` por stdin; sale 0 sí · 3 no.
+// ¿La imagen trae el generador? Sale 0 sí · 3 no (el path va por argv: el que corre es el node de la imagen).
+const GEN_JS = 'process.exit(require("fs").existsSync(process.argv[1])?0:3)'
 const MEM_JS = 'let d="";process.stdin.on("data",(c)=>(d+=c)).on("end",()=>{const s=(JSON.parse(d).services||{})[process.argv[1]]||{};const m=s.mem_limit??(((s.deploy||{}).resources||{}).limits||{}).memory;process.exit(m===undefined||m===null||m===""?3:0)})'
 async function ringArgs(decl, ins, v, o) {
   if (!ins.host.compose_project || !ins.host.compose_file) fail(EXIT.NOT_RUN, 'ring-args: la instalación no declara host.compose_project y host.compose_file, y el generador los necesita para leer el compose vivo')
@@ -273,8 +275,16 @@ async function ringArgs(decl, ins, v, o) {
   if (o.memory !== undefined) fail(EXIT.NOT_RUN, '--memory no existe: la memoria de los anillos se declara en el compose (mem_limit del servicio plantilla, o deploy.resources.limits.memory) — espejo primero — y el generador la deriva de ahí. Un valor a mano en cada corrida depende de la memoria de quien opera (#372)')
   const g = await gate(decl, ins, o.apply ? 'version' : 'read', o)
   const body = String.raw`P=${shq(ins.host.compose_project)}; F=${shq(ins.host.compose_file)}
-${v ? `IMG="$RINGS_IMAGE:${v}"` : 'IMG=$($DOCKER inspect --format "{{.Image}}" "$(vo_active_ring)" 2>/dev/null)'}
+${v ? `IMG="$RINGS_IMAGE:${v}"; VO_REF=$IMG` : String.raw`VO_RING=$(vo_active_ring || true)
+IMG=$($DOCKER inspect --format "{{.Image}}" "$VO_RING" 2>/dev/null)
+VO_REF=$($DOCKER inspect --format "{{.Config.Image}}" "$VO_RING" 2>/dev/null)`}
 [ -n "$IMG" ] || { echo "NOIMG"; exit 0; }
+# El generador viaja en la imagen recién desde 0.40.0 (#366): se comprueba que ESTA imagen lo traiga antes de
+# correrlo, para no confundir «la imagen no lo trae» con una falla del generador (#396).
+$DOCKER run --rm --entrypoint node "$IMG" -e ${shq(GEN_JS)} /app/deploy/rollout/ring-args-from-compose.mjs
+VO_G=$?
+if [ "$VO_G" = 3 ]; then echo "NOGEN ${'$'}{VO_RING:--} ${'$'}{VO_REF:-$IMG}"; exit 0; fi
+if [ "$VO_G" != 0 ]; then echo "GENFAIL no pude comprobar si la imagen trae el generador (rc=$VO_G)"; exit 0; fi
 PROF=""; for p in $($DOCKER compose -p "$P" -f "$F" config --profiles 2>/dev/null); do PROF="$PROF --profile $p"; done
 # shellcheck disable=SC2086
 $DOCKER compose -p "$P" -f "$F" $PROF config --no-env-resolution --format json > "$VO_T/compose.json" 2>"$VO_T/e" || { echo "NOCONFIG"; sed 's/^/  /' "$VO_T/e" | head -5; exit 0; }
@@ -296,6 +306,12 @@ cat "$VO_T/ring.args.new" > "$RINGS_DIR/ring.args" && echo "APPLIED"` : ''}`
   out(`   ${evidenceLine(g)}`)
   for (const l of r.lines) out(`   | ${l}`)
   if (r.lines.includes('NOMEM')) fail(EXIT.NOT_RUN, `el servicio «${svc}» del compose vivo no declara la memoria del anillo (mem_limit, o deploy.resources.limits.memory). No se derivó nada: sin ella, el anillo nuevo nacería con un valor que nadie decidió. Declárala en el compose del espejo y publícalo (espejo primero) (#372)`)
+  const nogen = r.lines.find((l) => l.startsWith('NOGEN '))
+  if (nogen) {
+    const [, ring, ref] = nogen.split(' ')
+    if (v) fail(EXIT.NOT_RUN, `la imagen de la versión destino (${ref}) no trae el generador de ring.args: viaja en la imagen desde 0.40.0 (#366). Pasa una versión destino ≥ 0.40.0 (#396)`)
+    fail(EXIT.NOT_RUN, `la imagen del anillo activo ${ring} (${ref}) es anterior a 0.40.0 y no trae el generador de ring.args (#366). Pasa la versión destino —\`ring-args <versión>\`—, cuya imagen sí lo trae. No se derivó nada (#396)`)
+  }
   const bad = r.lines.find((l) => /^(NOIMG|NOCONFIG|GENFAIL)/.test(l))
   if (bad) { out(`✗ no se pudo derivar (${bad}).`); return EXIT.FINDING }
   if (o.apply) return r.lines.includes('APPLIED') ? EXIT.OK : EXIT.MUTE

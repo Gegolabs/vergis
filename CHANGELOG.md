@@ -61,6 +61,18 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Plugin `vergis`: `ring-args` sin versión contra una imagen anterior a 0.40.0 dice qué hacer (#396)
+
+Sin versión, `vergis-ops exec rollout ring-args` corre el generador de `ring.args` con la imagen del
+**anillo activo**, y el generador viaja en la imagen recién desde 0.40.0 (#366). Contra una activa
+anterior salía `GENFAIL` con el stack de Node («Cannot find module …/ring-args-from-compose.mjs»).
+Ahora el CLI comprueba **antes** que la imagen elegida traiga el generador y, si no, sale **2** sin
+derivar nada, nombrando el anillo y la imagen: pasa la versión destino (`ring-args <versión>`), cuya
+imagen sí lo trae. Si la que no lo trae es la versión destino, pide una ≥ 0.40.0. No toca el nodo ni
+exige nada a la instancia.
+
 ## 0.42.0 — 2026-09-30
 
 ### Tres plugins de operación: `vergis`, `custos` y `mira` (`CAP-209`, `CAP-217`, `CAP-218`; #387)
