@@ -20,6 +20,7 @@ COPY packages/policy/package.json packages/policy/package.json
 # `--ignore-scripts` por ADR-001, como el resto de las instalaciones de esta imagen.
 RUN npm i -g npm@11.19.0 --ignore-scripts
 RUN npm ci --ignore-scripts
+COPY no-existe-control-negativo-334.json ./
 COPY . .
 RUN npm run build
 
