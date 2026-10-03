@@ -205,12 +205,11 @@ import { checkDeploymentConfig, reportDeploymentConfig, configCheckMode } from '
 import {
   explainDenial,
   isPublic,
-  parsePolicyStore,
   settingForClaim,
   type Policy,
   type PolicyDecl,
-  type PolicyStoreDoc,
 } from '@vergis/policy'
+import { loadPolicyStore, reloadPolicyStoreInPlace } from './policy-store-load'
 
 const ENGINE = (process.env['VERGIS_ENGINE'] ?? 'clickhouse').toLowerCase()
 if (ENGINE !== 'clickhouse' && ENGINE !== 'fabric') throw new Error(`VERGIS_ENGINE inválido: '${ENGINE}' (clickhouse | fabric).`)
@@ -439,13 +438,9 @@ const SERVING_CAPS = new Set([ENGINE === 'fabric' ? 'execute-sql-dwh' : 'execute
 // --- Policy store (data-anchored, autoría por entidad — charter §2c) --------
 const store = new Map<string, PolicyDecl>()
 const POLICY_PATHS = (process.env['VERGIS_POLICIES'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-/** Carga (o recarga) las políticas de `POLICY_PATHS` dentro de `target`. Lanza si algún archivo no parsea. */
-function loadPolicyStoreInto(target: Map<string, PolicyDecl>): void {
-  for (const p of POLICY_PATHS) {
-    for (const [ds, pol] of parsePolicyStore(parseYaml(readFileSync(resolve(p), 'utf8')) as PolicyStoreDoc)) target.set(ds, pol)
-  }
-}
-loadPolicyStoreInto(store)
+// Un dataset declarado en dos archivos lanza (#348): al arrancar tumba el boot, y en el hot-reload la
+// recarga se rechaza y se conserva el store vigente (validate-before-swap, `reloadPolicyStoreInPlace`).
+for (const [ds, pol] of loadPolicyStore(POLICY_PATHS)) store.set(ds, pol)
 
 // --- Productos de Información (specs authz-blind, ruteados por slug) ---------
 // DESCUBRIMIENTO DINÁMICO re-escaneado por request. Solo specs SERVIBLES (todas sus data-capabilities
@@ -3477,19 +3472,15 @@ function reloadGovernance(reason: string): void {
   // Primero el gobierno de dominio (conexiones/dominios/slots): el re-bootstrap de abajo ya debe ver
   // los perfiles nuevos para verificar un PI sobre un warehouse recién dado de alta (issue #50 + #52).
   reloadDomainGovernance(reason)
-  const next = new Map<string, PolicyDecl>()
-  try {
-    loadPolicyStoreInto(next)
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
+  const recarga = reloadPolicyStoreInPlace(store, POLICY_PATHS)
+  if (!recarga.ok) {
+    const msg = recarga.error
     console.error(`[hot-reload] recarga de políticas falló (${reason}); store vigente conservado: ${msg}`)
     // Sin artefactos: lo vigente se conserva y el contrato lo refleja solo (los artefactos previos no se
     // reemplazan, así que sus hashes siguen siendo los CARGADOS y el disco nuevo sale como `pending`).
     contract.record({ reason, ok: false, error: msg })
     return
   }
-  store.clear()
-  for (const [k, v] of next) store.set(k, v) // swap in-place tras parsear TODO ok (misma referencia que las clausuras capturaron)
   // Invalidar el result-cache: tras endurecer una policy, los hits cacheados servirían filas de la
   // política VIEJA hasta vencer el TTL. `clear()` existe si el conector está envuelto (withResultCache).
   const cached = servingCap as { clear?: () => void }

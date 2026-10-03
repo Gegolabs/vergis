@@ -107,6 +107,49 @@ el banco con Docker y no se corrió en este cambio. Lo medido es el instrumento:
 2,5 s sale OK con `ms≥2500` y el mismo request con timeout de 1 s sale `SINMEDIR`, en los dos sabores.
 Contra BusyBox real, `poller.sh` no se midió. La prueba usa un `wget` falso con sus mensajes.
 
+### Corregido: una política declarada en dos archivos de `VERGIS_POLICIES` ya no se resuelve por orden (#348)
+
+Dentro de un archivo, un `dataset` duplicado ya se rechazaba (`dataset-duplicate`). Entre archivos ganaba
+el último de la lista sin decir nada, y un `grant: all` posterior podía pisar una RLS según la posición
+del archivo en el env. Ahora la fusión aplica la misma regla: un dataset en dos archivos lanza
+`dataset-duplicate-across-files` nombrando las dos rutas.
+
+- **Al arrancar**, el nodo no arranca.
+- **En la recarga en caliente**, la recarga se rechaza (`[hot-reload] recarga de políticas falló`, y el
+  contrato la registra `ok: false`) y el nodo sigue sirviendo con el store vigente.
+- **Las declaraciones idénticas también lanzan.** Dos copias que hoy coinciden dejan de coincidir con la
+  primera edición de una de ellas, y entonces vuelve el last-wins. Dentro de un archivo tampoco se
+  toleran.
+
+**Qué exige: cambia el arranque.** Antes de promover, el operador comprueba que ningún dataset aparezca
+en dos de los archivos que lista `VERGIS_POLICIES`. Si aparece, la versión no arranca hasta dejar la
+política en un solo archivo. Medido sobre A.R.B.O.L. el 2026-10-03 con el cargador de esta versión, contra
+los archivos de `vergis-instance/policies` del lab y las listas de `deploy/mira-vm/compose.yml` (8
+archivos, 34 datasets) y `deploy/mira-vm-qa/compose.yml` (5 archivos, 29 datasets): **0 colisiones, arranca**.
+Agregar `entidades-cartera.yaml`, que no está en la lista, sí la tumbaría (`dbo.fact_saldos` con
+`entidades-finanzas.yaml`). **No medido** contra los archivos montados en la VM: la medición usó la copia
+del lab.
+
+### Corregido: `ingestion_run` sin fila `NotStarted` fantasma tras la cola (#362)
+
+Es el mismo arreglo que 0.39.0 hizo en `intake_watch_run`, aplicado a la proyección de procesos. La corrida se identifica por su id de
+instancia del motor, y no por el instante en que arrancó. Una corrida que pasó por cola ya no deja una
+segunda fila `NotStarted` que nunca termina.
+
+**Qué exige:** una migración **aditiva**, sin cambio de `SCHEMA_VERSION`, que corre sola al abrir el store:
+`ingestion_run` suma las columnas `instance_id` y `superseded_by` y un índice único parcial
+`(process_id, instance_id)`. Las filas legadas se cierran como sustituidas en el primer tick que trae ids,
+y no se borra ninguna. La versión anterior sigue escribiendo el archivo migrado, así que el rollback no
+exige restaurar (está cubierto por un test).
+
+### Corregido: el rechazo «ningún tipo» de `/cargar` lista la regla corta de cada tipo (#358)
+
+La lista de nombres esperados repetía la ficha entera de cada tipo, y llegaba a unos 1.800 caracteres.
+Ahora muestra el patrón de cada tipo, dice una sola vez que no importan las mayúsculas y remite a la
+página de cada tipo. El caso «se recibió antes como…», que habla de un solo tipo, conserva la ficha.
+
+**Qué exige:** nada. Cambia un texto de la interfaz.
+
 ## 0.42.0 — 2026-09-30
 
 ### Tres plugins de operación: `vergis`, `custos` y `mira` (`CAP-209`, `CAP-217`, `CAP-218`; #387)
