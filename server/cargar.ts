@@ -129,14 +129,20 @@ export function decidirDestino(tipos: IntakeSlot[], filename: string, pagina?: I
 /** El nombre esperado de un tipo, en palabras: la ficha, o el patrón dicho en palabras. */
 export const nombreEsperado = (s: IntakeSlot): string => s.ficha?.nombre ?? describirPatron(s.accept)
 
-/** «Este nombre no corresponde…» con los nombres esperados (§4.2), o el caso de la carga 27. */
+/** «Este nombre no corresponde…» con la regla corta de cada tipo (§4.2, #358), o el caso de la carga 27. */
 async function textoNinguno(deps: AdminDeps, tipos: IntakeSlot[], filename: string): Promise<string> {
   const previo = deps.intakeUploads?.findAcceptedUploadByFilename ? await deps.intakeUploads.findAcceptedUploadByFilename(filename).catch(() => null) : null
   const tipoPrevio = previo ? tipos.find((s) => s.id === previo.slotId) ?? (deps.intakeSlots ?? []).find((s) => s.id === previo.slotId) : undefined
   if (tipoPrevio)
     return `Este archivo se recibió antes como «${tipoPrevio.label}», pero ese archivo ahora tiene que llamarse así: ${nombreEsperado(tipoPrevio)} Si es la planilla nueva, cámbiale el nombre; si es la antigua, ya no se carga.`
-  const lista = tipos.map((s) => `«${s.label}»: ${nombreEsperado(s)}`).join(' · ')
-  return `Este nombre no corresponde a ningún archivo que puedas subir. Los nombres esperados son: ${lista}`
+  // #358 · En la lista va solo la regla corta: la `ficha.nombre` explica la convención entera (200 a 260
+  // caracteres cada una) y, concatenada para cada tipo del usuario, el rechazo llegaba a ~1.800. El caso
+  // de arriba sí conserva la ficha completa, porque habla de un solo tipo.
+  // «No importan las mayúsculas» vale para todos: se dice una vez al final, no en cada tipo.
+  const MAYUS = ' No importan las mayúsculas.'
+  const reglas = tipos.map((s) => describirPatron(s.accept))
+  const lista = tipos.map((s, i) => `«${s.label}»: ${reglas[i]!.endsWith(MAYUS) ? reglas[i]!.slice(0, -MAYUS.length) : reglas[i]}`).join(' · ')
+  return `Este nombre no corresponde a ningún archivo que puedas subir. Los nombres esperados son: ${lista}${reglas.some((r) => r.endsWith(MAYUS)) ? MAYUS : ''} La explicación completa de cada nombre está en la página de su tipo de archivo, en «Cargar archivos».`
 }
 
 // ─── El aviso de duplicado (V4) ─────────────────────────────────────────────────────────────────

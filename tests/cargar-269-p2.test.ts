@@ -281,6 +281,31 @@ describe('#269·§6.2.2 · recorrido local de `/cargar` (identidad forjada, sin 
     expect(a!['texto']).toBe('Este archivo se recibió antes como «Maestro de tiendas», pero ese archivo ahora tiene que llamarse así: El nombre tiene que contener «Tiendas por zona» y ser un Excel (.xlsx). No importan las mayúsculas. Si es la planilla nueva, cámbiale el nombre; si es la antigua, ya no se carga.')
   })
 
+  it('#358 · el rechazo «ningún tipo» lista la regla corta, no la ficha.nombre entera; el caso de un solo tipo la conserva', async () => {
+    // La forma de la instancia desde work/269 I2: cada `ficha.nombre` explica la convención completa.
+    const larga = (x: string): string => `El nombre tiene que contener «${x}», seguido de la fecha de emisión en formato día-mes-año, tal como lo baja el portal sin editarlo a mano; si lo renombras, conserva esa parte. Lo que Mira revisa es que aparezca «${x}» y que sea un Excel (.xlsx).`
+    const doc = { slots: SLOTS_DISJUNTOS.slots.map((s) => ({ ...s, ficha: { ...s.ficha, nombre: larga(s.accept.replace(/\*|\.xlsx/g, '')) } })) }
+    expect(larga('products-details').length).toBeGreaterThan(200)
+    const h = await arnes(doc)
+    const [a] = await revisar(h.admin, '', [{ nombre: 'Libro1.xlsx' }])
+    const texto = String(a!['texto'])
+    expect(a!['clase']).toBe('ninguno')
+    expect(texto).not.toContain('Lo que Mira revisa')
+    for (const s of doc.slots) expect(texto).toContain(`«${s.label}»: ${describirPatron(s.accept).replace(/ No importan las mayúsculas\.$/, '')}`)
+    expect(texto.match(/No importan las mayúsculas/g)).toHaveLength(1)
+    expect(texto).toContain('La explicación completa de cada nombre está en la página de su tipo de archivo')
+    // Contra lo que armaba el código viejo con las mismas fichas: menos de la mitad.
+    const viejo = `Este nombre no corresponde a ningún archivo que puedas subir. Los nombres esperados son: ${doc.slots.map((s) => `«${s.label}»: ${s.ficha.nombre}`).join(' · ')}`
+    expect(texto.length).toBeLessThan(viejo.length / 2)
+    // El rechazo de la subida dice lo mismo.
+    const r = await subir(h.admin, '/cargar', [{ nombre: 'Libro1.xlsx' }])
+    expect(decodeURIComponent(loc(r))).not.toContain('Lo que Mira revisa')
+    // «Se recibió antes como…» habla de un solo tipo: ahí la ficha completa sí cabe.
+    await h.store.recordUpload({ slotId: 'maestro', filename: 'Tiendas viejo.xlsx', sha256: 'b'.repeat(64), bytes: 1, uploadedBy: 'x@ejemplo.cl', uploadedAt: iso(-100), ok: true, triggered: false, origen: 'upload' })
+    const [b] = await revisar(h.admin, '', [{ nombre: 'Tiendas viejo.xlsx' }])
+    expect(String(b!['texto'])).toContain(larga('Tiendas por zona'))
+  })
+
   it('NFD: un nombre descompuesto se normaliza a NFC y se enruta', async () => {
     const h = await arnes({ slots: [{ id: 'saldos', label: 'Saldos', domain: 'comercial', accept: 'Antig?edad de saldos *.xlsx', target: { ...ts, path: 'Files/s' } }] })
     const nfd = 'Antigüedad de saldos W1.xlsx'
