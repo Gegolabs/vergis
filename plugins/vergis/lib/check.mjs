@@ -1,13 +1,21 @@
 // check.mjs — `vergis-ops check`: ¿la declaración se puede usar? Sale con 0 o con 2, y NOMBRA el
-// defecto. Es local: no toca el host. Las advertencias (repo público, tag móvil) no suben el exit.
+// defecto. Las advertencias (repo público, tag móvil) no suben el exit.
+//
+// Toca el host UNA vez por instalación, y solo para leer: la SONDA del instrumento (#376) — ¿el
+// contenedor donde va a vivir el poller trae con qué correrlo? Descubrirlo en `poller start` es
+// descubrirlo en medio del acto. Si la sonda MIDE que no puede, es un defecto (2); si NO PUDO medir
+// (transporte, contenedor ausente o detenido), sale 7 y lo dice — jamás 0. `--offline` la salta y lo
+// declara: es el modo de autorar la declaración antes de que el host exista.
 
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { EXIT, out } from './util.mjs'
+import { EXIT, OpsExit, out, shq } from './util.mjs'
 import { loadDeclaration, localPath, mirrorRoot } from './declaration.mjs'
 import { composeServices, composeProjectName, movableTag, serviceOfContainer } from './compose.mjs'
+import { runRemote } from './transport.mjs'
+import { PROBE_SH, probeRefusal } from './poller.mjs'
 
 /** El servicio del compose del que se derivan los anillos: el mismo que `exec rollout ring-args` toma por omisión. */
 const RING_TEMPLATE = 'vergis'
@@ -42,7 +50,7 @@ function githubRepoOf(dir) {
   return m ? `${m[1]}/${m[2]}` : null
 }
 
-export function runCheck({ cwd, flag, installation }) {
+export async function runCheck({ cwd, flag, installation }, { offline = false } = {}) {
   const decl = loadDeclaration({ cwd, flag })
   const errors = decl.errors.map((e) => e.message)
   const warnings = []
@@ -52,6 +60,16 @@ export function runCheck({ cwd, flag, installation }) {
     const list = installation ? decl.doc.installations.filter((i) => i.id === installation) : decl.doc.installations
     if (installation && list.length === 0) errors.push(`--installation «${installation}» no está declarada`)
     for (const ins of list) checkInstallation(decl, ins, errors, warnings, notes)
+  }
+
+  // La sonda del instrumento, en el host — solo si la declaración ya es usable (sin ella no hay transporte).
+  const unmeasured = []
+  if (decl.doc && errors.length === 0) {
+    const list = installation ? decl.doc.installations.filter((i) => i.id === installation) : decl.doc.installations
+    for (const ins of list) {
+      if (offline) { notes.push(`«${ins.id}» instrumento: NO sondeé sus herramientas en el host (--offline)`); continue }
+      await probeInstrument(decl, ins, errors, notes, unmeasured)
+    }
   }
 
   // Superficie: la declaración es inventario operativo — no secreto, pero no público (D4).
@@ -74,6 +92,11 @@ export function runCheck({ cwd, flag, installation }) {
     for (const e of errors) out(`   ✗ ${e}`)
     out(`✗ NO USABLE (exit 2): ${errors.length} defecto(s). Ningún verbo opera con esta declaración hasta que check salga 0.`)
     return EXIT.NOT_RUN
+  }
+  if (unmeasured.length) {
+    for (const u of unmeasured) out(`   ? ${u}`)
+    out(`⚠ MEDÍ A MEDIAS (exit 7): la declaración es usable, pero no pude sondear el instrumento de ${unmeasured.length} instalación(es) — el poller podría no correr ahí, y se sabría recién en \`poller start\`.`)
+    return EXIT.PARTIAL
   }
   out(`✓ DECLARACIÓN USABLE (exit 0): ${decl.doc.installations.map((i) => i.id).join(' · ')}${warnings.length ? ` — con ${warnings.length} advertencia(s) que no suben el exit` : ''}`)
   return EXIT.OK
@@ -191,4 +214,30 @@ function instrumentHost(ins, compose, notes, tag) {
   }
   const moveHint = declared ? '' : ' Para recrearlo con el corte medido, mueve antes el instrumento a un contenedor de vida larga que ese acto no recree (instrument.container).'
   notes.push(`${tag} instrumento: vive en «${ct}» (${origin}) = servicio «${svc}». \`exec service ${svc} recreate\` se niega mientras el poller corra ahí.${moveHint}`)
+}
+
+/**
+ * ¿El contenedor del instrumento trae con qué correr el poller? La misma sonda que `poller start` corre
+ * en su viaje (#376), acá antes del acto: `sh` con las herramientas de `poller.sh`, o `node` para su
+ * hermano `poller-node.mjs`. Lo medido negativo es un defecto; lo no medido va a `unmeasured`.
+ */
+async function probeInstrument(decl, ins, errors, notes, unmeasured) {
+  const tag = `«${ins.id}»`
+  const ct = ins.instrument?.container ? shq(ins.instrument.container) : '"$RINGS_EDGE"'
+  let r
+  try {
+    r = await runRemote(decl, ins, String.raw`VO_CT=${ct}
+${PROBE_SH}
+vo_instr_probe || true`)
+  } catch (e) {
+    if (!(e instanceof OpsExit)) throw e
+    unmeasured.push(`${tag} instrumento: no pude sondearlo — ${e.message.split('\n')[0]} (exit ${e.code})`)
+    return
+  }
+  const pr = probeRefusal(r.lines)
+  if (pr?.measured) { errors.push(`${tag} instrumento: ${pr.text}`); return }
+  if (pr) { unmeasured.push(`${tag} instrumento: ${pr.text}`); return }
+  const ok = r.lines.find((l) => l.startsWith('INSTR '))?.split(' ')
+  if (!ok) { unmeasured.push(`${tag} instrumento: la sonda no respondió`); return }
+  notes.push(`${tag} instrumento: «${ok[1]}» puede alojar el poller — ${ok[2] === 'node' ? 'con `poller-node.mjs` (trae node, no las herramientas de `poller.sh`)' : 'con `poller.sh`'} (sondeado en el host)`)
 }

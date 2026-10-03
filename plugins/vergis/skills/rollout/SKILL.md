@@ -86,7 +86,9 @@ vergis-ops poller cn1 --ring <versión destino>   # el mismo poller contra el an
 - **El control negativo es obligatorio.** Si el CN-1 sale con alguna muestra OK, el instrumento está ciego: no se promueve con él. Si sale verde entero contra un standby, sospecha del **transporte** antes que del mecanismo (¿el poller apuntó adonde creías?).
 - **Línea base** de `instrument.baseline_seconds` (60 por omisión) antes del acto: sin baseline no hay intervalo que medir.
 - **El CN-1 caduca a los 30 minutos**: `promote` y `rollback` exigen uno contra el destino tomado en la última media hora. Si el acto se demora, se repite el CN-1 — el instrumento se prueba antes del acto, no de memoria.
-- Un cuerpo vacío o no-JSON es `MAL`; sin respuesta HTTP es `SINMEDIR`, que se cuenta aparte. «No pude medir» nunca es verde — y tampoco es «corte»: con el timeout de 2 s del poller, una retención de la sala de espera > 2 s sale `SINMEDIR` (ver §6 y #367).
+- Un cuerpo vacío o no-JSON es `MAL`; sin respuesta HTTP en el timeout es `SINMEDIR`, que se cuenta aparte. «No pude medir» nunca es verde — y tampoco es «corte».
+- **Cada muestra lleva su latencia** (`ms=`) y el timeout es de **10 s** por omisión (`poller start --timeout s`): la sala de espera **retiene** requests durante el relevo, y una retención es un OK lento, no un «no pude medir» (#367). La cuenta dice la latencia OK máxima y cuántas OK pasaron de 2 s.
+- **Dónde puede vivir:** un contenedor con `sh` y las herramientas de `poller.sh` (`wget`, `sed`…), o uno que traiga solo `node` ≥ 18 — ahí corre su hermano `poller-node.mjs`, con la misma línea y el mismo predicado (#376). `vergis-ops check` lo sondea en el host antes del acto y nombra lo que falta.
 
 ### 5 · Promover
 
@@ -103,7 +105,7 @@ El CLI espera un cierre (`--tail`, 10 s) con el poller corriendo y **cuenta el c
 1. `vergis-ops poller stop` — la cuenta final. **Ese número es el corte, no la duración del comando** (el comando miente: un `restart` devuelve en milisegundos mientras las rutas no sirven por segundos).
 2. **vergis:verify**: salud, que cada Let responda en todas sus vistas, y la paridad; si la instalación gobierna el dato o sirve PIs de Mira, además **custos:verify** (RLS por identidad) y **mira:status** (vistas, drills y marcas). El smoke de la herramienta mira conteos, no rutas.
 3. **La fila** en `governance.cuts_log`: fecha, acto, origen → destino con digests, corte medido, instrumento y versión, si corrió el CN-1. Si no se pudo medir, la fila va igual diciendo «sin medir» y por qué.
-   - **Límite conocido del poller del plugin** (issue #367): consulta con **timeout de 2 s** y **no mide latencia por muestra**. La sala de espera del borde **retiene** requests durante el relevo (retención máxima medida en producción: 2.011 ms), así que un `SINMEDIR` es compatible con una retención > 2 s —costo declarado del Producto, no necesariamente corte—. La cuenta del CLI lo suma a «fuera de predicado»; **en la fila, las muestras `SINMEDIR` van como «sin medir», no como «corte»**. Hipótesis no medida; el refutador y la condición están en #367: ninguna instalación retira su instrumento de medición de corte a favor de este poller hasta que mida retención.
+   - **La fila separa** `fuera de predicado` (las `MAL`: ESE es el corte) de `sin medir` (las `SINMEDIR`: sin respuesta HTTP en el timeout), y lleva la latencia OK máxima y el timeout del poller. Una muestra retenida por la sala de espera (máximo medido en producción: 2.011 ms) sale OK con su `ms=`, no `SINMEDIR` (#367).
 4. **Deja el previo caliente**: es la red del rollback y no cuesta nada.
 
 ## Volver atrás

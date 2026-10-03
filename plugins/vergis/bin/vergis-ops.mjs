@@ -3,7 +3,8 @@
 // `vergis-ops.json` del repo del operador. Node ≥ 22, sin dependencias.
 //
 // Verbos:
-//   check                          ¿la declaración se puede usar? (local; 0 o 2)
+//   check [--offline]              ¿la declaración se puede usar? (0 · 2; 7 si no pudo sondear el
+//                                  instrumento en el host — `--offline` no lo sondea)
 //   recon                          check + health + contract + parity + estado de anillos, sin tocar nada
 //   health                         el predicado canónico por el borde, y la fase de cada anillo
 //   contract [classify <archivo> | wait <archivo> | env <VAR>]
@@ -58,7 +59,7 @@ export function parseArgs(argv, flags = new Set()) {
   return o
 }
 
-const FLAGS = new Set(['dry-run', 'json', 'rls', 'help', 'no-pull', 'redigest', 'rmi', 'apply', 'no-schema-gate', 'keep-tool'])
+const FLAGS = new Set(['dry-run', 'json', 'rls', 'help', 'no-pull', 'redigest', 'rmi', 'apply', 'no-schema-gate', 'keep-tool', 'offline'])
 
 async function main() {
   const argv = process.argv.slice(2)
@@ -75,7 +76,7 @@ async function main() {
   const common = { cwd: process.cwd(), flag: o.declaration, installation: o.installation }
   switch (verb) {
     case 'check':
-      return (await import('../lib/check.mjs')).runCheck(common)
+      return (await import('../lib/check.mjs')).runCheck(common, { offline: o.offline })
     case 'recon':
       return (await import('../lib/recon.mjs')).runRecon(common, o)
     case 'health':

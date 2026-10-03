@@ -25,8 +25,8 @@ async function paso(nombre, fn) {
 
 export async function runRecon(common) {
   const codes = []
-  codes.push(runCheck(common))
-  if (codes[0] !== EXIT.OK) return EXIT.NOT_RUN
+  codes.push(await runCheck(common))
+  if (codes[0] === EXIT.NOT_RUN) return EXIT.NOT_RUN
   const { decl, ins } = resolveInstallation(common)
   out(`== vergis-ops recon · ${ins.id} ==`)
   codes.push(await paso('health', async () => {

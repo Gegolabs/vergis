@@ -20,7 +20,7 @@ const SCHEMA = JSON.parse(readFileSync(join(PLUGIN, 'schema/vergis-ops.schema.js
 describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', () => {
   it('1 · JSON inválido', () => {
     const dir = declarar('{ "schema_version": 1, ')
-    const r = cli(['check'], { cwd: dir })
+    const r = cli(['check', '--offline'], { cwd: dir })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/JSON inválido/)
   })
@@ -28,7 +28,7 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
   it('2 · id duplicado', () => {
     const d = minima()
     d.installations.push({ ...d.installations[0] })
-    const r = cli(['check'], { cwd: declarar(d) })
+    const r = cli(['check', '--offline'], { cwd: declarar(d) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/«prueba» está repetido/)
   })
@@ -37,7 +37,7 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
     const d = minima()
     d.installations.push({ ...d.installations[0], id: 'otra' })
     const dir = declarar(d)
-    expect(cli(['check'], { cwd: dir }).code).toBe(0) // la declaración en sí es válida…
+    expect(cli(['check', '--offline'], { cwd: dir }).code).toBe(0) // la declaración en sí es válida…
     const r = cli(['health'], { cwd: dir }) // …pero ningún verbo elige por el operador
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/nombra una con --installation/)
@@ -50,13 +50,13 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
     execFileSync('git', ['-C', dir, 'add', 'llave.pem'])
     const d = minima({ transport: { kind: 'ssh', host: 'host.ejemplo', user: 'op', identity_file: 'llave.pem' } })
     writeFileSync(join(dir, 'vergis-ops.json'), JSON.stringify(d))
-    const r = cli(['check'], { cwd: dir })
+    const r = cli(['check', '--offline'], { cwd: dir })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/identity_file.*NO está ignorado/)
   })
 
   it('5 · governance.source declarado e inexistente', () => {
-    const r = cli(['check'], { cwd: declarar(minima({ governance: { source: 'NORMA.md' } })) })
+    const r = cli(['check', '--offline'], { cwd: declarar(minima({ governance: { source: 'NORMA.md' } })) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/governance\.source: la norma citada no existe/)
   })
@@ -68,14 +68,14 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
       mirror: { families: [{ id: 'compose', kind: 'fixed', local: 'deploy/compose.yml', remote: 'compose.yml' }] },
       services: [{ name: 'fantasma', interrupting: true, reload: 'none' }],
     })
-    const r = cli(['check'], { cwd: declarar(d, { 'deploy/compose.yml': compose }) })
+    const r = cli(['check', '--offline'], { cwd: declarar(d, { 'deploy/compose.yml': compose }) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/services «fantasma»: no está en el compose del espejo/)
   })
 
   it('7 · una ruta local del espejo que no existe', () => {
     const d = minima({ mirror: { families: [{ id: 'specs', kind: 'sweep', local: 'no/existe', remote: 'specs' }] } })
-    const r = cli(['check'], { cwd: declarar(d) })
+    const r = cli(['check', '--offline'], { cwd: declarar(d) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/la ruta local «no\/existe» no existe/)
   })
@@ -83,7 +83,7 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
   it('8 · --declaration con transporte ssh (la frontera del Producto)', () => {
     const d = minima({ transport: { kind: 'ssh', host: 'host.ejemplo', user: 'op' } })
     const dir = declarar(d)
-    const r = cli(['check', '--declaration', join(dir, 'vergis-ops.json')])
+    const r = cli(['check', '--offline', '--declaration', join(dir, 'vergis-ops.json')])
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/--declaration solo admite transporte «local»/)
   })
@@ -91,7 +91,7 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
   it('9 · falta host.root', () => {
     const d = minima()
     delete d.installations[0].host.root
-    const r = cli(['check'], { cwd: declarar(d) })
+    const r = cli(['check', '--offline'], { cwd: declarar(d) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/falta la clave obligatoria «installations\[0\]\.host\.root»/)
   })
@@ -99,7 +99,7 @@ describe('check · nueve declaraciones rotas salen con 2 y nombran el defecto', 
 
 describe('check · la declaración mínima es usable', () => {
   it('sale 0 con solo id, transport, host.root y rings', () => {
-    const r = cli(['check'], { cwd: declarar(minima()) })
+    const r = cli(['check', '--offline'], { cwd: declarar(minima()) })
     expect(r.code, r.all).toBe(0)
     expect(r.all).toMatch(/DECLARACIÓN USABLE/)
   })
@@ -111,7 +111,7 @@ describe('check · la declaración mínima es usable', () => {
   })
 
   it('rings.env con un secreto inline se rechaza', () => {
-    const r = cli(['check'], { cwd: declarar(minima({ rings: { env: { RINGS_GATE_TOKEN: 'abc' } } })) })
+    const r = cli(['check', '--offline'], { cwd: declarar(minima({ rings: { env: { RINGS_GATE_TOKEN: 'abc' } } })) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/parece un secreto inline/)
   })
@@ -122,7 +122,7 @@ describe('check · la declaración mínima es usable', () => {
       host: { root: '/srv/x', compose_file: '/srv/x/compose.yml' },
       mirror: { families: [{ id: 'compose', kind: 'fixed', local: 'compose.yml', remote: 'compose.yml' }] },
     })
-    const r = cli(['check'], { cwd: declarar(d, { 'compose.yml': compose }) })
+    const r = cli(['check', '--offline'], { cwd: declarar(d, { 'compose.yml': compose }) })
     expect(r.code, r.all).toBe(0)
     expect(r.all).toMatch(/usa un tag móvil/)
   })
@@ -132,7 +132,7 @@ describe('check · la declaración mínima es usable', () => {
       host: { root: '/srv/x', compose_file: '/srv/x/compose.yml' },
       mirror: { families: [{ id: 'compose', kind: 'fixed', local: 'compose.yml', remote: 'compose.yml' }] },
     })
-    return cli(['check'], { cwd: declarar(d, { 'compose.yml': compose }) })
+    return cli(['check', '--offline'], { cwd: declarar(d, { 'compose.yml': compose }) })
   }
 
   it('#370 · una imagen construida localmente (build:) no tiene tag móvil; la misma imagen sin build sí', () => {
@@ -160,7 +160,7 @@ describe('check · la declaración mínima es usable', () => {
 
   it('el transporte que nombra un host ausente de RESOURCES.md es defecto', () => {
     const d = minima({ transport: { kind: 'az-run-command', resource_group: 'rg-x', vm: 'vm-x', expected_account: 'op@x' } })
-    const r = cli(['check'], { cwd: declarar(d, { 'RESOURCES.md': '# Accesos\n\n| rg-x | … |\n' }) })
+    const r = cli(['check', '--offline'], { cwd: declarar(d, { 'RESOURCES.md': '# Accesos\n\n| rg-x | … |\n' }) })
     expect(r.code, r.all).toBe(2)
     expect(r.all).toMatch(/vm-x: el transporte lo nombra y RESOURCES\.md no/)
   })

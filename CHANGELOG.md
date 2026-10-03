@@ -73,6 +73,40 @@ derivar nada, nombrando el anillo y la imagen: pasa la versión destino (`ring-a
 imagen sí lo trae. Si la que no lo trae es la versión destino, pide una ≥ 0.40.0. No toca el nodo ni
 exige nada a la instancia.
 
+### Corregido: el poller del plugin vive donde el acto no lo toca y mide retención (#376, #367)
+
+**El instrumento corre en un contenedor solo-node (#376).** `poller.sh` exige `sh`, `wget` y `sed`, y el
+contenedor de vida larga que una instalación declara para medir un recreate del borde puede ser un relay
+de Node que no los trae. El plugin suma su hermano `instruments/poller-node.mjs`: la misma línea por
+muestra, el mismo vocabulario y el predicado de `lib/predicate.mjs`, sin ninguna herramienta del
+contenedor fuera de `node`. Lo elige una sonda en el host, la que corren `poller start` y `poller cn1`.
+Si el contenedor trae las dos cosas, gana `poller.sh`.
+
+**`check` sondea el instrumento antes del acto (#376).** Esa sonda llegaba recién en `poller start`, en
+medio del acto. Ahora `vergis-ops check` la corre en el host y sale **2** nombrando lo que falta. Si no
+puede sondear, porque falla el transporte o el contenedor no existe o está detenido, sale **7** y no 0.
+`--offline` salta la sonda y lo declara, para autorar la declaración antes de que el host exista.
+`recon` sigue de largo con un 7 de `check` y se detiene solo con un 2.
+
+**Retención (#367).** El timeout por muestra pasa de 2 s a **10 s** por omisión (`poller start --timeout
+s`, entre 1 y 60). Cada muestra lleva su latencia (`ms=`). La cuenta informa la latencia OK máxima y
+cuántas OK pasaron de 2 s. **La fila del corte separa** `fuera de predicado` (las `MAL`) de `sin medir`
+(las `SINMEDIR`), que antes sumaba en un solo número. De paso, `poller.sh` ya no le lee fase ni conteos
+a un cuerpo que no es JSON: la sala de espera le dejaba `phase=serving` en la línea de una muestra `MAL`.
+
+**Qué exige:** nada en la instancia; es plugin, del lado del operador. Tres cosas cambian para quien
+opera:
+
+- `check` toca el host: una lectura por instalación.
+- Con un timeout de 10 s, un nodo que cuelga los requests deja una muestra cada 10 s en vez de cuatro
+  por segundo. La serie sigue sin huecos silenciosos: cada muestra es `SINMEDIR`.
+- Un poller arrancado con el plugin anterior se sigue contando, como `sh` y con timeout de 2 s.
+
+**Sin medir:** el refutador de la hipótesis de #367 —que los `SINMEDIR` del banco son retención— exige
+el banco con Docker y no se corrió en este cambio. Lo medido es el instrumento: un request retenido
+2,5 s sale OK con `ms≥2500` y el mismo request con timeout de 1 s sale `SINMEDIR`, en los dos sabores.
+Contra BusyBox real, `poller.sh` no se midió. La prueba usa un `wget` falso con sus mensajes.
+
 ## 0.42.0 — 2026-09-30
 
 ### Tres plugins de operación: `vergis`, `custos` y `mira` (`CAP-209`, `CAP-217`, `CAP-218`; #387)

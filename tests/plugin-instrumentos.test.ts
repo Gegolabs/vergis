@@ -340,7 +340,7 @@ describe('parity: espejo↔host por sha256, con la guardia G1 y sus cinco inyect
     expect(d.out).toMatch(/EXCL +specs\/no-existe-en-el-espejo\.yaml +\(retirado\) — NO está en el espejo/)
     const r = cli(['parity'], { cwd: dir, env: e() })
     expect(r.out).toMatch(/EXCL +specs\/no-existe-en-el-espejo\.yaml .*NO está en el espejo/)
-    const c = cli(['check'], { cwd: dir, env: e() })
+    const c = cli(['check', '--offline'], { cwd: dir, env: e() })
     expect(c.code, c.all).toBe(0)
     expect(c.out).toMatch(/la exclusión «no-existe-en-el-espejo\.yaml» no está en el espejo/)
   })
