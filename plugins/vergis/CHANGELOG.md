@@ -5,6 +5,24 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
+## Sin publicar
+
+- **El hermano solo-node del poller (#376).** `instruments/poller-node.mjs` no se importa: el CLI le
+  antepone `PREDICATE_JS` al copiarlo, así que el predicado sigue escrito una sola vez, también dentro
+  del contenedor. Escribe su propio log y su pid (`--log`, `--pid`) porque el contenedor puede no traer
+  `sh`. Todas las operaciones del CLI sobre el contenedor (copiar, leer el log, ¿vive?, matar, el reloj,
+  la fase del standby) tienen su forma `node -e`, en `INSTR_SH`. La única con stdin es `vo_i_node_in`:
+  una `-i` en las demás se tragaría el resto del script.
+- **La sonda es una sola** (`PROBE_SH`), la de `check`, `poller start` y `cn1`. Distingue «medí que no
+  puede» (`NOTOOLS`, que es 2) de «no pude sondear» (`NOCT`, `STOPPEDCT` y `NODOCKER`, que son 7). Exige
+  a `poller.sh` todo lo que usa (`wget sed cut tr grep head date sleep cat`), no solo `wget` y `sed`.
+- **El registro del poller** lleva `flavor` y `timeout`. Uno sin esas claves, anterior a este cambio, se
+  lee como `sh` con 2 s.
+- **2xx en el hermano node** se juzga como 200, igual que `poller.sh`, porque BusyBox no distingue 2xx.
+  Los dos tienen que dar el mismo veredicto, y `tests/plugin-poller.test.ts` lo fija caso por caso.
+- **Supera la limitación de 0.42.0 (#367):** timeout de 10 s, latencia por muestra y fila separada. La
+  hipótesis del banco sigue sin medir (ver el `CHANGELOG.md` raíz).
+
 ## 0.42.0 — 2026-09-30
 
 - **El plugin se reparte en tres (#387, diseño `lab/work/288`)**: `vergis` queda con `setup` · `connect` ·

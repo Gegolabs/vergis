@@ -429,7 +429,7 @@ describe('exec service recreate: la guardia del contenedor que aloja el poller',
   it('check dice qué servicio aloja el instrumento, derivado del default', () => {
     const dir = repo({ services: SVC })
     writeFileSync(join(dir, 'compose.yml'), 'services:\n  caddy:\n    image: caddy:2.8.4\n    container_name: borde\n')
-    const r = cli(['check'], { cwd: dir })
+    const r = cli(['check', '--offline'], { cwd: dir })
     expect(r.code, r.all).toBe(0)
     expect(r.out).toMatch(/instrumento: vive en «borde» \(RINGS_EDGE, por omisión\) = servicio «caddy»/)
     expect(r.out).toMatch(/exec service caddy recreate` se niega mientras el poller corra ahí/)
