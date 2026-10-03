@@ -41,7 +41,7 @@ export {
   type ClaimDenialKind,
 } from './diagnose'
 export { trivialClickHouseProvider, type AuthorizationProvider } from './provider'
-export { parsePolicyStore, type DataPolicyDecl, type PolicyStoreDoc } from './store'
+export { parsePolicyStore, mergePolicyStores, type DataPolicyDecl, type PolicyStoreDoc, type PolicyStoreFile } from './store'
 export {
   resolveEntityStore,
   isEntityStore,

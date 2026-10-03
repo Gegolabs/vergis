@@ -121,4 +121,42 @@ export function parsePolicyStore(doc: (PolicyStoreDoc & { entities?: unknown; da
   return out
 }
 
+/** Un archivo del policy store ya parseado, con la ruta que lo nombra en los mensajes. */
+export interface PolicyStoreFile {
+  path: string
+  policies: Map<string, PolicyDecl>
+}
+
+/**
+ * Funde los archivos de `VERGIS_POLICIES` en un solo mapa, con la MISMA regla que rige dentro de un
+ * archivo (`dataset-duplicate`, #348): un dataset declarado en dos archivos lanza, nombrando las dos
+ * rutas. Sin esto el orden de la lista decidía en silencio, y el día que un lado fuera restrictivo y el
+ * otro `grant: all`, la RLS dependería de la posición del archivo en el env.
+ *
+ * Las declaraciones IDÉNTICAS también lanzan, y es elección (registrada en el PR de #348): idénticas
+ * hoy dejan de serlo con la primera edición de una de las dos copias, y entonces vuelve el last-wins
+ * que la regla existe para matar. Dentro de un archivo tampoco se toleran. Un dato, un solo lugar.
+ */
+export function mergePolicyStores(files: PolicyStoreFile[]): Map<string, PolicyDecl> {
+  const out = new Map<string, PolicyDecl>()
+  const origen = new Map<string, string>()
+  for (const f of files) {
+    for (const [ds, pol] of f.policies) {
+      const previo = origen.get(ds)
+      if (previo !== undefined) {
+        throw err(
+          'dataset-duplicate-across-files',
+          ds,
+          [previo, f.path],
+          `El dataset '${ds}' está declarado en dos archivos de VERGIS_POLICIES: '${previo}' y '${f.path}'. Con dos declaraciones ganaría la del último archivo de la lista, y el last-wins silencioso podría pisar la RLS con un 'grant: all' posterior.`,
+          `Dejar la política de '${ds}' en uno solo de los dos archivos.`,
+        )
+      }
+      origen.set(ds, f.path)
+      out.set(ds, pol)
+    }
+  }
+  return out
+}
+
 export type { PolicyDecl }

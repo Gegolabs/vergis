@@ -949,9 +949,11 @@ const INTAKE_BACKFILL_DDL = `CREATE TABLE IF NOT EXISTS intake_backfill (
   slot_id TEXT PRIMARY KEY, done_at TEXT NOT NULL, files INTEGER NOT NULL, errores INTEGER NOT NULL
 );`
 // ── Proyección de ingestión (issue #105): lo último conocido del motor, servible sin tocarlo ──
-// La identidad de una corrida es (process_id, started_at): el motor no entrega id de instancia, y
-// `started_at` se guarda TAL CUAL lo entrega (misma cadena ISO que usa el enlace al log de #99).
-// Su PK compuesta ES el índice de la consulta canónica (igualdad por proceso + orden por started_at).
+// `started_at` se guarda TAL CUAL lo entrega el motor (misma cadena ISO que usa el enlace al log de #99).
+// La PK compuesta ES el índice de la consulta canónica (igualdad por proceso + orden por started_at).
+// La IDENTIDAD de la corrida es `(process_id, instance_id)` desde #362, con el mismo diseño y la misma
+// razón que `intake_watch_run` (#361, ver abajo): Fabric le cambia el `startTimeUtc` a la corrida al
+// sacarla de la cola, y con el instante como clave la vista en cola quedaba `NotStarted` para siempre.
 const INGESTION_RUN_DDL = `CREATE TABLE IF NOT EXISTS ingestion_run (
   process_id TEXT NOT NULL,
   started_at TEXT NOT NULL,
@@ -960,6 +962,10 @@ const INGESTION_RUN_DDL = `CREATE TABLE IF NOT EXISTS ingestion_run (
   error TEXT,
   PRIMARY KEY (process_id, started_at)
 );`
+/** Las columnas e índice de identidad por id de #362: aditivos, como los de `intake_watch_run`. */
+const INGESTION_RUN_COLS = ['instance_id TEXT', 'superseded_by TEXT']
+const INGESTION_RUN_IDX_INSTANCE = `CREATE UNIQUE INDEX IF NOT EXISTS idx_ingestion_run_instance
+  ON ingestion_run (process_id, instance_id) WHERE instance_id IS NOT NULL;`
 const INGESTION_PROCESS_STATE_DDL = `CREATE TABLE IF NOT EXISTS ingestion_process_state (
   process_id TEXT PRIMARY KEY,
   schedule_seconds INTEGER,
@@ -1001,7 +1007,7 @@ const INTAKE_WATCH_LANDING_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_landin
 // único parcial), así que una versión anterior que abra este archivo en un rollback sigue escribiendo
 // con su `ON CONFLICT(slot_id, started_at)` sin tropezar (sus filas llevan `instance_id` NULL, que el
 // índice parcial no mira). El costo: dos instancias DISTINTAS con el mismo `startTimeUtc` al 1e-7 s no
-// caben — ver `upsertSlotRun`.
+// caben — ver `upsertCorrida`.
 const INTAKE_WATCH_RUN_DDL = `CREATE TABLE IF NOT EXISTS intake_watch_run (
   slot_id TEXT NOT NULL,
   started_at TEXT NOT NULL,
@@ -1025,6 +1031,13 @@ const INTAKE_WATCH_RUN_IDX_INSTANCE = `CREATE UNIQUE INDEX IF NOT EXISTS idx_int
 const SUSTITUCION_VENTANA_MS = DEFAULT_MAX_RUN_MINUTES * 60_000
 /** Estados de una corrida que YA arrancó: solo una de estas puede sustituir a una fila en cola. */
 const ARRANCADA: ReadonlySet<string> = new Set(['InProgress', 'Completed', 'Failed'])
+
+/** Las dos proyecciones de corridas que identifican la corrida por su id de instancia: la del intake
+ *  por slot (#361) y la de procesos (#362). Los nombres son constantes del código, nunca entrada: por
+ *  eso se interpolan en el SQL. */
+interface TablaDeCorridas { readonly tabla: 'intake_watch_run' | 'ingestion_run'; readonly llave: 'slot_id' | 'process_id' }
+const CORRIDAS_INTAKE: TablaDeCorridas = { tabla: 'intake_watch_run', llave: 'slot_id' }
+const CORRIDAS_INGESTION: TablaDeCorridas = { tabla: 'ingestion_run', llave: 'process_id' }
 
 const instanteDe = (s: string): number => Date.parse(/(?:[Zz]|[+-]\d\d:?\d\d)$/.test(s) ? s : `${s}Z`)
 
@@ -1073,9 +1086,9 @@ export function emparejarSustituidas(filas: FilaDeCorridaProyectada[], ventanaMs
  *
  * Nunca borra: marca `superseded_by` y la fila deja de proyectarse. La poda por retención la retira.
  */
-function cerrarSustituidas(db: SqlDb, slotId: string): number {
-  const stmt = db.prepare(`SELECT started_at, status, instance_id, superseded_by FROM intake_watch_run WHERE slot_id = ?`)
-  stmt.bind([slotId])
+function cerrarSustituidas(db: SqlDb, clave: string, { tabla, llave }: TablaDeCorridas = CORRIDAS_INTAKE): number {
+  const stmt = db.prepare(`SELECT started_at, status, instance_id, superseded_by FROM ${tabla} WHERE ${llave} = ?`)
+  stmt.bind([clave])
   const filas: FilaDeCorridaProyectada[] = []
   while (stmt.step()) {
     const r = stmt.getAsObject() as { started_at: string; status: string; instance_id: string | null; superseded_by: string | null }
@@ -1084,25 +1097,26 @@ function cerrarSustituidas(db: SqlDb, slotId: string): number {
   stmt.free()
   const pares = emparejarSustituidas(filas)
   for (const [huerfana, sustituta] of pares)
-    db.run(`UPDATE intake_watch_run SET superseded_by = ? WHERE slot_id = ? AND started_at = ? AND instance_id IS NULL`, [sustituta, slotId, huerfana])
+    db.run(`UPDATE ${tabla} SET superseded_by = ? WHERE ${llave} = ? AND started_at = ? AND instance_id IS NULL`, [sustituta, clave, huerfana])
   return pares.size
 }
 
-/** La colisión inobservada de `upsertSlotRun`: dos instancias DISTINTAS con el mismo `started_at` en
+/** La colisión inobservada de `upsertCorrida`: dos instancias DISTINTAS con el mismo `started_at` en
  *  el mismo slot. La PK `(slot_id, started_at)` no admite las dos; no se destruye nada, pero tampoco se
  *  calla. Mismo canal que los avisos del plano de escritura (`[store]` en stderr). */
-function avisarColision(slotId: string, startedAt: string, id: string, otroId: string, efecto: string): void {
+function avisarColision(tabla: string, clave: string, startedAt: string, id: string, otroId: string, efecto: string): void {
   console.warn(
-    `[store] intake_watch_run: dos instancias con el mismo started_at en '${slotId}' (${startedAt}: '${id}' y '${otroId}') — ${efecto}.`,
+    `[store] ${tabla}: dos instancias con el mismo started_at en '${clave}' (${startedAt}: '${id}' y '${otroId}') — ${efecto}.`,
   )
 }
 
 /**
- * Upsert de UNA corrida observada. Con `instanceId`, la identidad es el id: la corrida que el motor
+ * Upsert de UNA corrida observada, en la proyección del intake (`clave` = slot, #361) o en la de
+ * procesos (`clave` = proceso, #362). Con `instanceId`, la identidad es el id: la corrida que el motor
  * reporta con otro `started_at` actualiza SU fila en vez de nacer de nuevo (la fantasma no puede nacer).
  * Sin `instanceId` (motor sin id), la identidad sigue siendo el instante, como antes.
  */
-function upsertSlotRun(db: SqlDb, slotId: string, r: RunRecord): void {
+function upsertCorrida(db: SqlDb, clave: string, r: RunRecord, { tabla, llave }: TablaDeCorridas = CORRIDAS_INTAKE): void {
   const uno = (sql: string, params: (string | null)[]): Record<string, unknown> | null => {
     const st = db.prepare(sql)
     st.bind(params)
@@ -1115,14 +1129,14 @@ function upsertSlotRun(db: SqlDb, slotId: string, r: RunRecord): void {
   const id = r.instanceId?.trim() || null
   if (id == null) {
     db.run(
-      `INSERT INTO intake_watch_run (slot_id, started_at, ended_at, status, error) VALUES (?,?,?,?,?)
-       ON CONFLICT(slot_id, started_at) DO UPDATE SET ended_at=excluded.ended_at, status=excluded.status, error=excluded.error`,
-      [slotId, r.startedAt, ended, r.status, error],
+      `INSERT INTO ${tabla} (${llave}, started_at, ended_at, status, error) VALUES (?,?,?,?,?)
+       ON CONFLICT(${llave}, started_at) DO UPDATE SET ended_at=excluded.ended_at, status=excluded.status, error=excluded.error`,
+      [clave, r.startedAt, ended, r.status, error],
     )
     return
   }
-  const propia = uno(`SELECT started_at FROM intake_watch_run WHERE slot_id = ? AND instance_id = ?`, [slotId, id])
-  const ocupante = uno(`SELECT started_at, instance_id FROM intake_watch_run WHERE slot_id = ? AND started_at = ?`, [slotId, r.startedAt])
+  const propia = uno(`SELECT started_at FROM ${tabla} WHERE ${llave} = ? AND instance_id = ?`, [clave, id])
+  const ocupante = uno(`SELECT started_at, instance_id FROM ${tabla} WHERE ${llave} = ? AND started_at = ?`, [clave, r.startedAt])
   const ocupanteId = ocupante?.['instance_id'] == null ? null : String(ocupante['instance_id'])
   if (propia) {
     let startedAt = r.startedAt
@@ -1130,15 +1144,15 @@ function upsertSlotRun(db: SqlDb, slotId: string, r: RunRecord): void {
       // El instante nuevo ya lo ocupa otra fila. Sin id, es ESTA corrida vista por la versión anterior
       // (su clave era justo ese instante): se absorbe. Con otro id serían dos instancias con el mismo
       // `startTimeUtc` al 1e-7 s —no observado nunca—; no se destruye nada y se conserva el instante previo.
-      if (ocupanteId == null) db.run(`DELETE FROM intake_watch_run WHERE slot_id = ? AND started_at = ? AND instance_id IS NULL`, [slotId, r.startedAt])
+      if (ocupanteId == null) db.run(`DELETE FROM ${tabla} WHERE ${llave} = ? AND started_at = ? AND instance_id IS NULL`, [clave, r.startedAt])
       else {
         startedAt = String(propia['started_at'])
-        avisarColision(slotId, r.startedAt, id, ocupanteId, 'la corrida conserva su instante previo')
+        avisarColision(tabla, clave, r.startedAt, id, ocupanteId, 'la corrida conserva su instante previo')
       }
     }
     db.run(
-      `UPDATE intake_watch_run SET started_at = ?, ended_at = ?, status = ?, error = ?, superseded_by = NULL WHERE slot_id = ? AND instance_id = ?`,
-      [startedAt, ended, r.status, error, slotId, id],
+      `UPDATE ${tabla} SET started_at = ?, ended_at = ?, status = ?, error = ?, superseded_by = NULL WHERE ${llave} = ? AND instance_id = ?`,
+      [startedAt, ended, r.status, error, clave, id],
     )
     return
   }
@@ -1147,16 +1161,16 @@ function upsertSlotRun(db: SqlDb, slotId: string, r: RunRecord): void {
     // había cerrado como sustituida, se reabre: el motor acaba de decir que sigue ahí con ese instante).
     if (ocupanteId == null)
       db.run(
-        `UPDATE intake_watch_run SET instance_id = ?, ended_at = ?, status = ?, error = ?, superseded_by = NULL WHERE slot_id = ? AND started_at = ?`,
-        [id, ended, r.status, error, slotId, r.startedAt],
+        `UPDATE ${tabla} SET instance_id = ?, ended_at = ?, status = ?, error = ?, superseded_by = NULL WHERE ${llave} = ? AND started_at = ?`,
+        [id, ended, r.status, error, clave, r.startedAt],
       )
     // Con otro id: mismo caso inobservado de arriba. No se pisa la otra corrida, y esta queda SIN
     // proyectar mientras dure la colisión — por eso se avisa: el síntoma sería una corrida que el motor
     // lista y la proyección no.
-    else avisarColision(slotId, r.startedAt, id, ocupanteId, 'la corrida NO se proyecta')
+    else avisarColision(tabla, clave, r.startedAt, id, ocupanteId, 'la corrida NO se proyecta')
     return
   }
-  db.run(`INSERT INTO intake_watch_run (slot_id, started_at, ended_at, status, error, instance_id) VALUES (?,?,?,?,?,?)`, [slotId, r.startedAt, ended, r.status, error, id])
+  db.run(`INSERT INTO ${tabla} (${llave}, started_at, ended_at, status, error, instance_id) VALUES (?,?,?,?,?,?)`, [clave, r.startedAt, ended, r.status, error, id])
 }
 
 // ── Mapa identidad→claims (issue #159): el trust-base deja de ser un archivo del host ──
@@ -1363,6 +1377,9 @@ export class SqliteGovernanceStore implements GovernanceStore {
     db.run(INTAKE_REVERT_IDX)
     db.run(INTAKE_BACKFILL_DDL)
     db.run(INGESTION_RUN_DDL)
+    // #362 · identidad por id de instancia, como intake_watch_run: aditivo, compatible con un rollback.
+    ensureColumns(db, 'ingestion_run', INGESTION_RUN_COLS)
+    db.run(INGESTION_RUN_IDX_INSTANCE)
     db.run(INGESTION_PROCESS_STATE_DDL)
     db.run(INTAKE_WATCH_STATE_DDL)
     ensureColumns(db, 'intake_watch_state', INTAKE_WATCH_STATE_COLS)
@@ -2444,14 +2461,14 @@ export class SqliteGovernanceStore implements GovernanceStore {
       let escritas = 0
       for (const r of o.runs ?? []) {
         if (!r.startedAt) continue // sin clave posible: el motor no siempre entrega startTimeUtc
-        this.db.run(
-          `INSERT INTO ingestion_run (process_id, started_at, ended_at, status, error) VALUES (?,?,?,?,?)
-           ON CONFLICT(process_id, started_at) DO UPDATE SET ended_at=excluded.ended_at, status=excluded.status, error=excluded.error`,
-          [pid, r.startedAt, r.endedAt ?? null, r.status, r.error ?? null],
-        )
+        upsertCorrida(this.db, pid, r, CORRIDAS_INGESTION)
         escritas++
       }
-      if (escritas) this.pruneRuns(pid)
+      if (escritas) {
+        // DESPUÉS del upsert (criterio 4 de `cerrarSustituidas`): lo que el motor sigue listando ya se adoptó.
+        cerrarSustituidas(this.db, pid, CORRIDAS_INGESTION)
+        this.pruneRuns(pid)
+      }
       this.db.run(
         `INSERT INTO ingestion_process_state (process_id, schedule_seconds, observed_at, last_error, last_error_at)
          VALUES (?,?,?,NULL,NULL)
@@ -2485,14 +2502,15 @@ export class SqliteGovernanceStore implements GovernanceStore {
       const runs: RunRecord[] = []
       if (top > 0) {
         const stmt = this.db.prepare(
-          `SELECT started_at, ended_at, status, error FROM ingestion_run WHERE process_id = ? ORDER BY started_at DESC LIMIT ?`,
+          `SELECT started_at, ended_at, status, error, instance_id FROM ingestion_run WHERE process_id = ? AND superseded_by IS NULL ORDER BY started_at DESC LIMIT ?`,
         )
         stmt.bind([pid, top])
         while (stmt.step()) {
-          const r = stmt.getAsObject() as { started_at: string; ended_at?: string | null; status: string; error?: string | null }
+          const r = stmt.getAsObject() as { started_at: string; ended_at?: string | null; status: string; error?: string | null; instance_id?: string | null }
           const run: RunRecord = { startedAt: String(r.started_at), status: String(r.status) as RunStatus }
           if (r.ended_at != null) run.endedAt = String(r.ended_at)
           if (r.error != null) run.error = String(r.error)
+          if (r.instance_id != null) run.instanceId = String(r.instance_id)
           runs.push(run)
         }
         stmt.free()
@@ -2569,7 +2587,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
       let escritas = 0
       for (const r of o.runs ?? []) {
         if (!r.startedAt) continue // sin clave posible: el motor no siempre entrega startTimeUtc
-        upsertSlotRun(this.db, sid, r)
+        upsertCorrida(this.db, sid, r)
         escritas++
       }
       if (escritas) {
