@@ -63,6 +63,40 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### Consola SQL: el enlace al Datadoc (#405)
+
+Quien escribe SQL necesita saber qué significa cada tabla y cada columna. La Consola ofrece ahora,
+junto al editor, **«¿Qué significa cada tabla y cada columna? Abre el Datadoc ↗»**, que abre en
+pestaña nueva con `rel="noopener"`.
+
+**La dirección la declara la instancia**, con la env nueva **`VERGIS_CONSOLA_DATADOC_URL`**: una ruta del
+nodo (`/datadoc/`) o una URL `https://`, u `off` para apagar el enlace. Se valida al arrancar, y una
+dirección mala (`http://`, `javascript:`, `//otro-host`, una ruta sin `/` inicial, una URL con
+credenciales) **hace fallar el arranque** nombrando la env, como los numéricos de la Consola.
+
+**Sin la env**, el default depende del nodo:
+
+- **Si el nodo sirve su propio Datadoc** (`VERGIS_DATADOC=1`, CAP-197), el enlace apunta a `/datadoc/`.
+  Lo sirve el mismo proceso detrás del mismo gate, así que el enlace no puede apuntar a algo que no
+  existe.
+- **Si no lo sirve**, no hay enlace, y la página es **byte a byte** la de antes de este cambio. Se
+  midió: mismo sha256 que la de `main` en `6bb0fd5`.
+
+`/contrato` declara el destino vigente en `consola.datadoc` (`{ url, origen: "env" | "nodo" }`, o
+`null` sin enlace).
+
+**Qué exige:** nada para seguir igual. Dos cosas cambian para quien opera:
+
+- **Una instancia con la Consola y `VERGIS_DATADOC=1` encendidos verá el enlace sin configurar nada.**
+  Para no mostrarlo: `VERGIS_CONSOLA_DATADOC_URL=off`.
+- **Una instancia que sirve su Datadoc desde otro servicio** (otro contenedor detrás del mismo borde)
+  tiene que declararlo para que el enlace aparezca, p. ej. `VERGIS_CONSOLA_DATADOC_URL=/datadoc/`. Es
+  una env nueva y entra con restart.
+
+**Sin medir:** la conducta en un navegador real (la pestaña nueva, el `noopener`). La suite mide el HTML
+que sale, no lo que hace un navegador con él. El enlace va a la portada del Datadoc. El enlace por tabla
+queda fuera de esta versión (ver #405).
+
 ### Plugin `vergis`: `ring-args` sin versión contra una imagen anterior a 0.40.0 dice qué hacer (#396)
 
 Sin versión, `vergis-ops exec rollout ring-args` corre el generador de `ring.args` con la imagen del

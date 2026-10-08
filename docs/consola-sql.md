@@ -222,7 +222,41 @@ cada recarga.
 ```bash
 VERGIS_CONSOLA_ENABLED=1
 VERGIS_CONSOLA_SCOPE_GROUP=consola-sql   # el grupo se gestiona en Mira, no en AAD
+VERGIS_CONSOLA_DATADOC_URL=/datadoc/     # opcional: a dónde manda el enlace «Abre el Datadoc» (ver arriba)
 ```
+
+## ¿Cómo se llega al significado de cada tabla? (el enlace al Datadoc)
+
+Quien escribe SQL necesita saber qué significa cada tabla y cada columna. Junto al editor, la página
+ofrece **«¿Qué significa cada tabla y cada columna? Abre el Datadoc ↗»**, que abre en pestaña nueva
+(`target="_blank" rel="noopener"`). El destino se resuelve así, en este orden:
+
+| Caso | Destino | `/contrato.consola.datadoc` |
+|--|--|--|
+| `VERGIS_CONSOLA_DATADOC_URL` declarada | lo declarado | `{ url, origen: "env" }` |
+| `VERGIS_CONSOLA_DATADOC_URL=off` | sin enlace, aunque el nodo sirva su Datadoc | `null` |
+| sin declarar y el nodo sirve su Datadoc (`VERGIS_DATADOC=1`, CAP-197) | `/datadoc/` | `{ url: "/datadoc/", origen: "nodo" }` |
+| sin declarar y sin Datadoc del nodo | sin enlace — la página es byte a byte la de antes | `null` |
+
+**Por qué ése es el default.** El Datadoc del nodo lo sirve el mismo proceso, detrás del mismo gate, en
+una ruta que el producto conoce: el enlace no puede apuntar a algo que no existe. Fuera de ese caso el
+producto no tiene cómo saber si hay un catálogo ni dónde, y un enlace adivinado sería peor que ninguno.
+Una instancia que sirve su Datadoc **desde otro servicio** (otro contenedor detrás del mismo borde, otro
+host) lo declara.
+
+**Qué admite la env**, validada al arrancar: una **ruta del nodo** que empiece con una sola `/`
+(`/datadoc/`) o una **URL `https://`** con host y sin usuario ni clave. Cualquier otra cosa —`http://`,
+`javascript:`, `//otro-host`, una ruta sin `/` inicial, espacios— **hace fallar el arranque** nombrando
+la env, como los numéricos de la Consola: un enlace mal escrito se descubre al desplegar, no cuando
+alguien pregunta por qué no aparece.
+
+```bash
+VERGIS_CONSOLA_DATADOC_URL=/datadoc/   # el Datadoc lo sirve otro servicio bajo el mismo borde
+```
+
+El enlace va a la portada del Datadoc, no a la tabla. El Datadoc del nodo tiene una URL estable por
+entidad, pero enlazar desde el árbol de esquema exige que el navegador derive el nombre de la página y
+sepa si esa tabla está en el build vigente. Eso no entra en esta versión (#405).
 
 ## ¿Qué queda fuera de la v1?
 
