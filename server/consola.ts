@@ -53,6 +53,32 @@ export interface ConsolaDeps {
   brandTitle?: string
   /** Menú de avatar ya renderizado para esta identidad (el marco de la plataforma). */
   avatar?(email: string): Promise<string>
+  /**
+   * Destino VIVO del enlace «Abre el Datadoc» (#405), ya resuelto por `destinoDatadoc`. Se lee por
+   * request, como `estado()`: así no depende del orden en que el proceso cablea las capacidades.
+   * Ausente o `null` ⇒ sin enlace, y la página es exactamente la de antes de la capacidad.
+   */
+  datadoc?(): DestinoDatadoc | null
+}
+
+/** A dónde manda la Consola a leer qué significa cada tabla, y quién lo decidió. */
+export interface DestinoDatadoc {
+  url: string
+  /** `env` = lo declaró la instancia (`VERGIS_CONSOLA_DATADOC_URL`) · `nodo` = el Datadoc propio (CAP-197). */
+  origen: 'env' | 'nodo'
+}
+
+/**
+ * Resuelve el destino del enlace (#405). Lo declarado por la instancia manda, y su `off` también —
+ * apaga el enlace aunque el nodo sirva su Datadoc. Sin declaración, el default es el Datadoc del
+ * nodo SI ESTÁ ENCENDIDO: lo sirve el mismo proceso, bajo el mismo gate, en una ruta que el producto
+ * conoce (`/datadoc/`), así que el enlace no puede apuntar a algo que no existe. Sin Datadoc propio
+ * no hay nada que el producto pueda afirmar que exista, y entonces no hay enlace.
+ */
+export function destinoDatadoc(declarado: string | false | null, nodoSirveDatadoc: boolean): DestinoDatadoc | null {
+  if (declarado === false) return null
+  if (declarado) return { url: declarado, origen: 'env' }
+  return nodoSirveDatadoc ? { url: '/datadoc/', origen: 'nodo' } : null
 }
 
 // ═══ I4 · el log append-only de la Consola ═══════════════════════════════════════════════════════
@@ -460,6 +486,7 @@ async function paginaConsola(
     `<span id="estado"></span></div>` +
     `<p class="cons-aviso">Esta consola muestra <b>lo que Mira mostraría <i>a ti</i></b>: tus filas, y las columnas con regla siempre enmascaradas. ` +
     `Es de solo lectura, garantizada por los permisos del principal de la conexión. Para administrar la fuente usa el SQL endpoint de Fabric con tu cuenta.</p>` +
+    enlaceDatadoc(deps.datadoc?.() ?? null) +
     `<textarea id="sql" spellcheck="false" placeholder="SELECT TOP 100 * FROM [dbo].[…]"></textarea>` +
     `<div class="cons-tabs" id="tabs"></div>` +
     `<div class="cons-res" id="res"></div>`
@@ -471,6 +498,20 @@ async function paginaConsola(
     `<script>(function(){var t='oscuro';try{t=localStorage.getItem('vergis:index-theme')||'oscuro'}catch(e){}document.documentElement.setAttribute('data-theme',t)})();</script>` +
     `<script>var VERGIS_CONSOLA=${cfg};\n${vtCsvCell.toString()}\n${xlsxUnaHoja.toString()}\n${CONSOLA_JS}</script>` +
     `</body></html>`
+  )
+}
+
+/**
+ * El enlace al Datadoc (#405), junto al editor. Sin destino devuelve `''` — no un nodo vacío ni una
+ * regla de CSS nueva —, para que la página sin la capacidad sea byte a byte la de antes. El estilo va
+ * en línea por esa misma razón. Pestaña nueva con `noopener`: la consola tiene una consulta en vuelo
+ * y un token CSRF que la página abierta no tiene por qué poder tocar vía `window.opener`.
+ */
+function enlaceDatadoc(destino: DestinoDatadoc | null): string {
+  if (!destino) return ''
+  return (
+    `<p class="cons-datadoc" style="margin:0;font-size:12.5px;color:var(--muted)">¿Qué significa cada tabla y cada columna? ` +
+    `<a href="${escapeHtml(destino.url)}" target="_blank" rel="noopener">Abre el Datadoc ↗</a></p>`
   )
 }
 

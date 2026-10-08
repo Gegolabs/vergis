@@ -119,6 +119,13 @@ export interface ConsolaConfig {
    * sirviendo. Subirlo es una decisión del operador de la instancia, no un default del Producto.
    */
   maxConcurrentes: number
+  /**
+   * Destino DECLARADO del enlace «Abre el Datadoc» de la página (#405), ya validado al arrancar:
+   * `string` = la instancia lo declaró (ruta del nodo `/…` o `https://…`) · `false` = la instancia lo
+   * apagó (`off`) · `null` = no declaró nada, y entonces decide `destinoDatadoc` (consola.ts): si el
+   * nodo sirve su propio Datadoc (CAP-197), `/datadoc/`; si no, sin enlace.
+   */
+  datadocUrl: string | false | null
 }
 
 /**
@@ -380,6 +387,15 @@ export const FATAL_ENVS: EnvClass[] = [
       'un tope de concurrencia que es NaN no acota NADA, y un límite que no limita es peor que ausente.',
     where: 'configFromEnv (`num`/`numOpt`)',
   },
+  {
+    envs: ['VERGIS_CONSOLA_DATADOC_URL'],
+    why:
+      'Es un href que el nodo pone en una página de su origen: un `javascript:`, un `http://` o un ' +
+      '`//otro-host` serían un enlace que el operador no quiso escribir, servido con la autoridad del ' +
+      'nodo. Degradar a «sin enlace» escondería el error hasta que alguien preguntara por qué no aparece; ' +
+      'lanzar lo dice al arrancar, como los numéricos de la Consola.',
+    where: 'consolaConfig → `parseConsolaDatadocUrl`',
+  },
 ]
 
 export const DEGRADABLE_ENVS: EnvClass[] = [
@@ -514,7 +530,38 @@ function consolaConfig(env: Env): ConsolaConfig {
     timeoutMs: num(env, 'VERGIS_CONSOLA_TIMEOUT_MS', 60_000),
     maxRows: num(env, 'VERGIS_CONSOLA_MAX_ROWS', 5_000),
     maxConcurrentes: Math.max(1, num(env, 'VERGIS_CONSOLA_MAX_CONCURRENTES', 1)),
+    datadocUrl: parseConsolaDatadocUrl(env['VERGIS_CONSOLA_DATADOC_URL']),
   }
+}
+
+/**
+ * Valida el destino del enlace al Datadoc de la Consola (#405). Admite exactamente dos formas:
+ *
+ * - **Ruta del nodo**: empieza con UNA `/` (`/datadoc/`). `//host` se rechaza: es una URL relativa al
+ *   protocolo, o sea OTRO host, disfrazada de ruta. Una ruta sin `/` inicial (`datadoc/`) también,
+ *   porque se resolvería contra `/consola/…` y cambiaría de destino según la página.
+ * - **`https://` con host**, sin usuario ni clave: una credencial en un href la lee todo el que abra
+ *   la Consola.
+ *
+ * `off` apaga el enlace aunque el nodo sirva su Datadoc; vacío o ausente = no declarado (`null`). El
+ * mensaje de error no repite el valor cuando trae credenciales, por la misma razón.
+ */
+export function parseConsolaDatadocUrl(raw: string | undefined): string | false | null {
+  const v = (raw ?? '').trim()
+  if (v === '') return null
+  if (v.toLowerCase() === 'off') return false
+  const regla = 'debe ser una ruta del nodo que empiece con una sola «/» (p. ej. /datadoc/) o una URL https://, o «off»'
+  if (/[\s\u0000-\u001f\u007f\\]/.test(v)) throw new Error(`Config inválida: VERGIS_CONSOLA_DATADOC_URL='${v}' trae espacios, controles o «\\»; ${regla}.`)
+  if (v.startsWith('/') && !v.startsWith('//')) return v
+  let u: URL | null = null
+  try {
+    u = new URL(v)
+  } catch {
+    /* no es URL absoluta: cae al error de abajo */
+  }
+  if (u && (u.username || u.password)) throw new Error(`Config inválida: VERGIS_CONSOLA_DATADOC_URL trae usuario o clave en la URL; ${regla}.`)
+  if (u && u.protocol === 'https:' && u.hostname) return v
+  throw new Error(`Config inválida: VERGIS_CONSOLA_DATADOC_URL='${v}'; ${regla}.`)
 }
 
 /**

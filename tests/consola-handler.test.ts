@@ -14,7 +14,7 @@ import type { ConsolaResultado } from '@vergis/capabilities'
 
 const SECRET = 'secreto-de-prueba'
 const TOKEN = csrfFactory(SECRET)('ana@ga.test')
-const CFG = { enabled: true, scopeGroup: 'consola-sql', timeoutMs: 1000, maxRows: 5, maxConcurrentes: 1 }
+const CFG = { enabled: true, scopeGroup: 'consola-sql', timeoutMs: 1000, maxRows: 5, maxConcurrentes: 1, datadocUrl: null }
 
 function req(method: string, url: string, user: string, body = ''): IncomingMessage {
   const r = Readable.from([body]) as unknown as IncomingMessage & { url: string; method: string; headers: Record<string, string> }

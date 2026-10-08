@@ -193,6 +193,7 @@ describe('configFromEnv · Consola SQL', () => {
       timeoutMs: 60_000,
       maxRows: 5_000,
       maxConcurrentes: 1,
+      datadocUrl: null,
     })
   })
 
@@ -213,5 +214,51 @@ describe('configFromEnv · Consola SQL', () => {
   it('un numérico inválido LANZA: un tope que es NaN no acota nada (FATAL_ENVS)', () => {
     expect(() => configFromEnv({ VERGIS_CONSOLA_MAX_ROWS: 'muchas' }, fixedSecret)).toThrow(/VERGIS_CONSOLA_MAX_ROWS/)
     expect(() => configFromEnv({ VERGIS_CONSOLA_TIMEOUT_MS: 'ya' }, fixedSecret)).toThrow(/VERGIS_CONSOLA_TIMEOUT_MS/)
+  })
+})
+
+// ── CONSOLA SQL · enlace al Datadoc (#405) ───────────────────────────────────────────────────────
+describe('configFromEnv · VERGIS_CONSOLA_DATADOC_URL', () => {
+  const url = (v: string | undefined) => configFromEnv(v === undefined ? {} : { VERGIS_CONSOLA_DATADOC_URL: v }, fixedSecret).consola.datadocUrl
+
+  it('ausente o vacía = no declarada (`null`); `off` = apagada (`false`)', () => {
+    expect(url(undefined)).toBeNull()
+    expect(url('')).toBeNull()
+    expect(url('   ')).toBeNull()
+    expect(url('off')).toBe(false)
+    expect(url(' OFF ')).toBe(false)
+  })
+
+  it('admite una ruta del nodo con UNA «/» inicial y una URL https:// con host', () => {
+    expect(url('/datadoc/')).toBe('/datadoc/')
+    expect(url(' /datadoc/index.html#indice ')).toBe('/datadoc/index.html#indice')
+    expect(url('https://docs.ga.test/datadoc/')).toBe('https://docs.ga.test/datadoc/')
+  })
+
+  it('una dirección mala hace FALLAR el arranque nombrando la env (FATAL, como los numéricos)', () => {
+    for (const mala of [
+      'http://docs.ga.test/datadoc/', // sin TLS
+      'javascript:alert(1)', // esquema ejecutable
+      'data:text/html,<b>x</b>',
+      '//otro-host.test/datadoc/', // relativa al protocolo: otro host disfrazado de ruta
+      'datadoc/', // relativa a la página: cambiaría de destino según /consola/…
+      'https://', // https sin host
+      '/datadoc/ index.html', // espacio interior
+      '/\\otro-host.test', // la barra invertida que algunos navegadores leen como «/»
+      'ftp://docs.ga.test/',
+    ]) {
+      expect(() => configFromEnv({ VERGIS_CONSOLA_DATADOC_URL: mala }, fixedSecret), mala).toThrow(/VERGIS_CONSOLA_DATADOC_URL/)
+    }
+  })
+
+  it('una URL con usuario o clave se rechaza SIN repetir la credencial en el error', () => {
+    let msg = ''
+    try {
+      configFromEnv({ VERGIS_CONSOLA_DATADOC_URL: 'https://ana:s3creta@docs.ga.test/' }, fixedSecret)
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e)
+    }
+    expect(msg).toMatch(/VERGIS_CONSOLA_DATADOC_URL trae usuario o clave/)
+    expect(msg).not.toContain('s3creta')
   })
 })

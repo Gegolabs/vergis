@@ -135,6 +135,8 @@ export interface ConsolaContract {
   scopeGroup?: string
   limites?: { timeoutMs: number; maxRows: number; maxConcurrentes: number }
   auditLog?: { path: string; exists: boolean }
+  /** #405 · enlace «Abre el Datadoc» de la página: destino y origen (`env` | `nodo`); `null` = sin enlace. */
+  datadoc?: { url: string; origen: 'env' | 'nodo' } | null
   conectores?: Record<string, { ofrecible: boolean; motivo?: string; verificadoEn?: string; medido?: unknown }>
 }
 

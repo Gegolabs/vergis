@@ -175,7 +175,7 @@ import { createReportLoop, REPORT_CHECK_MS } from './report'
 import type { CargasOps, IntakeUploadEvent } from './admin-cargas'
 import { computeBound, unionInjections, type DatasetCfg, type BoundDataset } from './engines/clickhouse'
 import { verifyFabricServability, createFabricSourceStateOf, maskViewCandidates, unmaskProbeSchemas, verificarConectorConsola, type PiVerdict, type ConsolaConectorEstado } from './engines/fabric'
-import { createConsola, createConsolaLog, validarPerfilesConsola, consolaMenuScope, type ConsolaHandler, type ConsolaLog } from './consola'
+import { createConsola, createConsolaLog, validarPerfilesConsola, consolaMenuScope, destinoDatadoc, type ConsolaHandler, type ConsolaLog } from './consola'
 import { fail, readBody } from './http-util'
 import { createRequestHandler } from './routes'
 import { createPdfClient, pdfFilename } from './pdf'
@@ -277,6 +277,9 @@ const contract = createContractRegistry({
         maxConcurrentes: config.consola.maxConcurrentes,
       },
       auditLog: { path: `${OUT}/consola-audit.log`, exists: existsSync(`${OUT}/consola-audit.log`) },
+      // #405 · el enlace al Datadoc que la página ofrece AHORA y quién lo decidió (`env` | `nodo`);
+      // `null` = la página no lo muestra. Misma función que la página: no pueden discrepar.
+      datadoc: destinoDatadoc(config.consola.datadocUrl, datadoc !== null),
       conectores: Object.fromEntries(
         Object.keys(connections ?? {}).map((ref) => {
           const e = consolaState.get(ref)
@@ -2845,6 +2848,9 @@ if (config.consola.enabled) {
           signoutRd: SIGNOUT_RD || '/',
         })
       },
+      // #405 · se resuelve por request, sobre el `datadoc` vivo (CAP-197): el enlace no depende del
+      // orden en que este archivo cablea las dos capacidades.
+      datadoc: () => destinoDatadoc(config.consola.datadocUrl, datadoc !== null),
     })
     console.log(`[consola] Consola SQL activa · grupo '${config.consola.scopeGroup}' · ${config.consola.maxRows} filas · ${config.consola.maxConcurrentes} consulta(s) a la vez`)
   }
