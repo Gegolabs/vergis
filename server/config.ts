@@ -560,7 +560,10 @@ export function parseConsolaDatadocUrl(raw: string | undefined): string | false 
     /* no es URL absoluta: cae al error de abajo */
   }
   if (u && (u.username || u.password)) throw new Error(`Config inválida: VERGIS_CONSOLA_DATADOC_URL trae usuario o clave en la URL; ${regla}.`)
-  if (u && u.protocol === 'https:' && u.hostname) return v
+  // `https:host` y `https:/host` los parsea `new URL` como absolutos, pero en un href sobre una página
+  // https el navegador los resuelve RELATIVOS a ella (mismo esquema especial): `https:docs.test` desde
+  // `/consola/sql` lleva a `/consola/docs.test` del propio nodo. Se exige la forma literal `https://`.
+  if (u && u.protocol === 'https:' && u.hostname && /^https:\/\//i.test(v)) return v
   throw new Error(`Config inválida: VERGIS_CONSOLA_DATADOC_URL='${v}'; ${regla}.`)
 }
 

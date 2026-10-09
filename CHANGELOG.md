@@ -71,8 +71,8 @@ pestaña nueva con `rel="noopener"`.
 
 **La dirección la declara la instancia**, con la env nueva **`VERGIS_CONSOLA_DATADOC_URL`**: una ruta del
 nodo (`/datadoc/`) o una URL `https://`, u `off` para apagar el enlace. Se valida al arrancar, y una
-dirección mala (`http://`, `javascript:`, `//otro-host`, una ruta sin `/` inicial, una URL con
-credenciales) **hace fallar el arranque** nombrando la env, como los numéricos de la Consola.
+dirección mala (`http://`, `javascript:`, `//otro-host`, `https:host` sin las dos barras, una ruta sin `/`
+inicial, una URL con credenciales) **hace fallar el arranque** nombrando la env, como los numéricos de la Consola.
 
 **Sin la env**, el default depende del nodo:
 
