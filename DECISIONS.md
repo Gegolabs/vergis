@@ -9,6 +9,18 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-81 · 2026-10-09 — El corte 0.43.0 se completa: `fab:proof` en la Mac, juez Sonnet, merge de #410 y tag `v0.43.0`
+
+- **Qué cambió desde D-80** (medido por el despachador y dicho en el encargo): César deshabilitó los rulesets `purga-candado-ramas` y `purga-candado-tags`. Además, `fab:proof` no es un acto suyo: se corre en su Mac, cuya sesión `az` alcanza la suscripción ultrabase, como en los cortes anteriores. Las dos razones de D-80 dejaron de valer.
+- **Bifurcación**: (a) correr el arnés en el clon de la Mac · (b) correrlo en un worktree temporal sobre la rama del PR.
+- **Decidido**: **(b)**. Se usó `wt/corte-0430`, desprendido de `origin/release/0.43.0`, y se retiró al terminar. Con (a) el árbol de trabajo de César habría cambiado de rama. La ventana entera vive en un script con la pausa en el `trap`.
+- **Primer tramo**: sin fallos, con código 3 y 1 sin medir (C2). Faltó exportar `FAB_CONSOLA_SP_*`. **Segundo tramo**: C2 con `vergis-lab-serving-sp` (`Viewer`) como segundo principal, igual que de 0.35.0 a 0.42.0, y 90 s de calentamiento. Resultado: sin fallos, 26 hallazgos, 0 sin medir. `Paused` verificado tras cada tramo. Gasto ≈ US$0,058, bajo POL-01 (ledger).
+- **Juez sustituido otra vez**: Fable 5.1 devolvió HTTP 429. El veredicto de composición de #410 lo dio Sonnet 5.5: COMPONE, comentado en el PR. Al ser de otro modelo que el autor (Opus 5.5), cumple la Norma 8.
+- **Se hizo**: la fecha de la sección pasó a 2026-10-09 (`9ed243b`). Con el CI verde, #410 entró a `main` por squash (`b48de67`). El tag anotado `v0.43.0` (objeto `90f6655`) apunta a ese commit. `build.yml` (run 37937981877) publicó `0.43.0`, `0.43`, `latest` y `sha-b48de67`, todos con el digest `sha256:3b37d6915d9e7aefd5f9178354184eae2c3c724c82ab490271983ba02dfccf5a`.
+- **No se hizo**: la promoción al anillo de A.R.B.O.L. Es de César, con poller y CN-1.
+- **Costo de revertir**: el tag no se reescribe (CHANGELOG). Revertir significa cortar una 0.43.1 o hacer `git revert` del merge. La capacidad no queda encendida.
+- **Modelo autor**: claude-opus-5-5 (ejecutor headless del despachador).
+
 ## D-80 · 2026-10-09 — El corte 0.43.0 queda listo en el PR #410 sin mergear; el candado de tags no se abre en nombre de César
 
 - **Bifurcación**: el mandato pide cortar la versión y dejarla lista para promover. Al cortar apareció que el ruleset `purga-candado-tags` (activo desde 2026-09-30 23:10 -03, medido por la API de rulesets) prohíbe crear cualquier tag y **no tiene bypass para nadie**. Las opciones: (a) agregar `simon-alero` al bypass, empujar `v0.43.0` y volver a cerrarlo · (b) mergear el corte a `main` sin tag · (c) dejar el corte listo en un PR sin mergear y pedir el tag a César.
