@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.43.0 — 2026-10-09
 
-### Corregido: con muchas series, la leyenda se parte en filas y el gráfico deja de achicarse (#365)
+### Corregido: con muchas series, la leyenda se parte en filas y el gráfico deja de achicarse (#365, PR #407)
 
 La leyenda de los gráficos multi-serie va arriba y en una sola fila (CV-05). Con muchas series, esa
 fila era más ancha que el área de datos y fijaba el ancho del SVG. Al encajar el SVG en su columna,
@@ -89,7 +89,7 @@ cabe en media columna es el área de datos misma.
 se sirve. Las barras no crecen más allá del ancho del área de datos: cuando la columna de la rejilla es más ancha
 que el SVG, el gráfico queda a tamaño real y sobra espacio a la derecha.
 
-### Consola SQL: el enlace al Datadoc (#405)
+### Consola SQL: el enlace al Datadoc (#405; PRs #406, #409)
 
 Quien escribe SQL necesita saber qué significa cada tabla y cada columna. La Consola ofrece ahora,
 junto al editor, **«¿Qué significa cada tabla y cada columna? Abre el Datadoc ↗»**, que abre en
@@ -123,7 +123,7 @@ inicial, una URL con credenciales) **hace fallar el arranque** nombrando la env,
 que sale, no lo que hace un navegador con él. El enlace va a la portada del Datadoc. El enlace por tabla
 queda fuera de esta versión (ver #405).
 
-### Plugin `vergis`: `ring-args` sin versión contra una imagen anterior a 0.40.0 dice qué hacer (#396)
+### Plugin `vergis`: `ring-args` sin versión contra una imagen anterior a 0.40.0 dice qué hacer (#396, PR #401)
 
 Sin versión, `vergis-ops exec rollout ring-args` corre el generador de `ring.args` con la imagen del
 **anillo activo**, y el generador viaja en la imagen recién desde 0.40.0 (#366). Contra una activa
@@ -218,6 +218,19 @@ Ahora muestra el patrón de cada tipo, dice una sola vez que no importan las may
 página de cada tipo. El caso «se recibió antes como…», que habla de un solo tipo, conserva la ficha.
 
 **Qué exige:** nada. Cambia un texto de la interfaz.
+
+### Dependencias
+
+- `mssql` ^12.7.0 → **^12.7.2** (#364): patch dentro del mismo minor. Es el driver de los motores SQL
+  y viaja en la imagen. La suite pasa igual; no se midió contra un motor vivo.
+- Imagen base `node:22-slim` con digest nuevo (#363), el mismo tag `22-slim` reconstruido aguas arriba.
+  También cambia el digest de `caddy:2` en `deploy/compose.reference.yml`, que es la referencia y no la
+  instancia. Sin cambio de comportamiento observado: el CI construyó la imagen y pasó la suite.
+
+### Otros cambios en el rango que no viajan al operador
+
+`ci(build)` construye la imagen en cada PR sin publicarla (#334, #398). `capacidades:cotejo` gobierna
+la columna «Desde» del catálogo (#335, #399). `NEXT.md` y `RESOURCES.md` salen del repo público (#397).
 
 ## 0.42.0 — 2026-09-30
 
