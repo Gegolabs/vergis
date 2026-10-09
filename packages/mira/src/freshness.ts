@@ -26,6 +26,8 @@ interface FreshnessDecl {
   dataset: string
   /** Ruta `dataset.campo` resoluble contra `results`. */
   watermarkPath: string
+  /** Duración ISO 8601 del SLA, o `''` si la declaración no trae `max_age`: entonces la marca de agua
+   *  DECLARA EL CORTE (as-of del header, #108) y nunca se evalúa atraso (#411). */
   maxAgeRaw: string
   timezone: string
 }
@@ -38,6 +40,8 @@ interface FreshnessDecl {
  * Se evalúa cada declaración cuyo dataset esté RECUPERADO en `results`; el veredicto agregado es el
  * MÁS STALE (la mayor antigüedad relativa gana) y `staleDatasets` nombra a todos los atrasados.
  * `source_watermark: ignore` (global) apaga solo el check global; los por-dataset son independientes.
+ * Sin `max_age` (global o por-dataset) la declaración no tiene SLA: la marca de agua se resuelve y
+ * declara el corte, pero el veredicto es siempre fresco y no hay banner (#411).
  */
 export function checkFreshness(
   spec: MiraSpec,
@@ -79,7 +83,7 @@ function collectFreshnessDecls(spec: MiraSpec): FreshnessDecl[] {
     const maxAgeRaw = String(global['max_age'] ?? '')
     const raw = String(global['watermark_field'] ?? '')
     const path = raw.startsWith('data.') ? raw.slice('data.'.length) : raw
-    if (maxAgeRaw && path) {
+    if (path) {
       out.push({
         dataset: path.split('.')[0] ?? '',
         watermarkPath: path,
@@ -93,7 +97,7 @@ function collectFreshnessDecls(spec: MiraSpec): FreshnessDecl[] {
     if (!f) continue
     const maxAgeRaw = String(f['max_age'] ?? '')
     const field = String(f['watermark_field'] ?? '') // un CAMPO del propio dataset
-    if (!maxAgeRaw || !field) continue
+    if (!field) continue
     out.push({
       dataset: name,
       watermarkPath: `${name}.${field}`,
@@ -119,6 +123,13 @@ function checkOne(
   if (!watermark) return { checked: true, stale: false }
   // El grano lo trae el DATO: si el valor original era string, ese string es el corte tal cual.
   const watermarkRaw = typeof watermarkValue === 'string' ? watermarkValue : watermark.toISOString()
+
+  // SIN SLA (#411): la marca de agua declara el corte y jamás se evalúa atraso. `maxAgeMs` queda
+  // INDEFINIDO, no 0: `parseIsoDuration('')` da 0 y con 0 toda marca de agua saldría atrasada.
+  if (!decl.maxAgeRaw) {
+    const ageMs = Math.max(0, now - watermark.getTime())
+    return { checked: true, stale: false, watermark, watermarkRaw, ageMs, ageHuman: humanizeMs(ageMs) }
+  }
 
   const maxAgeMs = parseIsoDuration(decl.maxAgeRaw)
 
