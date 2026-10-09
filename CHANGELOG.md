@@ -74,8 +74,14 @@ Ahora **la leyenda sigue arriba y se parte en varias filas**, con tantas columna
 del área de datos. El mismo gráfico mide 356 px y se dibuja a tamaño real, sin reducción. Vale para los
 tres gráficos con leyenda: barras agrupadas, apiladas y series.
 
-**Una leyenda que ya cabía en una fila no cambia:** el HTML sale byte a byte igual. Se midió con el
-sha256 de cuatro gráficos de 2 a 4 series, con y sin este cambio.
+**Una leyenda que el cálculo da por cabida en una fila no cambia:** el spec sale sin `columns` y el HTML
+sale byte a byte igual. Se midió con el sha256 de cuatro gráficos de 2 a 4 series, con y sin este cambio.
+El cálculo es conservador: puede partir en dos filas una leyenda que justo cabía. Lo contrario no se
+encontró en un barrido de 450 renders: ninguna leyenda quedó más ancha que su área de datos.
+
+**Lo que no cambia:** el gráfico de barras **agrupadas** verticales sigue creciendo con categorías × series
+(9 series y 6 categorías ⇒ un área de datos de más de 1.400 px). Ahí la leyenda ya cabía. Lo que no
+cabe en media columna es el área de datos misma.
 
 **Qué exige:** nada. No hay migración, env nueva ni cambio de contrato.
 
