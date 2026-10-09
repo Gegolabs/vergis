@@ -233,6 +233,7 @@ describe('configFromEnv · VERGIS_CONSOLA_DATADOC_URL', () => {
     expect(url('/datadoc/')).toBe('/datadoc/')
     expect(url(' /datadoc/index.html#indice ')).toBe('/datadoc/index.html#indice')
     expect(url('https://docs.ga.test/datadoc/')).toBe('https://docs.ga.test/datadoc/')
+    expect(url('HTTPS://docs.ga.test/datadoc/')).toBe('HTTPS://docs.ga.test/datadoc/')
   })
 
   it('una dirección mala hace FALLAR el arranque nombrando la env (FATAL, como los numéricos)', () => {
@@ -246,6 +247,8 @@ describe('configFromEnv · VERGIS_CONSOLA_DATADOC_URL', () => {
       '/datadoc/ index.html', // espacio interior
       '/\\otro-host.test', // la barra invertida que algunos navegadores leen como «/»
       'ftp://docs.ga.test/',
+      'https:docs.ga.test/datadoc/', // sin «//»: en un href sobre https se resuelve relativo a la página
+      'https:/docs.ga.test/datadoc/', // ídem: llevaría a /docs.ga.test/datadoc/ del propio nodo
     ]) {
       expect(() => configFromEnv({ VERGIS_CONSOLA_DATADOC_URL: mala }, fixedSecret), mala).toThrow(/VERGIS_CONSOLA_DATADOC_URL/)
     }

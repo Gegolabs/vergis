@@ -15,6 +15,7 @@ import { createContractRegistry, createContractHandler, type ContractSnapshot } 
 import { createContractJournal, type ContractDelta } from '../server/contract-delta'
 import { createRequestHandler, type RouteDeps } from '../server/routes'
 import { configEnvKeys } from '../server/config'
+import { destinoDatadoc } from '../server/consola'
 import type { Report } from '../server/discovery'
 import { VERGIS_VERSION } from '../packages/capabilities/src/version'
 
@@ -583,6 +584,21 @@ describe('contrato · sección `consola`', () => {
     // El operador tiene que poder leer POR QUÉ sin entrar a los logs del contenedor.
     expect(Object.values(snap.consola?.conectores ?? {}).filter((c) => !c.ofrecible).every((c) => c.motivo)).toBe(true)
   })
+
+  // #405 (C-4 del juez de #406) · `consola.datadoc` se arma en `serve-rls.ts` con la MISMA
+  // `destinoDatadoc` que usa la página. Acá se mide que el contrato la publique en sus tres estados.
+  // El cableado de `serve-rls.ts` (la lectura de `datadoc !== null`) no lo ejercita ningún test.
+  for (const [caso, declarado, nodoSirve, esperado] of [
+    ['Datadoc del nodo vivo, sin env', null, true, { url: '/datadoc/', origen: 'nodo' }],
+    ['sin Datadoc del nodo, sin env', null, false, null],
+    ['env declarada', 'https://docs.ga.test/datadoc/', false, { url: 'https://docs.ga.test/datadoc/', origen: 'env' }],
+    ['env en off con el Datadoc vivo', false, true, null],
+  ] as const) {
+    it(`publica consola.datadoc — ${caso}`, () => {
+      const snap = registry({ consola: () => ({ enabled: true, datadoc: destinoDatadoc(declarado, nodoSirve) }) }).snapshot()
+      expect(snap.consola?.datadoc).toEqual(esperado)
+    })
+  }
 
   it('un proveedor que lanza cuesta la sección, jamás la consulta del contrato', () => {
     const snap = registry({
