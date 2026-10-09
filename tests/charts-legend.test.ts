@@ -8,7 +8,7 @@
 // y pisaba la barra más alta y el cruce de curvas. Con `orient: 'top'` Vega le reserva una banda del
 // lienzo y el área de plot se desplaza hacia abajo.
 import { describe, expect, it } from 'vitest'
-import { renderHtmlPiece, type ResolvedNode } from '@vergis/capabilities'
+import { legendColumns, legendEntryWidthPx, renderHtmlPiece, type ResolvedNode } from '@vergis/capabilities'
 
 type Rect = { x: number; y: number; w: number; h: number }
 
@@ -148,5 +148,86 @@ describe('#96 · la leyenda va fuera del área de plot', () => {
       ],
     })
     expect(html).not.toContain('role-legend')
+  })
+})
+
+// #365 · Con muchas series, la leyenda de una sola fila fijaba el ancho del SVG: en PI-32 (9 series de
+// Clasificación) el SVG medía ~4× su área de datos, y en una rejilla de dos columnas el gráfico se
+// dibujaba a menos de la mitad. La leyenda se parte en columnas para no pasar del ancho del área de
+// datos; si ya cabía, queda exactamente como estaba.
+const CLASIFICACIONES = [
+  'Árboles frutales', 'Plantas de interior', 'Arbustos', 'Herramientas', 'Maceteros',
+  'Sustratos', 'Semillas', 'Riego', 'Otros',
+]
+const MESES = ['jul-25', 'ago-25', 'sep-25', 'jul-26', 'ago-26', 'sep-26']
+
+function apilado(labels: string[]): ResolvedNode {
+  return {
+    type: 'distribution',
+    orientation: 'vertical',
+    stacked: true,
+    dimensionField: 'mes',
+    metricsSpec: labels.map((label, k) => ({ field: `s${k}`, label })),
+    rows: MESES.map((mes, i) => ({ mes, ...Object.fromEntries(labels.map((_, k) => [`s${k}`, (i + 1) * (k + 1)])) })),
+  }
+}
+
+function seriesDe(labels: string[]): ResolvedNode {
+  return {
+    type: 'series',
+    xField: 'mes',
+    seriesSpec: labels.map((label, k) => ({ field: `s${k}`, label })),
+    rows: MESES.map((mes, i) => ({ mes, ...Object.fromEntries(labels.map((_, k) => [`s${k}`, (i + 1) * (k + 1)])) })),
+  }
+}
+
+describe('#365 · la leyenda no es más ancha que el área de datos', () => {
+  for (const [nombre, piece] of [
+    ['apilado vertical, 9 series (PI-32)', apilado(CLASIFICACIONES)],
+    ['agrupado horizontal, 9 series', { ...apilado(CLASIFICACIONES), stacked: false, orientation: 'horizontal' } as ResolvedNode],
+    ['series (líneas), 9 series de rótulo largo', seriesDe(CLASIFICACIONES.map((c) => `${c} — temporada completa`))],
+  ] as [string, ResolvedNode][]) {
+    it(`${nombre}: la leyenda cabe en el ancho del plot, en varias filas, arriba y sin pisarlo`, async () => {
+      const html = await renderPiece(piece)
+      const { plot, legend } = chartGeom(html)
+      expect(legend.w).toBeLessThanOrEqual(plot.w)
+      expect(legend.x + legend.w).toBeLessThanOrEqual(plot.x + plot.w)
+      // Se partió: la banda tiene más de una fila (una fila mide 11 px).
+      expect(legend.h).toBeGreaterThan(11)
+      // Las garantías de #96 siguen: arriba y con solape cero.
+      expect(overlapArea(plot, legend)).toBe(0)
+      expect(legend.y + legend.h).toBeLessThanOrEqual(plot.y)
+      // Todas las series siguen nombradas.
+      for (const c of CLASIFICACIONES) expect(html).toContain(c)
+    })
+  }
+
+  it('el SVG del caso PI-32 deja de medir ~4× su área de datos', async () => {
+    const html = await renderPiece(apilado(CLASIFICACIONES))
+    const { plot } = chartGeom(html)
+    // Antes de #365 este SVG medía 997 px con un plot de 320. Ahora lo ensanchan solo los ejes.
+    expect(svgBox(html).w).toBeLessThan(plot.w * 1.3)
+  })
+
+  it('una leyenda que ya cabía en una fila sale idéntica: el spec no lleva `columns`', async () => {
+    // Dos series cortas en 320 px: una fila. El HTML debe ser el de siempre, sin grilla de leyenda.
+    const html = await renderPiece({ ...GROUPED, orientation: 'vertical' })
+    const { legend } = chartGeom(html)
+    expect(legend.h).toBe(11)
+    expect(legendColumns(['Alfa', 'Beta'], 320)).toBe(2)
+  })
+
+  it('legendColumns: el mayor número de columnas que cabe, alineando cada columna a su entrada más ancha', () => {
+    // Entradas de 16 + 8·caracteres px: «Arbustos» = 80, «Plantas de interior» = 168.
+    expect(legendEntryWidthPx('Arbustos')).toBe(80)
+    expect(legendEntryWidthPx('Plantas de interior')).toBe(168)
+    // labelLimit: un rótulo larguísimo mide como mucho 16 + 160.
+    expect(legendEntryWidthPx('x'.repeat(100))).toBe(176)
+    // Tres de 80 px caben en 260 (80·3 + 10·2), no en 259.
+    expect(legendColumns(['aaaaaaaa', 'bbbbbbbb', 'cccccccc'], 260)).toBe(3)
+    expect(legendColumns(['aaaaaaaa', 'bbbbbbbb', 'cccccccc'], 259)).toBe(2)
+    // Ni una columna cabe: queda en 1 (vertical), nunca 0.
+    expect(legendColumns(['Plantas de interior'], 50)).toBe(1)
+    expect(legendColumns([], 320)).toBe(1)
   })
 })

@@ -63,6 +63,26 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+### Corregido: con muchas series, la leyenda se parte en filas y el gráfico deja de achicarse (#365)
+
+La leyenda de los gráficos multi-serie va arriba y en una sola fila (CV-05). Con muchas series, esa
+fila era más ancha que el área de datos y fijaba el ancho del SVG. Al encajar el SVG en su columna,
+el gráfico entero se achicaba. En PI-32, el apilado por Clasificación (9 series) medía 988 px de ancho
+con un área de datos de 320. En una rejilla de dos columnas los rótulos quedaban en unos 5 px.
+
+Ahora **la leyenda sigue arriba y se parte en varias filas**, con tantas columnas como quepan en el ancho
+del área de datos. El mismo gráfico mide 356 px y se dibuja a tamaño real, sin reducción. Vale para los
+tres gráficos con leyenda: barras agrupadas, apiladas y series.
+
+**Una leyenda que ya cabía en una fila no cambia:** el HTML sale byte a byte igual. Se midió con el
+sha256 de cuatro gráficos de 2 a 4 series, con y sin este cambio.
+
+**Qué exige:** nada. No hay migración, env nueva ni cambio de contrato.
+
+**Sin medir:** cómo se ve en un navegador real. La suite mide la geometría del SVG emitido, que es la que
+se sirve. Las barras no crecen más allá del ancho del área de datos: cuando la columna de la rejilla es más ancha
+que el SVG, el gráfico queda a tamaño real y sobra espacio a la derecha.
+
 ### Consola SQL: el enlace al Datadoc (#405)
 
 Quien escribe SQL necesita saber qué significa cada tabla y cada columna. La Consola ofrece ahora,
