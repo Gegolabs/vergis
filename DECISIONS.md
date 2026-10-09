@@ -9,6 +9,15 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-80 · 2026-10-09 — El corte 0.43.0 queda listo en el PR #410 sin mergear; el candado de tags no se abre en nombre de César
+
+- **Bifurcación**: el mandato pide cortar la versión y dejarla lista para promover. Al cortar apareció que el ruleset `purga-candado-tags` (activo desde 2026-09-30 23:10 -03, medido por la API de rulesets) prohíbe crear cualquier tag y **no tiene bypass para nadie**. Las opciones: (a) agregar `simon-alero` al bypass, empujar `v0.43.0` y volver a cerrarlo · (b) mergear el corte a `main` sin tag · (c) dejar el corte listo en un PR sin mergear y pedir el tag a César.
+- **Decidido**: **(c)**. Lo descartado y por qué: (a) toca un control de la purga de historia que César decidió caso a caso. El bypass de **ramas** se abrió solo para `simon-alero` y por su respuesta a la tarjeta «vergis-candado» del Radar (minuta del 2026-10-02); el de tags lo dejó cerrado. Es «lo que él ya decidió distinto» (POLICIES, POL-01) y no se reabre por inferencia. (b) haría que `main` declarara una versión 0.43.0 que no existe, y la imagen `main` mostraría `Mira v0.43.0` sin el tag que la nombra (la frontera de D-28).
+- **También queda sin hacer, por la misma razón de autoridad y por medición**: `fab:proof` (D-57, antes del tag). Esta máquina no tiene sesión `az` con la suscripción del terreno propio: `az-cliente ultrabase` entra con `vergis-lab-serving-sp`, que solo ve el tenant (`SubscriptionNotFound`, medido). Sin tag no hay imagen versionada, porque `build.yml` publica solo con `v[0-9]*`; la promoción al anillo de A.R.B.O.L. queda como pedido.
+- **Juez sustituido**: los veredictos de #407 y #409 los dio Sonnet 5.5 y no Fable 5.1, porque Fable volvió con HTTP 429 (sin créditos). La Norma 8 exige otro modelo distinto del autor (Opus 5.5) y lo cumple; la ventaja medida de Fable para juzgar no estuvo disponible.
+- **Costo de revertir**: nulo. Cerrar el PR #410 o mergearlo cuando el tag sea posible.
+- **Modelo autor**: claude-opus-5-5 (ejecutor headless, mandato autónomo de César del 2026-10-08).
+
 ## D-79 · 2026-10-09 — #365: la leyenda se queda arriba y se parte en columnas según el ancho del área de datos; no pasa a la derecha
 
 - **Bifurcación**: el issue mide dos caminos: (a) conservar CV-05 (arriba, banda propia) y partir la leyenda en columnas · (b) cambiar CV-05 a `orient: 'right'` vertical, que es lo que pidió el especificador de PI-32 (spec v8 §2.4).
