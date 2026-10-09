@@ -61,6 +61,39 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Mira: la marca de agua declara el corte aunque el PI no tenga SLA de frescura (#411)
+
+Hasta 0.43.0 un PI solo mostraba «Datos al …» por marca de agua si su frescura declaraba `max_age`:
+sin él, la declaración se descartaba en silencio y el header caía al corte por ingesta o a «corte no
+disponible». Un especificador que pide «la última fecha de actualización de la data» sin un SLA
+tenía que inventar un `max_age` que falseaba un SLA inexistente.
+
+Ahora **`quality.freshness` y `data.<ds>.freshness` aceptan `watermark_field` sin `max_age`**: la marca
+de agua se resuelve y el header dice «Datos al …» (precedencia 1 del corte as-of, #108), el veredicto
+es siempre fresco y **no hay banner** — no se evalúa atraso porque no hay umbral. En la frescura
+por-dataset, `max_age` pasa de obligatorio a opcional; `watermark_field` sigue siendo obligatorio.
+
+**Con `max_age` nada cambia**: el atraso se evalúa igual, con el mismo banner y la misma degradación.
+
+**Qué exige:** nada. Dos cosas cambian para quien opera:
+
+- Un spec con `watermark_field` **global** y sin `max_age` que hoy no muestra corte por marca de agua
+  pasará a mostrarlo al actualizar. En las instancias conocidas no hay ninguno (cada `watermark_field`
+  vivo viene con su `max_age`).
+- Ese mismo spec **se valida ahora** como los demás: un `watermark_field` global que nombre un dataset
+  o un campo inexistentes rechaza el spec al cargarlo (`mira/spec-invalid`), donde antes se ignoraba.
+  Validar los specs de la instancia antes de actualizar lo dice.
+- **Qué corte muestra el header cuando el spec tiene varias declaraciones y todas están frescas:** la
+  marca de agua **más antigua** (el corte garantizado, la misma regla que el corte por ingesta de
+  #108). Antes ganaba la de mayor exceso sobre su SLA, que no es la más antigua cuando los SLA
+  difieren, y una declaración sin SLA habría dominado siempre. Si alguna está atrasada, nada cambia:
+  gana la de mayor exceso. Afecta solo a specs con más de una declaración de frescura.
+
+**Sin medir:** el render contra un motor vivo; la suite mide `checkFreshness`, la validación y el HTML
+del render local.
+
 ## 0.43.0 — 2026-10-09
 
 ### Corregido: con muchas series, la leyenda se parte en filas y el gráfico deja de achicarse (#365, PR #407)

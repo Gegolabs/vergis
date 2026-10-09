@@ -79,7 +79,7 @@ una versión ya cortada.
 | `CAP-20` | Versión del PI, visible en el pie del inspector | `identity.version` | 0.2.1 | [CHANGELOG 0.2.1](../CHANGELOG.md) |
 | `CAP-21` | Slug de URL derivado del código del PI | `identity.code` | 0.18.0 | [CHANGELOG 0.18.0 (#207)](../CHANGELOG.md) |
 | `CAP-22` | Contrato de datos de un dataset | `data.<ds>.capability` + `params` + `shape` | ≤0.9 | [arquitectura-multi-reporte.md §2](arquitectura-multi-reporte.md) |
-| `CAP-23` | Bloques de calidad y de entrega del spec | `quality` (frescura: `watermark_field`, `max_age`, `timezone`) · `delivery.render[]` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
+| `CAP-23` | Bloques de calidad y de entrega del spec | `quality` (frescura: `watermark_field`, `max_age`, `timezone`; sin `max_age` la marca de agua declara el corte del header sin SLA ni banner, #411) · `delivery.render[]` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 | `CAP-24` | Canales de entrega **declarados en el DSL y sin implementación** — **(no construido)** | `delivery.channels[]` | — | [mejoras-diagnostico.md §Brechas de cobertura](mejoras-diagnostico.md) |
 | `CAP-25` | Elementos diseñados y **no construidos**, con su disparador escrito | `narrative` · `alert` · `comparison` — **(no construido)** | — | [catalogo-elementos.md §5](catalogo-elementos.md) |
 

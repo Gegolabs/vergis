@@ -29,7 +29,7 @@ export interface MiraDataset {
   /** Llave de negocio declarada (D16). Ausente ⇒ el gesto de comentar no se ofrece (fail-closed). */
   anchor?: MiraAnchor
   /** Frescura POR-DATASET (además de la global de quality.freshness): `watermark_field` es un
-   *  CAMPO del propio dataset; `max_age` una duración ISO 8601 soportada. Ver freshness.ts. */
+   *  CAMPO del propio dataset; `max_age` (opcional, #411) una duración ISO 8601 soportada. Ver freshness.ts. */
   freshness?: { watermark_field?: string; max_age?: string; timezone?: string }
 }
 
@@ -488,12 +488,14 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     validatePieceNode(pc, hasPages ? `pages[${s.pages![i].id}].piece` : 'piece')
   }
 
-  // 4·ter · Frescura: si `quality.freshness` se declara con source_watermark != ignore y trae max_age,
-  // DEBE parsear a > 0 ms. `parseIsoDuration` devuelve 0 para formas no soportadas (P1W, P1M) → toda
+  // 4·ter · Frescura: si `quality.freshness` se declara con source_watermark != ignore, su max_age (si
+  // lo trae: es opcional desde #411) DEBE parsear a > 0 ms. `parseIsoDuration` devuelve 0 para formas no soportadas (P1W, P1M) → toda
   // fila de ayer queda stale en silencio, y con refuse_render el PI deja de servirse por un typo.
   const freshness = (s.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
-  if (freshness && freshness['source_watermark'] !== 'ignore' && freshness['max_age'] != null) {
-    validateMaxAge(String(freshness['max_age']), 'quality.freshness.max_age')
+  // Sin `max_age` la frescura no tiene SLA (#411): la marca de agua solo declara el corte, pero el
+  // watermark_field se valida igual — un typo dejaría el header en «corte no disponible» en silencio.
+  if (freshness && freshness['source_watermark'] !== 'ignore' && (freshness['max_age'] != null || freshness['watermark_field'] != null)) {
+    if (freshness['max_age'] != null) validateMaxAge(String(freshness['max_age']), 'quality.freshness.max_age')
     // watermark_field global (`data.<ds>.<campo>` o `<ds>.<campo>`): mismo par de checks que la
     // frescura por-dataset (4·ter·bis). Un typo de dataset la deshabilitaba en silencio; uno de campo
     // resolvía a undefined → toDate null → «fresco» en silencio, lo contrario de lo declarado.
@@ -529,16 +531,16 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
   for (const [name, ds] of Object.entries(s.data)) {
     const f = ds.freshness
     if (!f) continue
-    if (f.max_age == null || f.watermark_field == null) {
+    if (f.watermark_field == null) {
       throw new VergisError({
         error: 'mira/spec-invalid',
         code: 'freshness-dataset-incomplete',
         path: `data.${name}.freshness`,
-        message: `La frescura por-dataset de '${name}' requiere 'watermark_field' (un campo del dataset) y 'max_age'.`,
-        remediation: `Declarar ambos, p.ej. freshness: { watermark_field: fecha_dato, max_age: P1D }.`,
+        message: `La frescura por-dataset de '${name}' requiere 'watermark_field' (un campo del dataset); 'max_age' es opcional (sin él, la marca de agua declara el corte sin SLA, #411).`,
+        remediation: `Declarar watermark_field, p.ej. freshness: { watermark_field: fecha_dato, max_age: P1D } o solo { watermark_field: fecha_dato }.`,
       })
     }
-    validateMaxAge(String(f.max_age), `data.${name}.freshness.max_age`)
+    if (f.max_age != null) validateMaxAge(String(f.max_age), `data.${name}.freshness.max_age`)
     const field = String(f.watermark_field)
     if (ds.shape?.fields && !(field in ds.shape.fields)) {
       throw new VergisError({

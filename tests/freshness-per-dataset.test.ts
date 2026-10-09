@@ -121,8 +121,12 @@ delivery: { render: [{ format: html, target: web }] }
     expect(() => validate(baseYaml('{ watermark_field: fantasma, max_age: P1D }'))).toThrow(/fantasma/)
   })
 
-  it('declaración incompleta (sin max_age) → rechazo', () => {
-    expect(() => validate(baseYaml('{ watermark_field: fecha_mov }'))).toThrow(/max_age/)
+  it('declaración incompleta (sin watermark_field) → rechazo', () => {
+    expect(() => validate(baseYaml('{ max_age: P1D }'))).toThrow(/watermark_field/)
+  })
+
+  it('sin max_age → válida: la marca de agua declara el corte sin SLA (#411)', () => {
+    expect(() => validate(baseYaml('{ watermark_field: fecha_mov }'))).not.toThrow()
   })
 
   it('declaración correcta → válida', () => {
