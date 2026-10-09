@@ -5,7 +5,7 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
-## 0.43.0 — 2026-10-08
+## 0.43.0 — 2026-10-09
 
 - **El hermano solo-node del poller (#376).** `instruments/poller-node.mjs` no se importa: el CLI le
   antepone `PREDICATE_JS` al copiarlo, así que el predicado sigue escrito una sola vez, también dentro

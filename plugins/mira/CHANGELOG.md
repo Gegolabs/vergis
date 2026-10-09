@@ -4,7 +4,7 @@ El plugin tiene **la versión del Producto** (lockstep: `plugin.json` sigue a `p
 marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versión está en el
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**.
 
-## 0.43.0 — 2026-10-08
+## 0.43.0 — 2026-10-09
 
 Sin cambios propios del plugin: sube en lockstep con el Producto.
 

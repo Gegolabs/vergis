@@ -61,7 +61,7 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## 0.43.0 — 2026-10-08
+## 0.43.0 — 2026-10-09
 
 ### Corregido: con muchas series, la leyenda se parte en filas y el gráfico deja de achicarse (#365, PR #407)
 
