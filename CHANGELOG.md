@@ -85,6 +85,11 @@ por-dataset, `max_age` pasa de obligatorio a opcional; `watermark_field` sigue s
 - Ese mismo spec **se valida ahora** como los demás: un `watermark_field` global que nombre un dataset
   o un campo inexistentes rechaza el spec al cargarlo (`mira/spec-invalid`), donde antes se ignoraba.
   Validar los specs de la instancia antes de actualizar lo dice.
+- **Qué corte muestra el header cuando el spec tiene varias declaraciones y todas están frescas:** la
+  marca de agua **más antigua** (el corte garantizado, la misma regla que el corte por ingesta de
+  #108). Antes ganaba la de mayor exceso sobre su SLA, que no es la más antigua cuando los SLA
+  difieren, y una declaración sin SLA habría dominado siempre. Si alguna está atrasada, nada cambia:
+  gana la de mayor exceso. Afecta solo a specs con más de una declaración de frescura.
 
 **Sin medir:** el render contra un motor vivo; la suite mide `checkFreshness`, la validación y el HTML
 del render local.

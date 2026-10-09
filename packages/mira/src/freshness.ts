@@ -35,10 +35,12 @@ interface FreshnessDecl {
 /**
  * Evalúa la frescura de los datos contra las declaraciones del spec (doc 2 §5.3):
  *  - GLOBAL: `quality.freshness` con `watermark_field: <dataset>.<campo>` (comportamiento clásico).
- *  - POR-DATASET: `data.<ds>.freshness: { watermark_field: <campo>, max_age: P#D }` — el
- *    `watermark_field` acá es un CAMPO DEL PROPIO dataset (cadencias distintas por dataset).
- * Se evalúa cada declaración cuyo dataset esté RECUPERADO en `results`; el veredicto agregado es el
- * MÁS STALE (la mayor antigüedad relativa gana) y `staleDatasets` nombra a todos los atrasados.
+ *  - POR-DATASET: `data.<ds>.freshness: { watermark_field: <campo>, max_age?: P#D }` — el
+ *    `watermark_field` acá es un CAMPO DEL PROPIO dataset (cadencias distintas por dataset);
+ *    `max_age` es opcional (#411).
+ * Se evalúa cada declaración cuyo dataset esté RECUPERADO en `results`. Si alguna está atrasada, el
+ * veredicto agregado es el MÁS STALE (mayor exceso sobre su SLA) y `staleDatasets` nombra a todos los
+ * atrasados; si todas están frescas, el representante es la marca de agua MÁS ANTIGUA.
  * `source_watermark: ignore` (global) apaga solo el check global; los por-dataset son independientes.
  * Sin `max_age` (global o por-dataset) la declaración no tiene SLA: la marca de agua se resuelve y
  * declara el corte, pero el veredicto es siempre fresco y no hay banner (#411).
@@ -58,10 +60,16 @@ export function checkFreshness(
   if (verdicts.length === 0) return { checked: false, stale: false }
 
   const stale = verdicts.filter((v) => v.stale)
-  // El MÁS stale gana: mayor exceso relativo (ageMs − maxAgeMs). Fresco: el de mayor antigüedad
-  // (conserva el watermark representativo que el render usa como fecha del dato).
+  // Atrasado: gana el MÁS stale, el de mayor exceso sobre su SLA (ageMs − maxAgeMs). Fresco: gana la
+  // marca de agua MÁS ANTIGUA (mayor ageMs), que es el corte garantizado que el header declara —
+  // la misma regla que el corte por ingesta de #108 («la ingesta más antigua»). Medir el fresco por
+  // exceso hacía que una declaración sin SLA (#411, maxAgeMs ausente) dominara siempre: con una global
+  // P30D de hace 9 días y una sin SLA de hace 1 h, el header decía «hace 1 h».
   const pool = stale.length > 0 ? stale : verdicts
-  const worst = pool.reduce((a, b) => ((a.ageMs ?? 0) - (a.maxAgeMs ?? 0) >= (b.ageMs ?? 0) - (b.maxAgeMs ?? 0) ? a : b))
+  const excess = (v: FreshnessVerdict) => (v.ageMs ?? 0) - (v.maxAgeMs ?? 0)
+  const worst = stale.length > 0
+    ? pool.reduce((a, b) => (excess(a) >= excess(b) ? a : b))
+    : pool.reduce((a, b) => ((a.ageMs ?? 0) >= (b.ageMs ?? 0) ? a : b))
   return {
     checked: true,
     stale: stale.length > 0,

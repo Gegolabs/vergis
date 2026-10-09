@@ -488,8 +488,8 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
     validatePieceNode(pc, hasPages ? `pages[${s.pages![i].id}].piece` : 'piece')
   }
 
-  // 4·ter · Frescura: si `quality.freshness` se declara con source_watermark != ignore y trae max_age,
-  // DEBE parsear a > 0 ms. `parseIsoDuration` devuelve 0 para formas no soportadas (P1W, P1M) → toda
+  // 4·ter · Frescura: si `quality.freshness` se declara con source_watermark != ignore, su max_age (si
+  // lo trae: es opcional desde #411) DEBE parsear a > 0 ms. `parseIsoDuration` devuelve 0 para formas no soportadas (P1W, P1M) → toda
   // fila de ayer queda stale en silencio, y con refuse_render el PI deja de servirse por un typo.
   const freshness = (s.quality as { freshness?: Record<string, unknown> } | undefined)?.freshness
   // Sin `max_age` la frescura no tiene SLA (#411): la marca de agua solo declara el corte, pero el

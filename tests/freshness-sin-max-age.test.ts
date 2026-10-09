@@ -144,3 +144,53 @@ delivery: { render: [{ format: html, target: web }] }
     expect(html).not.toContain('corte no disponible')
   })
 })
+
+describe('corte del header cuando conviven declaraciones con y sin SLA (#411 · C-2)', () => {
+  const spec = base(
+    { freshness: { source_watermark: 'required', watermark_field: 'meta.fecha', max_age: 'P30D' } },
+    {
+      meta: { capability: 'x', shape: { type: 'single_row', fields: { fecha: 'date' } } },
+      detalle: { capability: 'x', freshness: { watermark_field: 'fecha_carga' } },
+    },
+  )
+
+  it('todas frescas: el header declara la marca de agua MÁS ANTIGUA (la global de hace 9 días, no la sin SLA de hace 1 h)', () => {
+    const v = checkFreshness(
+      spec,
+      {
+        meta: { rows: [{ fecha: '2026-06-01T15:00:00.000Z' }] }, // hace 9 días, dentro de P30D
+        detalle: { rows: [{ fecha_carga: '2026-06-10T14:00:00.000Z' }] }, // hace 1 h, sin SLA
+      } as unknown as ResultsArg,
+      NOW,
+    )
+    expect(v.stale).toBe(false)
+    expect(asOfFor(v)).toEqual({ cutoff: '2026-06-01T15:00:00.000Z', source: 'watermark' })
+  })
+
+  it('todas frescas y la sin SLA es la más vieja: el header declara la sin SLA', () => {
+    const v = checkFreshness(
+      spec,
+      {
+        meta: { rows: [{ fecha: '2026-06-09T15:00:00.000Z' }] },
+        detalle: { rows: [{ fecha_carga: '2026-05-01T00:00:00.000Z' }] },
+      } as unknown as ResultsArg,
+      NOW,
+    )
+    expect(v.stale).toBe(false)
+    expect(asOfFor(v).cutoff).toBe('2026-05-01T00:00:00.000Z')
+  })
+
+  it('con una atrasada: gana la atrasada aunque la sin SLA sea más vieja', () => {
+    const v = checkFreshness(
+      spec,
+      {
+        meta: { rows: [{ fecha: '2026-04-01T00:00:00.000Z' }] }, // > P30D → atrasada
+        detalle: { rows: [{ fecha_carga: '2020-01-01T00:00:00.000Z' }] },
+      } as unknown as ResultsArg,
+      NOW,
+    )
+    expect(v.stale).toBe(true)
+    expect(v.staleDatasets).toEqual(['meta'])
+    expect(asOfFor(v).cutoff).toBe('2026-04-01T00:00:00.000Z')
+  })
+})
