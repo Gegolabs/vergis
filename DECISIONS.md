@@ -9,6 +9,15 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-79 · 2026-10-09 — #365: la leyenda se queda arriba y se parte en columnas según el ancho del área de datos; no pasa a la derecha
+
+- **Bifurcación**: el issue mide dos caminos: (a) conservar CV-05 (arriba, banda propia) y partir la leyenda en columnas · (b) cambiar CV-05 a `orient: 'right'` vertical, que es lo que pidió el especificador de PI-32 (spec v8 §2.4).
+- **Decidido**: **(a)**, con el número de columnas calculado (`legendColumns`): el mayor que cabe en el ancho del área de datos, con la geometría de entrada medida sobre el SVG emitido (16 px + 8 px por carácter, tope 160, 10 px entre columnas). Si caben todas, el spec sale sin `columns`. Lo medido: cuatro gráficos de 2 a 4 series salen con el mismo sha256 con y sin el cambio, y el caso PI-32 (9 series) baja de 988 px a 356 px. Los 5 tests de #365 fallan con el código anterior.
+- **Por qué no (b)**: también resuelve el ancho (563 px en la medición del issue), pero cambia la leyenda de **todos** los gráficos multi-serie, también los que hoy se leen bien y a los que PI-17 ya está acostumbrado (TX-14.2, #79/#96). (a) solo toca los gráficos cuya leyenda no cabía. Lo prometido a Ratio en PI-32 (comentario `11511`) y PI-40 (`11534`) admitía las dos formas: «a la derecha, o arriba repartida en varias filas».
+- **Lo que no resuelve**: el área de datos no crece con la columna de la rejilla (el CSS solo pone `max-width: 100%`), así que en una columna ancha el gráfico queda a tamaño real y sobra espacio. Si Ratio insiste en la derecha, (b) sigue disponible como cambio de convención propio.
+- **Costo de revertir**: `git revert` del commit de #365; sin migración ni env.
+- **Modelo autor**: claude-opus-5-5 (ejecutor headless del despachador, mandato autónomo de César del 2026-10-08).
+
 ## D-78 · 2026-09-05 — H1 del plan de escala se mergea con CI verde (#298) y sus números ordenan H2–H7: el techo de Daftar lo pone el store en disco y el catálogo, no el runtime
 
 - **Bifurcación**: (a) dejar #298 abierto para que César lo mire · (b) mergear con sombrero de custodio (mandato vigente desde D-59), CI verde y controles negativos en rojo antes de las series.
