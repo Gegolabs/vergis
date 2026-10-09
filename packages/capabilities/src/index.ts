@@ -14,6 +14,8 @@ export {
   themeChartSvg,
   labelMode,
   labelWidthPx,
+  legendColumns,
+  legendEntryWidthPx,
   barStepPx,
   lanesPadFraction,
   stackTotals,

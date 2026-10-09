@@ -60,8 +60,54 @@ function chartAxisConfig(tokens: ThemeTokens) {
  * propia y el área de plot se desplaza, así que la leyenda queda FUERA. El título del chart es un
  * `<h3>` HTML fuera del SVG, así que la banda superior tampoco colisiona con él.
  */
-function chartLegendConfig() {
-  return { orient: 'top', title: null, direction: 'horizontal' } as const
+function chartLegendConfig(labels: string[], plotWidthPx: number) {
+  const columns = legendColumns(labels, plotWidthPx)
+  return columns < labels.length
+    ? ({ orient: 'top', title: null, direction: 'horizontal', columns } as const)
+    : ({ orient: 'top', title: null, direction: 'horizontal' } as const)
+}
+
+/**
+ * Geometría de una entrada de la leyenda tal como la dibuja Vega sin canvas (el SVG se compone en el
+ * servidor, así que ésta ES la del render servido). Medida sobre el SVG emitido, no supuesta: el
+ * rótulo empieza en x=16 (símbolo de 10 px + `labelOffset`), cada carácter estima 0,8 · 10 px (fuente
+ * de 10 px por defecto) y el rótulo se corta en `labelLimit` = 160 px. Entre columnas, 10 px.
+ */
+const LEGEND_LABEL_X_PX = 16
+const LEGEND_CHAR_PX = 8
+const LEGEND_LABEL_LIMIT_PX = 160
+const LEGEND_COLUMN_PAD_PX = 10
+
+/** Ancho en px de la entrada de leyenda de un rótulo (símbolo + rótulo, cortado en `labelLimit`). */
+export function legendEntryWidthPx(label: string): number {
+  return LEGEND_LABEL_X_PX + Math.min(LEGEND_LABEL_LIMIT_PX, [...label].length * LEGEND_CHAR_PX)
+}
+
+/**
+ * #365 · Cuántas columnas puede tener la leyenda sin ser más ancha que el área de datos. Una leyenda
+ * de una sola fila con muchas series fijaba el ancho del SVG (9 series ⇒ ~4× el área de datos), y al
+ * escalar el SVG a su columna el gráfico entero se dibujaba a menos de la mitad.
+ *
+ * Es el mayor `c` cuyo ancho cabe, con la alineación por columna de Vega (`gridAlign: 'each'`: cada
+ * columna mide lo que su entrada más ancha). Si caben todas (`c = n`), la leyenda queda en una fila y
+ * el spec sale SIN `columns`: un gráfico cuya leyenda ya cabía no cambia ni un byte. Si ni una
+ * columna cabe, queda en 1: la leyenda vertical es lo más angosto que existe.
+ *
+ * Se descartó llevarla a la derecha (`orient: 'right'`, el otro camino medido en #365): cabe igual de
+ * bien, pero cambia la convención de TODOS los gráficos, también los que hoy se leen bien.
+ */
+export function legendColumns(labels: string[], plotWidthPx: number): number {
+  const widths = labels.map(legendEntryWidthPx)
+  for (let c = widths.length; c > 1; c--) {
+    let total = (c - 1) * LEGEND_COLUMN_PAD_PX
+    for (let j = 0; j < c; j++) {
+      let col = 0
+      for (let i = j; i < widths.length; i += c) col = Math.max(col, widths[i]!)
+      total += col
+    }
+    if (total <= plotWidthPx) return c
+  }
+  return 1
 }
 
 /**
@@ -726,7 +772,7 @@ async function renderDistributionGrouped(
     field: 'serie',
     type: 'nominal' as const,
     scale: { domain: labels, range: colors },
-    legend: chartLegendConfig(),
+    legend: chartLegendConfig(labels, width),
   }
   const totalRows = totals
     ? rows.map((r, ri) => ({
@@ -844,6 +890,9 @@ export function seriesLanes(topsPx: number[]): number[] {
   return lanes
 }
 
+/** Ancho del área de datos de un `series` (constante: el eje x es ordinal y no escala con los puntos). */
+const SERIES_WIDTH_PX = 640
+
 /**
  * `series` — líneas de N series sobre un eje. Vega-Lite con datos LARGOS pre-computados server-side
  * (una fila por punto y serie) + `color` por serie; el eje x es ORDINAL en el orden de llegada de las
@@ -872,7 +921,7 @@ export async function renderSeries(
   const nums: number[] = []
   const texts: string[] = []
   for (const r of rows) for (const s of series) { const v = Number(r[s.field]); nums.push(v); texts.push(Number.isFinite(v) ? vtFormat(v, fmt) : '') }
-  const shown = new Set(seriesLabelIndices(rows.length, texts, 640))
+  const shown = new Set(seriesLabelIndices(rows.length, texts, SERIES_WIDTH_PX))
   const colors = seriesColors(tokens, Math.max(1, series.length))
   const domain = labelledDomain(nums, 0.12)
   const values: Record<string, unknown>[] = []
@@ -920,7 +969,7 @@ export async function renderSeries(
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
-    width: 640,
+    width: SERIES_WIDTH_PX,
     height: 240,
     data: { values },
     layer: [
@@ -931,7 +980,7 @@ export async function renderSeries(
       // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
       x: { field: x, type: 'ordinal', sort: null, title: null },
       y: { field: 'valor', type: 'quantitative', title: null, ...(domain ? { scale: { domain, zero: false } } : {}) },
-      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig() },
+      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig(labels, SERIES_WIDTH_PX) },
     },
     config: chartAxisConfig(tokens),
   }
