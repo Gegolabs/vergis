@@ -9,6 +9,20 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-83 · 2026-10-14 — El corte 0.45.0 sale sin `fab:proof` previo al tag, por la misma razón medida que D-82
+
+- **Contexto**: César decidió (2026-10-14, dec-20261014-33eba17a-03, tarjeta Radar e32a260b) que la leyenda de los gráficos multi-serie se declare por spec y que PI-32 la use a la derecha. El cambio (#365) está en `main` desde el PR #418 (`3e61a1f`); para que la instancia lo tome hace falta la release. D-57 ata `fab:proof` al corte, antes del tag.
+- **Bifurcación**: (a) esperar la Mac para correr `fab:proof` antes del tag · (b) taggear sin la ventana de Fabric, con la equivalencia medida y la deuda declarada, como en D-82.
+- **Decidido**: **(b)**. La Mac sigue rechazando la conexión (`ssh` a 127.0.0.1:22222, `Connection refused`, 10:21 −03) y `az-cliente ultrabase` sigue viendo solo el tenant (`N/A(tenant level account)`, medido de nuevo).
+- **Lo medido que la sostiene**: `git diff v0.44.0..HEAD` sobre `packages/policy`, `server/` y `scripts/fabric-lab-proof.ts` es vacío. El rango toca `packages/capabilities` (render de gráficos), `packages/mira` (validación y composición del DSL), docs, el cotejo de capacidades y tests. `npm run fab:sql` emite SQL **byte-idéntico** en `v0.44.0` y en el corte (sha256 `e265731a…`, 90 líneas, el mismo hash de D-82). Si el corte cambiara el DDL que el arnés mide, ese hash habría salido distinto.
+- **Lo que no cubre**: lo mismo que D-82, un cambio del SKU F2 de Fabric desde el 9-oct. Ese riesgo lo comparten 0.43.0 y 0.44.0; esta versión no lo agrava.
+- **Descartado**: (a), porque bloquea una promoción decidida por César sin que su resultado pueda cambiar lo que la versión declara.
+- **Deuda**: la de D-82 crece. `fab:proof` queda pendiente sobre `v0.44.0` y `v0.45.0`; basta correrlo una vez sobre `v0.45.0` cuando la Mac vuelva, porque el SQL es el mismo. Se registra en el ledger.
+- **Juez de composición**: no se pidió otro. El rango trae un solo cambio de código (#418), ya juzgado por Fable 5.1 (COMPONE CON CONDICIONES, comentado en el PR); no hay piezas que componer.
+- **De paso**: `docs/capacidades.md` tenía CAP-219 (#405) como «sin publicar» aunque salió en 0.43.0. Se corrigió a `0.43.0` en este mismo corte (precedente: el corte 0.28.0 hizo lo mismo con CAP-141/175/177).
+- **Reversa**: el tag no se reescribe; si la ventana de Fabric sale roja, se corta 0.45.1.
+- **Modelo autor**: claude-opus-5-5 (trabajador del lab A.R.B.O.L., mandato de César del 2026-10-14).
+
 ## D-82 · 2026-10-14 — El corte 0.44.0 sale sin `fab:proof` previo al tag: la Mac no responde y el rango no toca lo que el arnés mide
 
 - **Contexto**: César decidió «Sí, corta y promueve» (2026-10-14 ~09:40 −03, dec-20261014-33eba17a-02, tarjeta Radar 6f1bc9bc) para la release que trae #411 (PR #412). D-57 ata `fab:proof` al corte, antes del tag.
