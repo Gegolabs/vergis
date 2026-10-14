@@ -17,7 +17,7 @@ el registro existe para que revertirla sea barato.
 - **Lo medido que la sostiene**: `git diff v0.44.0..HEAD` sobre `packages/policy`, `server/` y `scripts/fabric-lab-proof.ts` es vacío. El rango toca `packages/capabilities` (render de gráficos), `packages/mira` (validación y composición del DSL), docs, el cotejo de capacidades y tests. `npm run fab:sql` emite SQL **byte-idéntico** en `v0.44.0` y en el corte (sha256 `e265731a…`, 90 líneas, el mismo hash de D-82). Si el corte cambiara el DDL que el arnés mide, ese hash habría salido distinto.
 - **Lo que no cubre**: lo mismo que D-82, un cambio del SKU F2 de Fabric desde el 9-oct. Ese riesgo lo comparten 0.43.0 y 0.44.0; esta versión no lo agrava.
 - **Descartado**: (a), porque bloquea una promoción decidida por César sin que su resultado pueda cambiar lo que la versión declara.
-- **Deuda**: la de D-82 crece. `fab:proof` queda pendiente sobre `v0.44.0` y `v0.45.0`; basta correrlo una vez sobre `v0.45.0` cuando la Mac vuelva, porque el SQL es el mismo. Se registra en el ledger.
+- **Deuda**: la de D-82 crece. `fab:proof` queda pendiente sobre `v0.44.0` y `v0.45.0`; basta correrlo una vez sobre `v0.45.0` cuando la Mac vuelva, porque el SQL es el mismo. La ventana, cuando ocurra, se asienta en `POLICIES-ledger.md`.
 - **Juez de composición**: no se pidió otro. El rango trae un solo cambio de código (#418), ya juzgado por Fable 5.1 (COMPONE CON CONDICIONES, comentado en el PR); no hay piezas que componer.
 - **De paso**: `docs/capacidades.md` tenía CAP-219 (#405) como «sin publicar» aunque salió en 0.43.0. Se corrigió a `0.43.0` en este mismo corte (precedente: el corte 0.28.0 hizo lo mismo con CAP-141/175/177).
 - **Reversa**: el tag no se reescribe; si la ventana de Fabric sale roja, se corta 0.45.1.
