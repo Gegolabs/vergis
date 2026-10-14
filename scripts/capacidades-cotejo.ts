@@ -124,6 +124,11 @@ export function derivarConjuntos(): ConjuntoDerivado[] {
     ),
   )
 
+  // #365 · Posiciones de la leyenda de un chart multi-serie (`legend`), del vocabulario cerrado.
+  const leyenda = literales(
+    extraer(validate, /export const LEGEND_POSITIONS = \[([^\]]*)\]/, 'export const LEGEND_POSITIONS', 'validate.ts'),
+  )
+
   // Claves del namespace client-side `interactions`, leídas de la interfaz del spec.
   const bloqueInteractions = extraer(
     validate,
@@ -149,6 +154,7 @@ export function derivarConjuntos(): ConjuntoDerivado[] {
     { nombre: 'tipos de pieza del DSL', origen: 'packages/mira/src/dsl/validate.ts · ELEMENT_TYPES', valores: tipos },
     { nombre: 'tokens de formato', origen: 'packages/capabilities/src/table-runtime.ts · vtFormat', valores: formatos },
     { nombre: 'tokens de `sort` de un chart', origen: 'packages/mira/src/dsl/validate.ts · vocabulario cerrado de sort', valores: sort },
+    { nombre: 'posiciones de `legend` de un chart', origen: 'packages/mira/src/dsl/validate.ts · LEGEND_POSITIONS', valores: leyenda },
     { nombre: 'claves de `interactions`', origen: 'packages/mira/src/dsl/validate.ts · MiraSpec.interactions', valores: interactions },
     {
       // Cualificadas a propósito: exigir `id` a secas sería un requisito que cualquier texto cumple

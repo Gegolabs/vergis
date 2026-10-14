@@ -14,6 +14,8 @@ export {
   themeChartSvg,
   labelMode,
   labelWidthPx,
+  chartLegendConfig,
+  LEGEND_RIGHT_LABEL_LIMIT_PX,
   legendColumns,
   legendEntryWidthPx,
   barStepPx,
@@ -28,7 +30,7 @@ export {
   seriesLanes,
   svgTitlesDesdeAria,
 } from './render-chart'
-export type { TopNRank, LabelMode } from './render-chart'
+export type { TopNRank, LabelMode, LegendPosition } from './render-chart'
 export { FILTER_VISIBLE_MAX } from './render-html-piece'
 export { TABLE_SSR_MAX_ROWS, TABLE_PRINT_MAX_ROWS, magnitudeColumns } from './render-table'
 export { MAGNITUDE_CSS } from './piece-css'

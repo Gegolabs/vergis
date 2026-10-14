@@ -162,6 +162,36 @@ horizontal.
 - `totals` solo tiene efecto en apilado; en agrupado se ignora. Debe ser booleano
   (`distribution-totals-not-boolean`): una cadena `"false"` lo dejaría encendido en silencio.
 
+### ¿Dónde va la leyenda? (`legend`)
+
+La leyenda de un gráfico multi-serie va **arriba, en filas** por defecto (CV-05): sin título, en una
+banda propia sobre el área de datos, partida en tantas columnas como quepan en el ancho del área de
+datos (#365). Un spec puede pedirla **a la derecha y vertical**, una serie por fila:
+
+```yaml
+- distribution:
+    dimension: data.cruce.mes
+    metric: data.cruce.total
+    series: clasificacion
+    stacked: true
+    orientation: vertical
+    legend: right          # opcional: top (default) | right
+```
+
+- **Vocabulario cerrado**: `top` (el default, igual a omitirlo) o `right`. Cualquier otro valor
+  rechaza el spec (`distribution-legend-unknown`): un `legend: derecha` no fallaría en el render,
+  dejaría la leyenda arriba en silencio.
+- **Aplica a los gráficos con leyenda**: `distribution` agrupado o apilado (`metrics` o `series`) y
+  `series` (líneas, ver §3). En un `distribution` de una sola métrica no hay leyenda y `legend` no
+  tiene efecto.
+- **A la derecha los rótulos se cortan más tarde**: hasta 25 caracteres salen enteros (arriba, 19);
+  sobre eso, «…». El área de datos no cambia de tamaño; lo que crece es el lienzo, y la leyenda queda
+  fuera del área de datos, sin pisarla (#96).
+- **El costo**: el ancho de la leyenda se le suma al del gráfico. Cuando el SVG se escala a una
+  columna angosta, las barras se dibujan más chicas que con la leyenda arriba (con 9 series de
+  ~25 caracteres, el área de datos es ~53 % del ancho a la derecha y ~88 % arriba). Por eso el default
+  sigue siendo arriba.
+
 #### Formato `abbr` — magnitud abreviada (es-CL)
 
 | Valor | `abbr` | `int_0` |
@@ -191,7 +221,9 @@ decimal solo si la mantisa es menor a 100.
 
 - **`data`** es el dataset (`data.<dataset>`); cada fila es un punto del eje. **`x`** es el campo del
   eje; **`metrics`** las series (≥1). `x` y los campos de serie se validan contra el shape.
-- **Render**: `fold` + `mark: line` con puntos, leyenda abajo, paleta del theme (`chartSeries`).
+- **Render**: `fold` + `mark: line` con puntos, leyenda arriba (o a la derecha con `legend: right`,
+  §2 «¿Dónde va la leyenda?»; un valor fuera del vocabulario es `series-legend-unknown`), paleta del
+  theme (`chartSeries`).
 - **El eje x respeta el ORDEN DE LLEGADA de las filas** (`sort: null`): el SQL manda el orden y la
   agregación del eje; **no** se re-ordena alfabético.
 

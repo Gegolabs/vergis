@@ -61,6 +61,28 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Mira: la leyenda de un gráfico multi-serie puede ir a la derecha (`legend: right`) (#365)
+
+Un `distribution` agrupado o apilado y un `series` aceptan **`legend: right`**: la leyenda pasa a la
+derecha del área de datos, vertical, con una serie por fila, y los rótulos salen enteros hasta 25
+caracteres (arriba se cortan en 19). Lo pidió el especificador de PI-32 para su apilado de 9 series;
+César decidió el 2026-10-14 que la posición sea declarable por spec (camino 3 del issue).
+
+**El default no cambia**: sin `legend`, o con `legend: top`, la leyenda sigue arriba y en filas,
+como hasta 0.44.0, byte a byte. `legend` admite solo `top` o `right`; cualquier otro valor rechaza el spec
+al cargarlo (`distribution-legend-unknown`, `series-legend-unknown`).
+
+**El costo de la derecha**: el ancho de la leyenda se suma al del gráfico, así que en una columna
+angosta las barras se ven más chicas que con la leyenda arriba. Con 9 series de hasta 25 caracteres,
+el área de datos es el 53 % del ancho del SVG (arriba, el 88 %).
+
+**Qué exige:** nada. Ningún spec existente cambia.
+
+**Sin medir:** el render en un navegador con el ancho real de la columna; la suite mide la geometría
+del SVG servido.
+
 ## 0.44.0 — 2026-10-14
 
 ### Mira: la marca de agua declara el corte aunque el PI no tenga SLA de frescura (#411, PR #412)

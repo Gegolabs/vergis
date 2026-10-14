@@ -48,23 +48,54 @@ function chartAxisConfig(tokens: ThemeTokens) {
   }
 }
 
+/** Posición de la leyenda de un chart multi-serie (#365). `top` es el default de plataforma (CV-05). */
+export type LegendPosition = 'top' | 'right'
+
 /**
- * Config de la leyenda de los charts multi-serie — CONVENCIÓN DE PLATAFORMA, no declarable por spec
- * (el spec declara QUÉ se grafica; la plataforma decide CÓMO se ve). Horizontal, sin título y ARRIBA.
+ * Config de la leyenda de los charts multi-serie. Sin título y, por DEFECTO, ARRIBA y horizontal
+ * (CV-05, convención de plataforma). Desde #365 (decisión de César del 2026-10-14, camino 3 del issue) el spec
+ * puede pedirla a la DERECHA y vertical con `legend: right`; cualquier otro valor lo rechaza la
+ * validación, y un spec que no lo declara sale byte a byte como antes.
  *
- * `orient: 'top'` y no `'top-right'` (#96): los orient de ESQUINA (`top-right`, `top-left`, …) son
- * posicionamiento DENTRO del rectángulo de datos — Vega no les reserva espacio y la leyenda se dibuja
- * encima de las marcas (medido: con `top-right` el grupo de leyenda caía 100% dentro del área de plot
- * en los tres tipos de chart, pisando la barra más alta y el cruce de curvas). Solo los orient de
- * BORDE (`top`, `bottom`, `left`, `right`) entran en el layout del lienzo: Vega les reserva una banda
- * propia y el área de plot se desplaza, así que la leyenda queda FUERA. El título del chart es un
- * `<h3>` HTML fuera del SVG, así que la banda superior tampoco colisiona con él.
+ * `orient: 'top'`/`'right'` y no `'top-right'` (#96): los orient de ESQUINA (`top-right`, `top-left`, …)
+ * son posicionamiento DENTRO del rectángulo de datos — Vega no les reserva espacio y la leyenda se
+ * dibuja encima de las marcas (medido: con `top-right` el grupo de leyenda caía 100% dentro del área
+ * de plot en los tres tipos de chart, pisando la barra más alta y el cruce de curvas). Solo los orient
+ * de BORDE (`top`, `bottom`, `left`, `right`) entran en el layout del lienzo: Vega les reserva una
+ * banda propia y el área de plot se desplaza, así que la leyenda queda FUERA. El título del chart es
+ * un `<h3>` HTML fuera del SVG, así que la banda superior tampoco colisiona con él.
  */
-function chartLegendConfig(labels: string[], plotWidthPx: number) {
+export function chartLegendConfig(labels: string[], plotWidthPx: number, position: LegendPosition = 'top') {
+  if (position === 'right') return rightLegendConfig(labels)
   const columns = legendColumns(labels, plotWidthPx)
   return columns < labels.length
     ? ({ orient: 'top', title: null, direction: 'horizontal', columns } as const)
     : ({ orient: 'top', title: null, direction: 'horizontal' } as const)
+}
+
+/**
+ * Tope del rótulo de la leyenda a la DERECHA (#365), en px de la estimación de Vega (8 px por
+ * carácter): 200 px = 25 caracteres enteros, contra los 19 que deja el `labelLimit` por defecto (160). A la
+ * derecha el ancho de la leyenda se le resta al área de datos cuando el SVG se escala a su columna,
+ * así que el tope es un compromiso: los rótulos de PI-32 (≤ 25 caracteres) salen sin «…» y la
+ * leyenda no pasa de 16 + 200 px aunque un rótulo sea larguísimo.
+ */
+export const LEGEND_RIGHT_LABEL_LIMIT_PX = 200
+
+/**
+ * Leyenda a la derecha y vertical (#365): una entrada por fila, en el orden de las series. El
+ * `labelLimit` sube solo si algún rótulo lo necesita, y nunca pasa de `LEGEND_RIGHT_LABEL_LIMIT_PX`:
+ * con rótulos cortos la config es la misma que con el tope por defecto, y la leyenda no reserva
+ * ancho que no usa.
+ */
+function rightLegendConfig(labels: string[]) {
+  const longest = Math.max(0, ...labels.map((l) => [...l].length * LEGEND_CHAR_PX))
+  // Vega corta el rótulo si su ancho estimado NO es menor que `labelLimit` (comparación estricta,
+  // medida: con 200 px un rótulo de 25 caracteres = 200 px salía «…»). De ahí el +1.
+  const labelLimit = Math.min(LEGEND_RIGHT_LABEL_LIMIT_PX, longest) + 1
+  return labelLimit > LEGEND_LABEL_LIMIT_PX
+    ? ({ orient: 'right', title: null, direction: 'vertical', labelLimit } as const)
+    : ({ orient: 'right', title: null, direction: 'vertical' } as const)
 }
 
 /**
@@ -93,8 +124,9 @@ export function legendEntryWidthPx(label: string): number {
  * el spec sale SIN `columns`: un gráfico cuya leyenda ya cabía no cambia ni un byte. Si ni una
  * columna cabe, queda en 1: la leyenda vertical es lo más angosto que existe.
  *
- * Se descartó llevarla a la derecha (`orient: 'right'`, el otro camino medido en #365): cabe igual de
- * bien, pero cambia la convención de TODOS los gráficos, también los que hoy se leen bien.
+ * No se movió el default a la derecha (`orient: 'right'`, el otro camino medido en #365): cabe igual
+ * de bien, pero cambiaría la convención de TODOS los gráficos. La derecha es opt-in por spec
+ * (`legend: right`, decisión de César del 2026-10-14) y no pasa por este cálculo: ahí la leyenda es una columna.
  */
 export function legendColumns(labels: string[], plotWidthPx: number): number {
   const widths = labels.map(legendEntryWidthPx)
@@ -772,7 +804,7 @@ async function renderDistributionGrouped(
     field: 'serie',
     type: 'nominal' as const,
     scale: { domain: labels, range: colors },
-    legend: chartLegendConfig(labels, width),
+    legend: chartLegendConfig(labels, width, node.legend),
   }
   const totalRows = totals
     ? rows.map((r, ri) => ({
@@ -980,7 +1012,7 @@ export async function renderSeries(
       // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
       x: { field: x, type: 'ordinal', sort: null, title: null },
       y: { field: 'valor', type: 'quantitative', title: null, ...(domain ? { scale: { domain, zero: false } } : {}) },
-      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig(labels, SERIES_WIDTH_PX) },
+      color: { field: 'serie', type: 'nominal', scale: { domain: labels, range: colors }, legend: chartLegendConfig(labels, SERIES_WIDTH_PX, node.legend) },
     },
     config: chartAxisConfig(tokens),
   }

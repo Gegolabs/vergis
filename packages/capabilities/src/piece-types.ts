@@ -178,6 +178,8 @@ export interface ResolvedNode {
   stacked?: boolean
   /** `distribution` apilado: rótulo con el TOTAL de cada barra (#359). Encendido salvo `false`. */
   totals?: boolean
+  /** `distribution` multi-serie y `series`: posición de la leyenda (#365). Ausente = `top` (CV-05). */
+  legend?: 'top' | 'right'
   /** `distribution`: criterio de orden de las categorías, ya normalizado por compose (#81). */
   sortSpec?: ChartSort
   orientation?: string
