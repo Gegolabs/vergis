@@ -22,6 +22,7 @@ el registro existe para que revertirla sea barato.
 - **De paso**: `docs/capacidades.md` tenía CAP-219 (#405) como «sin publicar» aunque salió en 0.43.0. Se corrigió a `0.43.0` en este mismo corte (precedente: el corte 0.28.0 hizo lo mismo con CAP-141/175/177).
 - **Reversa**: el tag no se reescribe; si la ventana de Fabric sale roja, se corta 0.45.1.
 - **Modelo autor**: claude-opus-5-5 (trabajador del lab A.R.B.O.L., mandato de César del 2026-10-14).
+- **Cierre (2026-10-14)**: `fab:proof` sobre `v0.45.0` (`47e8131`) **lanzado y no medido**. Corrió en la Mac por `ssh`, en un directorio temporal con el tag por `git archive` y `npm ci`, en la misma ventana que el de `v0.44.0` (`fab:sql` sha256 `e265731a…` en los dos). Arrancó a las 14:16:48Z. La Mac se cerró hacia las 14:20Z, antes de que se viera su rc, y el túnel no volvió. Sin rc ni resumen, la deuda de esta versión **sigue abierta**. Su log quedó en la Mac, en `~/.alero-fabproof-20261014/proof-v0.45.0.log`. La pausa queda **sin verificar** desde el taller. El único indicio es `GET …/workspaces/{ws}/warehouses` con el SP de serving, que devolvió HTTP 500 `InternalServerError` a las 14:27Z, la firma de `Paused` en el README. Es solo un indicio, porque no tiene control con la capacidad `Active`.
 
 ## D-82 · 2026-10-14 — El corte 0.44.0 sale sin `fab:proof` previo al tag: la Mac no responde y el rango no toca lo que el arnés mide
 
@@ -35,6 +36,7 @@ el registro existe para que revertirla sea barato.
 - **Juez de composición**: no se pidió. El rango trae un solo cambio de código (#412), ya juzgado por Fable (correcta tras condiciones); no hay piezas que componer.
 - **Reversa**: el tag no se reescribe; si la ventana de Fabric sale roja, se corta 0.44.1.
 - **Modelo autor**: claude-opus-5-5 (trabajador del lab A.R.B.O.L., mandato de César del 2026-10-14).
+- **Cierre (2026-10-14)**: `fab:proof` corrido sobre `v0.44.0` (`db8211e`) en la Mac por `ssh`, en un directorio temporal con el tag por `git archive` y `npm ci`: **rc=0, sin fallos, 26 hallazgos, 0 sin medir**. Duró 146 s (14:14:22→14:16:48Z). Ventana: `resume` 14:12:30Z, `Active` 14:12:43Z y 90 s de calentamiento. C2 corrió con `vergis-lab-serving-sp` (`Viewer`) como segundo principal. `fab:sql` dio sha256 `e265731a…`, el mismo de D-82. La deuda de esta versión queda **saldada**. La pausa del `trap` no se alcanzó a ver (ver D-83).
 
 ## D-81 · 2026-10-09 — El corte 0.43.0 se completa: `fab:proof` en la Mac, juez Sonnet, merge de #410 y tag `v0.43.0`
 
