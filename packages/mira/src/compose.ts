@@ -129,6 +129,8 @@ export interface ResolvedNode {
   stacked?: boolean
   /** `distribution` apilado: rótulo con el TOTAL de cada barra (#359). Encendido salvo `false`. */
   totals?: boolean
+  /** `distribution` multi-serie y `series`: posición de la leyenda (#365). Ausente = `top` (CV-05). */
+  legend?: 'top' | 'right'
   /** `distribution`: criterio de orden de las categorías, ya normalizado (#81). */
   sortSpec?: ChartSort
   orientation?: string
@@ -329,6 +331,8 @@ export function composePiece(
       stacked?: boolean
       /** #359 · rótulo del total de cada barra apilada; `false` lo apaga (default: encendido). */
       totals?: boolean
+      /** #365 · `right` pone la leyenda a la derecha y vertical (default: arriba, CV-05). */
+      legend?: string
       orientation?: string
       sort?: string
       format?: string
@@ -357,6 +361,7 @@ export function composePiece(
         sortSpec,
         stacked: d.stacked === true,
         ...(d.totals === false ? { totals: false } : {}),
+        ...(d.legend === 'right' ? { legend: 'right' as const } : {}),
         orientation: d.orientation,
         format: d.format,
         title: d.title,
@@ -374,6 +379,7 @@ export function composePiece(
         sortSpec,
         stacked: d.stacked === true,
         ...(d.totals === false ? { totals: false } : {}),
+        ...(d.legend === 'right' ? { legend: 'right' as const } : {}),
         orientation: d.orientation,
         format: d.format,
         title: d.title,
@@ -405,13 +411,23 @@ export function composePiece(
       data?: string
       x?: string
       metrics?: { field?: string; label?: string }[]
+      /** #365 · `right` pone la leyenda a la derecha y vertical (default: arriba, CV-05). */
+      legend?: string
       format?: string
       title?: string
     }
     const dataset = stripData(String(se.data ?? '')).split('.')[0]
     const rows = [...(results[dataset]?.rows ?? [])]
     const seriesSpec = (se.metrics ?? []).map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
-    return { type: 'series', rows, xField: se.x, seriesSpec, format: se.format, title: se.title }
+    return {
+      type: 'series',
+      rows,
+      xField: se.x,
+      seriesSpec,
+      ...(se.legend === 'right' ? { legend: 'right' as const } : {}),
+      format: se.format,
+      title: se.title,
+    }
   }
   if (node['table']) {
     const t = node['table'] as {

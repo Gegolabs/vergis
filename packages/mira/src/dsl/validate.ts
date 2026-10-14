@@ -296,6 +296,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         remediation: `Escribir 'totals: false' para apagar el rótulo del total de cada barra apilada (por defecto está encendido).`,
       })
     }
+    assertLegendPosition(d, 'distribution')
     // `sort` (#81): vocabulario CERRADO — `magnitude` (default e implícito) · `chrono` (manda el
     // ORDER BY del SQL) · `value:<serie>` (una serie declarada, por label o por field). En modo mono
     // se acepta además el token legacy `-campo`/`campo`. Un `value:` colgante ordenaría por un campo
@@ -398,6 +399,7 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
         remediation: `Declarar '${x}' en shape.fields de '${dsName}' o corregir x.`,
       })
     }
+    assertLegendPosition(se, 'series')
     const metrics = se['metrics']
     if (!Array.isArray(metrics) || metrics.length === 0) {
       throw new VergisError({
@@ -1223,4 +1225,30 @@ function assertNoStrayFltPlaceholders(spec: MiraSpec, declared: Set<string>): vo
       })
     }
   }
+}
+
+/**
+ * Posiciones declarables de la leyenda de un chart multi-serie (#365, decisión de César del 2026-10-14). Vocabulario CERRADO:
+ * `top` es el default de plataforma (CV-05, arriba y en filas) y `right` la pone a la derecha y
+ * vertical. Ausente = `top`.
+ */
+export const LEGEND_POSITIONS = ['top', 'right'] as const
+
+/**
+ * `legend` de un `distribution` o un `series`: un valor fuera del vocabulario (`Right`, `derecha`,
+ * `left`) no fallaría en el render — dejaría la leyenda arriba en silencio, lo contrario de lo
+ * declarado. Se rechaza acá, con la lista de valores válidos.
+ */
+function assertLegendPosition(node: Record<string, unknown>, kind: 'distribution' | 'series'): void {
+  if (!('legend' in node)) return
+  const v = node['legend']
+  if (typeof v === 'string' && (LEGEND_POSITIONS as readonly string[]).includes(v)) return
+  throw new VergisError({
+    error: 'mira/spec-invalid',
+    code: `${kind}-legend-unknown`,
+    path: `piece -> ${kind}.legend`,
+    value: (v ?? null) as never,
+    message: `La 'legend' de un gráfico ${kind} debe ser ${LEGEND_POSITIONS.map((p) => `'${p}'`).join(' o ')}; recibió ${JSON.stringify(v ?? null)}.`,
+    remediation: `Escribir 'legend: right' para la leyenda a la derecha y vertical, u omitirla (default: arriba, en filas).`,
+  })
 }
