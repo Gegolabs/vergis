@@ -9,6 +9,19 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-82 · 2026-10-14 — El corte 0.44.0 sale sin `fab:proof` previo al tag: la Mac no responde y el rango no toca lo que el arnés mide
+
+- **Contexto**: César decidió «Sí, corta y promueve» (2026-10-14 ~09:40 −03, dec-20261014-33eba17a-02, tarjeta Radar 6f1bc9bc) para la release que trae #411 (PR #412). D-57 ata `fab:proof` al corte, antes del tag.
+- **Bifurcación**: (a) esperar la Mac para correr `fab:proof` antes del tag · (b) taggear sin la ventana de Fabric, con la equivalencia medida y la deuda declarada.
+- **Decidido**: **(b)**. La Mac, único sitio con sesión `az` sobre la suscripción ultrabase, rechaza la conexión (`ssh` a 127.0.0.1:22222, `Connection refused`, dos intentos ~09:45 y ~10:00 −03); el taller solo ve el tenant (`az-cliente ultrabase`, medido de nuevo hoy).
+- **Lo medido que la sostiene**: `git diff v0.43.0..HEAD` sobre `packages/policy`, `server/` y `scripts/fabric-lab-proof.ts` es vacío, y `npm run fab:sql` emite SQL **byte-idéntico** en `v0.43.0` y en el corte (sha256 `e265731a…`, 90 líneas): si el corte cambiara el DDL que el arnés mide, ese hash habría salido distinto. `fab:proof` sobre 0.43.0 salió verde el 2026-10-09 (D-81).
+- **Lo que no cubre**: un cambio del SKU F2 de Fabric desde el 9-oct. Ese riesgo lo comparte 0.43.0, que es lo que corre hoy; esta versión no lo agrava.
+- **Descartado**: (a), porque bloquea la promoción decidida por César sin que su resultado pueda cambiar lo que la versión declara.
+- **Deuda**: correr `fab:proof` sobre `v0.44.0` cuando la Mac vuelva, y registrarlo en el ledger. Comentario en el PR #417.
+- **Juez de composición**: no se pidió. El rango trae un solo cambio de código (#412), ya juzgado por Fable (correcta tras condiciones); no hay piezas que componer.
+- **Reversa**: el tag no se reescribe; si la ventana de Fabric sale roja, se corta 0.44.1.
+- **Modelo autor**: claude-opus-5-5 (trabajador del lab A.R.B.O.L., mandato de César del 2026-10-14).
+
 ## D-81 · 2026-10-09 — El corte 0.43.0 se completa: `fab:proof` en la Mac, juez Sonnet, merge de #410 y tag `v0.43.0`
 
 - **Qué cambió desde D-80** (medido por el despachador y dicho en el encargo): César deshabilitó los rulesets `purga-candado-ramas` y `purga-candado-tags`. Además, `fab:proof` no es un acto suyo: se corre en su Mac, cuya sesión `az` alcanza la suscripción ultrabase, como en los cortes anteriores. Las dos razones de D-80 dejaron de valer.
