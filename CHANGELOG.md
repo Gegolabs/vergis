@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.45.0 — 2026-10-14
 
-### Mira: la leyenda de un gráfico multi-serie puede ir a la derecha (`legend: right`) (#365)
+### Mira: la leyenda de un gráfico multi-serie puede ir a la derecha (`legend: right`) (#365, PR #418)
 
 Un `distribution` agrupado o apilado y un `series` aceptan **`legend: right`**: la leyenda pasa a la
 derecha del área de datos, vertical, con una serie por fila, y los rótulos salen enteros hasta 25
