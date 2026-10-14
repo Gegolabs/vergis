@@ -61,9 +61,9 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
-## Sin publicar
+## 0.44.0 — 2026-10-14
 
-### Mira: la marca de agua declara el corte aunque el PI no tenga SLA de frescura (#411)
+### Mira: la marca de agua declara el corte aunque el PI no tenga SLA de frescura (#411, PR #412)
 
 Hasta 0.43.0 un PI solo mostraba «Datos al …» por marca de agua si su frescura declaraba `max_age`:
 sin él, la declaración se descartaba en silencio y el header caía al corte por ingesta o a «corte no

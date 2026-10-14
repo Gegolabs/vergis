@@ -5,6 +5,10 @@ marketplace lo fija al tag `vX.Y.Z`). Lo que el operador consume de cada versió
 `CHANGELOG.md` de la raíz del repo; este archivo registra lo que es **del plugin**: decisiones de
 implementación del CLI y de las skills, y la historia que las skills heredaron.
 
+## 0.44.0 — 2026-10-14
+
+Sin cambios propios del plugin: sube en lockstep con el Producto.
+
 ## 0.43.0 — 2026-10-09
 
 - **El hermano solo-node del poller (#376).** `instruments/poller-node.mjs` no se importa: el CLI le
