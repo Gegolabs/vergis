@@ -213,7 +213,7 @@ services:
   # SSO delante del motor: reenvía el email del usuario autenticado como X-Forwarded-Email. Genérico
   # (aquí oauth2-proxy con un IdP OIDC); reemplaza issuer/client por los de tu tenant. Secretos en env_file.
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:latest@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
     restart: unless-stopped
     # SIN `depends_on`: su upstream ya no es un servicio de este compose sino el CONMUTADOR del borde, y
     # los anillos son contenedores que crea `botler-rollout` fuera del ciclo de vida de compose. Un
@@ -243,7 +243,7 @@ services:
   # validar y recargar la config (`RINGS_EDGE`, default `caddy`). Si tu compose le pone otro nombre
   # (prefijo del proyecto), pásalo por env a la herramienta.
   caddy:
-    image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    image: caddy:2@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
     restart: unless-stopped
     depends_on: [oauth2-proxy]
     # `:8079` NO se publica — `expose`, jamás `ports:`. Mismo supuesto de red D2 que protege a
