@@ -2,7 +2,7 @@
 // Genera el <script> que filtra client-side (facetas de la bandeja) y recomputa KPIs/semáforo sobre los
 // datasets materializados, SIN nuevas queries. Browser-only: el test `new Function(...)` solo valida
 // sintaxis (no comportamiento) — editar con cuidado.
-import { SAVED_VIEWS_JS } from './table-runtime'
+import { SAVED_VIEWS_JS, vtIsNeg } from './table-runtime'
 import type { Interactive } from './piece-types'
 
 export function renderInteractiveScript(it: Interactive): string {
@@ -19,6 +19,8 @@ export function renderInteractiveScript(it: Interactive): string {
   var liveEl = document.getElementById('vergis-flt-live');
   var livePrintEl = document.getElementById('vergis-flt-live-print');
   var boxes = tray ? Array.prototype.slice.call(tray.querySelectorAll('input[type=checkbox]')) : [];
+  // #421 · la MISMA decisión de signo que el SSR y la tabla (vtIsNeg, inyectada por toString).
+  ${vtIsNeg.toString()}
   function fmt(v, f){
     if (f === 'percent_1') return (v*100).toFixed(1) + '%';
     if (f === 'int_0') return new Intl.NumberFormat('es-CL',{maximumFractionDigits:0}).format(Math.round(v));
@@ -99,7 +101,9 @@ export function renderInteractiveScript(it: Interactive): string {
     paintChips();
     document.querySelectorAll('[data-agg]').forEach(function(el){
       var a = JSON.parse(el.getAttribute('data-agg'));
-      el.querySelector('.kpi-value').textContent = fmt(agg(filteredRowsFor(a.dataset), a), el.getAttribute('data-format'));
+      var kv = el.querySelector('.kpi-value'); var ktx = fmt(agg(filteredRowsFor(a.dataset), a), el.getAttribute('data-format'));
+      kv.textContent = ktx;
+      kv.classList.toggle('vt-neg', el.getAttribute('data-negative') !== 'plain' && vtIsNeg(ktx));
       var ca = el.getAttribute('data-comparison-agg');
       if (ca){ var cab = JSON.parse(ca); var cmp = el.querySelector('.kpi-comparison');
         if (cmp) cmp.textContent = (el.getAttribute('data-comparison-label')||'') + ' ' + fmt(agg(filteredRowsFor(cab.dataset || a.dataset), cab), el.getAttribute('data-format')); }

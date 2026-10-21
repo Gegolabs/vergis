@@ -27,6 +27,8 @@ export const defaultTheme: Theme = {
 <title>${escapeHtml(title)}</title>
 <style>
   :root { font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; color: #1f2937; }
+  /* #421 · negativo en rojo (solo el texto; #b91c1c sobre blanco = 6,5:1). */
+  .kpi .kpi-value.vt-neg, .dato .dato-v.vt-neg, table td.vt-neg { color: var(--neg, #b91c1c); }
   body { margin: 0; padding: 24px; background: #f8fafc; transition: padding-right .22s ease; }
   body:has(.tray-toggle:checked) { padding-right: 324px; }
   h1 { font-size: 22px; margin: 0 0 4px; }

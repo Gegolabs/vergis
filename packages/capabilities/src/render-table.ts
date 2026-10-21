@@ -5,7 +5,7 @@
 import { escapeHtml } from './markdown'
 import { ctxQuery, formatValue } from './piece-util'
 import { llaveCanonicaDeFila, type TablaAncla } from './notas-render'
-import { vtTotals } from './table-runtime'
+import { vtNegCls, vtTotals } from './table-runtime'
 import type { ResolvedNode, RenderOpts, Drill, CarryCtx, TableColumn } from './piece-types'
 
 export const TABLE_SSR_MAX_ROWS = 500
@@ -101,7 +101,7 @@ export function renderTableFoot(cols: TableColumn[], rows: Record<string, unknow
       if (c.total) {
         const v = totals[c.field]
         const text = v == null ? '—' : formatValue(v, c.format)
-        return `<td class="${align} vt-total" data-total-field="${escapeHtml(c.field)}">${escapeHtml(text)}</td>`
+        return `<td class="${align} vt-total${vtNegCls(c.negative, text)}" data-total-field="${escapeHtml(c.field)}">${escapeHtml(text)}</td>`
       }
       if (!labelPuesto) {
         labelPuesto = true
@@ -153,7 +153,7 @@ function renderTableBody(
           const raw = r[c.field]
           const text = formatValue(raw, c.format)
           const bg = ranges[c.field] ? magnitudeVar(Number(raw), ranges[c.field]) : ''
-          return `<td class="align-${c.align ?? 'left'}"${bg}>${escapeHtml(text)}</td>`
+          return `<td class="align-${c.align ?? 'left'}${vtNegCls(c.negative, text)}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
       // Llave de negocio de la fila (solo si el dataset declaró `anchor`): es el ancla del comentario

@@ -2,7 +2,7 @@ import { type Capability } from '@vergis/botler'
 import { VERGIS_VERSION_LABEL } from './version'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE } from './table-runtime'
+import { TABLE_RUNTIME_SOURCE, vtNegCls } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS, TABLE_TOTALS_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
@@ -556,7 +556,7 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
   // Atributos para recompute client-side (interacción declarada acotada).
   let dataAttrs = ''
   if (opts.interactive && node.agg) {
-    dataAttrs = ` data-format="${escapeHtml(node.format ?? '')}" data-agg="${escapeHtml(JSON.stringify(node.agg))}"`
+    dataAttrs = ` data-format="${escapeHtml(node.format ?? '')}" data-agg="${escapeHtml(JSON.stringify(node.agg))}"${node.negative === 'plain' ? ' data-negative="plain"' : ''}`
     if (node.comparisonAgg) dataAttrs += ` data-comparison-agg="${escapeHtml(JSON.stringify(node.comparisonAgg))}" data-comparison-label="${escapeHtml(node.comparisonLabel ?? '')}"`
   }
   const comparison =
@@ -566,7 +566,7 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
   const sizeCls = node.size ? ` kpi-${escapeHtml(node.size)}` : ''
   return (
     `<section class="kpi${sizeCls}"${accent}${dataAttrs}>` +
-    `<div class="kpi-value">${escapeHtml(value)}</div>` +
+    `<div class="kpi-value${vtNegCls(node.negative, value)}">${escapeHtml(value)}</div>` +
     `<div class="kpi-label">${escapeHtml(String(node.label ?? ''))}${comparison}</div>` +
     `</section>`
   )
@@ -582,7 +582,7 @@ function renderDato(node: ResolvedNode): string {
   return (
     `<div class="dato">` +
     `<span class="dato-k">${escapeHtml(String(node.label ?? ''))}</span>` +
-    `<span class="dato-v">${escapeHtml(value)}</span>` +
+    `<span class="dato-v${vtNegCls(node.negative, value)}">${escapeHtml(value)}</span>` +
     `</div>`
   )
 }

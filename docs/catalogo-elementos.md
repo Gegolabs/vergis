@@ -408,6 +408,36 @@ data:
   demás, y uno no declarado en `data:` rechaza la spec (`dangling-data-reference`).
 - El rótulo interpolado es el que llevan la cabecera, el filtro de columna, la agrupación y el CSV.
 
+## 4·septies · Negativos en rojo — convención de plataforma, con salida por columna
+
+**Toda cifra cuyo valor mostrado es negativo se pinta de rojo**, sin que el spec lo pida: en las celdas
+de `table`, el total al pie, los subtotales de grupo y el valor de `kpi` y `dato`. El color solo afecta
+el texto (sin fondo) y el signo `-` se conserva, así que el color nunca es la única señal.
+
+- **Decide el valor mostrado, no el crudo.** Un `-0,4` con `int_0` se muestra `0` y no se pinta. Una
+  fecha, un guion suelto (`—`) o un texto que empieza con guion no son negativos. La regla es una sola
+  función (`vtIsNeg`) que usan el SSR y el runtime del cliente: al filtrar, agrupar u ordenar, la
+  tabla hidratada pinta exactamente las mismas celdas que la servida.
+- **Salida declarable:** donde el signo no significa «malo» (una desviación en la que negativo es
+  favorable, un costo con signo contable), la columna o el elemento declara `negative: plain`. Es el
+  único valor que se acepta: cualquier otro rechaza la spec (`negative-invalid`).
+
+```yaml
+- table:
+    data: data.pyl
+    columns:
+      - { field: margen, label: "Margen", format: int_0 }                     # rojo si es negativo
+      - { field: desviacion, label: "Desv.", format: int_0, negative: plain } # nunca rojo
+- kpi: { metric: data.resumen.resultado, label: "Resultado", format: int_0 }
+```
+
+- El token es `--neg` en cada paleta del tema, con contraste ≥ 4,5:1 sobre el fondo de la tabla.
+- **Convive con el color de magnitud** (§4·bis): la rampa pinta el fondo, nunca en rojo, y `vt-neg` pinta
+  el texto. Con las dos encendidas se ven las dos, aunque sobre un fondo de rampa oscuro el rojo
+  pierde contraste.
+- **Fuera de alcance:** los gráficos (las barras negativas ya caen bajo el cero, con el color de su
+  serie), el CSV y el export.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de

@@ -127,6 +127,8 @@ export interface TableColumn {
    * Ya NORMALIZADO por compose (el DSL admite `true` como alias de `sum`).
    */
   total?: 'sum' | 'avg' | 'count'
+  /** #421 · salida de la convención de signo: `plain` = los negativos de esta columna no se pintan de rojo. */
+  negative?: 'plain'
 }
 export interface Aggregation {
   dataset?: string
@@ -163,6 +165,8 @@ export interface ResolvedNode {
   label?: string
   format?: string
   accent?: string
+  /** #421 · `plain` = el valor de este `kpi`/`dato` no se pinta de rojo aunque sea negativo. */
+  negative?: 'plain'
   comparison?: unknown
   comparisonLabel?: string
   agg?: Aggregation
