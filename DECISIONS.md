@@ -9,6 +9,17 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-84 · 2026-10-21 — El corte 0.46.0 sale sin `fab:proof` previo al tag, con la equivalencia de SQL medida (como D-82/D-83)
+
+- **Contexto**: cuatro pedidos transversales de la certificación interna de A.R.B.O.L. (#421, #420, #422 y #425), que el cliente reclamó en la daily del 21-oct (INC-046 de la obra). Los cuatro están en `main` por los PR #426 a #429, cada uno con su juez Fable 5.1 y las condiciones aplicadas. D-57 ata `fab:proof` al corte, antes del tag.
+- **Bifurcación**: (a) correr `fab:proof` antes del tag · (b) taggear con la equivalencia medida y la deuda declarada.
+- **Decidido**: **(b)**. Desde el taller, `az-cliente ultrabase` ve solo el nivel de tenant (`N/A(tenant level account)`, medido hoy) y la receta del README trae identificadores de ejemplo: rehacer el descubrimiento de D-83 no cabía en la sesión que trae la entrega al cliente.
+- **Lo medido que la sostiene**: `npm run fab:sql` emite SQL **byte-idéntico** en `v0.45.0` y en `main` (sha256 `e265731aa8b7…`, el mismo de D-82 y D-83). El rango no toca `packages/policy` ni `scripts/fabric-lab-proof.ts`. Toca `server/nav.ts` y `server/serve-rls.ts` solo para pasar el parámetro `from` (#422) y el runtime de notas (#425), no el SQL.
+- **Lo que no cubre**: un cambio del SKU de Fabric desde el 14-oct, igual que en D-83.
+- **Deuda**: `fab:proof` sobre `v0.46.0`, que se asienta en `POLICIES-ledger.md` cuando corra.
+- **Reversa**: el tag no se reescribe; si `fab:proof` sale rojo, se corta 0.46.1.
+- **Modelo autor**: claude-opus-5-5 (trabajador del lab A.R.B.O.L., encargo 20261021-1229 del despachador).
+
 ## D-83 · 2026-10-14 — El corte 0.45.0 sale sin `fab:proof` previo al tag, por la misma razón medida que D-82
 
 - **Contexto**: César decidió (2026-10-14, dec-20261014-33eba17a-03, tarjeta Radar e32a260b) que la leyenda de los gráficos multi-serie se declare por spec y que PI-32 la use a la derecha. El cambio (#365) está en `main` desde el PR #418 (`3e61a1f`); para que la instancia lo tome hace falta la release. D-57 ata `fab:proof` al corte, antes del tag.
