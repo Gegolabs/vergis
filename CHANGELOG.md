@@ -61,6 +61,38 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## 0.46.0 — 2026-10-21
+
+Cuatro pedidos de la certificación interna de una instalación beta (A.R.B.O.L.), los cuatro transversales: valen para todos los informes, no para uno.
+
+### Mira: los negativos van en rojo por convención de plataforma, con salida `negative: plain` (#421, PR #427)
+
+Toda cifra cuyo valor **mostrado** es negativo se pinta con el token `--neg`: celdas de tabla, total al pie, subtotales de grupo y el valor de `kpi` y `dato`. Lo decide una sola función (`vtIsNeg`) sobre el texto ya formateado, con el valor crudo numérico, en el SSR y en el cliente tras filtrar, agrupar u ordenar. Un `-0,4` con `int_0` se muestra `0` y no se pinta, y una fecha, un guion o un texto como «-5 kg» tampoco. El signo `-` se conserva. Donde el negativo no es malo, la columna o el elemento declara `negative: plain`; cualquier otro valor rechaza el spec (`negative-invalid`). Catálogo §4·septies, `CAP-221`.
+
+**Qué exige:** nada en los specs. **Pero cambia cómo se ven todos los informes con cifras negativas**: avísale a quien esté revisando uno antes de promover.
+
+**Sin medir:** el color en un navegador con el color de magnitud encendido (sobre un fondo de rampa oscuro el rojo pierde contraste). Fuera de alcance: gráficos, comparación del `kpi`, `semaforo`, CSV y export.
+
+### Mira: un filtro de bandeja muestra el rótulo declarado en `display` (#420, PR #428)
+
+`filters[].display` (`data.<dataset>.<campo>`, del mismo dataset que `source`): la bandeja, el chip activo, el resumen de impresión y el buscador muestran el rótulo, y el buscador también encuentra por el valor. El bind, el saneo y la URL siguen sobre el valor. Rótulo vacío → el valor; rótulos repetidos → « rótulo (valor) ». Sin `display`, el render es idéntico byte a byte. Catálogo §4·octies, `CAP-222`.
+
+**Qué exige:** nada.
+
+### Mira: la vista de detalle dice qué filtra, tiene camino de regreso y la tabla conserva su estado al volver (#422, PR #429)
+
+- **Sellos del drill:** cada clave de `context` con valor se muestra en la banda de contexto como sello de solo lectura. `context` admite `{ key, label?, display? }`, y `display` sale del dato de la vista destino, nunca de la URL. Si falta, el sello muestra el valor y queda el evento `mira-context-display-missing`. Una clave que ya es control de cabecera no se repite.
+- **Regreso:** cada drill lleva `from=<query de la vista de origen>`, y la vista destino pinta `← origen`, con la cadena de hasta 3 niveles y los títulos del spec.
+- **Estado:** orden, facetas, búsqueda, agrupación y scroll (el de la ventana y el de la tabla) se guardan en `sessionStorage` al salir. Se restituyen solo al volver, con el «atrás» del navegador o por una miga (`vret=1`, que se quita de la URL después). La entrada nueva parte limpia. Medido en Chromium headless con este mismo bundle; el detalle está en el PR.
+
+`superficie-de-estado.md` §3·bis, `CAP-223`. **Qué exige:** nada. Un spec con `context: [a, b]` sigue igual, y ahora además pinta los sellos.
+
+### Corrección: el hilo de comentarios se lee aunque el dataset anclado dependa de un control (#425, PR #426)
+
+El `GET` del hilo lleva el mismo ctx que el `POST`. Hasta 0.45.0, en un dataset anclado cuyo SQL usa `:ctx.*`, comentar funcionaba pero el hilo daba 403 («No se pudo leer el hilo»).
+
+**Cotejo de Fabric:** `fab:sql` da `e265731a…`, igual que en v0.45.0: ningún cambio toca el SQL que emite el Producto. `fab:proof` no corrió antes del tag (D-84).
+
 ## 0.45.0 — 2026-10-14
 
 ### Mira: la leyenda de un gráfico multi-serie puede ir a la derecha (`legend: right`) (#365, PR #418)
