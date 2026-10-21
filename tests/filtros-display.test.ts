@@ -161,10 +161,10 @@ describe('#420 · validación de `display`', () => {
 })
 
 describe('#420 · superficie con `display`', () => {
-  it('la bandeja muestra los nombres; el href lleva el código; el buscador busca por el nombre', async () => {
+  it('la bandeja muestra los nombres; el href lleva el código; el buscador busca por el nombre y por el código', async () => {
     const tray = trayOf(await renderYaml(yamlFor('data.catalogo.nombre')))
     expect(tray).toContain('</span> Bodega Central</a>')
-    expect(tray).toContain('data-v="bodega central"')
+    expect(tray).toContain('data-v="bodega central c10"') // quien escribe el código también encuentra el centro
     expect(tray).toMatch(/href="[^"]*flt\.cc=C10"/)
     expect(tray).not.toContain('</span> C10</a>')
     expect(tray).toContain('</span> Oficina (C04)</a>')

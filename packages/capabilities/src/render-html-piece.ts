@@ -435,7 +435,18 @@ function filterOptionPairs(f: FilterResolved): FilterOption[] {
 
 /** Rótulo visible de un valor seleccionado; un valor sin opción (no debería ocurrir: está saneado) se ve tal cual. */
 function filterOptionLabel(f: FilterResolved, value: string): string {
-  return filterOptionPairs(f).find((o) => o.value === value)?.label ?? value
+  return filterLabelMap(f).get(value) ?? value
+}
+
+/** Valor → rótulo de un filtro, armado una vez por filtro y reutilizado (chips y resumen de impresión). */
+const labelMaps = new WeakMap<FilterResolved, Map<string, string>>()
+function filterLabelMap(f: FilterResolved): Map<string, string> {
+  let m = labelMaps.get(f)
+  if (!m) {
+    m = new Map(filterOptionPairs(f).map((o) => [o.value, o.label]))
+    labelMaps.set(f, m)
+  }
+  return m
 }
 
 /**
@@ -461,7 +472,7 @@ function renderTrayFilters(filters: FilterResolved[], activePage: string | undef
             : fltHref(activePage, carry, flt, f.multi ? undefined : { id: f.id }, { id: f.id, value: v })
           return (
             // #420 · El buscador (`data-v`) y el texto buscan y muestran el RÓTULO; el href lleva el valor.
-            `<label class="vflt-opt${on ? ' on' : ''}${extra ? ' vflt-extra' : ''}" data-v="${escapeHtml(label.toLowerCase())}">` +
+            `<label class="vflt-opt${on ? ' on' : ''}${extra ? ' vflt-extra' : ''}" data-v="${escapeHtml((label === v ? v : label + ' ' + v).toLowerCase())}">` +
             `<a href="${escapeHtml(href)}" role="checkbox" aria-checked="${on}">` +
             `<span class="vflt-box">${on ? '✓' : ''}</span> ${escapeHtml(label)}</a></label>`
           )
