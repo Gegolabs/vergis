@@ -68,6 +68,7 @@
           "id": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$" },
           "label": { "type": "string" },
           "source": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$", "description": "Catálogo de opciones: data.<dataset>.<campo> (un SELECT DISTINCT que corre bajo la misma RLS)." },
+          "display": { "type": "string", "pattern": "^data\\.[a-zA-Z0-9_]+\\.[a-zA-Z0-9_]+$", "description": "Rótulo de las opciones (#420): data.<dataset>.<campo> del MISMO catálogo que source. Solo presentación (bandeja, chip, buscador); el bind y el saneo siguen sobre el valor de source. Default: el propio valor." },
           "column": { "type": "string", "pattern": "^[A-Za-z0-9_\\[\\]]+(\\.[A-Za-z0-9_\\[\\]]+)*$", "description": "Columna que el predicado filtra en las queries (default = el campo de source). Se INTERPOLA: identificador SQL, jamás una expresión." },
           "multi": { "type": "boolean", "description": "Selección múltiple (default: un solo valor)." },
           "depends_on": { "type": "string", "pattern": "^[a-zA-Z0-9_]+$", "description": "Cascada: id de un filtro declarado ANTES, cuya selección condiciona las opciones de este." }

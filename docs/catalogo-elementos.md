@@ -440,6 +440,39 @@ el texto (sin fondo) y el signo `-` se conserva, así que el color nunca es la �
 - **Fuera de alcance:** los gráficos (las barras negativas ya caen bajo el cero, con el color de su
   serie), la comparación del `kpi`, las tarjetas del `semaforo`, el CSV y el export.
 
+## 4·octies · Rótulo de las opciones de un filtro de bandeja (`filters[].display`)
+
+Un filtro de bandeja (`filters`, `:flt.<id>`; el bloque se explica en
+[superficie-de-estado.md §4·bis](superficie-de-estado.md)) ofrece como opción el valor del campo de
+`source`. Cuando ese valor es un **código** —un centro de costo, una cuenta, una sucursal—, `display`
+declara qué campo de la **misma fila del catálogo** se muestra en su lugar:
+
+```yaml
+filters:
+  - id: cc
+    label: Centro de costo
+    source: data.catalogo.cc          # el VALOR: lo que se bindea en :flt.cc y viaja en la URL
+    display: data.catalogo.nombre     # el RÓTULO: lo que se ve en la bandeja, el chip y el buscador
+data:
+  catalogo:
+    params: { sql: "SELECT DISTINCT cc, nombre FROM dbo.centros" }
+    shape: { type: rows, fields: { cc: string, nombre: string } }
+```
+
+- **El rótulo es solo presentación.** El predicado, el saneo de la selección y el `flt.<id>` de la URL
+  siguen sobre el valor: seleccionar «Bodega Central» filtra el documento igual que seleccionar `C10`.
+  Un rótulo escrito en la URL no es una opción y se descarta, como cualquier valor fuera del catálogo.
+- **Las reglas de `controls[].display`.** La primera fila de cada valor fija su rótulo; un rótulo
+  vacío o nulo cae al valor; un fecha-hora ISO se recorta a la fecha; y si dos valores distintos
+  comparten rótulo, ambos se muestran como « rótulo (valor) ». El orden de las opciones sigue siendo
+  el del valor.
+- **El chip activo y el buscador** de la bandeja muestran y buscan por el rótulo.
+- **Misma forma y mismo rigor que `source`:** `data.<dataset>.<campo>`, del mismo dataset que
+  `source` (el rótulo se lee de la fila de la opción) y con el campo declarado en `shape.fields`. Un
+  `display` colgante rechaza la spec (`filter-display-dangling` · `filter-display-field-dangling`).
+- **Sin `display`, nada cambia:** el rótulo es el valor, sin recorte ni desambiguación, y la bandeja
+  se rinde byte a byte como antes.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de
