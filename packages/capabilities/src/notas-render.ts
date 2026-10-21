@@ -156,6 +156,16 @@ if(kit){
 }
 
 // ── Comentarios: marcador, popover con el hilo, y la acción por fila ─────────────────────────
+// El GET del hilo lleva el MISMO ctx que el POST (#425): el gate re-ejecuta el dataset con el ctx de
+// la URL, y un dataset cuyo SQL usa :ctx.* sin él no devuelve la fila (403 sobre una fila visible).
+// Un valor vacío o nulo se omite, igual que en ctxQuery del servidor.
+function ctxQs(ctx){
+  var out=''; if(!ctx) return out;
+  Object.keys(ctx).forEach(function(k){
+    var v=ctx[k]; (Array.isArray(v)?v:[v]).forEach(function(x){ if(x==null||x==='') return; out+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(x)); });
+  });
+  return out;
+}
 var pop=null;
 function cerrarPop(){ if(pop){ pop.remove(); pop=null; } }
 document.addEventListener('click', function(e){ if(pop && !pop.contains(e.target) && !e.target.closest('.vt-nmark') && !e.target.closest('.vt-ncomentar')) cerrarPop(); });
@@ -180,7 +190,7 @@ function abrirPop(anchorEl, ancla, llave, campo){
       return '<div class="notas-item"><div class="notas-meta">'+esc(n.autor)+' · '+esc(fecha(n.createdAt))+(n.campo?(' · '+esc(n.campo)):'')+(n.refRota?' · referencia no resuelta':'')+'</div>'+esc(n.contenido||'(nota retirada)')+'</div>';
     }).join('');
   }
-  var q=CFG.comentariosUrl+'?dataset='+encodeURIComponent(ancla.dataset)+'&key='+encodeURIComponent(JSON.stringify(llave));
+  var q=CFG.comentariosUrl+'?dataset='+encodeURIComponent(ancla.dataset)+'&key='+encodeURIComponent(JSON.stringify(llave))+ctxQs(CFG.ctx);
   fetch(q,{headers:{accept:'application/json'}}).then(function(r2){ return r2.json(); })
     .then(function(j){ pintar(j.notas||[]); })
     .catch(function(){ hilo.innerHTML='<div class="notas-err">No se pudo leer el hilo.</div>'; });
