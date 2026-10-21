@@ -38,8 +38,22 @@ export interface MiraPage {
   id: string
   title: string
   piece: Record<string, unknown>
-  /** Parámetros de contexto que esta vista recibe del drill-through (`:ctx.<param>` en su data). */
-  context?: string[]
+  /** Parámetros de contexto que esta vista recibe del drill-through (`:ctx.<param>` en su data).
+   *  Un string es la clave; un objeto declara además el rótulo del sello y el campo del dataset de la
+   *  vista cuyo valor se muestra en vez del valor crudo (#422, misma semántica que `controls[].display`). */
+  context?: (string | MiraContextEntry)[]
+}
+
+/** #422 · Una clave de contexto con su sello: `key` se bindea, `label` rotula, `display` se muestra. */
+export interface MiraContextEntry {
+  key: string
+  label?: string
+  display?: string
+}
+
+/** #422 · Las claves de contexto de una vista, cualquiera sea la forma declarada (string u objeto). */
+export function contextKeys(page: Pick<MiraPage, 'context'>): string[] {
+  return (page.context ?? []).map((c) => (typeof c === 'string' ? c : c.key))
 }
 
 export interface MiraSpec {
@@ -741,7 +755,7 @@ function validatePages(pages: MiraPage[]): void {
           remediation: `Crear la página '${d.to}' o corregir drillthrough.to.`,
         })
       }
-      const ctx = target.context ?? []
+      const ctx = contextKeys(target)
       const missing = d.by.filter((k) => !ctx.includes(k))
       if (missing.length > 0) {
         throw new VergisError({

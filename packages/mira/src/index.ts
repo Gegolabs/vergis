@@ -1,7 +1,7 @@
 export { MiraBotlet, createMiraBotlet, DEFAULT_INTERACTIVE_MAX_ROWS } from './mira'
 export { applyCtx, resolveControlValue, resolveControlValues, buildControlOptions, trimIsoLabel, labelForValue, defaultFromField, markedDefaults, isDefaultFlag } from './controls'
 export type { ControlOption } from './controls'
-export { resolveActiveView } from './views'
+export { resolveActiveView, resolveContextSeals, parseBackChain, originQuery, BACK_MAX_DEPTH } from './views'
 export { applyFlt, resolveFilters, normalizeFlt, filterCarry, filterColumn, stripFilterSource, FILTER_MAX_VALUES } from './filters'
 export type { FilterOption, FilterResolved, FltValues } from './filters'
 export type { MiraOptions, MiraOutput } from './mira'

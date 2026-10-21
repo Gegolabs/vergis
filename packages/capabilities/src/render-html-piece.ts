@@ -28,7 +28,7 @@ import type {
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry, print, pdfUrl } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry, print, pdfUrl, contextSeals, back, drillFrom, stateKey } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     // PAPEL (#65 · D6): en modo print manda la paleta declarada por el theme, ANTES de resolver los
@@ -43,11 +43,13 @@ export const renderHtmlPiece: Capability = {
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false, magnitude: false, tableTotals: false }
     const flt = fltCarry ?? {}
-    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, print: !!print, carry, signals, fltQ: fltQuery(flt) }
+    // El sufijo que llevan los drills: los filtros de bandeja vigentes y (#422) la miga de ESTA vista.
+    const drillQ = fltQuery(flt) + (drillFrom ? `&from=${encodeURIComponent(drillFrom)}` : '')
+    const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, print: !!print, carry, signals, fltQ: drillQ, stateKey }
     // CONVENCIÓN (TX-11 «una cosa, un lugar»): el selector de alcance vive en la BANDA (el sello ES
     // el control), no en la bandeja. El tab «Controles» de la bandeja queda para la maquinaria
     // (facetas de dashboard / runtime de tabla). Los selectores de alcance NO viven aquí.
-    const contextStrip = controls && controls.length ? renderContextStrip(controls, pages?.active, carry) : ''
+    const contextStrip = (controls && controls.length) || (contextSeals && contextSeals.length) ? renderContextStrip(controls ?? [], pages?.active, carry, contextSeals ?? []) : ''
     // Franja de CHIPS de los filtros activos (#82), bajo la banda de contexto: la cara muestra el
     // estado, el control vive en la bandeja. Sin filtros activos, la franja no existe.
     // …y la MISMA franja hospeda los chips VIVOS de las facetas client-side (#114): una sola
@@ -55,7 +57,7 @@ export const renderHtmlPiece: Capability = {
     const hasFacets = !!(interactive && interactive.filters.length > 0)
     const chips = renderFilterChips(filters ?? [], pages?.active, carry, flt, hasFacets)
     const nav = pages ? renderPagesNav(pages, carry, flt) : ''
-    let body = contextStrip + chips + nav + (await renderNode(piece, opts))
+    let body = renderBackNav(back ?? [], !!print) + contextStrip + chips + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
     // BANDEJA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
     // los tabs Controles·Vistas·Config y el pie de versión. El shell NO se gatea por maquinaria: una
@@ -101,7 +103,7 @@ export const renderHtmlPiece: Capability = {
     if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
     if (pages?.unknown) css += PAGES_AVISO_CSS
-    if (contextStrip) css += CONTEXT_BAR_CSS
+    if (contextStrip || (back && back.length && !print)) css += CONTEXT_BAR_CSS
     if (chips) css += FILTER_CHIPS_CSS
     // #255 · las facetas client-side usan las MISMAS clases del patrón de #209 ⇒ su hoja y su
     // buscador se inyectan también cuando la bandeja solo trae facetas (antes se gateaban por
@@ -237,7 +239,11 @@ const CONTEXT_BAR_CSS = `
 .vctxbar .vctx-pop{position:absolute;z-index:20;top:calc(100% + 4px);left:0;min-width:150px;display:flex;flex-direction:column;gap:4px;padding:8px;background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.18)}
 .vctxbar .vctx-pop label{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;white-space:nowrap;cursor:pointer;color:var(--fg,#1f2937)}
 .vctx-print{display:none}
-@media print{.vctxbar{position:static;border:none;padding:0;margin:0 0 10px;gap:12px;font-size:11px}.vctxbar .vctx-screen{display:none!important}.vctxbar .vctx-print{display:inline!important;font-weight:700}}
+.vback{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 10px;font-size:12px}
+.vback a{color:var(--fg-dim,#64748b);text-decoration:none}
+.vback a:hover{color:var(--fg,#1f2937);text-decoration:underline}
+.vback .vback-arrow,.vback .vback-sep{color:var(--fg-dim,#64748b)}
+@media print{.vback{display:none}.vctxbar{position:static;border:none;padding:0;margin:0 0 10px;gap:12px;font-size:11px}.vctxbar .vctx-screen{display:none!important}.vctxbar .vctx-print{display:inline!important;font-weight:700}}
 `
 
 /**
@@ -264,7 +270,12 @@ function ctxNavBase(cId: string, activePage: string | undefined, carry: CarryCtx
  * unido y cuyo popover reúne los checkboxes existentes. Por ítem se emite además `.vctx-print` (texto
  * plano) — en print el widget `.vctx-screen` se oculta y queda el texto (el sello impreso es «OC …»).
  */
-function renderContextStrip(controls: ControlResolved[], activePage: string | undefined, carry: CarryCtx): string {
+function renderContextStrip(
+  controls: ControlResolved[],
+  activePage: string | undefined,
+  carry: CarryCtx,
+  seals: { key: string; label: string; value: string }[] = [],
+): string {
   const items = controls
     .filter((c) => c.value != null && c.value !== '')
     .map((c) => {
@@ -309,7 +320,27 @@ function renderContextStrip(controls: ControlResolved[], activePage: string | un
       )
     })
     .join('')
-  return items ? `<div class="vctxbar">${items}</div>` : ''
+  // #422 · Sellos del drill: solo lectura (la clave la fija el drill, no se elige acá), en pantalla y
+  // en papel. Van después de los controles de cabecera, en el orden de `context`.
+  const sellos = seals
+    .map((s) => `<span class="vctx-item vctx-drill" data-ctx="${escapeHtml(s.key)}"><span class="vctx-k">${escapeHtml(s.label)}</span><span class="vctx-v">${escapeHtml(s.value)}</span></span>`)
+    .join('')
+  return items || sellos ? `<div class="vctxbar">${items}${sellos}</div>` : ''
+}
+
+/**
+ * #422 · Camino de regreso de un drill: `← <vista de origen>` y, con más de un nivel, la cadena desde
+ * la más antigua. Cada eslabón vuelve a su vista con el ctx y los filtros que tenía (su query, que trae
+ * su propio `from`) y `vret=1`, que le pide a la tabla de destino restituir su estado guardado. Sin
+ * cadena (entrada directa) no se pinta; en papel no hay a dónde volver.
+ */
+function renderBackNav(back: { title: string; query: string }[], print: boolean): string {
+  if (print || back.length === 0) return ''
+  const links = [...back]
+    .reverse()
+    .map((b) => `<a href="?${escapeHtml(b.query)}&amp;vret=1">${escapeHtml(b.title)}</a>`)
+    .join('<span class="vback-sep">›</span>')
+  return `<nav class="vback" aria-label="Volver"><span class="vback-arrow">←</span>${links}</nav>`
 }
 
 /**

@@ -278,6 +278,26 @@ export function vtNegCls(negative: unknown, text: unknown, raw: unknown): string
   return numeric && vtIsNeg(text) ? ' vt-neg' : ''
 }
 
+/**
+ * #422 · La llave bajo la que una tabla guarda su estado en `sessionStorage`: el path del PI, la llave
+ * de la VISTA que calcula el servidor (página + ctx efectivo + filtros, sin la cadena de regreso) y la
+ * posición de la tabla en el documento. Sin llave de vista (PI de una sola vista) cae a la query.
+ * AUTOCONTENIDA: viaja al browser vía `.toString()` (PURE_FNS).
+ */
+export function vtStateKey(path: string, viewKey: string | undefined, search: string, idx: number): string {
+  return 'vt-state:' + path + '|' + (viewKey || String(search || '').replace(/^\?/, '')) + '#' + idx
+}
+
+/**
+ * #422 · ¿Se restituye el estado guardado? Solo al VOLVER: por atrás/adelante del navegador
+ * (`PerformanceNavigationTiming.type === 'back_forward'`) o por una miga de regreso (`vret=1` en la
+ * query). Una entrada nueva (enlace, pestaña, recarga) parte limpia. AUTOCONTENIDA (PURE_FNS).
+ */
+export function vtShouldRestore(navType: unknown, search: string): boolean {
+  if (navType === 'back_forward') return true
+  return /(^|[?&])vret=1(&|$)/.test(String(search || ''))
+}
+
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
 export function vtFormat(value: unknown, format?: string): string {
   // Los drivers SQL entregan los enteros de 64 bits como STRING para no perder precisión (p. ej.
@@ -906,6 +926,8 @@ const PURE_FNS = [
   vtIsCategorical,
   vtIsNeg,
   vtNegCls,
+  vtStateKey,
+  vtShouldRestore,
   vtFormat,
   vtApply,
   vtFacetOptions,
@@ -1018,6 +1040,14 @@ function vtBootstrap(root){
   var carry = payload.carryCtx || {};
   var ancla = payload.ancla || null;
   var fltQ = payload.fltQ || '';
+  /* #422 · el estado de la tabla sobrevive al ir y volver: se guarda en sessionStorage bajo la llave de
+     la VISTA (la calcula el servidor) y se restituye solo al volver (atrás/adelante o miga). */
+  var vtIdx = Array.prototype.indexOf.call(document.querySelectorAll('.vtable'), root);
+  var stKey = vtStateKey(location.pathname, payload.stateKey, location.search, vtIdx);
+  var restoreY = null, restoreT = null;
+  function scrollBox(){ return root.querySelector('.vt-scroll'); }
+  function saveState(){ try{ var sb=scrollBox(); sessionStorage.setItem(stKey, JSON.stringify({ s: snapshot(), y: window.scrollY, t: sb ? sb.scrollTop : 0 })); }catch(e){} }
+  window.addEventListener('pagehide', saveState);
   var nactions = drills.length ? 1 : 0;
   function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
@@ -1133,6 +1163,18 @@ function vtBootstrap(root){
     renderGroupUI(); render();
   }
   vergisSavedViews({ snapshot: snapshot, apply: applySnapshot });
+  (function(){
+    var nav = (window.performance && performance.getEntriesByType) ? (performance.getEntriesByType('navigation')[0] || {}) : {};
+    if(!vtShouldRestore(nav.type, location.search)) return;
+    try{
+      var saved = JSON.parse(sessionStorage.getItem(stKey) || 'null');
+      if(saved && saved.s){ applySnapshot(saved.s); restoreY = (typeof saved.y === 'number') ? saved.y : null; restoreT = (typeof saved.t === 'number') ? saved.t : null; }
+      /* vret ya cumplió: se quita de la URL (sin entrada de historial) para que una recarga parta limpia. */
+      if(/(^|[?&])vret=1(&|$)/.test(location.search) && history.replaceState){
+        var u2 = new window.URL(location.href); u2.searchParams.delete('vret'); history.replaceState(history.state, '', u2.pathname + u2.search + u2.hash);
+      }
+    }catch(e){}
+  })();
 
   // ---- Popover por columna (ícono embudo en el header) ----
   //      CONVENCIÓN DE PLATAFORMA, no configurable por spec: una columna NUMÉRICA no ofrece filtro
@@ -1398,6 +1440,13 @@ function vtBootstrap(root){
     } else {
       render();
     }
+  }
+  /* La fila visible arriba: la tabla hace scroll dentro de .vt-scroll; la página, en la ventana. El
+     navegador no restituye solo (scrollRestoration manual mientras se restituye). */
+  if(restoreY != null || restoreT != null){
+    try{ if('scrollRestoration' in history) history.scrollRestoration = 'manual'; }catch(e){}
+    var y = restoreY, t = restoreT;
+    (window.requestAnimationFrame || setTimeout)(function(){ var sb=scrollBox(); if(sb && t != null) sb.scrollTop = t; if(y != null) window.scrollTo(0, y); });
   }
 }
 Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);

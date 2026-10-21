@@ -134,6 +134,7 @@ una versión ya cortada.
 | `CAP-53` | PI multi-vista con barra de navegación | `pages[]` (`id`, `title`, `piece`), URL `?page=<id>` | ≤0.9 | [arquitectura-multi-reporte.md §1](arquitectura-multi-reporte.md) |
 | `CAP-54` | Contexto exigido por una página | `pages[].context[]` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 | `CAP-55` | Drill-through de una fila a otra vista, pasando claves de contexto | `drills[]` = `{ to, by[], label }` (clave simple o compuesta) | 0.2.0 | [CHANGELOG 0.2.0](../CHANGELOG.md) |
+| `CAP-223` | **Contexto del drill visible, regreso con su ruta y estado de la tabla al volver**: sellos de solo lectura por clave de `context` (nombre resuelto del dato de la vista destino, nunca de la URL), migas `← vista de origen` con su ctx y filtros (cadena de hasta 3), y orden, facetas, búsqueda, agrupación y scroll restituidos al volver por atrás o por miga | `pages[].context[]` como objeto `{ key, label?, display? }` (o string); query `from` y `vret` (las pone la plataforma); evento `mira-context-display-missing` | sin publicar (#422) | [superficie-de-estado.md §3·bis](superficie-de-estado.md) |
 | `CAP-56` | PI de una sola vista | `piece` (excluyente con `pages`) | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 
 ## Bandeja / inspector

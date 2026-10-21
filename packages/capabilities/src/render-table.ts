@@ -20,6 +20,7 @@ export const TABLE_PRINT_MAX_ROWS = 5000
 export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   const carry = opts.carry
   const fltQ = opts.fltQ ?? ''
+  const stateKey = opts.stateKey
   const cols = node.columnsSpec ?? []
   const rows = node.rows ?? []
   const drills = opts.print ? [] : (node.drills ?? [])
@@ -74,7 +75,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   opts.signals.interactiveTable = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
   const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla, fltQ)
-  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete, fltQ)
+  return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete, fltQ, stateKey)
 }
 
 /**
@@ -177,6 +178,7 @@ function renderInteractiveTable(
   carry: CarryCtx = {},
   ssrComplete = true,
   fltQ = '',
+  stateKey?: string,
 ): string {
   // Meta de columnas que viaja al runtime (sortable/searchable resueltos; filter/groupBy tri-estado).
   const colMeta = cols.map((c) => ({
@@ -224,7 +226,7 @@ function renderInteractiveTable(
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
   // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
   //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
-  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, fltQ, ssrComplete, ancla: node.ancla }).replace(/</g, '\\u003c')
+  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, fltQ, ssrComplete, ancla: node.ancla, stateKey }).replace(/</g, '\\u003c')
 
   // Pie con el contador de filas (TX-11 WP4·3): información del documento, no control — vive en la
   // CARA de cada tabla interactiva (el runtime lo puebla) y se imprime (estado honesto).
