@@ -29,6 +29,8 @@ describe('runtime de notas · el GET del hilo lleva el ctx (#425)', () => {
     expect(ctxQs({ semana: ['2026-10-19', '2026-10-26'] })).toBe('&ctx.semana=2026-10-19&ctx.semana=2026-10-26')
     expect(ctxQs(undefined)).toBe('')
     expect(ctxQs({})).toBe('')
+    // Vacío o nulo se omite, como ctxQuery del servidor: GET y POST nunca difieren.
+    expect(ctxQs({ empresa: '', semana: ['2026-10-26', ''], x: null })).toBe('&ctx.semana=2026-10-26')
   })
 
   it('codifica llave y valor (un & en el valor no parte la query)', () => {
@@ -38,6 +40,8 @@ describe('runtime de notas · el GET del hilo lleva el ctx (#425)', () => {
   it('la URL del hilo se arma con el ctx del CFG, el mismo que lleva el POST', () => {
     expect(NOTAS_RUNTIME_SOURCE).toContain("encodeURIComponent(JSON.stringify(llave))+ctxQs(CFG.ctx)")
     expect(NOTAS_RUNTIME_SOURCE).toContain('payload.ctx=CFG.ctx')
+    // El re-fetch del hilo después de comentar usa la MISMA url (con ctx), no una armada aparte.
+    expect(NOTAS_RUNTIME_SOURCE).toContain('return fetch(q,')
   })
 })
 

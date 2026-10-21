@@ -158,10 +158,11 @@ if(kit){
 // ── Comentarios: marcador, popover con el hilo, y la acción por fila ─────────────────────────
 // El GET del hilo lleva el MISMO ctx que el POST (#425): el gate re-ejecuta el dataset con el ctx de
 // la URL, y un dataset cuyo SQL usa :ctx.* sin él no devuelve la fila (403 sobre una fila visible).
+// Un valor vacío o nulo se omite, igual que en ctxQuery del servidor.
 function ctxQs(ctx){
   var out=''; if(!ctx) return out;
   Object.keys(ctx).forEach(function(k){
-    var v=ctx[k]; (Array.isArray(v)?v:[v]).forEach(function(x){ out+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(x==null?'':String(x)); });
+    var v=ctx[k]; (Array.isArray(v)?v:[v]).forEach(function(x){ if(x==null||x==='') return; out+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(x)); });
   });
   return out;
 }
