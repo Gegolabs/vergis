@@ -3,7 +3,7 @@ export { applyCtx, resolveControlValue, resolveControlValues, buildControlOption
 export type { ControlOption } from './controls'
 export { resolveActiveView } from './views'
 export { applyFlt, resolveFilters, normalizeFlt, filterCarry, filterColumn, stripFilterSource, FILTER_MAX_VALUES } from './filters'
-export type { FilterResolved, FltValues } from './filters'
+export type { FilterOption, FilterResolved, FltValues } from './filters'
 export type { MiraOptions, MiraOutput } from './mira'
 export type { CtxValues, PagesNav, ControlResolved } from './mira-types'
 export { parseSpec } from './dsl/parse'

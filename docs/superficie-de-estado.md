@@ -91,6 +91,9 @@ data:
 - **La granularidad la decide el spec**: los datasets sin `:flt.` no se re-anclan. Así un dashboard
   puede dejar deliberadamente fuera del filtro sus tarjetas de encabezado o una curva de referencia,
   sin ninguna regla especial del motor.
+- **`display`** (opcional, `data.<dataset>.<campo>` del mismo catálogo) es el rótulo visible de las
+  opciones cuando el valor es un código; el bind sigue sobre el valor. Detalle en
+  [catalogo-elementos.md §4·octies](catalogo-elementos.md).
 - **`column`** (default: el campo de `source`) es la columna que el predicado filtra; se **interpola**
   en el SQL, así que se valida como identificador — nunca admite una expresión.
 - **Correspondencia obligatoria en ambas direcciones**: un `:flt.` sin filtro declarado y un filtro

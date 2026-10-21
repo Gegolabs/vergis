@@ -19,6 +19,7 @@
  * Los valores del usuario viajan SIEMPRE como binds, nunca interpolados en el SQL.
  */
 import { VergisError } from '@vergis/botler'
+import { trimIsoLabel } from './controls'
 import type { MiraFilter } from './dsl/validate'
 
 /** Tope de valores seleccionables en un filtro — guard contra una URL que infle los binds. */
@@ -27,14 +28,23 @@ export const FILTER_MAX_VALUES = 100
 /** Selección cruda por filtro, tal como llega de la URL (`flt.<id>=v`, repetible). */
 export type FltValues = Record<string, string | string[]>
 
+/**
+ * Opción de un filtro (#420): `value` es lo que se bindea en `:flt.<id>` y viaja en la URL; `label`
+ * es solo presentación. Sin `display` declarado, `label === value`.
+ */
+export interface FilterOption {
+  value: string
+  label: string
+}
+
 /** Un filtro ya resuelto: opciones (cascadeadas) + selección (saneada contra ellas). */
 export interface FilterResolved {
   id: string
   label: string
   multi: boolean
   /** Opciones vigentes, ya condicionadas por la selección del padre si el filtro depende de otro. */
-  options: string[]
-  /** Selección efectiva: solo valores presentes en `options` (typo/injection-safe). */
+  options: FilterOption[]
+  /** Selección efectiva: solo `value`s presentes en `options` (typo/injection-safe). */
   selected: string[]
 }
 
@@ -74,6 +84,33 @@ function ancestors(f: MiraFilter, byId: Map<string, MiraFilter>): MiraFilter[] {
     cur = cur.depends_on ? byId.get(cur.depends_on) : undefined
   }
   return chain
+}
+
+/**
+ * Pares {value,label} del filtro (#420). El ORDEN y el dedup son los de siempre (por `value`, numeric-
+ * aware), así que sin `display` el resultado es exactamente el de antes con `label = value` — sin
+ * recorte ISO ni desambiguación, que solo existen cuando hay un rótulo que pueda diferir del valor.
+ * Con `display`, las MISMAS reglas que `buildControlOptions`: la 1ª aparición del valor fija el
+ * rótulo, un rótulo vacío/null cae al valor, el ISO-datetime se recorta, y dos valores distintos con
+ * el mismo rótulo se desambiguan con « rótulo (valor) ».
+ */
+function filterOptions(rows: Record<string, unknown>[], field: string, displayField: string | undefined): FilterOption[] {
+  const values = distinctSorted(rows, field)
+  if (!displayField) return values.map((v) => ({ value: v, label: v }))
+  const firstLabel = new Map<string, string>()
+  for (const r of rows) {
+    const v = r[field]
+    if (v == null || v === '') continue
+    const value = String(v)
+    if (firstLabel.has(value)) continue
+    const raw = r[displayField]
+    firstLabel.set(value, raw == null || raw === '' ? trimIsoLabel(value) : trimIsoLabel(raw instanceof Date ? raw : String(raw)))
+  }
+  const pairs = values.map((value) => ({ value, label: firstLabel.get(value) ?? value }))
+  const labelCount = new Map<string, number>()
+  for (const p of pairs) labelCount.set(p.label, (labelCount.get(p.label) ?? 0) + 1)
+  for (const p of pairs) if ((labelCount.get(p.label) ?? 0) > 1) p.label = `${p.label} (${p.value})`
+  return pairs
 }
 
 /** Valores distintos de un campo sobre unas filas, sin vacíos, en orden natural (numeric-aware). */
@@ -117,9 +154,10 @@ export function resolveFilters(
       const aField = stripFilterSource(a.source)[1]
       rows = rows.filter((r) => sel.includes(String(r[aField] ?? '')))
     }
-    const options = distinctSorted(rows, field)
+    const options = filterOptions(rows, field, f.display ? stripFilterSource(f.display)[1] : undefined)
+    const values = new Set(options.map((o) => o.value))
     const asked = requested[f.id] ?? []
-    let selected = asked.filter((v) => options.includes(v))
+    let selected = asked.filter((v) => values.has(v))
     // Single: un solo valor manda (una URL con varios no convierte el filtro en multi).
     if (!f.multi && selected.length > 1) selected = [selected[0]]
     if (selected.length > FILTER_MAX_VALUES) {

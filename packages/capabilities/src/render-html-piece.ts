@@ -11,7 +11,7 @@ import { renderInteractiveScript } from './interactive-script'
 import { renderNotasTraySection, NOTAS_CSS, NOTAS_RUNTIME_SOURCE } from './notas-render'
 import { ctxQuery, fltQuery, formatValue } from './piece-util'
 import type {
-  Interactive, PagesNav, ControlResolved, CarryCtx, FilterResolved, RenderParams,
+  Interactive, PagesNav, ControlResolved, CarryCtx, FilterResolved, FilterOption, RenderParams,
   ResolvedNode, RenderOpts, RenderSignals,
 } from './piece-types'
 
@@ -406,16 +406,18 @@ function renderFilterChips(filters: FilterResolved[], activePage: string | undef
   const chips = active
     .flatMap((f) =>
       f.selected.map((v) => {
+        // El href quita el VALOR; lo que se lee es el RÓTULO (#420 — sin `display`, son iguales).
         const href = escapeHtml(fltHref(activePage, carry, flt, { id: f.id, value: v }))
+        const shown = filterOptionLabel(f, v)
         return (
-          `<span class="vflt-chip vflt-screen"><b>${escapeHtml(f.label)}:</b> ${escapeHtml(v)}` +
-          `<a class="vflt-x" href="${href}" title="Quitar este filtro" aria-label="Quitar ${escapeHtml(f.label)}: ${escapeHtml(v)}">✕</a></span>`
+          `<span class="vflt-chip vflt-screen"><b>${escapeHtml(f.label)}:</b> ${escapeHtml(shown)}` +
+          `<a class="vflt-x" href="${href}" title="Quitar este filtro" aria-label="Quitar ${escapeHtml(f.label)}: ${escapeHtml(shown)}">✕</a></span>`
         )
       }),
     )
     .join('')
   // Resumen para el papel: los chips son botones y en print no tienen sentido.
-  const printSummary = active.map((f) => `${f.label}: ${f.selected.join(', ')}`).join(' · ')
+  const printSummary = active.map((f) => `${f.label}: ${f.selected.map((v) => filterOptionLabel(f, v)).join(', ')}`).join(' · ')
   const clearAll =
     active.length > 1 || active[0].selected.length > 1
       ? `<a class="vflt-clear vflt-screen" href="${escapeHtml(fltHref(activePage, carry, {}))}">limpiar todo</a>`
@@ -424,6 +426,16 @@ function renderFilterChips(filters: FilterResolved[], activePage: string | undef
     `<div class="vfltbar"${barId}><span class="vflt-k vflt-screen">Filtros</span>${chips}${live}${clearAll}` +
     `<span class="vflt-print">Filtros — ${escapeHtml(printSummary)}</span></div>`
   )
+}
+
+/** Opciones de un filtro como pares {value,label}: la cadena sola vale como valor y rótulo (#420). */
+function filterOptionPairs(f: FilterResolved): FilterOption[] {
+  return f.options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o))
+}
+
+/** Rótulo visible de un valor seleccionado; un valor sin opción (no debería ocurrir: está saneado) se ve tal cual. */
+function filterOptionLabel(f: FilterResolved, value: string): string {
+  return filterOptionPairs(f).find((o) => o.value === value)?.label ?? value
 }
 
 /**
@@ -436,8 +448,8 @@ function renderTrayFilters(filters: FilterResolved[], activePage: string | undef
     .map((f) => {
       const grande = f.options.length > FILTER_VISIBLE_MAX
       let visibles = 0
-      const opts = f.options
-        .map((v) => {
+      const opts = filterOptionPairs(f)
+        .map(({ value: v, label }) => {
           const on = f.selected.includes(v)
           // #209 · Una opción SELECCIONADA nunca se pliega: esconder la propia selección del usuario
           // es peor que la lista larga — deja de poder ver, y de poder quitar, lo que él eligió.
@@ -448,9 +460,10 @@ function renderTrayFilters(filters: FilterResolved[], activePage: string | undef
             ? fltHref(activePage, carry, flt, { id: f.id, value: v })
             : fltHref(activePage, carry, flt, f.multi ? undefined : { id: f.id }, { id: f.id, value: v })
           return (
-            `<label class="vflt-opt${on ? ' on' : ''}${extra ? ' vflt-extra' : ''}" data-v="${escapeHtml(v.toLowerCase())}">` +
+            // #420 · El buscador (`data-v`) y el texto buscan y muestran el RÓTULO; el href lleva el valor.
+            `<label class="vflt-opt${on ? ' on' : ''}${extra ? ' vflt-extra' : ''}" data-v="${escapeHtml(label.toLowerCase())}">` +
             `<a href="${escapeHtml(href)}" role="checkbox" aria-checked="${on}">` +
-            `<span class="vflt-box">${on ? '✓' : ''}</span> ${escapeHtml(v)}</a></label>`
+            `<span class="vflt-box">${on ? '✓' : ''}</span> ${escapeHtml(label)}</a></label>`
           )
         })
         .join('')

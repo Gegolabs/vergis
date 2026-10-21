@@ -89,6 +89,12 @@ export interface MiraFilter {
   id: string
   label?: string
   source: string
+  /**
+   * Rótulo de las opciones (#420): `data.<dataset>.<campo>` del MISMO catálogo que `source`. Solo cambia
+   * el texto visible (bandeja, chip, buscador); el valor que se bindea y se sanea sigue siendo el de
+   * `source`. Default: el propio valor.
+   */
+  display?: string
   column?: string
   multi?: boolean
   depends_on?: string
@@ -1176,6 +1182,28 @@ function validateFilters(spec: MiraSpec): void {
         `Declarar '${field}' en shape.fields o corregir source.`,
         `filters[${f.id}].source`,
       )
+    }
+    if (f.display != null) {
+      // #420 · Mismo criterio que `source`: un rótulo colgante caería al valor EN SILENCIO (la bandeja
+      // mostraría los códigos que `display` venía a reemplazar). Y del MISMO catálogo: el rótulo se lee
+      // de la fila de la opción, así que otro dataset no tiene fila que leer.
+      const dRef = stripDataRef(String(f.display)).split('.')
+      if (typeof f.display !== 'string' || !String(f.display).startsWith('data.') || dRef.length !== 2 || dRef[0] !== dsName || !dRef[1]) {
+        fail(
+          'filter-display-dangling',
+          `El filtro '${f.id}' toma su rótulo de '${String(f.display)}', que no resuelve a un campo data.${dsName}.<campo> de su propio catálogo.`,
+          `Apuntar display a data.${dsName}.<campo> (el mismo dataset de source) o quitarlo.`,
+          `filters[${f.id}].display`,
+        )
+      }
+      if (ds?.shape?.fields && !(dRef[1] in ds.shape.fields)) {
+        fail(
+          'filter-display-field-dangling',
+          `El filtro '${f.id}' muestra el campo '${dRef[1]}' de '${dsName}', que no está declarado en data.${dsName}.shape.fields.`,
+          `Declarar '${dRef[1]}' en shape.fields o corregir display.`,
+          `filters[${f.id}].display`,
+        )
+      }
     }
     const column = f.column && f.column !== '' ? f.column : field
     if (!SQL_IDENT.test(column)) {

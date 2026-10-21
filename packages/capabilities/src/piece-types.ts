@@ -52,8 +52,19 @@ export interface FilterResolved {
   id: string
   label: string
   multi: boolean
-  options: string[]
+  /**
+   * Opciones vigentes. Pares `{value,label}` (#420): `value` es lo que viaja en `flt.<id>` y `label` lo
+   * que se ve en la bandeja, el chip y el buscador. Se acepta también la cadena sola (= valor y rótulo).
+   */
+  options: (string | FilterOption)[]
+  /** Selección efectiva, por `value`. */
   selected: string[]
+}
+
+/** Opción de un filtro de bandeja: llave que se bindea + rótulo visible (#420). */
+export interface FilterOption {
+  value: string
+  label: string
 }
 
 /** Valor(es) de una clave de contexto a preservar en la navegación (multi-select → varios). */

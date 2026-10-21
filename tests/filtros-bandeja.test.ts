@@ -180,7 +180,7 @@ describe('#82 · validación del bloque `filters`', () => {
 
 describe('#82 · applyFlt: predicado y binds', () => {
   const cols = { familia: 'familia', tipo: 'dbo.h.[tipo]' }
-  const sel = (id: string, selected: string[], multi = false) => ({ id, label: id, multi, options: selected, selected })
+  const sel = (id: string, selected: string[], multi = false) => ({ id, label: id, multi, options: selected.map((v) => ({ value: v, label: v })), selected })
 
   it('sin selección ⇒ `1=1` (ausencia = sin efecto)', () => {
     const out = applyFlt({ sql: 'SELECT 1 WHERE :flt.familia' }, [sel('familia', [])], cols)
@@ -229,14 +229,14 @@ describe('#82 · resolveFilters: cascada y saneo', () => {
 
   it('sin selección: todas las opciones, nada seleccionado', () => {
     const r = resolveFilters(FILTERS, catalogs, {})
-    expect(r[0].options).toEqual(['Norte', 'Sur'])
-    expect(r[1].options).toEqual(['A1', 'A2', 'B1', 'B2'])
+    expect(r[0].options.map((o) => o.value)).toEqual(['Norte', 'Sur'])
+    expect(r[1].options.map((o) => o.value)).toEqual(['A1', 'A2', 'B1', 'B2'])
     expect(r.every((f) => f.selected.length === 0)).toBe(true)
   })
 
   it('CASCADA: elegir el padre reduce las opciones del hijo', () => {
     const r = resolveFilters(FILTERS, catalogs, { familia: ['Norte'] })
-    expect(r[1].options).toEqual(['A1', 'A2'])
+    expect(r[1].options.map((o) => o.value)).toEqual(['A1', 'A2'])
   })
 
   it('selección HUÉRFANA del hijo se limpia sola al cambiar el padre', () => {
