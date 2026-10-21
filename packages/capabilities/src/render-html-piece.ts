@@ -566,7 +566,7 @@ function renderKpi(node: ResolvedNode, opts: RenderOpts): string {
   const sizeCls = node.size ? ` kpi-${escapeHtml(node.size)}` : ''
   return (
     `<section class="kpi${sizeCls}"${accent}${dataAttrs}>` +
-    `<div class="kpi-value${vtNegCls(node.negative, value)}">${escapeHtml(value)}</div>` +
+    `<div class="kpi-value${vtNegCls(node.negative, value, node.value)}">${escapeHtml(value)}</div>` +
     `<div class="kpi-label">${escapeHtml(String(node.label ?? ''))}${comparison}</div>` +
     `</section>`
   )
@@ -582,7 +582,7 @@ function renderDato(node: ResolvedNode): string {
   return (
     `<div class="dato">` +
     `<span class="dato-k">${escapeHtml(String(node.label ?? ''))}</span>` +
-    `<span class="dato-v${vtNegCls(node.negative, value)}">${escapeHtml(value)}</span>` +
+    `<span class="dato-v${vtNegCls(node.negative, value, node.value)}">${escapeHtml(value)}</span>` +
     `</div>`
   )
 }

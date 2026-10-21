@@ -266,12 +266,16 @@ export function vtIsNeg(text: unknown): boolean {
 }
 
 /**
- * #421 · La clase de signo de una celda: ` vt-neg` si el valor mostrado es negativo y la columna (o el
- * elemento) no declaró la salida `negative: plain`; vacío en otro caso. AUTOCONTENIDA salvo `vtIsNeg`
- * (en PURE_FNS): viaja al browser vía `.toString()`.
+ * #421 · La clase de signo de una celda: ` vt-neg` si el valor mostrado es negativo, la columna (o el
+ * elemento) no declaró la salida `negative: plain` y el valor CRUDO es numérico (number o string
+ * numérico, como el BIGINT de un driver SQL): un texto que empieza con «-5» en una columna de texto no
+ * es una cifra. Vacío en otro caso. AUTOCONTENIDA salvo `vtIsNeg` (en PURE_FNS): viaja al browser vía
+ * `.toString()`.
  */
-export function vtNegCls(negative: unknown, text: unknown): string {
-  return negative !== 'plain' && vtIsNeg(text) ? ' vt-neg' : ''
+export function vtNegCls(negative: unknown, text: unknown, raw: unknown): string {
+  if (negative === 'plain') return ''
+  const numeric = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '' && !Number.isNaN(Number(raw)))
+  return numeric && vtIsNeg(text) ? ' vt-neg' : ''
 }
 
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
@@ -782,7 +786,7 @@ export function vtGroupHeadCells(
       const v = tot[c.field]
       const field = String(c.field).replace(/"/g, '&quot;')
       const txt = v == null ? '—' : vtFormat(v, c.format)
-      out += '<td class="align-' + (c.align || 'left') + ' vt-gtotal' + vtNegCls(c.negative, txt) + '" data-total-field="' + field + '">' + txt + '</td>'
+      out += '<td class="align-' + (c.align || 'left') + ' vt-gtotal' + vtNegCls(c.negative, txt, v) + '" data-total-field="' + field + '">' + txt + '</td>'
     } else {
       out += '<td></td>'
     }
@@ -977,7 +981,7 @@ function vtColorBg(value, range){
 function vtCell(col, r){
   var raw=r[col.field]; var text=vtFormat(raw, col.format);
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
-  return '<td class="align-'+(col.align||'left')+vtNegCls(col.negative, text)+'"'+bg+'>'+vtEsc(text)+'</td>';
+  return '<td class="align-'+(col.align||'left')+vtNegCls(col.negative, text, raw)+'"'+bg+'>'+vtEsc(text)+'</td>';
 }
 /* Una clave multi-valor del carry (control multi-select) se repite: &ctx.k=a&ctx.k=b (espejo de ctxQuery server-side). */
 function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ var vs=Array.isArray(m[k])?m[k]:[m[k]]; for(var i=0;i<vs.length;i++){ if(vs[i]!=null&&vs[i]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(vs[i])); } } return q; }
@@ -1353,7 +1357,7 @@ function vtBootstrap(root){
         var ttx = (tv==null) ? '—' : vtFormat(tv, colFormat(tf));
         tds[ti].textContent = ttx;
         var tcol = cols.filter(function(x){return x.field===tf;})[0];
-        tds[ti].classList.toggle('vt-neg', vtNegCls(tcol ? tcol.negative : undefined, ttx) !== '');
+        tds[ti].classList.toggle('vt-neg', vtNegCls(tcol ? tcol.negative : undefined, ttx, tv) !== '');
       }
     }
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){

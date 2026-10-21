@@ -435,8 +435,10 @@ el texto (sin fondo) y el signo `-` se conserva, así que el color nunca es la �
 - **Convive con el color de magnitud** (§4·bis): la rampa pinta el fondo, nunca en rojo, y `vt-neg` pinta
   el texto. Con las dos encendidas se ven las dos, aunque sobre un fondo de rampa oscuro el rojo
   pierde contraste.
+- **Solo cifras:** además del texto mostrado, el valor crudo tiene que ser numérico (número o string
+  numérico, como un BIGINT). Una columna de texto con «-5 kg» no se pinta.
 - **Fuera de alcance:** los gráficos (las barras negativas ya caen bajo el cero, con el color de su
-  serie), el CSV y el export.
+  serie), la comparación del `kpi`, las tarjetas del `semaforo`, el CSV y el export.
 
 ## 5 · El resto del catálogo: diseñado, no construido
 

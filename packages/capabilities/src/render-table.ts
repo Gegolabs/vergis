@@ -101,7 +101,7 @@ export function renderTableFoot(cols: TableColumn[], rows: Record<string, unknow
       if (c.total) {
         const v = totals[c.field]
         const text = v == null ? '—' : formatValue(v, c.format)
-        return `<td class="${align} vt-total${vtNegCls(c.negative, text)}" data-total-field="${escapeHtml(c.field)}">${escapeHtml(text)}</td>`
+        return `<td class="${align} vt-total${vtNegCls(c.negative, text, v)}" data-total-field="${escapeHtml(c.field)}">${escapeHtml(text)}</td>`
       }
       if (!labelPuesto) {
         labelPuesto = true
@@ -153,7 +153,7 @@ function renderTableBody(
           const raw = r[c.field]
           const text = formatValue(raw, c.format)
           const bg = ranges[c.field] ? magnitudeVar(Number(raw), ranges[c.field]) : ''
-          return `<td class="align-${c.align ?? 'left'}${vtNegCls(c.negative, text)}"${bg}>${escapeHtml(text)}</td>`
+          return `<td class="align-${c.align ?? 'left'}${vtNegCls(c.negative, text, raw)}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
       // Llave de negocio de la fila (solo si el dataset declaró `anchor`): es el ancla del comentario
@@ -191,6 +191,8 @@ function renderInteractiveTable(
     filter: c.filter,
     groupBy: c.groupBy,
     total: c.total,
+    // #421 · la salida viaja al cliente: sin ella, la columna plain se pintaría al re-renderizar.
+    negative: c.negative,
   }))
   // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
   // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.

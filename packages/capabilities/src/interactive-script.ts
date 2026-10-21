@@ -101,9 +101,9 @@ export function renderInteractiveScript(it: Interactive): string {
     paintChips();
     document.querySelectorAll('[data-agg]').forEach(function(el){
       var a = JSON.parse(el.getAttribute('data-agg'));
-      var kv = el.querySelector('.kpi-value'); var ktx = fmt(agg(filteredRowsFor(a.dataset), a), el.getAttribute('data-format'));
+      var kv = el.querySelector('.kpi-value'); var kraw = agg(filteredRowsFor(a.dataset), a); var ktx = fmt(kraw, el.getAttribute('data-format'));
       kv.textContent = ktx;
-      kv.classList.toggle('vt-neg', el.getAttribute('data-negative') !== 'plain' && vtIsNeg(ktx));
+      kv.classList.toggle('vt-neg', el.getAttribute('data-negative') !== 'plain' && typeof kraw === 'number' && vtIsNeg(ktx));
       var ca = el.getAttribute('data-comparison-agg');
       if (ca){ var cab = JSON.parse(ca); var cmp = el.querySelector('.kpi-comparison');
         if (cmp) cmp.textContent = (el.getAttribute('data-comparison-label')||'') + ' ' + fmt(agg(filteredRowsFor(cab.dataset || a.dataset), cab), el.getAttribute('data-format')); }

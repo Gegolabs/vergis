@@ -48,9 +48,16 @@ describe('vtIsNeg · decide el texto mostrado', () => {
   })
 
   it('la salida plain apaga la clase', () => {
-    expect(vtNegCls(undefined, '-5')).toBe(' vt-neg')
-    expect(vtNegCls('plain', '-5')).toBe('')
-    expect(vtNegCls(undefined, '5')).toBe('')
+    expect(vtNegCls(undefined, '-5', -5)).toBe(' vt-neg')
+    expect(vtNegCls('plain', '-5', -5)).toBe('')
+    expect(vtNegCls(undefined, '5', 5)).toBe('')
+  })
+
+  it('solo pinta cifras: un texto que empieza con «-5» en una columna de texto no es negativo', () => {
+    expect(vtNegCls(undefined, '-5', '-5')).toBe(' vt-neg') // BIGINT como string: es cifra
+    expect(vtNegCls(undefined, '-5 kg', '-5 kg')).toBe('')
+    expect(vtNegCls(undefined, '-5', 'ref -5')).toBe('')
+    expect(vtNegCls(undefined, '-5', null)).toBe('')
   })
 })
 
@@ -117,11 +124,37 @@ describe('runtime del cliente · misma decisión que el SSR', () => {
     `${vtIsNeg.toString()}\n${vtNegCls.toString()}\n${vtFormat.toString()}\n${glue}\nreturn vtCell;`,
   )() as (col: Record<string, unknown>, r: Record<string, unknown>) => string
 
-  it('las celdas del cliente pintan exactamente las mismas que el SSR', async () => {
-    const cols = tabla().columnsSpec as unknown as Record<string, unknown>[]
+  // Las columnas que recibe el cliente son las del payload EMITIDO, no las del spec: así se mide lo
+  // que de verdad viaja (una salida `plain` que no viajara se pintaría al re-renderizar).
+  const colsDelPayload = (h: string): Record<string, unknown>[] => {
+    const m = /<script type="application\/json" class="vtable-data">([\s\S]*?)<\/script>/.exec(h)
+    if (!m) throw new Error('la tabla no emitió su payload')
+    return (JSON.parse(m[1]) as { cols: Record<string, unknown>[] }).cols
+  }
+
+  it('las celdas del cliente, con las columnas del payload, pintan exactamente las mismas que el SSR', async () => {
+    const h = await html(tabla())
+    const cols = colsDelPayload(h)
+    expect(cols.find((c) => c['field'] === 'desv')?.['negative']).toBe('plain')
     const cliente = FILAS.map((r) => cols.map((c) => vtCell(c, r)).join('')).join('')
-    expect(cuenta(cliente)).toBe(cuenta(cuerpo(await html(tabla()))))
+    expect(cuenta(cliente)).toBe(cuenta(cuerpo(h)))
     expect(cuenta(cliente)).toBe(2)
+  })
+
+  it('CONTROL NEGATIVO: con la decisión neutralizada, el conteo del cliente cae a 0', async () => {
+    const neutro = new Function(
+      `function vtIsNeg(){ return false }\n${vtNegCls.toString()}\n${vtFormat.toString()}\n${glue}\nreturn vtCell;`,
+    )() as typeof vtCell
+    const cols = colsDelPayload(await html(tabla()))
+    expect(cuenta(FILAS.map((r) => cols.map((c) => neutro(c, r)).join('')).join(''))).toBe(0)
+  })
+
+  it('el rojo del subtotal gana a la regla de color de la cabecera de grupo', async () => {
+    const h = await html(tabla())
+    const base = h.indexOf('.vtable tr.vt-group-head td{')
+    const neg = h.indexOf('.vtable tr.vt-group-head td.vt-neg{color:var(--neg')
+    expect(base).toBeGreaterThan(-1)
+    expect(neg).toBeGreaterThan(base) // misma base de especificidad + la clase, y emitida después
   })
 
   it('el subtotal de un grupo negativo lleva vt-neg', () => {
