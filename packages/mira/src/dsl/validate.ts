@@ -923,6 +923,26 @@ function validatePieceNode(node: unknown, path: string): void {
     })
   }
   if (typeKeys[0] === 'table') validateTableColumns(obj['table'], `${path}.table`)
+  if (typeKeys[0] === 'kpi' || typeKeys[0] === 'dato') validateNegative(obj[typeKeys[0]], `${path}.${typeKeys[0]}`)
+}
+
+/**
+ * #421 · `negative` es la SALIDA de la convención de plataforma «negativo en rojo», y su único valor es
+ * `plain`. Un valor desconocido (`negative: red`, `negative: false`) no puede pasar en silencio: el autor
+ * creería haber configurado algo que el render ignora.
+ */
+function validateNegative(el: unknown, path: string): void {
+  if (el == null || typeof el !== 'object') return
+  const v = (el as Record<string, unknown>)['negative']
+  if (v == null || v === 'plain') return
+  throw new VergisError({
+    error: 'mira/spec-invalid',
+    code: 'negative-invalid',
+    path: `${path}.negative`,
+    value: v as never,
+    message: `'negative: ${String(v)}' no es un valor conocido: los negativos van en rojo por convención de plataforma, y la única salida es 'plain'.`,
+    remediation: `Escribir 'negative: plain' para que los negativos de este elemento no se pinten de rojo, u omitir la clave.`,
+  })
 }
 
 /** Vocabulario CERRADO del agregado al pie de una columna de tabla (#314). `true` es alias de `sum`
@@ -942,6 +962,7 @@ function validateTableColumns(table: unknown, path: string): void {
   if (!Array.isArray(columns)) return
   for (const [i, col] of columns.entries()) {
     if (col == null || typeof col !== 'object') continue
+    validateNegative(col, `${path}.columns[${i}]`)
     const total = (col as Record<string, unknown>)['total']
     if (total == null) continue
     if (total === true || (typeof total === 'string' && TABLE_TOTAL_OPS.has(total))) continue

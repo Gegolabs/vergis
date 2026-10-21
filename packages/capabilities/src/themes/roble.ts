@@ -100,6 +100,8 @@ export const robleTheme: Theme = {
     --fg: #ebdbb2; --fg-dim: #a89984;
     --green: #b8bb26; --yellow: #fabd2f; --red: #fb4934;
     --blue: #83a598; --orange: #fe8019; --purple: #d3869b; --gray: #a89984;
+    /* #421 · negativo en rojo: solo el TEXTO, contraste ≥ 4.5:1 sobre --bg. */
+    --neg: #fb4934;
     /* #210 · rampa del color de magnitud: el ACENTO del theme, nunca roja. */
     --mag-h: 61; --mag-s: 55%;
     /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
@@ -110,6 +112,8 @@ export const robleTheme: Theme = {
     --fg: #3c3836; --fg-dim: #7c6f64;
     --green: #79740e; --yellow: #b57614; --red: #9d0006;
     --blue: #076678; --orange: #af3a03; --purple: #8f3f71; --gray: #7c6f64;
+    /* #421 · negativo en rojo: solo el TEXTO, contraste ≥ 4.5:1 sobre --bg. */
+    --neg: #9d0006;
     /* #210 · rampa del color de magnitud: el ACENTO del theme, nunca roja. */
     --mag-h: 57; --mag-s: 60%;
     /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
@@ -120,6 +124,8 @@ export const robleTheme: Theme = {
     --fg: #1a1a1a; --fg-dim: #64748b;
     --green: #16a34a; --yellow: #d97706; --red: #dc2626;
     --blue: #2563eb; --orange: #ea580c; --purple: #9333ea; --gray: #64748b;
+    /* #421 · negativo en rojo: solo el TEXTO, contraste ≥ 4.5:1 sobre --bg. */
+    --neg: #b91c1c;
     /* #210 · rampa del color de magnitud: el ACENTO del theme, nunca roja. */
     --mag-h: 142; --mag-s: 50%;
     /* Colores de los charts (#78): el SVG los referencia por var() y cae al hex horneado. */
@@ -201,6 +207,8 @@ export const robleTheme: Theme = {
   .kpi[data-accent="orange"] .kpi-value { color: var(--orange); }
   .kpi[data-accent="purple"] .kpi-value { color: var(--purple); }
   .kpi[data-accent="gray"] .kpi-value { color: var(--gray); }
+  /* #421 · el valor negativo va en rojo aunque la tarjeta tenga acento (misma especificidad, va después). */
+  .kpi .kpi-value.vt-neg, .dato .dato-v.vt-neg, table td.vt-neg { color: var(--neg); }
 
   /* dato (TX-12): atributo rotulado — tipografía de texto, NO tarjeta-medida (distinto del kpi) */
   .dato { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }

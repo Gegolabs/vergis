@@ -91,6 +91,8 @@ export interface TableColumn {
   groupBy?: boolean
   /** Agregado al pie de la columna (#314). `true` es alias de `sum` y compose lo normaliza. */
   total?: 'sum' | 'avg' | 'count' | true
+  /** #421 · salida de la convención de signo: `plain` = los negativos de esta columna no se pintan de rojo. */
+  negative?: 'plain'
 }
 
 /**
@@ -114,6 +116,8 @@ export interface ResolvedNode {
   label?: string
   format?: string
   accent?: string
+  /** #421 · `plain` = el valor de este `kpi`/`dato` no se pinta de rojo aunque sea negativo. */
+  negative?: 'plain'
   comparison?: unknown
   comparisonLabel?: string
   agg?: Aggregation
@@ -244,6 +248,7 @@ export function composePiece(
       agg?: Aggregation
       comparison_agg?: Aggregation
       size?: string
+      negative?: 'plain'
     }
     // Valor inicial: por agregación sobre un dataset, o por path directo.
     let value: unknown
@@ -267,18 +272,20 @@ export function composePiece(
       agg: kpi.agg ? { ...kpi.agg, dataset: kpi.agg.dataset } : undefined,
       comparisonAgg: kpi.comparison_agg,
       size: kpi.size,
+      negative: kpi.negative,
     }
   }
   if (node['dato']) {
     // `dato` (TX-12): atributo rotulado (etiqueta + valor). El valor se resuelve por el MISMO
     // mecanismo de path que `kpi.metric` (resolvePath sobre data.<dataset>.<campo>). NO es una
     // medida (tarjeta grande): es contenido/estado, se imprime tal cual y jamás es interactivo.
-    const dt = node['dato'] as { label?: string; value?: string; format?: string }
+    const dt = node['dato'] as { label?: string; value?: string; format?: string; negative?: 'plain' }
     return {
       type: 'dato',
       label: dt.label,
       value: resolvePath(String(dt.value ?? ''), results, spec),
       format: dt.format,
+      negative: dt.negative,
     }
   }
   if (node['semaforo']) {

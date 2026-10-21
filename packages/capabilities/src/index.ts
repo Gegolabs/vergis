@@ -48,6 +48,8 @@ export {
   vtSortValues,
   vtIsCategorical,
   vtFormat,
+  vtIsNeg,
+  vtNegCls,
   vtApply,
   vtFacetOptions,
   vtNumFilterLabel,

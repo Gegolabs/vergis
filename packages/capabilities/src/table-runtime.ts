@@ -249,6 +249,35 @@ export function vtIsCategorical(
   return n >= 1 && n <= cap
 }
 
+/**
+ * #421 · ¿El valor MOSTRADO es negativo? Decide sobre el texto ya formateado, no sobre el crudo: un
+ * `-0,4` con `int_0` se muestra `0` y no se pinta, y un `-0` de `abbr` ya sale `0`. Negativo = el texto
+ * empieza con el signo (`-` o `−`), sigue con dígitos y separadores, tiene al menos un dígito distinto
+ * de cero y termina, a lo sumo, en `%`, `K` o `M`. Una fecha (`2026-10-21`), un guion suelto (`—`, `-`)
+ * o un texto que empieza con guion no son números negativos y no se pintan.
+ *
+ * Es la ÚNICA regla: la usan el SSR (`render-table`, `render-html-piece`) y el runtime del cliente.
+ * Si divergen, la tabla hidratada y la SSR se pintan distinto (el mismo modo de falla que cuidan
+ * `vtNKey` y `vtColorBg`). AUTOCONTENIDA: viaja al browser vía `.toString()` (PURE_FNS).
+ */
+export function vtIsNeg(text: unknown): boolean {
+  const s = String(text == null ? '' : text).trim()
+  return /^[-\u2212]\s?[\d.,]*[1-9][\d.,]*\s?(%|K|M)?$/.test(s)
+}
+
+/**
+ * #421 · La clase de signo de una celda: ` vt-neg` si el valor mostrado es negativo, la columna (o el
+ * elemento) no declaró la salida `negative: plain` y el valor CRUDO es numérico (number o string
+ * numérico, como el BIGINT de un driver SQL): un texto que empieza con «-5» en una columna de texto no
+ * es una cifra. Vacío en otro caso. AUTOCONTENIDA salvo `vtIsNeg` (en PURE_FNS): viaja al browser vía
+ * `.toString()`.
+ */
+export function vtNegCls(negative: unknown, text: unknown, raw: unknown): string {
+  if (negative === 'plain') return ''
+  const numeric = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '' && !Number.isNaN(Number(raw)))
+  return numeric && vtIsNeg(text) ? ' vt-neg' : ''
+}
+
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
 export function vtFormat(value: unknown, format?: string): string {
   // Los drivers SQL entregan los enteros de 64 bits como STRING para no perder precisión (p. ej.
@@ -729,7 +758,7 @@ export function vtTotals(
  * browser): esta función viaja al navegador vía `.toString()`.
  */
 export function vtGroupHeadCells(
-  cols: { field: string; label?: string; align?: string; format?: string; total?: 'sum' | 'avg' | 'count' | true }[],
+  cols: { field: string; label?: string; align?: string; format?: string; total?: 'sum' | 'avg' | 'count' | true; negative?: string }[],
   rows: Record<string, unknown>[],
   nactions: number,
   labelHtml: string,
@@ -756,7 +785,8 @@ export function vtGroupHeadCells(
     if (c && c.total) {
       const v = tot[c.field]
       const field = String(c.field).replace(/"/g, '&quot;')
-      out += '<td class="align-' + (c.align || 'left') + ' vt-gtotal" data-total-field="' + field + '">' + (v == null ? '—' : vtFormat(v, c.format)) + '</td>'
+      const txt = v == null ? '—' : vtFormat(v, c.format)
+      out += '<td class="align-' + (c.align || 'left') + ' vt-gtotal' + vtNegCls(c.negative, txt, v) + '" data-total-field="' + field + '">' + txt + '</td>'
     } else {
       out += '<td></td>'
     }
@@ -874,6 +904,8 @@ const PURE_FNS = [
   vtDistinct,
   vtSortValues,
   vtIsCategorical,
+  vtIsNeg,
+  vtNegCls,
   vtFormat,
   vtApply,
   vtFacetOptions,
@@ -949,7 +981,7 @@ function vtColorBg(value, range){
 function vtCell(col, r){
   var raw=r[col.field]; var text=vtFormat(raw, col.format);
   var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
-  return '<td class="align-'+(col.align||'left')+'"'+bg+'>'+vtEsc(text)+'</td>';
+  return '<td class="align-'+(col.align||'left')+vtNegCls(col.negative, text, raw)+'"'+bg+'>'+vtEsc(text)+'</td>';
 }
 /* Una clave multi-valor del carry (control multi-select) se repite: &ctx.k=a&ctx.k=b (espejo de ctxQuery server-side). */
 function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ var vs=Array.isArray(m[k])?m[k]:[m[k]]; for(var i=0;i<vs.length;i++){ if(vs[i]!=null&&vs[i]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(vs[i])); } } return q; }
@@ -1322,7 +1354,10 @@ function vtBootstrap(root){
       for(var ti=0; ti<tds.length; ti++){
         var tf = tds[ti].getAttribute('data-total-field');
         var tv = tot[tf];
-        tds[ti].textContent = (tv==null) ? '—' : vtFormat(tv, colFormat(tf));
+        var ttx = (tv==null) ? '—' : vtFormat(tv, colFormat(tf));
+        tds[ti].textContent = ttx;
+        var tcol = cols.filter(function(x){return x.field===tf;})[0];
+        tds[ti].classList.toggle('vt-neg', vtNegCls(tcol ? tcol.negative : undefined, ttx, tv) !== '');
       }
     }
     Array.prototype.forEach.call(root.querySelectorAll('th[data-field]'), function(th){
