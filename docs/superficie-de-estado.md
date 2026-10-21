@@ -40,6 +40,42 @@ sello **es** el control (una cosa, un lugar — no se duplica en la bandeja):
 Por cada ítem se emiten dos representaciones: `.vctx-screen` (el widget) y `.vctx-print` (el texto).
 El CSS `@media print` oculta el widget y deja el texto.
 
+## 3·bis · El contexto del drill, el camino de regreso y el estado de la tabla
+
+Una vista de detalle alcanzada por drill-through **dice qué está filtrando, tiene camino de vuelta, y
+la tabla de origen se reencuentra como se dejó** (#422).
+
+- **Sellos del drill.** Cada clave de `context` con valor se muestra en la banda de contexto, después
+  de los controles, como sello de **solo lectura** (la clave la fija el drill, no se elige ahí). En
+  papel sale como texto. `context` admite la forma objeto, con la misma semántica que
+  `controls[].display`:
+
+  ```yaml
+  - id: detalle-cliente
+    title: "Detalle por Cliente"
+    context:
+      - { key: empresa_codigo, label: "Empresa", display: empresa_nombre }
+      - { key: linea, label: "Línea" }
+  ```
+
+  `key` se bindea, `label` rotula y `display` es un campo del dato **de la vista destino**: se toma de
+  la primera fila de un dataset de la vista que lo traiga, nunca de la URL, así que un rótulo no se
+  puede forjar. Si el campo no viene, el sello muestra el valor de la clave (nunca vacío) y el nodo
+  registra `mira-context-display-missing`. `context: [a, b]` sigue valiendo: el sello rotula con la
+  clave y muestra el valor.
+- **Regreso con su ruta.** Cada drill lleva `from=<query de la vista de origen>` (la página, el ctx
+  efectivo —incluidos los defaults resueltos—, los filtros de bandeja y su propio `from`). La vista
+  destino pinta `← <vista de origen>` y, con más niveles, la cadena desde la más antigua, cada eslabón
+  con el ctx y los filtros que tenía. El título sale del spec por el id de página; un `from` hacia una
+  página que no existe no pinta nada. La cadena se poda a 3 eslabones. Sin `from` (entrada directa) no
+  hay migas.
+- **El estado de la tabla sobrevive al ir y volver.** Orden, facetas, filtros de número y fecha,
+  búsqueda, agrupación y posición del scroll se guardan en `sessionStorage` al salir de la página,
+  bajo una llave de la **vista** que calcula el servidor (página + ctx efectivo + filtros). Se
+  restituyen solo al volver: con el «atrás» del navegador o por una miga (que agrega `vret=1`). Una
+  entrada nueva (pestaña, enlace, recarga) parte limpia. Es el mismo snapshot que «Vistas guardadas»,
+  pero no se escribe en la URL compartible.
+
 ## 4 · Los chips de filtro activo
 
 Los filtros y la búsqueda aplicados aparecen como **chips removibles** en la cara, solo cuando están

@@ -83,6 +83,8 @@ export interface RunOptions {
    *  para multi-selección. Sustractivo dentro de lo que la RLS ya autoriza: los valores fuera del
    *  catálogo se descartan y jamás se interpolan en el SQL (ver packages/mira/src/filters.ts). */
   flt?: Record<string, string | string[]>
+  /** #422 · Query de la vista de origen de un drill (`?from=`): la cadena de regreso. */
+  from?: string
   /** Tope de filas materializables por `interactions.filters` (ver MiraOptions.interactiveMaxRows).
    *  Mira no lee env: el server lo toma de VERGIS_INTERACTIVE_MAX_ROWS y lo inyecta acá. */
   interactiveMaxRows?: number
@@ -173,6 +175,7 @@ export async function runSpec(options: RunOptions): Promise<RunOutcome> {
       page: options.page,
       ctx: options.ctx,
       flt: options.flt,
+      from: options.from,
       asOf: options.asOf,
       print: options.print,
       pdfUrl: options.pdfUrl,

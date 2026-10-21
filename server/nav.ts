@@ -8,6 +8,8 @@ export interface NavQuery {
   page?: string
   ctx?: Record<string, string | string[]>
   flt?: Record<string, string | string[]>
+  /** #422 · la query de la vista de origen de un drill (cadena de regreso). */
+  from?: string
 }
 
 /** Extrae page/ctx de la URL. El `ctx` se bindea como parámetro (injection-safe) aguas abajo.
@@ -27,5 +29,6 @@ export function navFromUrl(rawUrl: string): NavQuery {
     page: u.searchParams.get('page') ?? undefined,
     ctx: Object.keys(ctx).length ? ctx : undefined,
     flt: Object.keys(flt).length ? flt : undefined,
+    from: u.searchParams.get('from') ?? undefined,
   }
 }

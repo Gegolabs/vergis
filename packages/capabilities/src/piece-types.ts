@@ -104,6 +104,14 @@ export interface RenderParams {
    * está apagada: sin `VERGIS_PDF_SERVICE_URL` no hay ni endpoint ni botón — el mismo `if`).
    */
   pdfUrl?: string
+  /** #422 · Sellos de solo lectura de la banda de contexto: las claves recibidas por el drill. */
+  contextSeals?: { key: string; label: string; value: string }[]
+  /** #422 · Cadena de regreso (de la vista más cercana a la más antigua): título del spec + su query. */
+  back?: { title: string; query: string }[]
+  /** #422 · Query de ESTA vista: cada drill desde ella la lleva como `from`. */
+  drillFrom?: string
+  /** #422 · Llave de la vista para el estado de sus tablas (sin la cadena de regreso). */
+  stateKey?: string
 }
 
 export interface TableColumn {
@@ -238,6 +246,8 @@ export interface RenderOpts {
    * client-side de la tabla — así el carry de los `flt.` no se re-implementa en dos lugares.
    */
   fltQ?: string
+  /** #422 · llave de la VISTA (página + ctx efectivo + filtros) bajo la que la tabla guarda su estado. */
+  stateKey?: string
   interactive: boolean
   /** Modo PRINT (issue #65 · D5): las tablas se rinden estáticas y COMPLETAS (sin runtime, sin
    *  scroll-wrapper, sin payload JSON, sin drills) hasta `TABLE_PRINT_MAX_ROWS`. */

@@ -10,7 +10,8 @@ import { applyNotas, type ResolverComentarios } from './notas'
 import { expectString, expectRows } from './contract'
 import type { CtxValues, PagesNav, ControlResolved } from './mira-types'
 import { applyCtx, stripCtrlSource, resolveControlValue, resolveControlValues, buildControlOptions, labelForValue, markedDefaults } from './controls'
-import { resolveActiveView, normalizeCtx, watermarkDatasetOf, isMultiControl, asSingle } from './views'
+import { resolveActiveView, normalizeCtx, watermarkDatasetOf, isMultiControl, asSingle, resolveContextSeals, parseBackChain, originQuery } from './views'
+import { contextKeys } from './dsl/validate'
 import { applyFlt, filterCarry, filterColumn, normalizeFlt, resolveFilters, stripFilterSource, type FilterResolved } from './filters'
 import { parseSpec } from './dsl/parse'
 import { collectDataRefs, collectDatasetKeys, validateSpec, type MiraControl, type MiraDataset, type MiraPage, type MiraSpec } from './dsl/validate'
@@ -175,6 +176,24 @@ export class MiraBotlet implements Botlet {
     const composed = composePiece(activePiece, results, spec)
     const resolved: ResolvedNode = banner ? { layout: 'rows', elements: [banner, composed] } : composed
 
+    // 5·ter · CONTEXTO DEL DRILL Y REGRESO (#422). Los sellos muestran las claves recibidas por el drill
+    // (rótulo y nombre resueltos del dato de esta vista, nunca de la URL); la cadena de regreso sale de
+    // `from` (la query de la vista de origen), con títulos del spec; y `drillFrom` es la query de ESTA
+    // vista, que cada drill desde ella lleva como su `from`.
+    const activePage = isMulti ? spec.pages?.find((p) => p.id === pagesNav?.active) : undefined
+    const { seals: contextSeals, sinDisplay } = resolveContextSeals(activePage, ctxValues, results, datasetNames)
+    if (sinDisplay.length) host.log({ type: 'mira-context-display-missing', botletId: this.id, page: activePage?.id, keys: sinDisplay })
+    const fromParam = typeof ctx.params?.['from'] === 'string' ? (ctx.params['from'] as string) : undefined
+    const back = isMulti ? parseBackChain(fromParam, spec.pages) : []
+    let drillFrom: string | undefined
+    let stateKey: string | undefined
+    if (activePage) {
+      const ctxOrigen: CtxValues = { ...carryCtx }
+      for (const k of contextKeys(activePage)) if (ctxValues[k] != null) ctxOrigen[k] = ctxValues[k]
+      drillFrom = originQuery(activePage.id, ctxOrigen, fltCarry, back.length ? fromParam : undefined)
+      stateKey = originQuery(activePage.id, ctxOrigen, fltCarry, undefined)
+    }
+
     // 5·bis · CAPA DE NOTAS (presentación): si el llamador provee el resolver, cada tabla anclada
     // recibe el conteo de lo comentado sobre las filas que ya se van a servir — para el marcador.
     // Corre DESPUÉS de componer y no toca el camino del dato (D7: el motor no lee notas).
@@ -250,7 +269,7 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasRender, asOfParam, print, pdfUrl)
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasRender, asOfParam, print, pdfUrl, { contextSeals, back, drillFrom, stateKey })
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -496,6 +515,7 @@ export class MiraBotlet implements Botlet {
     asOfParam?: PiAsOfParam,
     print?: boolean,
     pdfUrl?: string,
+    drill?: { contextSeals: unknown[]; back: { title: string; query: string }[]; drillFrom?: string; stateKey?: string },
   ): Promise<string> {
     // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
     const { theme, palette } = resolveTheme(resolved, themeOverride)
@@ -522,6 +542,10 @@ export class MiraBotlet implements Botlet {
         fltCarry,
         print,
         pdfUrl,
+        contextSeals: drill?.contextSeals,
+        back: drill?.back,
+        drillFrom: drill?.drillFrom,
+        stateKey: drill?.stateKey,
       },
       identity,
     ))

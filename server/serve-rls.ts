@@ -1056,6 +1056,7 @@ async function runPi(
     page: nav.page,
     ctx: nav.ctx,
     flt: nav.flt,
+    from: nav.from,
     interactiveMaxRows: INTERACTIVE_MAX_ROWS,
     asOf,
     // PAPEL (#65 · D4): el PDF es este MISMO render en modo print — misma identidad, misma RLS.

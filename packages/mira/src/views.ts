@@ -2,7 +2,7 @@
 // Resolución de la VISTA ACTIVA de un spec multi-vista (página por `pageParam`, nav sin destinos de
 // drill salvo la activa, pieza-guía si falta el contexto), normalización del `ctx` de navegación y
 // utilidades de datasets. Todo PURO y testeable (ver tests/resolve-active-view.test.ts).
-import { collectDataRefs, collectDatasetKeys, type MiraControl, type MiraPage, type MiraSpec } from './dsl/validate'
+import { collectDataRefs, collectDatasetKeys, contextKeys, type MiraControl, type MiraPage, type MiraSpec } from './dsl/validate'
 import type { CtxValues, PagesNav } from './mira-types'
 
 /**
@@ -29,10 +29,10 @@ export function resolveActiveView(
   // `pageUnknown`), y al USUARIO con el aviso de la nav (`pagesNav.unknown` → `.vpages-aviso`), para que
   // quien llegó por un enlace guardado sepa que su enlace está roto y no lo lea como navegación normal.
   const pageUnknown = pageParam != null && requested === undefined
-  const navPages = pages.filter((p) => !(p.context && p.context.length > 0) || p.id === active.id)
+  const navPages = pages.filter((p) => contextKeys(p).length === 0 || p.id === active.id)
   const pagesNav: PagesNav = { items: navPages.map((p) => ({ id: p.id, title: p.title })), active: active.id }
   if (pageUnknown) pagesNav.unknown = pageParam
-  const missing = (active.context ?? []).filter((c) => !ctxValues[c])
+  const missing = contextKeys(active).filter((c) => !ctxValues[c])
   if (missing.length > 0) {
     return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [], pageUnknown }
   }
@@ -103,4 +103,107 @@ function contextPrompt(page: MiraPage, missing: string[]): Record<string, unknow
       },
     ],
   }
+}
+
+
+/** #422 · Un sello de solo lectura de la banda de contexto: la clave recibida por el drill. */
+export interface ContextSeal {
+  key: string
+  label: string
+  value: string
+}
+
+/**
+ * #422 · Los sellos de contexto de la vista activa: uno por clave declarada en `context` con valor en el
+ * ctx. El texto visible sale de `display` en la PRIMERA fila de un dataset de la vista que traiga ese
+ * campo (server-side, nunca de la URL: un rótulo no se puede forjar). Si el campo no aparece o viene
+ * vacío, el sello muestra el valor de la clave (nunca vacío) y `sinDisplay` nombra la clave para el log.
+ */
+export function resolveContextSeals(
+  page: MiraPage | undefined,
+  ctxValues: CtxValues,
+  results: Record<string, { rows?: Record<string, unknown>[] } | undefined>,
+  datasetNames: string[],
+): { seals: ContextSeal[]; sinDisplay: string[] } {
+  const seals: ContextSeal[] = []
+  const sinDisplay: string[] = []
+  for (const entry of page?.context ?? []) {
+    const e = typeof entry === 'string' ? { key: entry } : entry
+    const raw = ctxValues[e.key]
+    if (raw == null || raw === '') continue
+    const value = Array.isArray(raw) ? raw.join(', ') : String(raw)
+    let shown: string | undefined
+    if (e.display) {
+      for (const ds of datasetNames) {
+        const v = results[ds]?.rows?.[0]?.[e.display]
+        if (v != null && String(v) !== '') {
+          shown = String(v)
+          break
+        }
+      }
+      if (shown === undefined) sinDisplay.push(e.key)
+    }
+    seals.push({ key: e.key, label: e.label ?? e.key, value: shown ?? value })
+  }
+  return { seals, sinDisplay }
+}
+
+/** #422 · Profundidad máxima de la cadena de regreso (migas). Más allá, se poda la más antigua. */
+export const BACK_MAX_DEPTH = 3
+
+/** Un eslabón de la cadena de regreso: el título de la vista de origen y su query (sin `?`). */
+export interface BackCrumb {
+  page: string
+  title: string
+  query: string
+}
+
+/**
+ * #422 · La cadena de regreso que trae `from` (la query de la vista de origen, que a su vez puede traer
+ * su propio `from`), de la más cercana a la más antigua. El título sale del spec por el id de página,
+ * nunca de la URL; un eslabón cuya página no existe corta la cadena.
+ */
+export function parseBackChain(from: string | undefined, pages: MiraPage[] | undefined, max = BACK_MAX_DEPTH): BackCrumb[] {
+  const out: BackCrumb[] = []
+  let cur = from
+  while (cur && out.length < max) {
+    const q = new URLSearchParams(cur)
+    const id = q.get('page')
+    const page = id != null ? pages?.find((p) => p.id === id) : undefined
+    if (!page) break
+    out.push({ page: page.id, title: page.title, query: cur })
+    cur = q.get('from') ?? undefined
+  }
+  return out
+}
+
+/** Recorta una query `from` a `levels` eslabones (el más antiguo se descarta). */
+function trimFrom(from: string | undefined, levels: number): string | undefined {
+  if (!from || levels <= 0) return undefined
+  const q = new URLSearchParams(from)
+  const inner = trimFrom(q.get('from') ?? undefined, levels - 1)
+  if (inner) q.set('from', inner)
+  else q.delete('from')
+  return q.toString()
+}
+
+/**
+ * #422 · La query de la vista ACTUAL, que un drill desde ella lleva como `from`: la página, el ctx
+ * vigente (carry de cabecera + claves de contexto de la vista), los filtros de bandeja y su propio
+ * `from`, podado para que la cadena no pase de `max` eslabones.
+ */
+export function originQuery(
+  pageId: string,
+  ctx: CtxValues,
+  flt: Record<string, string[]>,
+  from: string | undefined,
+  max = BACK_MAX_DEPTH,
+): string {
+  const q = new URLSearchParams()
+  q.set('page', pageId)
+  for (const [k, v] of Object.entries(ctx)) for (const x of Array.isArray(v) ? v : [v]) if (x != null && x !== '') q.append(`ctx.${k}`, String(x))
+  for (const [k, vs] of Object.entries(flt)) for (const x of vs) q.append(`flt.${k}`, x)
+  const inner = trimFrom(from, max - 1)
+  if (inner) q.set('from', inner)
+  return q.toString()
 }

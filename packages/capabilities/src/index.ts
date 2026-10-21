@@ -50,6 +50,8 @@ export {
   vtFormat,
   vtIsNeg,
   vtNegCls,
+  vtStateKey,
+  vtShouldRestore,
   vtApply,
   vtFacetOptions,
   vtNumFilterLabel,
