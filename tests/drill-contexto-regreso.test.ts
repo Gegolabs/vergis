@@ -112,6 +112,10 @@ describe('pieza 1 · la vista de detalle dice qué está filtrando', () => {
     const h = await render({ page: 'detalle-cliente', ctx: { empresa: 'VH', linea: 'Frutales', empresa_nombre: 'FORJADO' } })
     expect(h).not.toContain('FORJADO')
   })
+  it('una clave de context que además es control de cabecera no se pinta dos veces', async () => {
+    const h = await render({ page: 'detalle-cliente', ctx: { empresa: 'VH', linea: 'Frutales', periodo: '2026-09' } })
+    expect(sellos(h).map((x) => x[0])).not.toContain('periodo')
+  })
   it('la vista sin drill no pinta sellos de contexto', async () => {
     expect(sellos(await render({ page: 'pyl' }))).toEqual([])
   })
@@ -183,6 +187,8 @@ describe('pieza 3 · el estado de la tabla sobrevive al ir y volver', () => {
     expect(TABLE_RUNTIME_SOURCE).toContain('if(!vtShouldRestore(nav.type, location.search)) return;')
     expect(TABLE_RUNTIME_SOURCE).toContain('applySnapshot(saved.s)')
     expect(TABLE_RUNTIME_SOURCE).toContain('window.scrollTo(0, y)')
+    expect(TABLE_RUNTIME_SOURCE).toContain('sb.scrollTop = t') // la tabla hace scroll en su contenedor
+    expect(TABLE_RUNTIME_SOURCE).toContain("u2.searchParams.delete('vret')") // una recarga parte limpia
   })
 })
 

@@ -1044,8 +1044,9 @@ function vtBootstrap(root){
      la VISTA (la calcula el servidor) y se restituye solo al volver (atrás/adelante o miga). */
   var vtIdx = Array.prototype.indexOf.call(document.querySelectorAll('.vtable'), root);
   var stKey = vtStateKey(location.pathname, payload.stateKey, location.search, vtIdx);
-  var restoreY = null;
-  function saveState(){ try{ sessionStorage.setItem(stKey, JSON.stringify({ s: snapshot(), y: window.scrollY })); }catch(e){} }
+  var restoreY = null, restoreT = null;
+  function scrollBox(){ return root.querySelector('.vt-scroll'); }
+  function saveState(){ try{ var sb=scrollBox(); sessionStorage.setItem(stKey, JSON.stringify({ s: snapshot(), y: window.scrollY, t: sb ? sb.scrollTop : 0 })); }catch(e){} }
   window.addEventListener('pagehide', saveState);
   var nactions = drills.length ? 1 : 0;
   function renderCols(){ return cols; }
@@ -1167,7 +1168,11 @@ function vtBootstrap(root){
     if(!vtShouldRestore(nav.type, location.search)) return;
     try{
       var saved = JSON.parse(sessionStorage.getItem(stKey) || 'null');
-      if(saved && saved.s){ applySnapshot(saved.s); restoreY = (typeof saved.y === 'number') ? saved.y : null; }
+      if(saved && saved.s){ applySnapshot(saved.s); restoreY = (typeof saved.y === 'number') ? saved.y : null; restoreT = (typeof saved.t === 'number') ? saved.t : null; }
+      /* vret ya cumplió: se quita de la URL (sin entrada de historial) para que una recarga parta limpia. */
+      if(/(^|[?&])vret=1(&|$)/.test(location.search) && history.replaceState){
+        var u2 = new window.URL(location.href); u2.searchParams.delete('vret'); history.replaceState(history.state, '', u2.pathname + u2.search + u2.hash);
+      }
     }catch(e){}
   })();
 
@@ -1436,7 +1441,13 @@ function vtBootstrap(root){
       render();
     }
   }
-  if(restoreY != null){ var y = restoreY; (window.requestAnimationFrame || setTimeout)(function(){ window.scrollTo(0, y); }); }
+  /* La fila visible arriba: la tabla hace scroll dentro de .vt-scroll; la página, en la ventana. El
+     navegador no restituye solo (scrollRestoration manual mientras se restituye). */
+  if(restoreY != null || restoreT != null){
+    try{ if('scrollRestoration' in history) history.scrollRestoration = 'manual'; }catch(e){}
+    var y = restoreY, t = restoreT;
+    (window.requestAnimationFrame || setTimeout)(function(){ var sb=scrollBox(); if(sb && t != null) sb.scrollTop = t; if(y != null) window.scrollTo(0, y); });
+  }
 }
 Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
 // ---- Kit ÚNICO en el Inspector (TX-11 WP4·2): con 1 tabla interactiva, su kit va tal cual. Con ≥2

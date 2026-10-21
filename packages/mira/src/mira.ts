@@ -181,7 +181,10 @@ export class MiraBotlet implements Botlet {
     // `from` (la query de la vista de origen), con títulos del spec; y `drillFrom` es la query de ESTA
     // vista, que cada drill desde ella lleva como su `from`.
     const activePage = isMulti ? spec.pages?.find((p) => p.id === pagesNav?.active) : undefined
-    const { seals: contextSeals, sinDisplay } = resolveContextSeals(activePage, ctxValues, results, datasetNames)
+    // Una clave que ya es un control de cabecera tiene su sello (el control): no se pinta dos veces.
+    const ctxSinControles: CtxValues = { ...ctxValues }
+    for (const k of Object.keys(carryCtx)) delete ctxSinControles[k]
+    const { seals: contextSeals, sinDisplay } = resolveContextSeals(activePage, ctxSinControles, results, datasetNames)
     if (sinDisplay.length) host.log({ type: 'mira-context-display-missing', botletId: this.id, page: activePage?.id, keys: sinDisplay })
     const fromParam = typeof ctx.params?.['from'] === 'string' ? (ctx.params['from'] as string) : undefined
     const back = isMulti ? parseBackChain(fromParam, spec.pages) : []
