@@ -61,6 +61,30 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## 0.47.0 — 2026-10-28
+
+Un pedido de una instalación beta (A.R.B.O.L., PI-38) y una corrección de seguridad en una dependencia transitiva.
+
+### Mira: color de celda por valor categórico en `table` (`columns[].tones`) (#441, PR #442)
+
+Una columna de `table` declara `tones: {<valor>: <tono>}`, y la celda se pinta con el fondo y el texto de ese tono. El valor **crudo** se compara sin mayúsculas, tildes ni espacios de borde, de los dos lados. Los tonos son del sistema de diseño (`green · blue · red · yellow · orange · purple · gray · neutral`), con contraste AA en las paletas claras, en `gruvbox` y en papel. El texto del valor sigue en la celda, y un valor sin tono queda neutro. Una sola función (`vtToneCls`) decide en el SSR y en el runtime del cliente. Un tono fuera del vocabulario rechaza el spec (`table-column-tone-unknown`), igual que un `tones` que no es mapa (`table-column-tones-invalid`) o dos llaves que se normalizan igual con tonos distintos (`table-column-tones-ambiguous`). En una celda con tono, el fondo de magnitud cede. Catálogo §4·nonies, `CAP-224`.
+
+**Sin `tones`, el render es idéntico byte a byte**: ni el CSS ni el runtime de la tabla llevan nada de esta capacidad. Medido con arnés sobre las 53 tablas de las 11 specs de una instancia.
+
+**Qué exige:** nada en los specs existentes. **Pero el orden importa:** la spec 0.5 de PI-17 (`vergis-instance` `055636b`) exige la versión que trae `CAP-224`. Con una imagen anterior, `tones` se acepta sin error y el Status sale sin color. **Promueve la imagen antes de publicar la spec.**
+
+**Sin medir:** el color en un navegador real; la suite mide el HTML servido y el contraste calculado.
+
+### Corrección: `@azure/msal-node` fuera del rango de GHSA-xcx6-jx8p-x3h5 (PR #443)
+
+`@azure/msal-node` ≤ 7.0.2 (aviso high sobre el flujo `auth_code`) entraba por `tedious` → `@azure/identity` 4.13.1. Ninguna `@azure/identity` publicada pide msal-node ^7, así que se fuerza con `overrides`. Vergis no usa el flujo vulnerable: en modo `secret`, tedious adquiere con `ClientSecretCredential`. Pero msal sí está en el camino de la autenticación a Azure SQL y Fabric, y los cambios mayores de msal-node 6.0 y 7.0 solo tocan `acquireTokenInteractive`, que identity no usa.
+
+**Qué exige:** nada. **Medido** contra el warehouse del terreno Fabric propio, con un service principal `Viewer`, en un handshake TDS completo de tedious 20.0.0 en modo `azure-active-directory-service-principal-secret` más un `SELECT`. Funciona con msal-node 7.1.2 (esta imagen) y con 5.2.2 (la de 0.46.0, como control). El control negativo con secreto malo no conecta.
+
+**La versión de msal-node es más nueva que el cooldown:** 7.1.2 se publicó el 2026-10-27, y `renovate.json` admite saltar los 14 días ante una alerta de vulnerabilidad. 7.1.0 corrige el mismo aviso y cumple el cooldown; el PR #444 la fija para la próxima versión.
+
+**Cotejo de Fabric:** `fab:sql` da `e265731a…`, igual que en v0.46.0. `fab:proof` corrió antes del tag sobre esta versión y sobre v0.46.0: sin fallos, 26 hallazgos y 0 sin medir en los dos.
+
 ## 0.46.0 — 2026-10-21
 
 Cuatro pedidos de la certificación interna de una instalación beta (A.R.B.O.L.), los cuatro transversales: valen para todos los informes, no para uno.
