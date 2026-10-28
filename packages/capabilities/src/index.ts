@@ -40,6 +40,7 @@ export { renderNotasTraySection, llaveCanonicaDeFila, NOTAS_CSS, NOTAS_RUNTIME_S
 export type { NotasRenderContext, TablaAncla } from './notas-render'
 export {
   TABLE_RUNTIME_SOURCE,
+  TABLE_RUNTIME_SOURCE_TONES,
   vtNorm,
   vtIsNumericCol,
   vtIsDateCol,
@@ -50,6 +51,9 @@ export {
   vtFormat,
   vtIsNeg,
   vtNegCls,
+  vtToneKey,
+  vtToneCls,
+  TABLE_TONES,
   vtStateKey,
   vtShouldRestore,
   vtApply,

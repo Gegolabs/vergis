@@ -2,8 +2,8 @@ import { type Capability } from '@vergis/botler'
 import { VERGIS_VERSION_LABEL } from './version'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE, vtNegCls } from './table-runtime'
-import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS, TABLE_TOTALS_CSS } from './piece-css'
+import { TABLE_RUNTIME_SOURCE, TABLE_RUNTIME_SOURCE_TONES, vtNegCls } from './table-runtime'
+import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS, TABLE_TOTALS_CSS, TABLE_TONES_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
 import { CHART_HOVER_CSS, CHART_HOVER_SOURCE } from './chart-hover'
@@ -114,6 +114,7 @@ export const renderHtmlPiece: Capability = {
     if (signals.magnitude) css += MAGNITUDE_CSS
     if (signals.drillActions) css += DRILL_ACTIONS_CSS
     if (signals.tableTotals) css += TABLE_TOTALS_CSS
+    if (signals.tableTones) css += TABLE_TONES_CSS
     // #263 · el realce del rótulo se emite SOLO si el documento trae un gráfico, y nunca en papel
     // (#65 · D4: en print no viaja JS). La señal es el propio marcado ya compuesto — un documento sin
     // charts no paga ni una línea de cromo.
@@ -122,7 +123,8 @@ export const renderHtmlPiece: Capability = {
     if (print) css += PRINT_TRUNC_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
-    if (hasTable && !print) tail += `<script>${TABLE_RUNTIME_SOURCE}</script>`
+    // #441 · con alguna columna `tones` va la variante que los conoce; sin tonos, los bytes de siempre.
+    if (hasTable && !print) tail += `<script>${signals.tableTones ? TABLE_RUNTIME_SOURCE_TONES : TABLE_RUNTIME_SOURCE}</script>`
     // #209 · El buscador de los filtros de bandeja. Es local por construcción (el catálogo ya viaja
     // completo en el HTML) y no depende del runtime de tabla: un dashboard sin tablas también tiene
     // filtros. En papel no va: ahí no hay quién escriba.

@@ -5,7 +5,7 @@
 import { escapeHtml } from './markdown'
 import { ctxQuery, formatValue } from './piece-util'
 import { llaveCanonicaDeFila, type TablaAncla } from './notas-render'
-import { vtNegCls, vtTotals } from './table-runtime'
+import { vtNegCls, vtToneCls, vtTotals } from './table-runtime'
 import type { ResolvedNode, RenderOpts, Drill, CarryCtx, TableColumn } from './piece-types'
 
 export const TABLE_SSR_MAX_ROWS = 500
@@ -31,6 +31,8 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   // #314 · la señal la marca quien emite la feature: el pie de totales existe en los tres modos
   // (interactivo, estático, papel) y su CSS no puede colgar del CSS de la tabla interactiva.
   if (cols.some((c) => c.total)) opts.signals.tableTotals = true
+  // #441 · ídem para los tonos: su CSS y el runtime que los conoce solo van si alguna columna los declaró.
+  if (cols.some((c) => c.tones)) opts.signals.tableTones = true
   const titleHtml = node.title ? `<h3>${escapeHtml(node.title)}</h3>` : ''
 
   // PRINT (D5): SIEMPRE estática y COMPLETA — el tope SSR de 500 es un contrato con el runtime JS, que
@@ -153,8 +155,11 @@ function renderTableBody(
         .map((c) => {
           const raw = r[c.field]
           const text = formatValue(raw, c.format)
-          const bg = ranges[c.field] ? magnitudeVar(Number(raw), ranges[c.field]) : ''
-          return `<td class="align-${c.align ?? 'left'}${vtNegCls(c.negative, text, raw)}"${bg}>${escapeHtml(text)}</td>`
+          // #441 · el tono es del valor CRUDO (la categoría), no del texto formateado. Con tono, el fondo
+          // de magnitud cede: una celda tiene un solo fondo.
+          const tone = c.tones ? vtToneCls(c.tones, raw) : ''
+          const bg = ranges[c.field] && !tone ? magnitudeVar(Number(raw), ranges[c.field]) : ''
+          return `<td class="align-${c.align ?? 'left'}${vtNegCls(c.negative, text, raw)}${tone}"${bg}>${escapeHtml(text)}</td>`
         })
         .join('')
       // Llave de negocio de la fila (solo si el dataset declaró `anchor`): es el ancla del comentario
@@ -195,6 +200,8 @@ function renderInteractiveTable(
     total: c.total,
     // #421 · la salida viaja al cliente: sin ella, la columna plain se pintaría al re-renderizar.
     negative: c.negative,
+    // #441 · los tonos viajan al cliente: sin ellos, la celda perdería su color al filtrar u ordenar.
+    tones: c.tones,
   }))
   // Cada columna filtrable lleva un ícono discreto (embudo) en su header. Al clickearlo se
   // abre un popover (estilo autofiltro): buscador que acota + selector de valores únicos.

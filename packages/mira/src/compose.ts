@@ -93,6 +93,8 @@ export interface TableColumn {
   total?: 'sum' | 'avg' | 'count' | true
   /** #421 · salida de la convención de signo: `plain` = los negativos de esta columna no se pintan de rojo. */
   negative?: 'plain'
+  /** #441 · color de celda por valor categórico (ESPEJO de piece-types). */
+  tones?: Record<string, string>
 }
 
 /**

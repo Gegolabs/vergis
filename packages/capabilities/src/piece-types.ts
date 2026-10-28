@@ -148,6 +148,12 @@ export interface TableColumn {
   total?: 'sum' | 'avg' | 'count'
   /** #421 · salida de la convención de signo: `plain` = los negativos de esta columna no se pintan de rojo. */
   negative?: 'plain'
+  /**
+   * #441 · Color de celda por valor categórico: `{<valor>: <tono>}`. El valor se compara normalizado
+   * (`vtToneKey`: sin mayúsculas, sin tildes, sin espacios de borde); el tono es un nombre del
+   * vocabulario cerrado `TABLE_TONES`. Un valor sin tono declarado queda neutro.
+   */
+  tones?: Record<string, string>
 }
 export interface Aggregation {
   dataset?: string
@@ -272,4 +278,6 @@ export interface RenderSignals {
   /** Hay al menos una tabla con pie de totales (#314) → requiere TABLE_TOTALS_CSS. También en una
    *  tabla estática o en papel, que no reciben el CSS interactivo. */
   tableTotals: boolean
+  /** #441 · Hay al menos una columna con `tones` → requiere TABLE_TONES_CSS y el runtime con tonos. */
+  tableTones?: boolean
 }

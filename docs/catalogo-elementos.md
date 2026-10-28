@@ -473,6 +473,46 @@ data:
 - **Sin `display`, nada cambia:** el rótulo es el valor, sin recorte ni desambiguación, y la bandeja
   se rinde byte a byte como antes.
 
+## 4·nonies · Color de celda por valor categórico (`columns[].tones`)
+
+Una columna de `table` que guarda un **estado** —entregado, en proceso, atrasado— puede declarar el
+tono de cada valor. La celda se pinta con el fondo y el texto de ese tono:
+
+```yaml
+- table:
+    data: data.programas
+    columns:
+      - { field: programa, label: "Programa" }
+      - field: status
+        label: "Status"
+        tones:
+          "Entregado": green
+          "En Proceso": blue
+          "Atrasado": red
+          "Eliminado": neutral
+          "Sin Información": yellow
+```
+
+- **La comparación no distingue mayúsculas, tildes ni espacios de borde**, ni del lado del dato ni del
+  lado del spec: `EN PROCESO`, ` en proceso ` y `En Proceso` toman el mismo tono, y `SIN INFORMACION`
+  cae en `"Sin Información"`. Los espacios internos sí cuentan. Decide el valor **crudo** de la celda,
+  no el texto formateado. Es una sola función (`vtToneCls`) para el SSR y el runtime del cliente: al
+  filtrar, agrupar u ordenar, la tabla hidratada pinta las mismas celdas que la servida.
+- **Los tonos son nombres del sistema de diseño, no colores:** `green` · `blue` · `red` · `yellow` ·
+  `orange` · `purple` · `gray` · `neutral`. `neutral` declara a propósito «sin color» (un estado que
+  se lee en blanco). Cada tono trae su fondo y su texto con contraste AA (≥ 4,5:1) en las paletas
+  claras, en la oscura (`gruvbox`) y en papel.
+- **El color nunca es la única señal:** el texto del valor sigue en la celda tal como vino.
+- **Un valor sin tono declarado queda neutro.** Un tono fuera del vocabulario (`verde`, `"#00ff00"`)
+  rechaza la spec (`table-column-tone-unknown`), igual que un `tones` que no es un mapa
+  (`table-column-tones-invalid`) o dos valores que se normalizan igual con tonos distintos
+  (`table-column-tones-ambiguous`).
+- **Convive con lo demás de la columna:** el rojo de negativos (§4·septies) sigue en su columna, y en
+  una celda con tono el fondo de magnitud (§4·bis) cede: una celda tiene un solo fondo. La fila
+  seleccionada y el hover de drill conservan su resalte.
+- **Sin `tones`, nada cambia:** ni el CSS ni el runtime de la tabla llevan un byte de esta capacidad.
+- **Fuera de alcance:** las cabeceras y subtotales de grupo, los gráficos, el CSV y el export.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de
