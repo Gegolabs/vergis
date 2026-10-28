@@ -9,6 +9,17 @@ el registro existe para que revertirla sea barato.
 
 ---
 
+## D-85 · 2026-10-28 — El corte 0.47.0 sale con `@azure/msal-node` 7.1.2, de un día, y no espera a #444
+
+- **Contexto**: arbol-lab necesita `CAP-224` (#442) para subir la hoja de PI-38. El override de #443 resolvió 7.1.2, publicada el 2026-10-27, dentro del cooldown de 14 días del ADR-001. El juez de #443 lo dejó como mejora C-1, no bloqueante (deuda `d-20261028-69ca88f9-08`). El PR #444 fija 7.1.0, con gates, audit y token medidos, pero su juez Fable no llegó antes del corte: el primero murió por 429, sin créditos, y el despachador lanzó otro en la flota.
+- **Bifurcación**: (a) esperar el juez de #444 y cortar con 7.1.0 · (b) cortar ya con 7.1.2 y llevar #444 a 0.47.1.
+- **Decidido**: **(b)**, con la indicación del despachador. Ninguna regla del corte exige el cooldown. `renovate.json` lo pone en Renovate y admite saltarlo ante una alerta de vulnerabilidad (precedente: fast-uri 3.1.7, 8afa39e).
+- **Lo medido que la sostiene**: en la ventana de Fabric previa al tag, el handshake TDS completo de tedious 20.0.0 en modo `azure-active-directory-service-principal-secret`, más un `SELECT`, contra el warehouse `vergislab`, con `vergis-lab-serving-sp`. Pasa con msal-node **7.1.2** (6,4 s), con **7.1.0** (6,3 s) y con **5.2.2** como control (12,4 s). Con secreto malo no conecta, ni con 7.1.2 ni con 7.1.0. Así queda cerrado lo único que el juez de #443 dejó sin evidencia. `fab:proof` sobre la candidata (`f520ad6`) y sobre `v0.46.0`: sin fallos, 26 hallazgos y 0 sin medir en los dos, lo que **salda la deuda de D-84**. `fab:sql` sigue en `e265731a…`.
+- **Lo que no cubre**: el control negativo no imprimió el código AADSTS (el mensaje de tedious vino vacío). Falló con el secreto malo y conectó con el bueno en el mismo árbol, pero la razón del rechazo no quedó escrita.
+- **Juez de composición**: no se pidió otro. Las dos piezas tienen juez Fable 5.1 (`correcta-con-condiciones`, 0 bloqueantes), y el de #443 verificó la composición con #442: el lockfile no lo toca #442 y los dos parten de `dac4f18`. El commit de corte solo trae versión, changelog, catálogo y registro.
+- **Reversa**: el tag no se reescribe. Si 7.1.2 resultara comprometida, se corta 0.47.1 con #444.
+- **Modelo autor**: claude-opus-5-5 (encargo `vergis-release-tones` del despachador).
+
 ## D-84 · 2026-10-21 — El corte 0.46.0 sale sin `fab:proof` previo al tag, con la equivalencia de SQL medida (como D-82/D-83)
 
 - **Contexto**: cuatro pedidos transversales de la certificación interna de A.R.B.O.L. (#421, #420, #422 y #425), que el cliente reclamó en la daily del 21-oct (INC-046 de la obra). Los cuatro están en `main` por los PR #426 a #429, cada uno con su juez Fable 5.1 y las condiciones aplicadas. D-57 ata `fab:proof` al corte, antes del tag.
