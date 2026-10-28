@@ -965,6 +965,64 @@ function validateNegative(el: unknown, path: string): void {
   })
 }
 
+/**
+ * #441 · Vocabulario CERRADO de tonos de celda (`columns[].tones`). ESPEJO de `TABLE_TONES` de
+ * `@vergis/capabilities` (mira no depende de capabilities; un test cuida que no diverjan).
+ */
+export const TABLE_TONE_NAMES: readonly string[] = ['green', 'blue', 'red', 'yellow', 'orange', 'purple', 'gray', 'neutral']
+
+/** #441 · Llave normalizada de un valor de `tones` (ESPEJO de `vtToneKey`): sin tildes, mayúsculas ni espacios de borde. */
+function toneKey(v: string): string {
+  return v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
+}
+
+/**
+ * #441 · `tones` es un mapa `{<valor>: <tono>}`. Un tono fuera del vocabulario no puede pasar en
+ * silencio (el autor creería haber pintado algo que el render ignora), y dos valores que se normalizan
+ * a la misma llave con tonos distintos son ambiguos: los dos se rechazan con su código.
+ */
+function validateTones(col: unknown, path: string): void {
+  const tones = (col as Record<string, unknown>)['tones']
+  if (tones == null) return
+  const field = String((col as Record<string, unknown>)['field'] ?? '')
+  if (typeof tones !== 'object' || Array.isArray(tones)) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'table-column-tones-invalid',
+      path: `${path}.tones`,
+      value: tones as never,
+      message: `La columna '${field}' declara 'tones' que no es un mapa {valor: tono}.`,
+      remediation: `Escribir 'tones: { "Entregado": green, "Atrasado": red }', con tonos de: ${TABLE_TONE_NAMES.join(', ')}.`,
+    })
+  }
+  const seen = new Map<string, { value: string; tone: string }>()
+  for (const [value, tone] of Object.entries(tones as Record<string, unknown>)) {
+    if (typeof tone !== 'string' || !TABLE_TONE_NAMES.includes(tone)) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'table-column-tone-unknown',
+        path: `${path}.tones.${value}`,
+        value: tone as never,
+        message: `La columna '${field}' pinta '${value}' con el tono '${String(tone)}', que no es un tono del sistema de diseño.`,
+        remediation: `Usar uno de: ${TABLE_TONE_NAMES.join(', ')} ('neutral' = sin color). Los tonos son nombres, no colores hex.`,
+      })
+    }
+    const k = toneKey(value)
+    const prev = seen.get(k)
+    if (prev && prev.tone !== tone) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'table-column-tones-ambiguous',
+        path: `${path}.tones.${value}`,
+        value: value as never,
+        message: `La columna '${field}' declara '${prev.value}' (${prev.tone}) y '${value}' (${tone}): se comparan sin mayúsculas ni tildes, así que son el mismo valor con dos tonos.`,
+        remediation: `Dejar una sola entrada para ese valor.`,
+      })
+    }
+    seen.set(k, { value, tone })
+  }
+}
+
 /** Vocabulario CERRADO del agregado al pie de una columna de tabla (#314). `true` es alias de `sum`
  *  (compose lo normaliza); todo lo demás se rechaza acá. */
 const TABLE_TOTAL_OPS = new Set(['sum', 'avg', 'count'])
@@ -983,6 +1041,7 @@ function validateTableColumns(table: unknown, path: string): void {
   for (const [i, col] of columns.entries()) {
     if (col == null || typeof col !== 'object') continue
     validateNegative(col, `${path}.columns[${i}]`)
+    validateTones(col, `${path}.columns[${i}]`)
     const total = (col as Record<string, unknown>)['total']
     if (total == null) continue
     if (total === true || (typeof total === 'string' && TABLE_TOTAL_OPS.has(total))) continue

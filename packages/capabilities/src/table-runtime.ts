@@ -298,6 +298,48 @@ export function vtShouldRestore(navType: unknown, search: string): boolean {
   return /(^|[?&])vret=1(&|$)/.test(String(search || ''))
 }
 
+/**
+ * #441 · Vocabulario CERRADO de tonos de celda: nombres del sistema de diseño (los mismos colores
+ * semánticos del theme), nunca hex. `neutral` declara a propósito «sin color» (p. ej. un estado
+ * «Eliminado» que se lee en blanco). El tema define, por paleta, el fondo y el texto de cada uno
+ * con contraste AA (`--tone-<t>-bg` / `--tone-<t>-fg`).
+ */
+export const TABLE_TONES = ['green', 'blue', 'red', 'yellow', 'orange', 'purple', 'gray', 'neutral'] as const
+
+/**
+ * #441 · Llave de comparación de un valor categórico: sin tildes (NFD sin marcas combinantes), sin
+ * mayúsculas y sin espacios de borde. `Sin Información`, `SIN INFORMACION` y ` sin información `
+ * dan la misma llave. Un valor nulo da `''`. AUTOCONTENIDA: viaja al browser vía `.toString()`.
+ */
+export function vtToneKey(value: unknown): string {
+  return String(value == null ? '' : value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+}
+
+/**
+ * #441 · La clase de tono de una celda: ` vt-tone vt-tone-<t>` si la columna declaró `tones` y el
+ * valor CRUDO cae (normalizado) en una de sus llaves; vacío en otro caso — un valor sin tono queda
+ * neutro. El tono se acepta solo si es una palabra en minúsculas (el validador ya cerró el
+ * vocabulario; acá solo se impide inyectar una clase arbitraria si el render se invoca suelto).
+ * Es la ÚNICA regla: la usan el SSR (`render-table`) y el runtime del cliente.
+ * AUTOCONTENIDA salvo `vtToneKey`: viaja al browser vía `.toString()`.
+ */
+export function vtToneCls(tones: unknown, raw: unknown): string {
+  if (tones == null || typeof tones !== 'object') return ''
+  const k = vtToneKey(raw)
+  if (k === '') return ''
+  const map = tones as Record<string, unknown>
+  for (const key in map) {
+    if (vtToneKey(key) !== k) continue
+    const t = map[key]
+    return typeof t === 'string' && /^[a-z]+$/.test(t) ? ' vt-tone vt-tone-' + t : ''
+  }
+  return ''
+}
+
 /** Formatea un valor de celda en el cliente (espejo del formatValue del render). */
 export function vtFormat(value: unknown, format?: string): string {
   // Los drivers SQL entregan los enteros de 64 bits como STRING para no perder precisión (p. ej.
@@ -989,6 +1031,24 @@ function vergisSavedViews(opts){
 }
 `
 
+/** La celda del cliente SIN tonos: el texto exacto que el runtime viene emitiendo (no-regresión #441). */
+const VT_CELL = `function vtCell(col, r){
+  var raw=r[col.field]; var text=vtFormat(raw, col.format);
+  var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
+  return '<td class="align-'+(col.align||'left')+vtNegCls(col.negative, text, raw)+'"'+bg+'>'+vtEsc(text)+'</td>';
+}`
+
+/**
+ * #441 · La celda del cliente CON tonos: espejo de `renderTableBody` — la clase sale de `vtToneCls` y,
+ * si hay tono, el fondo de magnitud cede (una celda tiene un solo fondo).
+ */
+const VT_CELL_TONES = `function vtCell(col, r){
+  var raw=r[col.field]; var text=vtFormat(raw, col.format);
+  var tone=col.tones ? vtToneCls(col.tones, raw) : '';
+  var bg=(col.colorscale && !tone) ? vtColorBg(Number(raw), col.ranges) : '';
+  return '<td class="align-'+(col.align||'left')+vtNegCls(col.negative, text, raw)+tone+'"'+bg+'>'+vtEsc(text)+'</td>';
+}`
+
 const DOM_GLUE = `
 function vtEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 /* #210 · espejo EXACTO de magnitudeVar (render-table): emite la POSICION en la rampa, no un color.
@@ -1000,11 +1060,7 @@ function vtColorBg(value, range){
   var t=(value-range.min)/(range.max-range.min);
   return ' style="--mag:'+t.toFixed(4)+'"';
 }
-function vtCell(col, r){
-  var raw=r[col.field]; var text=vtFormat(raw, col.format);
-  var bg=col.colorscale ? vtColorBg(Number(raw), col.ranges) : '';
-  return '<td class="align-'+(col.align||'left')+vtNegCls(col.negative, text, raw)+'"'+bg+'>'+vtEsc(text)+'</td>';
-}
+${VT_CELL}
 /* Una clave multi-valor del carry (control multi-select) se repite: &ctx.k=a&ctx.k=b (espejo de ctxQuery server-side). */
 function vtCtxQuery(carry, keys){ var m={},k,q=''; for(k in (carry||{})) m[k]=carry[k]; for(k in (keys||{})) m[k]=keys[k]; for(k in m){ var vs=Array.isArray(m[k])?m[k]:[m[k]]; for(var i=0;i<vs.length;i++){ if(vs[i]!=null&&vs[i]!=='') q+='&ctx.'+encodeURIComponent(k)+'='+encodeURIComponent(String(vs[i])); } } return q; }
 /* fltQ = sufijo &flt.k=v YA serializado server-side (filtros de bandeja activos): se anexa tal cual, sin re-implementar su carry aqui. */
@@ -1471,3 +1527,13 @@ Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
 
 export const TABLE_RUNTIME_SOURCE: string =
   '(function(){\n' + PURE_FNS.map((f) => f.toString()).join('\n') + '\n' + SAVED_VIEWS_JS + '\n' + DOM_GLUE + '\n})();'
+
+/**
+ * #441 · El runtime de un documento con alguna columna `tones`: las mismas piezas más `vtToneKey` /
+ * `vtToneCls` y la celda que las usa. Es una variante y no un agregado al runtime de siempre para que
+ * un documento SIN tonos siga recibiendo exactamente los mismos bytes.
+ */
+export const TABLE_RUNTIME_SOURCE_TONES: string =
+  '(function(){\n' +
+  [...PURE_FNS, vtToneKey, vtToneCls].map((f) => f.toString()).join('\n') +
+  '\n' + SAVED_VIEWS_JS + '\n' + DOM_GLUE.replace(VT_CELL, () => VT_CELL_TONES) + '\n})();'

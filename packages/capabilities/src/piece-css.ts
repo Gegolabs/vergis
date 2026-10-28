@@ -152,3 +152,23 @@ export const TABLE_TOTALS_CSS = `
 .table tfoot td{font-weight:600;border-top:2px solid var(--border,#e2e8f0);background:var(--card,#f8fafc)}
 .table tfoot .vt-total-label{color:var(--fg-dim,#64748b);text-transform:uppercase;font-size:11px;letter-spacing:.04em}
 `
+
+/**
+ * #441 · Color de celda por valor categórico (`columns[].tones`). Fondo y texto por tono, con contraste
+ * AA del texto sobre su fondo; los fallbacks son la paleta CLARA (theme default, paletas claras y
+ * papel) y la paleta oscura (`gruvbox` del theme roble) los sobreescribe solo en pantalla: en papel la
+ * paleta se repinta en claro. Los tokens viven ACÁ y no en el theme para que un documento sin `tones`
+ * no reciba ni un byte nuevo. `neutral` no
+ * tiene regla: declara a propósito «sin color». El texto del valor sigue en la celda: el color nunca
+ * es la única señal. Va solo si alguna columna declaró `tones` (señal `tableTones`).
+ */
+export const TABLE_TONES_CSS = `
+.table td.vt-tone-green{background:var(--tone-green-bg,#bbf7d0);color:var(--tone-green-fg,#14532d)}
+.table td.vt-tone-blue{background:var(--tone-blue-bg,#bfdbfe);color:var(--tone-blue-fg,#1e3a8a)}
+.table td.vt-tone-red{background:var(--tone-red-bg,#fecaca);color:var(--tone-red-fg,#7f1d1d)}
+.table td.vt-tone-yellow{background:var(--tone-yellow-bg,#fef08a);color:var(--tone-yellow-fg,#713f12)}
+.table td.vt-tone-orange{background:var(--tone-orange-bg,#fed7aa);color:var(--tone-orange-fg,#7c2d12)}
+.table td.vt-tone-purple{background:var(--tone-purple-bg,#e9d5ff);color:var(--tone-purple-fg,#581c87)}
+.table td.vt-tone-gray{background:var(--tone-gray-bg,#e2e8f0);color:var(--tone-gray-fg,#1e293b)}
+@media screen{html[data-palette="gruvbox"]{--tone-green-bg:#45501f;--tone-green-fg:#e0e39a;--tone-blue-bg:#1f4250;--tone-blue-fg:#b4dbe6;--tone-red-bg:#5a2420;--tone-red-fg:#ffbdb0;--tone-yellow-bg:#57471a;--tone-yellow-fg:#fde596;--tone-orange-bg:#5a3214;--tone-orange-fg:#ffcb9c;--tone-purple-bg:#4a2c43;--tone-purple-fg:#f0c6dd;--tone-gray-bg:#45403d;--tone-gray-fg:#ebdbb2}}
+`
