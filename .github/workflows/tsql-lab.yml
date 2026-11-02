@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 15
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090
+        image: mcr.microsoft.com/mssql/server:2022-latest@sha256:cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: 'Vergis!Lab2026'
@@ -46,9 +46,9 @@ jobs:
           - 11433:1433
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: 22
+          node-version: 22.23.3
           cache: npm
       # EL npm VA PINNEADO, por la misma razón que shellcheck (ver el job `shell`): sin este paso la
       # versión de npm del gate la decide la imagen del runner — `setup-node` con `node-version: 22`
