@@ -71,7 +71,7 @@ Un `series` (líneas) declara las series con `metrics: [{field,label}]`, o sea f
 
 Validación con nombre: `series-series-metrics-collision`, `series-value-missing`, `series-value-without-series`, `series-series-not-field`, `series-series-field-dangling`, `series-value-field-dangling`, `series-names-not-boolean`; falta de `x`, `series-x-missing` como siempre.
 
-**Sin `series:`/`names`, el render es idéntico byte a byte**: sha256 del HTML de dos piezas de formato ancho, calculado con `main` antes del cambio, fijado como golden en `tests/series-largo.test.ts`.
+**Sin `series:`/`names`, el render es idéntico byte a byte**: sha256 del spec de Vega-Lite que recibe `compile` para dos piezas de formato ancho, calculado con `main` antes del cambio y fijado como golden en `tests/series-largo.test.ts` (el spec, no el SVG: las coordenadas del SVG dependen de la medición de texto y difieren entre máquinas).
 
 **Dos decisiones a mirar:** la celda ausente es un **hueco** (no 0, a diferencia del `distribution` apilado); y el excedente sobre 8 se **suma** en «(otras)», que para versiones de una misma magnitud no es una cifra con sentido — mantener la selección bajo la cota.
 

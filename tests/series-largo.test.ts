@@ -9,11 +9,20 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { runSpec } from '@vergis/cli'
 import { parseSpec, validateSpec, foldSeriesColumn, CHART_MAX_SERIES, OTHER_SERIES_LABEL } from '@vergis/mira'
 import { renderHtmlPiece, spreadNameTops, type ResolvedNode } from '@vergis/capabilities'
 import { VergisError, type Capability } from '@vergis/botler'
+
+// Captura el spec de Vega-Lite que el render entrega a `compile`. El golden de retrocompatibilidad se
+// mide sobre ESE spec (datos puros, igual en toda arquitectura) y no sobre el SVG, cuyas coordenadas
+// dependen de la medición de texto y difieren entre máquinas (el sha del HTML falló en CI).
+const compilados = vi.hoisted(() => [] as unknown[])
+vi.mock('../packages/capabilities/node_modules/vega-lite', async (importOriginal) => {
+  const o = await importOriginal<{ compile: (spec: unknown, opts?: unknown) => unknown }>()
+  return { ...o, compile: (spec: unknown, opts?: unknown) => { compilados.push(spec); return o.compile(spec, opts) } }
+})
 
 const SCHEMA = JSON.parse(
   readFileSync(resolve(fileURLToPath(new URL('../schema/mira-spec.schema.json', import.meta.url))), 'utf8'),
@@ -69,13 +78,29 @@ describe('series largo · el formato ancho no cambia', () => {
   const wide = MESES.map((m, i) => ({ mes: m, base: (i + 1) * 100000, actual: (i + 1) * 120000 + 5000 }))
   const seriesSpec = [{ field: 'base', label: 'Base' }, { field: 'actual', label: 'Actual' }]
 
-  // Golden calculado con el código de `main` (12ca3d7) ANTES de tocar nada: si cambia, cambió el
-  // render de todo `series` existente y hay que decir por qué.
-  it('render ancho sin `names`: HTML idéntico byte a byte al de main', async () => {
-    const a = await renderPiece({ type: 'series', xField: 'mes', rows: wide, seriesSpec } as ResolvedNode)
-    expect(sha(a)).toBe('1dc1a20c2c8c91b1299d7949466bbe07848be461c66049c3c90b69b9b47bdf12')
-    const b = await renderPiece({ type: 'series', xField: 'mes', rows: wide, seriesSpec, format: 'int_0', title: 'T', legend: 'right' } as ResolvedNode)
-    expect(sha(b)).toBe('28aa41f0ef27d553b5b4dab59cb309e80ff373c620db8deb59d334a011743a16')
+  // Golden calculado con el código de `main` (12ca3d7) ANTES de tocar nada, sobre el spec de
+  // Vega-Lite que recibe `compile`: si cambia, cambió el render de todo `series` existente y hay que
+  // decir por qué. El render ancho sin `names` entrega EXACTAMENTE el mismo spec que entregaba main.
+  async function specDe(piece: ResolvedNode): Promise<string> {
+    const n = compilados.length
+    await renderPiece(piece)
+    // Sin esta guardia, un spec no capturado (caché, otra copia de vega-lite) pasaría por «igual».
+    expect(compilados.length, 'NO PUDE MEDIR: el render no pasó por compile()').toBe(n + 1)
+    return sha(JSON.stringify(compilados[n]))
+  }
+  it('render ancho sin `names`: el spec de Vega-Lite es idéntico byte a byte al de main', async () => {
+    expect(await specDe({ type: 'series', xField: 'mes', rows: wide, seriesSpec } as ResolvedNode)).toBe(
+      '4fea6680b58513f7cb645a097f1b4b677acf5f97efbd13472fa6702d79bcabb5',
+    )
+    expect(
+      await specDe({ type: 'series', xField: 'mes', rows: wide, seriesSpec, format: 'int_0', title: 'T', legend: 'right' } as ResolvedNode),
+    ).toBe('d8ea1bf0ea073a95df4add2083ef599ed7580de070104d6367dd5955924575cb')
+  })
+
+  it('control negativo: con `names` el mismo dato SÍ cambia el spec (el golden discrimina)', async () => {
+    expect(await specDe({ type: 'series', xField: 'mes', rows: wide, seriesSpec, seriesNames: true } as ResolvedNode)).not.toBe(
+      '4fea6680b58513f7cb645a097f1b4b677acf5f97efbd13472fa6702d79bcabb5',
+    )
   })
 
   it('`names: false` explícito es lo mismo que ausente', async () => {
