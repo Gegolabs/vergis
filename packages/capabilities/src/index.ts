@@ -28,6 +28,7 @@ export {
   seriesLabelStride,
   seriesLabelIndices,
   seriesLanes,
+  spreadNameTops,
   svgTitlesDesdeAria,
 } from './render-chart'
 export type { TopNRank, LabelMode, LegendPosition } from './render-chart'

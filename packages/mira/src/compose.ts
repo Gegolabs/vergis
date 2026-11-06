@@ -420,12 +420,39 @@ export function composePiece(
       data?: string
       x?: string
       metrics?: { field?: string; label?: string }[]
+      /** Modo LONG: las series salen de los valores de ESTA columna; `value` es la columna del valor. */
+      series?: string
+      value?: string
+      /** `true` rotula cada línea con el nombre de su serie, en su último punto. */
+      names?: boolean
       /** #365 · `right` pone la leyenda a la derecha y vertical (default: arriba, CV-05). */
       legend?: string
       format?: string
       title?: string
     }
     const dataset = stripData(String(se.data ?? '')).split('.')[0]
+    // Modo LONG (como el `series: <campo>` de #203): cada fila es `(x, serie, valor)` y se pliega ACÁ
+    // a formato wide, de modo que el render de líneas se reutiliza entero. La celda ausente es un
+    // hueco (NaN), no 0: una línea que cae a cero porque a su serie le falta un mes miente.
+    if (typeof se.series === 'string' && se.series !== '') {
+      const xField = String(se.x ?? '')
+      const src = results[dataset]?.rows ?? []
+      const folded = foldSeriesColumn(src, xField, se.series, String(se.value ?? ''), CHART_MAX_SERIES, Number.NaN)
+      // El pliegue categoriza por texto; el eje conserva el valor CRUDO de la primera fila de cada x.
+      const rawX = new Map<string, unknown>()
+      for (const r of src) { const k = String(r[xField] ?? ''); if (!rawX.has(k)) rawX.set(k, r[xField]) }
+      const rows = folded.rows.map((r) => ({ ...r, [xField]: rawX.get(String(r[xField])) }))
+      return {
+        type: 'series',
+        rows,
+        xField: se.x,
+        seriesSpec: folded.metricsSpec,
+        ...(se.names === true ? { seriesNames: true } : {}),
+        ...(se.legend === 'right' ? { legend: 'right' as const } : {}),
+        format: se.format,
+        title: se.title,
+      }
+    }
     const rows = [...(results[dataset]?.rows ?? [])]
     const seriesSpec = (se.metrics ?? []).map((m) => ({ field: String(m.field ?? ''), label: m.label ?? String(m.field ?? '') }))
     return {
@@ -433,6 +460,7 @@ export function composePiece(
       rows,
       xField: se.x,
       seriesSpec,
+      ...(se.names === true ? { seriesNames: true } : {}),
       ...(se.legend === 'right' ? { legend: 'right' as const } : {}),
       format: se.format,
       title: se.title,
@@ -545,6 +573,8 @@ export function foldSeriesColumn(
   seriesField: string,
   valueField: string,
   maxSeries: number = CHART_MAX_SERIES,
+  /** Valor de la celda `(categoría, serie)` sin filas. `0` para apilados (#203); `NaN` para líneas. */
+  fill: number = 0,
 ): { rows: Record<string, unknown>[]; metricsSpec: { field: string; label: string }[]; capped: boolean } {
   // Series y categorías en orden de aparición (el SQL manda).
   const seriesOrder: string[] = []
@@ -565,7 +595,7 @@ export function foldSeriesColumn(
   const byCat = new Map<string, Record<string, unknown>>()
   for (const cat of catOrder) {
     const row: Record<string, unknown> = { [dimField]: cat }
-    for (const m of metricsSpec) row[m.field] = 0
+    for (const m of metricsSpec) row[m.field] = fill
     byCat.set(cat, row)
   }
   for (const r of rows) {

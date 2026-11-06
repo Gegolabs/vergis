@@ -217,6 +217,8 @@ export interface ResolvedNode {
   xField?: string
   /** `series`: 1..N series (formato wide, una columna por serie). */
   seriesSpec?: { field: string; label: string }[]
+  /** `series`: rotula cada línea con el nombre de su serie, en su último punto. Ausente = apagado. */
+  seriesNames?: boolean
   columnsSpec?: TableColumn[]
   labelField?: string
   presentField?: string
