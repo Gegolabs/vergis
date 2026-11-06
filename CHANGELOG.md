@@ -61,6 +61,24 @@ la numeración y que lo declarado en máquina esté citado, y esta línea cubre 
 **antes de empujar el tag**, no después. El precedente que la fija es 0.21.0, cuyo centinela se midió
 veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-lab.md`](scripts/README-fabric-lab.md).
 
+## Sin publicar
+
+### Mira: `series` admite formato LARGO (`series: <campo>` + `value: <campo>`) y rotula cada línea con su nombre (`names: true`)
+
+Un `series` (líneas) declara las series con `metrics: [{field,label}]`, o sea fijas al escribir el spec. Cuando salen del dato —el caso de A.R.B.O.L. PI-38: el usuario elige varias versiones de presupuesto en un control multi y el gráfico acumulado dibuja una línea por versión elegida— no había forma de declararlo. Ahora `series: <campo>` deriva una línea por cada valor distinto de esa columna y `value: <campo>` es la columna del valor; cada fila es `(x, serie, valor)`. Es la contraparte para líneas del `series: <campo>` del `distribution` (0.18.0): el pliegue largo→ancho es la misma función de `compose`, y el render de líneas se reutiliza entero. Orden de las series = orden de aparición (manda el SQL); pares repetidos suman; cota de 8 con el excedente en «(otras)». Catálogo §3, `CAP-225`.
+
+`names: true` escribe el nombre de la serie en el último punto con dato de cada línea (formato ancho o largo), con las alturas repartidas para que las líneas que terminan juntas no se pisen. Apagado por defecto. Catálogo §3, `CAP-226`.
+
+Validación con nombre: `series-series-metrics-collision`, `series-value-missing`, `series-value-without-series`, `series-series-not-field`, `series-series-field-dangling`, `series-value-field-dangling`, `series-names-not-boolean`; falta de `x`, `series-x-missing` como siempre.
+
+**Sin `series:`/`names`, el render es idéntico byte a byte**: sha256 del HTML de dos piezas de formato ancho, calculado con `main` antes del cambio, fijado como golden en `tests/series-largo.test.ts`.
+
+**Dos decisiones a mirar:** la celda ausente es un **hueco** (no 0, a diferencia del `distribution` apilado); y el excedente sobre 8 se **suma** en «(otras)», que para versiones de una misma magnitud no es una cifra con sentido — mantener la selección bajo la cota.
+
+**Qué exige:** nada en los specs existentes. Un spec que use `series:` o `names:` necesita la imagen que traiga `CAP-225`/`CAP-226`; con una anterior el spec se rechaza al validar (`series-metrics-missing`), no se degrada en silencio.
+
+**Sin medir:** el render en un navegador real; la suite mide el SVG servido y su estructura.
+
 ## 0.47.0 — 2026-10-28
 
 Un pedido de una instalación beta (A.R.B.O.L., PI-38) y una corrección de seguridad en una dependencia transitiva.

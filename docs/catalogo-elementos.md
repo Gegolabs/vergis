@@ -227,6 +227,42 @@ decimal solo si la mantisa es menor a 100.
 - **El eje x respeta el ORDEN DE LLEGADA de las filas** (`sort: null`): el SQL manda el orden y la
   agregación del eje; **no** se re-ordena alfabético.
 
+### Líneas desde una COLUMNA (formato largo) y el nombre sobre cada línea
+
+`metrics[]` fija las series al escribir el spec. Cuando salen del dato —las versiones de presupuesto
+que el usuario elige en un control multi (`single: false`) son una línea cada una, y cuántas son lo
+decide la selección—, el formato **largo** las deriva de una columna, igual que el `series: <campo>`
+del `distribution` (§2):
+
+```yaml
+- series:
+    data: data.acumulado          # filas (mes, version_etiqueta, acumulado), ya ordenadas por el SQL
+    x: mes
+    series: version_etiqueta      # una línea por valor distinto de esta columna
+    value: acumulado              # la columna del valor de cada punto
+    names: true                   # el nombre de la serie sobre su línea (default: apagado)
+    format: abbr
+```
+
+- **Excluyente con `metrics`** (`series-series-metrics-collision`). `value` solo existe con `series`
+  (`series-value-without-series`) y con `series` es obligatorio (`series-value-missing`). `x`, `series`
+  y `value` son campos pelados del dataset y se validan contra el shape (`*-dangling`).
+- **El pliegue largo→ancho vive en `compose`**, la misma función que el `distribution` (§2): el orden de
+  las líneas es el de aparición en las filas (manda el SQL), los pares `(x, serie)` repetidos suman y
+  el eje conserva el valor crudo de `x`.
+- **La celda ausente es un hueco**, no un 0 (en el `distribution` apilado es 0, porque ahí hueco y cero
+  se dibujan igual): una línea que cae a cero porque a su serie le falta un mes miente.
+- **Cota de 8 series** (`CHART_MAX_SERIES`, el tamaño de la paleta): el excedente se agrega en
+  «(otras)» **sumando**. Eso es lo correcto para series aditivas y engañoso para versiones de una misma
+  magnitud (la suma de dos presupuestos no es un presupuesto): con ese dato, mantener la selección
+  bajo la cota.
+- **La leyenda trae el nombre exacto** de cada serie (el valor de la columna), y `format` rotula cada
+  punto (`abbr` por defecto).
+- **`names: true`** (también en formato ancho, con el `label` de cada `metrics[]`) escribe el nombre en
+  el último punto con dato de cada línea, a la derecha; las alturas se reparten para que dos líneas que
+  terminan juntas no se pisen, y un nombre de más de 36 caracteres se trunca con «…» (la leyenda y el
+  tooltip conservan el completo). Sin `names` el render es idéntico byte a byte al anterior.
+
 ### Desviación declarada vs doc de diseño §4.1 (`006/3`)
 
 `time_field` / `granularity` / `range` **no se implementan**. El eje temporal lo modela la **query**

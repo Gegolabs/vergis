@@ -420,6 +420,79 @@ export function validateSpec(spec: unknown, ctx: { capabilities: string[]; schem
       })
     }
     assertLegendPosition(se, 'series')
+    // `names`: booleano. Una cadena `"false"` se leería como encendida; se exige el tipo.
+    if ('names' in se && typeof se['names'] !== 'boolean') {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-names-not-boolean',
+        path: 'piece -> series.names',
+        value: (se['names'] ?? null) as never,
+        message: `El 'names' de un elemento series debe ser true o false; recibió ${JSON.stringify(se['names'] ?? null)}.`,
+        remediation: `Escribir 'names: true' para rotular cada línea con el nombre de su serie, o quitarlo.`,
+      })
+    }
+    // Modo LONG: `series: <campo>` + `value: <campo>` — cada fila del dataset es `(x, serie, valor)` y
+    // las series salen de los valores de la columna `series`. Es el complemento del modo wide
+    // (`metrics`): declarar los dos es pedir dos orígenes de series a la vez.
+    const hasSeriesCol = typeof se['series'] === 'string' && se['series'] !== ''
+    const hasMetricsKey = se['metrics'] != null
+    if ('series' in se && !hasSeriesCol) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-series-not-field',
+        path: 'piece -> series.series',
+        value: (se['series'] ?? null) as never,
+        message: `El 'series' de un elemento series debe ser el NOMBRE de una columna del dataset; recibió ${JSON.stringify(se['series'] ?? null)}.`,
+        remediation: `Escribir 'series: <campo>' (campo pelado del dataset de 'data').`,
+      })
+    }
+    if (hasSeriesCol && hasMetricsKey) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-series-metrics-collision',
+        path: 'piece -> series.series',
+        value: se['series'] as never,
+        message: `Un elemento series declara 'series' (las series salen de una columna) y 'metrics' (las series son columnas del YAML) a la vez; son mutuamente excluyentes.`,
+        remediation: `Dejar solo 'series: <campo>' con 'value: <campo>' (formato largo), o solo 'metrics: [{ field, label }, ...]' (formato ancho).`,
+      })
+    }
+    if ('value' in se && !hasSeriesCol) {
+      throw new VergisError({
+        error: 'mira/spec-invalid',
+        code: 'series-value-without-series',
+        path: 'piece -> series.value',
+        value: (se['value'] ?? null) as never,
+        message: `Un elemento series declara 'value' sin 'series': 'value' solo existe en el formato largo.`,
+        remediation: `Agregar 'series: <campo>' (formato largo) o reemplazar 'value' por 'metrics: [{ field, label }, ...]' (formato ancho).`,
+      })
+    }
+    if (hasSeriesCol) {
+      const sf = String(se['series'])
+      const value = se['value']
+      if (typeof value !== 'string' || !value) {
+        throw new VergisError({
+          error: 'mira/spec-invalid',
+          code: 'series-value-missing',
+          path: 'piece -> series.value',
+          value: (value ?? null) as never,
+          message: `Un elemento series en formato largo ('series: ${sf}') requiere 'value' (la columna del valor de cada punto).`,
+          remediation: `Declarar 'value: <campo>' (un campo numérico del dataset de 'data').`,
+        })
+      }
+      for (const [key, field, code] of [['series', sf, 'series-series-field-dangling'], ['value', value, 'series-value-field-dangling']] as const) {
+        if (sds?.shape?.fields && !(field in sds.shape.fields)) {
+          throw new VergisError({
+            error: 'mira/spec-invalid',
+            code,
+            path: `piece -> series.${key}`,
+            value: field,
+            message: `La columna '${field}' de series.${key} no está declarada en data.${dsName}.shape.fields.`,
+            remediation: `Declarar '${field}' en shape.fields de '${dsName}' o corregir series.${key}.`,
+          })
+        }
+      }
+      continue
+    }
     const metrics = se['metrics']
     if (!Array.isArray(metrics) || metrics.length === 0) {
       throw new VergisError({

@@ -922,6 +922,43 @@ export function seriesLanes(topsPx: number[]): number[] {
   return lanes
 }
 
+/** Alto del área de datos de un `series`. */
+const SERIES_HEIGHT_PX = 240
+/** Separación vertical mínima entre dos rótulos de nombre (la altura de la letra más aire). */
+const SERIES_NAME_GAP_PX = 13
+/** Ancho estimado por carácter del rótulo de nombre, y tope de caracteres antes de truncar. */
+const SERIES_NAME_CHAR_PX = 6.4
+const SERIES_NAME_MAX_CHARS = 36
+/** Campos auxiliares del rótulo de nombre (solo existen con `names`). */
+const NAME_FIELD = '__name'
+const NAME_Y_FIELD = '__nameY'
+const NAME_LAST_FIELD = '__last'
+
+/**
+ * Reparte verticalmente los rótulos de nombre de los extremos de las líneas para que no se pisen.
+ * Entra la posición (px desde arriba) del último punto de cada serie; sale la posición del rótulo,
+ * en el mismo orden. Se recorre de arriba abajo empujando hacia abajo lo que quede a menos de `gap`
+ * del anterior; si el último se sale del área, se re-empuja hacia arriba. Puro y testeable.
+ */
+export function spreadNameTops(topsPx: number[], gap: number, heightPx: number): number[] {
+  const order = topsPx.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y || a.i - b.i)
+  const out = new Array<number>(topsPx.length)
+  let prev = -Infinity
+  for (const p of order) { const y = Math.max(p.y, prev + gap); out[p.i] = y; prev = y }
+  let limit = heightPx
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k].i
+    if (out[i] > limit) out[i] = limit
+    limit = out[i] - gap
+  }
+  return out
+}
+
+/** Nombre de serie para el extremo de la línea: el exacto, o truncado con «…» si no cabe. */
+function seriesNameText(label: string): string {
+  return label.length > SERIES_NAME_MAX_CHARS ? `${label.slice(0, SERIES_NAME_MAX_CHARS - 1)}…` : label
+}
+
 /** Ancho del área de datos de un `series` (constante: el eje x es ordinal y no escala con los puntos). */
 const SERIES_WIDTH_PX = 640
 
@@ -957,10 +994,23 @@ export async function renderSeries(
   const colors = seriesColors(tokens, Math.max(1, series.length))
   const domain = labelledDomain(nums, 0.12)
   const values: Record<string, unknown>[] = []
+  // `names` · el rótulo con el nombre de la serie va en su ÚLTIMO punto con dato, a la derecha. Su
+  // altura se reparte entre series para que no se pisen (`spreadNameTops`). Nada de esto se calcula
+  // con `names` apagado: el spec de Vega-Lite queda idéntico al de siempre.
+  const withNames = node.seriesNames === true
+  const lastIdx = series.map((s) => { for (let i = rows.length - 1; i >= 0; i--) if (Number.isFinite(Number(rows[i][s.field]))) return i; return -1 })
+  const nameYs = new Map<number, number>()
+  if (withNames && domain) {
+    const have = series.map((_, si) => si).filter((si) => lastIdx[si] >= 0)
+    const tops = have.map((si) => markTopPx(Number(rows[lastIdx[si]][series[si].field]), domain, SERIES_HEIGHT_PX))
+    const spread = spreadNameTops(tops, SERIES_NAME_GAP_PX, SERIES_HEIGHT_PX)
+    const [lo, hi] = domain
+    have.forEach((si, k) => nameYs.set(si, hi - (spread[k] * (hi - lo)) / SERIES_HEIGHT_PX))
+  }
   rows.forEach((r, i) => {
     // El carril NO sale del índice de la serie: sale de qué punto va por encima de cuál en ESTE mes
     // (`seriesLanes`). Sin dominio no hay posición predecible → se conserva el reparto por índice.
-    const tops = series.map((s) => (domain ? markTopPx(Number(r[s.field]), domain, 240) : 0))
+    const tops = series.map((s) => (domain ? markTopPx(Number(r[s.field]), domain, SERIES_HEIGHT_PX) : 0))
     const lanes = domain ? seriesLanes(tops) : series.map((_, si) => si)
     series.forEach((s, si) => {
       const v = Number(r[s.field])
@@ -975,6 +1025,13 @@ export async function renderSeries(
         [TOOLTIP_FIELD]: `${String(r[x] ?? '')} · ${s.label} — ${Number.isFinite(v) ? vtFormat(v, fmt) : 's/d'}`,
         [LABEL_LANE_FIELD]: lanes[si],
         __show: shown.has(i) ? 1 : 0,
+        ...(withNames
+          ? {
+              [NAME_LAST_FIELD]: lastIdx[si] === i ? 1 : 0,
+              [NAME_FIELD]: seriesNameText(s.label),
+              [NAME_Y_FIELD]: nameYs.get(si) ?? (Number.isFinite(v) ? v : 0),
+            }
+          : {}),
       })
     })
   })
@@ -998,15 +1055,28 @@ export async function renderSeries(
     },
   })
   const labelLayersSeries = Array.from({ length: Math.max(1, series.length) }, (_, k) => pointLabel(k))
+  // Capa del nombre: solo los últimos puntos, a la derecha, con la altura ya repartida.
+  const nameLayer = {
+    transform: [{ filter: `datum.${NAME_LAST_FIELD} === 1` }],
+    mark: { type: 'text', align: 'left', baseline: 'middle', dx: 9, fontSize: LABEL_FONT_PX, fontWeight: 'bold', color: tokens.chartText } as const,
+    encoding: {
+      y: { field: NAME_Y_FIELD, type: 'quantitative' as const, ...(domain ? { scale: { domain, zero: false } } : {}) },
+      text: { field: NAME_FIELD, type: 'nominal' as const },
+      description: { field: TOOLTIP_FIELD, type: 'nominal' as const },
+    },
+  }
+  const namePad = Math.ceil(Math.min(SERIES_NAME_MAX_CHARS, Math.max(0, ...labels.map((l) => seriesNameText(l).length))) * SERIES_NAME_CHAR_PX) + 16
   const spec: TopLevelSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
     background: 'transparent',
     width: SERIES_WIDTH_PX,
-    height: 240,
+    height: SERIES_HEIGHT_PX,
+    ...(withNames ? { padding: { left: 5, top: 5, bottom: 5, right: namePad } } : {}),
     data: { values },
     layer: [
       { mark: { type: 'line', point: true }, encoding: { description: { field: TOOLTIP_FIELD, type: 'nominal' as const } } },
       ...labelLayersSeries,
+      ...(withNames ? [nameLayer] : []),
     ],
     encoding: {
       // `sort: null` → orden de llegada de las filas (el SQL ordena/agrega el eje).
