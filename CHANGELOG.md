@@ -63,7 +63,11 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-### Mira: `series` admite formato LARGO (`series: <campo>` + `value: <campo>`) y rotula cada línea con su nombre (`names: true`)
+## 0.48.0 — 2026-11-06
+
+Un pedido de una instalación beta (A.R.B.O.L., PI-38 §2.5): una línea por versión elegida en un control multi.
+
+### Mira: `series` admite formato LARGO (`series: <campo>` + `value: <campo>`) y rotula cada línea con su nombre (`names: true`) (PR #448)
 
 Un `series` (líneas) declara las series con `metrics: [{field,label}]`, o sea fijas al escribir el spec. Cuando salen del dato —el caso de A.R.B.O.L. PI-38: el usuario elige varias versiones de presupuesto en un control multi y el gráfico acumulado dibuja una línea por versión elegida— no había forma de declararlo. Ahora `series: <campo>` deriva una línea por cada valor distinto de esa columna y `value: <campo>` es la columna del valor; cada fila es `(x, serie, valor)`. Es la contraparte para líneas del `series: <campo>` del `distribution` (0.18.0): el pliegue largo→ancho es la misma función de `compose`, y el render de líneas se reutiliza entero. Orden de las series = orden de aparición (manda el SQL); pares repetidos suman; cota de 8 con el excedente en «(otras)». Catálogo §3, `CAP-225`.
 
@@ -75,7 +79,7 @@ Validación con nombre: `series-series-metrics-collision`, `series-value-missing
 
 **Dos decisiones a mirar:** la celda ausente es un **hueco** (no 0, a diferencia del `distribution` apilado); y el excedente sobre 8 se **suma** en «(otras)», que para versiones de una misma magnitud no es una cifra con sentido — mantener la selección bajo la cota.
 
-**Qué exige:** nada en los specs existentes. Un spec que use `series:` o `names:` necesita la imagen que traiga `CAP-225`/`CAP-226`; con una anterior el spec se rechaza al validar (`series-metrics-missing`), no se degrada en silencio.
+**Qué exige:** nada en los specs existentes. **Pero el orden importa:** un spec que use `series:` o `names:` necesita esta versión. Con una imagen anterior, el spec se rechaza al validar (`series-metrics-missing`) y la línea en formato largo no se dibuja; no se degrada en silencio. La spec de PI-38 de A.R.B.O.L. lo usa: **promueve la imagen antes de publicar la spec.**
 
 **Sin medir:** el render en un navegador real; la suite mide el SVG servido y su estructura.
 

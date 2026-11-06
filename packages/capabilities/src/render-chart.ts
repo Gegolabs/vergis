@@ -1056,6 +1056,9 @@ export async function renderSeries(
   })
   const labelLayersSeries = Array.from({ length: Math.max(1, series.length) }, (_, k) => pointLabel(k))
   // Capa del nombre: solo los últimos puntos, a la derecha, con la altura ya repartida.
+  // El nombre sale en el COLOR DE SU SERIE: la codificación `color` del nivel superior (por `serie`)
+  // se hereda y prevalece sobre `mark.color`, que aquí no tiene efecto (medido en el SVG: el `<text>`
+  // lleva `var(--chart-s2,…)`, no `chartText`). Se deja la propiedad para no cambiar el spec publicado.
   const nameLayer = {
     transform: [{ filter: `datum.${NAME_LAST_FIELD} === 1` }],
     mark: { type: 'text', align: 'left', baseline: 'middle', dx: 9, fontSize: LABEL_FONT_PX, fontWeight: 'bold', color: tokens.chartText } as const,
