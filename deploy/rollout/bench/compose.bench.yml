@@ -36,7 +36,7 @@ services:
 
   # El borde que conmuta y espera — el SUJETO de la medición.
   caddy:
-    image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    image: caddy:2@sha256:ce773ec7a742ce15ee6bf2bb5f65882b9e2a4487b10733e6f1484f86e6b5d8bc
     container_name: benchv14-caddy
     depends_on:
       clickhouse: { condition: service_healthy }
@@ -57,7 +57,7 @@ services:
 
   # EL INSTRUMENTO. Se levanta cuando el banco ya está estable y sobrevive al acto entero.
   poller:
-    image: node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+    image: node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
     container_name: benchv14-poller
     profiles: ["medicion"]
     depends_on: [caddy]
@@ -77,7 +77,7 @@ services:
 
   # El loop de mutaciones (V13 de work/210 §10, 1/s) — hermano del poller, tampoco lo recrea el acto.
   mutador:
-    image: node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+    image: node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
     container_name: benchv14-mutador
     profiles: ["medicion"]
     depends_on: [caddy]
