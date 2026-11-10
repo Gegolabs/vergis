@@ -16,7 +16,7 @@ export function resolveActiveView(
   spec: MiraSpec,
   pageParam: string | undefined,
   ctxValues: CtxValues,
-): { activePiece: Record<string, unknown>; pagesNav?: PagesNav; datasetNames: string[]; pageUnknown?: boolean } {
+): { activePiece: Record<string, unknown>; pagesNav?: PagesNav; datasetNames: string[]; pageUnknown?: boolean; missingContext?: string[] } {
   const isMulti = Array.isArray(spec.pages) && spec.pages.length > 0
   if (!isMulti) {
     return { activePiece: spec.piece as Record<string, unknown>, datasetNames: Object.keys(spec.data) }
@@ -34,7 +34,7 @@ export function resolveActiveView(
   if (pageUnknown) pagesNav.unknown = pageParam
   const missing = contextKeys(active).filter((c) => !ctxValues[c])
   if (missing.length > 0) {
-    return { activePiece: contextPrompt(active, missing), pagesNav, datasetNames: [], pageUnknown }
+    return { activePiece: contextPrompt(active), pagesNav, datasetNames: [], pageUnknown, missingContext: missing }
   }
   return { activePiece: active.piece, pagesNav, datasetNames: uniqueDatasets(active.piece), pageUnknown }
 }
@@ -91,14 +91,20 @@ export function watermarkDatasetOf(spec: MiraSpec): string | undefined {
   return wf ? wf.split('.')[0] || undefined : undefined
 }
 
-/** Pieza-guía cuando se entra a una vista de detalle sin el contexto requerido (no por drill). */
-function contextPrompt(page: MiraPage, missing: string[]): Record<string, unknown> {
+/**
+ * Pieza-guía cuando se entra a una vista de detalle sin el contexto requerido (no por drill).
+ *
+ * #458 · Le habla al usuario, no al operador: los nombres de las claves que faltan son jerga técnica
+ * («falta: empresa_codigo, cliente») y no le dicen qué hacer. Esos nombres van al log del operador
+ * (`mira-context-missing`, desde `missingContext`), que es quien puede usarlos.
+ */
+function contextPrompt(page: MiraPage): Record<string, unknown> {
   return {
     layout: 'rows',
     elements: [
       {
         markdown_block: {
-          content: `### ${page.title}\n\nSelecciona un registro en otra vista para ver su detalle (falta: ${missing.join(', ')}).`,
+          content: `### ${page.title}\n\nSelecciona un registro en otra vista para ver su detalle.`,
         },
       },
     ],
