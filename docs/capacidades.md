@@ -139,6 +139,7 @@ una versión ya cortada.
 | `CAP-54` | Contexto exigido por una página | `pages[].context[]` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 | `CAP-55` | Drill-through de una fila a otra vista, pasando claves de contexto | `drills[]` = `{ to, by[], label }` (clave simple o compuesta) | 0.2.0 | [CHANGELOG 0.2.0](../CHANGELOG.md) |
 | `CAP-223` | **Contexto del drill visible, regreso con su ruta y estado de la tabla al volver**: sellos de solo lectura por clave de `context` (nombre resuelto del dato de la vista destino, nunca de la URL), migas `← vista de origen` con su ctx y filtros (cadena de hasta 3), y orden, facetas, búsqueda, agrupación y scroll restituidos al volver por atrás o por miga | `pages[].context[]` como objeto `{ key, label?, display? }` (o string); query `from` y `vret` (las pone la plataforma); evento `mira-context-display-missing` | 0.46.0 (#422) | [superficie-de-estado.md §3·bis](superficie-de-estado.md) |
+| `CAP-228` | **Cabecera de navegación en toda vista**: botones «← Volver» (a la vista de origen del drill; sin origen no aparece), «Inicio» (la primera vista del PI) y «Catálogo» (el listado de PI, que dejó la bandeja); con dos o más niveles de drill, la ruta de migas debajo. Los filtros de bandeja conservan el registro del drill y su regreso | plataforma (`<nav class="vnav">`), sin declaración en el spec | sin publicar (#458, #459, #460) | [CHANGELOG · Sin publicar](../CHANGELOG.md) |
 | `CAP-56` | PI de una sola vista | `piece` (excluyente con `pages`) | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 
 ## Bandeja
@@ -151,6 +152,7 @@ una versión ya cortada.
 | `CAP-60` | Selector de tabla objetivo cuando hay ≥2 tablas interactivas | selector del kit | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
 | `CAP-61` | Orden, búsqueda global y por columna, y agrupación en la tabla | runtime de tabla (`vtApply`) | ≤0.9 | [table-runtime.ts](../packages/capabilities/src/table-runtime.ts) |
 | `CAP-62` | Contador de filas al pie de cada tabla, imprimible | pie discreto de la tabla | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
+| `CAP-229` | **La caja de la tabla mide hasta el borde inferior de la pantalla**, descontando lo que tiene encima y su pie: la barra horizontal y las últimas filas quedan a la vista al cargar | runtime de tabla (`vtFitHeight`), sin declaración en el spec | sin publicar (#462) | [CHANGELOG · Sin publicar](../CHANGELOG.md) |
 | `CAP-63` | Selector de **Apariencia** (paleta del theme), persistido por reporte | grupo «Apariencia» de la bandeja + `localStorage` | 0.10.0 | [catalogo-elementos.md §4](catalogo-elementos.md) |
 | `CAP-64` | Color de magnitud en tablas, encendido por el lector y apagado por defecto | interruptor de la bandeja; `--mag` / `--mag-h` / `--mag-s` del theme | 0.18.0 (#210) | [catalogo-elementos.md §4·bis](catalogo-elementos.md) |
 | `CAP-65` | Descargar CSV de la **vista actual** (separador `;`, BOM UTF-8, anti formula-injection) | botón «Descargar» de la bandeja | 0.7.0 (#61) | [CHANGELOG 0.7.0 · 0.14.0](../CHANGELOG.md) |
