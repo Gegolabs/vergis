@@ -49,6 +49,6 @@
   },
   "overrides": {
     "fast-uri": "^3.1.7",
-    "@azure/msal-node": "^7.1.0"
+    "@azure/msal-node": "7.1.0"
   }
 }
