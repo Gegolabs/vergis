@@ -150,14 +150,16 @@ describe('render · la opción viaja solo cuando se declara', () => {
  * el CSS y el `<nav class="vnav">` de la cabecera y la entrada `.tray-catalog` retirada. Papel, sin cromo,
  * conserva su hash. Y otra vez por #461: el diff contra el paso anterior es solo el rótulo, el aria
  * de la bandeja y un comentario del runtime de tabla que viaja en el documento («Inspector» → «Bandeja»).
+ * Y por #462: el runtime de las tablas interactivas trae `vtFitHeight` y su cableado (el alto de la caja);
+ * la estática y el papel, que no llevan runtime, conservan su hash.
  */
 describe('golden · un spec sin la opción se ve igual que en main, byte a byte', () => {
   const GOLDEN: [string, Partial<ResolvedNode>, { print?: boolean }, string][] = [
-    ['interactiva', {}, {}, '72b20ee2698437c4143519780e02d2aff3006bf659056c39fb237174925122dc'],
-    ['interactiva · tones', { columnsSpec: cols(true) }, {}, 'a8cabc7d0ce1ba9b750222d8ee14c9f26ff9eeff2e8a602a975131c7ad4484c9'],
+    ['interactiva', {}, {}, '274af2a27b161011f1f633087b267cb35ac675bb3d796756b59524d098fbffe5'],
+    ['interactiva · tones', { columnsSpec: cols(true) }, {}, '7eb254ea0f3e4c6c9039c46de719bed3b4a8154bfceba82065a7e7131c6a98ef'],
     ['estática', { interactive: false }, {}, 'c4b7a4a4684d75c39f83c07407b6ccedf7aa853c059d2e7b9f4ad99832aba25b'],
     ['papel', {}, { print: true }, 'ce5992eae9ae066350571f7c80e3aacc50d3afa17c349172037d76fbf0595e35'],
-    ['interactiva · drill', { drills: [{ to: 'det', by: ['empresa'] }] }, {}, 'e26afbce088cd5f31c893e09dc6ca399f30919b7c9adab7eed31c59eaa071485'],
+    ['interactiva · drill', { drills: [{ to: 'det', by: ['empresa'] }] }, {}, '71ee6187eb40a7dd69ad5269724ddfb3e6fbb2c21092a062698ae90573f3cd29'],
   ]
   it.each(GOLDEN)('%s', async (_n, over, opts, esperado) => {
     expect(sha(await html(tabla(over), opts))).toBe(esperado)
