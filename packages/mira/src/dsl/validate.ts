@@ -1096,6 +1096,53 @@ function validateTones(col: unknown, path: string): void {
   }
 }
 
+/** #451 · Vocabulario CERRADO de cómo nacen los grupos al agrupar una tabla. */
+export const TABLE_GROUP_STARTS: readonly string[] = ['collapsed', 'expanded']
+
+/**
+ * #451 · `table.group: { start: collapsed | expanded }` — cómo nacen los grupos cuando el lector agrupa
+ * desde la bandeja. Un valor desconocido o una llave que no existe no pueden pasar en silencio (el autor
+ * creería haber pedido algo que el render ignora), y tampoco `start: collapsed` en una tabla con
+ * `interactive: false`: la tabla estática no agrupa, así que la opción no tendría efecto.
+ */
+function validateTableGroup(table: unknown, path: string): void {
+  const t = table as Record<string, unknown>
+  const group = t['group']
+  if (group == null) return
+  if (typeof group !== 'object' || Array.isArray(group) || Object.keys(group).some((k) => k !== 'start')) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'table-group-invalid',
+      path: `${path}.group`,
+      value: group as never,
+      message: `La tabla declara 'group' con una forma que no se conoce: se espera un mapa con 'start'.`,
+      remediation: `Escribir 'group: { start: collapsed }' (o 'expanded', el defecto). No hay otras llaves en 'group'.`,
+    })
+  }
+  const start = (group as Record<string, unknown>)['start']
+  if (start == null) return
+  if (typeof start !== 'string' || !TABLE_GROUP_STARTS.includes(start)) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'table-group-start-unknown',
+      path: `${path}.group.start`,
+      value: start as never,
+      message: `La tabla declara 'group.start: ${String(start)}', que no es una forma de partir de los grupos.`,
+      remediation: `Usar uno de: ${TABLE_GROUP_STARTS.join(', ')}.`,
+    })
+  }
+  if (start === 'collapsed' && t['interactive'] === false) {
+    throw new VergisError({
+      error: 'mira/spec-invalid',
+      code: 'table-group-static',
+      path: `${path}.group.start`,
+      value: start as never,
+      message: `La tabla declara 'group.start: collapsed' e 'interactive: false': la tabla estática no agrupa, así que la opción no tendría efecto.`,
+      remediation: `Quitar 'group' o quitar 'interactive: false'.`,
+    })
+  }
+}
+
 /** Vocabulario CERRADO del agregado al pie de una columna de tabla (#314). `true` es alias de `sum`
  *  (compose lo normaliza); todo lo demás se rechaza acá. */
 const TABLE_TOTAL_OPS = new Set(['sum', 'avg', 'count'])
@@ -1109,6 +1156,7 @@ const TABLE_TOTAL_OPS = new Set(['sum', 'avg', 'count'])
  */
 function validateTableColumns(table: unknown, path: string): void {
   if (table == null || typeof table !== 'object') return
+  validateTableGroup(table, path)
   const columns = (table as Record<string, unknown>)['columns']
   if (!Array.isArray(columns)) return
   for (const [i, col] of columns.entries()) {

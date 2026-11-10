@@ -42,6 +42,9 @@ export type { NotasRenderContext, TablaAncla } from './notas-render'
 export {
   TABLE_RUNTIME_SOURCE,
   TABLE_RUNTIME_SOURCE_TONES,
+  TABLE_RUNTIME_SOURCE_GROUPS_COLLAPSED,
+  tableRuntimeSource,
+  vtGroupCollapsed,
   vtNorm,
   vtIsNumericCol,
   vtIsDateCol,

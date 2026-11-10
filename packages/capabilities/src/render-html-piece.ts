@@ -2,7 +2,7 @@ import { type Capability } from '@vergis/botler'
 import { VERGIS_VERSION_LABEL } from './version'
 import { escapeHtml, renderMarkdown } from './markdown'
 import { getTheme, resolveChartTokens, chartVarMap, type ThemeTokens } from './themes'
-import { TABLE_RUNTIME_SOURCE, TABLE_RUNTIME_SOURCE_TONES, vtNegCls } from './table-runtime'
+import { tableRuntimeSource, vtNegCls } from './table-runtime'
 import { TABLE_INTERACTIVE_CSS, TRAY_CSS, MAGNITUDE_CSS, TABLE_TOTALS_CSS, TABLE_TONES_CSS } from './piece-css'
 import { renderTable } from './render-table'
 import { renderDistribution, renderSeries } from './render-chart'
@@ -123,8 +123,9 @@ export const renderHtmlPiece: Capability = {
     if (print) css += PRINT_TRUNC_CSS
     if (css) body = `<style>${css}</style>` + body
     // El runtime de la tabla (orden/filtro/búsqueda/agrupar/drill) al final: se autoarranca por `.vtable`.
-    // #441 · con alguna columna `tones` va la variante que los conoce; sin tonos, los bytes de siempre.
-    if (hasTable && !print) tail += `<script>${signals.tableTones ? TABLE_RUNTIME_SOURCE_TONES : TABLE_RUNTIME_SOURCE}</script>`
+    // #441 · con alguna columna `tones` va la variante que los conoce; #451 · ídem con alguna tabla que
+    // parte con los grupos colapsados. Sin ninguna de las dos, los bytes de siempre.
+    if (hasTable && !print) tail += `<script>${tableRuntimeSource({ tones: signals.tableTones, groupsCollapsed: signals.tableGroupsCollapsed })}</script>`
     // #209 · El buscador de los filtros de bandeja. Es local por construcción (el catálogo ya viaja
     // completo en el HTML) y no depende del runtime de tabla: un dashboard sin tablas también tiene
     // filtros. En papel no va: ahí no hay quién escriba.

@@ -160,6 +160,8 @@ export interface ResolvedNode {
    * (p.ej. "ver el socio" y "ver la empresa"); con uno solo, además se habilita el doble-clic de fila.
    */
   drills?: Drill[]
+  /** #451 · tabla: los grupos nacen colapsados al agrupar (ESPEJO de piece-types). */
+  groupStart?: 'collapsed'
   /**
    * Llave de negocio declarada por el dataset de la tabla (`data.<ds>.anchor`, D16). Es lo que
    * permite clavar un comentario en un REGISTRO. Mira la copia del spec tal cual — es DESCRIPTIVA,
@@ -475,6 +477,7 @@ export function composePiece(
       title?: string
       interactive?: boolean
       drillthrough?: unknown
+      group?: { start?: string }
     }
     const dataset = stripData(String(t.data ?? '')).split('.')[0]
     let rows = [...(results[dataset]?.rows ?? [])]
@@ -500,6 +503,8 @@ export function composePiece(
       }),
       title: t.title,
       interactive: t.interactive,
+      // #451 · solo `collapsed` viaja: `expanded` es el defecto y una tabla sin `group` no cambia.
+      ...(t.group?.start === 'collapsed' ? { groupStart: 'collapsed' as const } : {}),
       drills: drills.length ? drills : undefined,
       // La llave de negocio del dataset viaja con la tabla (fail-closed: sin `anchor` declarado, no
       // hay ancla y el gesto de comentar no se ofrece). `comentarios` nace vacío: quien lee el store
