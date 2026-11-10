@@ -28,7 +28,7 @@ import type {
 export const renderHtmlPiece: Capability = {
   name: 'render-html-piece',
   async execute(params: unknown): Promise<unknown> {
-    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry, print, pdfUrl, contextSeals, back, drillFrom, stateKey } = (params ?? {}) as RenderParams
+    const { piece, title, theme: themeName, palette, meta, interactive, pages, controls, carryCtx, notas, filters, fltCarry, print, pdfUrl, contextSeals, back, drillFrom, stateKey, fltNav } = (params ?? {}) as RenderParams
     if (!piece) throw new Error('render-html-piece: falta el árbol de pieza (piece)')
     const theme = getTheme(themeName)
     // PAPEL (#65 · D6): en modo print manda la paleta declarada por el theme, ANTES de resolver los
@@ -43,6 +43,9 @@ export const renderHtmlPiece: Capability = {
     const carry = carryCtx ?? {}
     const signals: RenderSignals = { interactiveTable: false, drillActions: false, magnitude: false, tableTotals: false }
     const flt = fltCarry ?? {}
+    // #458 · Lo que conservan los enlaces de los filtros de bandeja: el ctx completo de la vista y su
+    // `from` (sin `fltNav`, como un llamador que no es Mira: el carry de cabecera).
+    const fnav: FltNav = { ctx: fltNav?.ctx ?? carry, from: fltNav?.from }
     // El sufijo que llevan los drills: los filtros de bandeja vigentes y (#422) la miga de ESTA vista.
     const drillQ = fltQuery(flt) + (drillFrom ? `&from=${encodeURIComponent(drillFrom)}` : '')
     const opts: RenderOpts = { tokens: chartTokens, chartVars, interactive: !!interactive, print: !!print, carry, signals, fltQ: drillQ, stateKey }
@@ -55,7 +58,7 @@ export const renderHtmlPiece: Capability = {
     // …y la MISMA franja hospeda los chips VIVOS de las facetas client-side (#114): una sola
     // superficie de estado de filtros por documento, sin importar quién los aplique.
     const hasFacets = !!(interactive && interactive.filters.length > 0)
-    const chips = renderFilterChips(filters ?? [], pages?.active, carry, flt, hasFacets)
+    const chips = renderFilterChips(filters ?? [], pages?.active, fnav, flt, hasFacets)
     const nav = pages ? renderPagesNav(pages, carry, flt) : ''
     let body = renderBackNav(back ?? [], !!print) + contextStrip + chips + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
@@ -68,7 +71,7 @@ export const renderHtmlPiece: Capability = {
     // El tab «Controles» reúne los filtros SERVER-SIDE (#82, re-render por navegación) y las facetas
     // client-side de `interactions.filters` — en ese orden: los primeros re-anclan charts y KPIs de
     // una vez; las segundas son el camino barato para tablas/KPIs sin gráficos.
-    const trayFilters = renderTrayFilters(filters ?? [], pages?.active, carry, flt)
+    const trayFilters = renderTrayFilters(filters ?? [], pages?.active, fnav, flt)
     // Grupo «Descargar» a nivel de DOCUMENTO (#65 · D9): el PDF congela el documento entero con la
     // vista y los filtros SERVER-SIDE vigentes. Server-rendered y por-documento — distinto del kit
     // «Descargar» por-TABLA que el runtime inyecta client-side (ese exporta UNA tabla, en CSV).
@@ -406,11 +409,24 @@ const TRAY_FILTERS_CSS = `
 @media print{.faceta-options .vflt-opt{display:none}}
 `
 
-/** `?page=…&ctx…&flt…` para un href de filtro (misma página, contexto intacto, `flt` recompuesto). */
-function fltHref(activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>, omit?: { id: string; value?: string }, add?: { id: string; value: string }): string {
+/** #458 · Lo que un enlace de filtro conserva de la vista: su ctx completo y su `from` (el regreso). */
+interface FltNav {
+  ctx: CarryCtx
+  from?: string
+}
+
+/**
+ * `?page=…&ctx…&flt…&from=…` para un href de filtro: misma página, contexto intacto, `flt` recompuesto.
+ *
+ * #458 · «Contexto intacto» es el ctx COMPLETO de la vista, no solo el carry de cabecera: en una vista
+ * alcanzada por drill, las claves del drill y el `from` son lo que la sostiene en el registro y le da
+ * su regreso. Perderlos al filtrar dejaba la vista en la pieza-guía y sin «Volver».
+ */
+function fltHref(activePage: string | undefined, nav: FltNav, flt: Record<string, string[]>, omit?: { id: string; value?: string }, add?: { id: string; value: string }): string {
   const base = activePage ? `?page=${encodeURIComponent(activePage)}` : '?'
-  let q = ctxQuery(carry) + fltQuery(flt, omit)
+  let q = ctxQuery(nav.ctx) + fltQuery(flt, omit)
   if (add) q += `&flt.${encodeURIComponent(add.id)}=${encodeURIComponent(add.value)}`
+  if (nav.from) q += `&from=${encodeURIComponent(nav.from)}`
   return base + q
 }
 
@@ -424,7 +440,7 @@ function fltHref(activePage: string | undefined, carry: CarryCtx, flt: Record<st
  * `update()` mantiene: `#vergis-flt-live` (chips de pantalla) y `#vergis-flt-live-print` (resumen).
  * Sin filtros activos NI facetas → nada (byte a byte como antes: ausencia = documento completo).
  */
-function renderFilterChips(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>, hasFacets = false): string {
+function renderFilterChips(filters: FilterResolved[], activePage: string | undefined, carry: FltNav, flt: Record<string, string[]>, hasFacets = false): string {
   const active = filters.filter((f) => f.selected.length > 0)
   if (active.length === 0 && !hasFacets) return ''
   // Slots que el script client rellena; solo existen si hay facetas que puedan poblarlos. El `id` de
@@ -488,7 +504,7 @@ function filterLabelMap(f: FilterResolved): Map<string, string> {
  * checkbox con JS: el mecanismo de #82 es navegación + re-render server-side (así se re-anclan los
  * charts, que son SVG horneado), no recompute client-side. Las opciones ya vienen cascadeadas.
  */
-function renderTrayFilters(filters: FilterResolved[], activePage: string | undefined, carry: CarryCtx, flt: Record<string, string[]>): string {
+function renderTrayFilters(filters: FilterResolved[], activePage: string | undefined, carry: FltNav, flt: Record<string, string[]>): string {
   return filters
     .map((f) => {
       const grande = f.options.length > FILTER_VISIBLE_MAX

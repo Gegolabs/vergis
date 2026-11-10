@@ -112,6 +112,9 @@ export interface RenderParams {
   drillFrom?: string
   /** #422 · Llave de la vista para el estado de sus tablas (sin la cadena de regreso). */
   stateKey?: string
+  /** #458 · Lo que conservan los enlaces de los filtros de bandeja (aplicar, quitar, limpiar): el ctx
+   *  COMPLETO de la vista —carry de cabecera + claves del drill— y su `from`. Ausente ⇒ solo el carry. */
+  fltNav?: { ctx: CarryCtx; from?: string }
 }
 
 export interface TableColumn {

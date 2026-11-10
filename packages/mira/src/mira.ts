@@ -112,6 +112,8 @@ export class MiraBotlet implements Botlet {
     const isMulti = pagesNav != null
     // Enlace a una página inexistente: se sirvió la 1ª en su lugar. Se audita en vez de fallar en silencio.
     if (view.pageUnknown) host.log({ type: 'mira-page-unknown', botletId: this.id, requested: pageParam, served: pagesNav?.active })
+    // #458 · Las claves que faltan para la vista de detalle se nombran al operador, no en la cara.
+    if (view.missingContext?.length) host.log({ type: 'mira-context-missing', botletId: this.id, page: pagesNav?.active, keys: view.missingContext })
 
     // 3 · Recuperación de datos (vía Botler.capability_call, nunca acceso directo)
     const results: Record<string, DatasetResult> = {}
@@ -196,6 +198,10 @@ export class MiraBotlet implements Botlet {
       drillFrom = originQuery(activePage.id, ctxOrigen, fltCarry, back.length ? fromParam : undefined)
       stateKey = originQuery(activePage.id, ctxOrigen, fltCarry, undefined)
     }
+    // #458 · Lo que un filtro de bandeja tiene que conservar al aplicarse o quitarse: TODO el ctx de la
+    // vista (el carry de cabecera con sus defaults resueltos + las claves del drill que trajo la URL) y
+    // su `from`. Solo con el carry, las claves del drill se perdían y la vista caía en la pieza-guía.
+    const fltNav = { ctx: { ...ctxValues, ...carryCtx }, from: back.length ? fromParam : undefined }
 
     // 5·bis · CAPA DE NOTAS (presentación): si el llamador provee el resolver, cada tabla anclada
     // recibe el conteo de lo comentado sobre las filas que ya se van a servir — para el marcador.
@@ -272,7 +278,7 @@ export class MiraBotlet implements Botlet {
         host.log({ type: 'mira-render-skip', botletId: this.id, format: r.format, reason: 'no soportado en v0.1' })
         continue
       }
-      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasRender, asOfParam, print, pdfUrl, { contextSeals, back, drillFrom, stateKey })
+      html = await this.renderHtml(resolved, spec, freshness, interactive, pagesNav, controlsResolved, carryCtx, filtersResolved, fltCarry, r.theme, host, identity, notasRender, asOfParam, print, pdfUrl, { contextSeals, back, drillFrom, stateKey, fltNav })
       host.log({ type: 'mira-render', botletId: this.id, format: 'html' })
     }
 
@@ -518,7 +524,7 @@ export class MiraBotlet implements Botlet {
     asOfParam?: PiAsOfParam,
     print?: boolean,
     pdfUrl?: string,
-    drill?: { contextSeals: unknown[]; back: { title: string; query: string }[]; drillFrom?: string; stateKey?: string },
+    drill?: { contextSeals: unknown[]; back: { title: string; query: string }[]; drillFrom?: string; stateKey?: string; fltNav?: { ctx: CtxValues; from?: string } },
   ): Promise<string> {
     // Theme/paleta por TIPO de PI (default de plataforma; el theme del spec, si existe, gana).
     const { theme, palette } = resolveTheme(resolved, themeOverride)
@@ -549,6 +555,7 @@ export class MiraBotlet implements Botlet {
         back: drill?.back,
         drillFrom: drill?.drillFrom,
         stateKey: drill?.stateKey,
+        fltNav: drill?.fltNav,
       },
       identity,
     ))
