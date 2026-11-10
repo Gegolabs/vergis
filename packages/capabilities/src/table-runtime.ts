@@ -288,6 +288,33 @@ export function vtStateKey(path: string, viewKey: string | undefined, search: st
   return 'vt-state:' + path + '|' + (viewKey || String(search || '').replace(/^\?/, '')) + '#' + idx
 }
 
+/** #462 · Alto mínimo de la caja de una tabla: por debajo, una caja «que cabe» ya no deja leer filas. */
+export const VT_FIT_MIN = 240
+/** #462 · Aire entre el fondo de la caja y el borde inferior de la ventana (la barra no queda rasante). */
+export const VT_FIT_GAP = 16
+
+/**
+ * #462 · Alto máximo de la caja de una tabla (`.vt-scroll`), en px, para que su fondo —la barra de
+ * desplazamiento horizontal y las últimas filas— quede DENTRO de la pantalla.
+ *
+ * Antes era un `70vh` fijo, ciego a lo que la tabla tiene encima (cabecera, navegación, controles,
+ * chips, aviso de frescura): con todo eso, el fondo de la caja quedaba bajo el pliegue y en una tabla
+ * ancha la barra horizontal no se veía. Ahora:
+ *
+ * - Si desde donde empieza la caja hasta el borde inferior queda al menos `min`, la caja mide eso: su
+ *   fondo se ve al cargar, sin desplazar la página.
+ * - Si no (la tabla vive más abajo, tras gráficos), la caja mide lo que deja la banda de contexto
+ *   pegajosa (`stickyH`): al llegar a la tabla, entera en pantalla con su barra horizontal.
+ *
+ * `topDoc` es el borde superior de la caja medido en el DOCUMENTO (no en la ventana), para que el
+ * resultado no dependa de cuánto se haya desplazado la página. AUTOCONTENIDA (PURE_FNS).
+ */
+export function vtFitHeight(viewH: number, topDoc: number, stickyH: number, min: number, gap: number): number {
+  const below = Math.floor(viewH - topDoc - gap)
+  if (below >= min) return below
+  return Math.max(min, Math.floor(viewH - stickyH - gap))
+}
+
 /**
  * #422 · ¿Se restituye el estado guardado? Solo al VOLVER: por atrás/adelante del navegador
  * (`PerformanceNavigationTiming.type === 'back_forward'`) o por una miga de regreso (`vret=1` en la
@@ -985,6 +1012,7 @@ const PURE_FNS = [
   vtNegCls,
   vtStateKey,
   vtShouldRestore,
+  vtFitHeight,
   vtFormat,
   vtApply,
   vtFacetOptions,
@@ -1119,6 +1147,21 @@ function vtBootstrap(root){
   function scrollBox(){ return root.querySelector('.vt-scroll'); }
   function saveState(){ try{ var sb=scrollBox(); sessionStorage.setItem(stKey, JSON.stringify({ s: snapshot(), y: window.scrollY, t: sb ? sb.scrollTop : 0 })); }catch(e){} }
   window.addEventListener('pagehide', saveState);
+  /* #462 · la caja de la tabla mide hasta el borde inferior de la pantalla, descontando lo que tiene
+     encima (vtFitHeight). Se recalcula al cambiar el tamaño de la ventana y al abrir o cerrar la
+     bandeja, que encoge el contenido y cambia el alto de lo que va arriba. */
+  function fitBox(){
+    var sb=scrollBox(); if(!sb) return;
+    var bar=document.querySelector('.vctxbar');
+    var sh=(bar && window.getComputedStyle(bar).position==='sticky') ? bar.getBoundingClientRect().height : 0;
+    /* lo que la tabla trae DEBAJO de la caja (el pie con el conteo de filas, el borde de la tarjeta)
+       también tiene que caber: se suma al aire del borde inferior. */
+    var r=sb.getBoundingClientRect(), tail=Math.max(0, root.getBoundingClientRect().bottom - r.bottom);
+    sb.style.maxHeight = vtFitHeight(window.innerHeight, r.top + window.scrollY, sh, ${VT_FIT_MIN}, ${VT_FIT_GAP} + tail) + 'px';
+  }
+  window.addEventListener('resize', fitBox);
+  var trayTg=document.getElementById('vergis-tray-toggle');
+  if(trayTg) trayTg.addEventListener('change', function(){ setTimeout(fitBox, 260); });
   var nactions = drills.length ? 1 : 0;
   function renderCols(){ return cols; }
   var groupFields = cols.filter(function(c){ return c.groupBy===false?false:(c.groupBy===true?true:vtIsCategorical(rows, c.field, c.filter)); });
@@ -1512,6 +1555,7 @@ function vtBootstrap(root){
       render();
     }
   }
+  fitBox();
   /* La fila visible arriba: la tabla hace scroll dentro de .vt-scroll; la página, en la ventana. El
      navegador no restituye solo (scrollRestoration manual mientras se restituye). */
   if(restoreY != null || restoreT != null){
