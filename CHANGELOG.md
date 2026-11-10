@@ -63,6 +63,8 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+## 0.50.0 — 2026-11-10
+
 Lo que pidió la certificación interna de los PI de la instancia GH (10-11-2026): filtrar en un detalle sin perder el registro, volver y llegar al inicio sin buscar el camino, el catálogo fuera de la bandeja, el panel con su nombre y la tabla que deja ver su final.
 
 ### Mira: el filtro de bandeja en una vista alcanzada por drill conserva el registro y su regreso (#458)
@@ -79,9 +81,11 @@ El rótulo del panel, la uña que lo abre y su nombre para lectores de pantalla 
 
 ### Render: la caja de la tabla mide hasta el borde inferior de la pantalla (#462)
 
-La caja de una tabla interactiva tenía un alto fijo (`70vh`), así que con cabecera, controles, chips y aviso de frescura encima, la barra horizontal de una tabla ancha y las últimas filas quedaban bajo el pliegue. Ahora el runtime la mide desde donde empieza hasta el borde inferior, descontando su pie, y la recalcula al cambiar el tamaño de la ventana y al abrir o cerrar la bandeja. Si la tabla empieza muy abajo, la caja mide lo que deja la banda de contexto, para caber entera al llegar a ella. Sin JavaScript rige el `70vh` de siempre. Medido en Chromium headless con 19 columnas: con 0.49.0 el fondo de la caja queda fuera en 1280×800, 1366×768 y 1920×1080; con este cambio, la tabla entera queda dentro. `CAP-229`.
+La caja de una tabla interactiva tenía un alto fijo (`70vh`), así que con cabecera, controles, chips y aviso de frescura encima, la barra horizontal de una tabla ancha y las últimas filas quedaban bajo el pliegue. Ahora el runtime la mide desde donde empieza hasta el borde inferior, descontando su pie, y la recalcula al cambiar el tamaño de la ventana y al abrir o cerrar la bandeja. Si la tabla empieza muy abajo, la caja mide lo que deja la banda de contexto, para caber entera al llegar a ella. Sin JavaScript rige el `70vh` de siempre. Medido en Chromium headless con un documento de 19 columnas y 300 filas, con cabecera, banda de contexto, chips, pestañas y aviso de frescura encima: con este cambio, la caja y su tarjeta quedan dentro en 1280×800, 1366×768, 1920×1080 y 1280×600 (lo repitió el juez con un documento propio). Cuánto quedaba fuera con 0.49.0 depende de cuánto haya encima de la tabla: con ese documento, el fondo de la caja quedaba fuera en las tres primeras; con uno con menos cromo, la caja cabía y quedaba fuera solo el pie de la tarjeta. La medición no vive en el repo todavía (#465). **Límite conocido:** si lo de encima cambia de alto sin recargar (por ejemplo, al buscar), la caja no se recalcula y el pie de la tarjeta puede quedar bajo el pliegue; la barra horizontal sigue visible (#467). `CAP-229`.
 
 **Qué exige:** nada. Ningún spec cambia, no hay env nuevo ni migración. **Lo que cambia para quien mira:** la cabecera de botones aparece en todo PI y el catálogo ya no está en la bandeja.
+
+**Límite conocido de #458 (#464):** el arreglo cubre los enlaces del filtro de bandeja. En una vista alcanzada por drill, **cambiar un control de cabecera** (por ejemplo, el Período) y **«Descargar PDF»** siguen armando su URL solo con el alcance de cabecera: pierden las claves del drill y el `from`, y la vista (o el papel) sale con la pieza-guía. Los midió el juez de #463 y son iguales en 0.49.0; no son regresiones de esta versión.
 
 ## 0.49.0 — 2026-11-10
 
