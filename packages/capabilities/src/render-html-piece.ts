@@ -60,7 +60,8 @@ export const renderHtmlPiece: Capability = {
     const hasFacets = !!(interactive && interactive.filters.length > 0)
     const chips = renderFilterChips(filters ?? [], pages?.active, fnav, flt, hasFacets)
     const nav = pages ? renderPagesNav(pages, carry, flt) : ''
-    let body = renderBackNav(back ?? [], !!print) + contextStrip + chips + nav + (await renderNode(piece, opts))
+    const headerNav = renderHeaderNav(back ?? [], pages, carry, flt, !!print)
+    let body = headerNav + contextStrip + chips + nav + (await renderNode(piece, opts))
     const hasTable = signals.interactiveTable
     // BANDEJA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
     // los tabs Controles·Vistas·Config y el pie de versión. El shell NO se gatea por maquinaria: una
@@ -106,7 +107,8 @@ export const renderHtmlPiece: Capability = {
     if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
     if (pages?.unknown) css += PAGES_AVISO_CSS
-    if (contextStrip || (back && back.length && !print)) css += CONTEXT_BAR_CSS
+    if (contextStrip) css += CONTEXT_BAR_CSS
+    if (headerNav) css += HEADER_NAV_CSS
     if (chips) css += FILTER_CHIPS_CSS
     // #255 · las facetas client-side usan las MISMAS clases del patrón de #209 ⇒ su hoja y su
     // buscador se inyectan también cuando la bandeja solo trae facetas (antes se gateaban por
@@ -245,11 +247,7 @@ const CONTEXT_BAR_CSS = `
 .vctxbar .vctx-pop{position:absolute;z-index:20;top:calc(100% + 4px);left:0;min-width:150px;display:flex;flex-direction:column;gap:4px;padding:8px;background:var(--panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.18)}
 .vctxbar .vctx-pop label{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;white-space:nowrap;cursor:pointer;color:var(--fg,#1f2937)}
 .vctx-print{display:none}
-.vback{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 10px;font-size:12px}
-.vback a{color:var(--fg-dim,#64748b);text-decoration:none}
-.vback a:hover{color:var(--fg,#1f2937);text-decoration:underline}
-.vback .vback-arrow,.vback .vback-sep{color:var(--fg-dim,#64748b)}
-@media print{.vback{display:none}.vctxbar{position:static;border:none;padding:0;margin:0 0 10px;gap:12px;font-size:11px}.vctxbar .vctx-screen{display:none!important}.vctxbar .vctx-print{display:inline!important;font-weight:700}}
+@media print{.vctxbar{position:static;border:none;padding:0;margin:0 0 10px;gap:12px;font-size:11px}.vctxbar .vctx-screen{display:none!important}.vctxbar .vctx-print{display:inline!important;font-weight:700}}
 `
 
 /**
@@ -335,19 +333,67 @@ function renderContextStrip(
 }
 
 /**
- * #422 · Camino de regreso de un drill: `← <vista de origen>` y, con más de un nivel, la cadena desde
- * la más antigua. Cada eslabón vuelve a su vista con el ctx y los filtros que tenía (su query, que trae
- * su propio `from`) y `vret=1`, que le pide a la tabla de destino restituir su estado guardado. Sin
- * cadena (entrada directa) no se pinta; en papel no hay a dónde volver.
+ * #459 · #460 · Cabecera de navegación de TODA vista: botones «← Volver», «Inicio» y «Catálogo».
+ *
+ * - **Volver** lleva a la vista de origen del drill (`back[0]`, con `vret=1` para que su tabla
+ *   restituya el estado — #422). Sin origen no se pinta: no hay a dónde volver dentro del informe, y
+ *   un «Volver» que no vuelve a ningún lado es peor que su ausencia (lo admite el issue).
+ * - **Inicio** es la portada del PI: su primera vista, con el carry de cabecera y los filtros vigentes
+ *   (el mismo href que su pestaña). En un PI de una sola vista, la vista misma sin claves de drill.
+ * - **Catálogo** es el listado de PI (`/`). Vivía como primera entrada de la bandeja (#136 · D3); se
+ *   mudó acá porque el usuario lo espera junto a la navegación, no entre los filtros.
+ *
+ * Con más de un nivel de drill, debajo de los botones va la ruta completa (`.vback`, la miga de #422),
+ * de la vista más antigua a la más cercana. En papel no hay a dónde ir: no se pinta.
  */
-function renderBackNav(back: { title: string; query: string }[], print: boolean): string {
-  if (print || back.length === 0) return ''
-  const links = [...back]
-    .reverse()
-    .map((b) => `<a href="?${escapeHtml(b.query)}&amp;vret=1">${escapeHtml(b.title)}</a>`)
-    .join('<span class="vback-sep">›</span>')
-  return `<nav class="vback" aria-label="Volver"><span class="vback-arrow">←</span>${links}</nav>`
+function renderHeaderNav(
+  back: { title: string; query: string }[],
+  pages: PagesNav | undefined,
+  carry: CarryCtx,
+  flt: Record<string, string[]>,
+  print: boolean,
+): string {
+  if (print) return ''
+  const btns: string[] = []
+  if (back.length > 0) {
+    const origen = back[0]
+    btns.push(
+      `<a class="vnav-btn vnav-volver" href="?${escapeHtml(origen.query)}&amp;vret=1" title="Volver a «${escapeHtml(origen.title)}»">← Volver</a>`,
+    )
+  }
+  const portada = pages?.items[0]
+  const inicioHref = portada ? `?page=${encodeURIComponent(portada.id)}${ctxQuery(carry)}${fltQuery(flt)}` : `?${(ctxQuery(carry) + fltQuery(flt)).slice(1)}`
+  const enPortada = (!portada || pages?.active === portada.id) && back.length === 0
+  btns.push(
+    `<a class="vnav-btn vnav-inicio" href="${escapeHtml(inicioHref)}" title="Ir a la portada del informe"${enPortada ? ' aria-current="page"' : ''}>Inicio</a>`,
+  )
+  btns.push(`<a class="vnav-btn vnav-catalogo" href="/" title="Ir al catálogo de informes">Catálogo</a>`)
+  const ruta =
+    back.length > 1
+      ? `<nav class="vback" aria-label="Ruta"><span class="vback-arrow">←</span>${[...back]
+          .reverse()
+          .map((b) => `<a href="?${escapeHtml(b.query)}&amp;vret=1">${escapeHtml(b.title)}</a>`)
+          .join('<span class="vback-sep">›</span>')}</nav>`
+      : ''
+  return `<nav class="vnav" aria-label="Navegación">${btns.join('')}</nav>${ruta}`
 }
+
+/** CSS de la cabecera de navegación (#459 · #460): botones con aspecto de botón, no enlaces grises. */
+const HEADER_NAV_CSS = `
+.vnav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.vnav .vnav-btn{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;font-size:13px;font-weight:600;line-height:1.2;text-decoration:none;color:var(--fg,#1f2937);background:var(--card,#f1f5f9);border:1px solid var(--border,#cbd5e1);border-radius:7px;white-space:nowrap}
+.vnav .vnav-btn:hover{border-color:var(--green,#2563eb);color:var(--green,#2563eb)}
+.vnav .vnav-btn:focus-visible{outline:2px solid var(--green,#2563eb);outline-offset:2px}
+.vnav .vnav-volver{color:#fff;background:var(--green,#2563eb);border-color:var(--green,#2563eb)}
+.vnav .vnav-volver:hover{color:#fff;filter:brightness(1.08)}
+.vnav .vnav-inicio[aria-current="page"]{background:transparent}
+.vnav .vnav-catalogo{margin-left:auto}
+.vback{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-4px 0 12px;font-size:12px}
+.vback a{color:var(--fg-dim,#64748b);text-decoration:none}
+.vback a:hover{color:var(--fg,#1f2937);text-decoration:underline}
+.vback .vback-arrow,.vback .vback-sep{color:var(--fg-dim,#64748b)}
+@media print{.vnav,.vback{display:none}}
+`
 
 /**
  * CSS de la franja de CHIPS de filtros activos (#82). Vive bajo la banda de contexto: el control está
@@ -798,9 +844,8 @@ function renderTrayShell(
     `</label>` +
     `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Inspector">` +
     `<div class="tray-head"><strong>Inspector</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
-    // «Volver al catálogo» (#136 · D3): PRIMERA entrada de la bandeja, antes de los tabs. Enlace
-    // simple al índice (`/`), que ya está gateado por identidad y filtra por lo abrible.
-    `<a class="tray-catalog" href="/" title="Volver al catálogo" aria-label="Volver al catálogo">← Catálogo</a>` +
+    // El acceso al catálogo NO vive acá (#460): está en la cabecera de navegación, junto a «Volver» e
+    // «Inicio». La bandeja queda para filtros, agrupación y vistas guardadas.
     // 3 tabs (radios CSS puros): Controles · Guardados · Config
     `<input type="radio" name="vergis-traytab" id="vergis-tt-controles" class="tray-tabin"${controlesChecked} hidden>` +
     `<input type="radio" name="vergis-traytab" id="vergis-tt-guardados" class="tray-tabin" hidden>` +

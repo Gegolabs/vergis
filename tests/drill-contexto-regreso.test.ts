@@ -132,7 +132,9 @@ describe('pieza 2 · regreso con su ruta', () => {
   it('dos niveles: la vista final pinta las dos migas, de la más antigua a la más cercana, y cada una vuelve con su ctx', async () => {
     const f1 = fromDelDrill(await render({ page: 'pyl' }))
     const h2 = await render({ page: 'detalle-cliente', ctx: { empresa: 'VH', linea: 'Frutales', periodo: '2026-09' }, from: f1 })
-    expect(migas(h2).map((m) => m[1])).toEqual(['P&amp;L por Empresa'])
+    // #459 · Con un nivel, el regreso es el botón «← Volver» (la ruta de migas aparece desde dos).
+    expect(migas(h2)).toEqual([])
+    expect(dec(/<a class="vnav-btn vnav-volver" href="([^"]*)"/.exec(h2)?.[1] ?? '')).toBe(`?${f1}&vret=1`)
     const f2 = fromDelDrill(h2)
     const h3 = await render({ page: 'detalle-doc', ctx: { empresa: 'VH', cliente: 'C7' }, from: f2 })
     const m3 = migas(h3)

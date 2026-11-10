@@ -143,14 +143,20 @@ describe('render · la opción viaja solo cuando se declara', () => {
  * normalizada, calculado con `main` (df56e39, v0.48.0) ANTES del cambio, bajo vitest (el `.toString()` del runtime
  * depende del transformador: el mismo caso bajo tsx da otro hash). Si esto se rompe por otro
  * cambio legítimo de la tabla, se recalcula con el `main` de ese momento — nunca con la rama.
+ *
+ * Recalculado por #459 · #460 (cabecera de navegación, catálogo fuera de la bandeja): el golden hashea
+ * el documento entero, así que el cromo nuevo cambia los hashes sin tocar la tabla. Antes de aceptar los
+ * hashes nuevos se diferenció el HTML de `main` (0bd9738) contra la rama: las únicas líneas distintas son
+ * el CSS y el `<nav class="vnav">` de la cabecera y la entrada `.tray-catalog` retirada. Papel, sin cromo,
+ * conserva su hash.
  */
 describe('golden · un spec sin la opción se ve igual que en main, byte a byte', () => {
   const GOLDEN: [string, Partial<ResolvedNode>, { print?: boolean }, string][] = [
-    ['interactiva', {}, {}, '42483c0064fa26e40d233c9d57a59efc5e52c18d1b1a39f058473938573eb7d5'],
-    ['interactiva · tones', { columnsSpec: cols(true) }, {}, '7d1d182691020f404d2aa0e2dd23a4bd478a9efed9cab09950f56ca0ccb7de28'],
-    ['estática', { interactive: false }, {}, 'cced4885a058cae96f6c636f20d1e2a8a054590b936c495b99212b1606ba9076'],
+    ['interactiva', {}, {}, '52a3374c3dba56d4b2e7244ac5e6019ce21bcfb45526759b698e5dc9fbbf8055'],
+    ['interactiva · tones', { columnsSpec: cols(true) }, {}, '089630c2bafa0eff6f97da8ee29ab3478599e3b3d41a7a934dde6d9d13dbddea'],
+    ['estática', { interactive: false }, {}, 'f1cbfc802be6ef4a7fddeb395a4ee23c0878e22a69fdea5a5eda52d8d43410bb'],
     ['papel', {}, { print: true }, 'ce5992eae9ae066350571f7c80e3aacc50d3afa17c349172037d76fbf0595e35'],
-    ['interactiva · drill', { drills: [{ to: 'det', by: ['empresa'] }] }, {}, 'ba163a83f2f30a83e38407a91821f3a28fa0c8b70955f63d5bbaeda082812804'],
+    ['interactiva · drill', { drills: [{ to: 'det', by: ['empresa'] }] }, {}, '5523d01e4097c3b10b576bda2c45c4c9fc7f6a2129582f84213c65d60622e30d'],
   ]
   it.each(GOLDEN)('%s', async (_n, over, opts, esperado) => {
     expect(sha(await html(tabla(over), opts))).toBe(esperado)

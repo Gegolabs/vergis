@@ -55,22 +55,32 @@ async function render(params: Record<string, unknown>): Promise<string> {
   return html
 }
 
-describe('entrada «← Catálogo» en la bandeja (T2)', () => {
-  it('la bandeja abre con un enlace `.tray-catalog` a `/`', async () => {
+// #460 · El acceso al catálogo se mudó de la bandeja a la cabecera de navegación de la vista.
+describe('acceso al catálogo en la cabecera, fuera de la bandeja (#460)', () => {
+  const bandeja = (html: string) => /<aside class="tray"[\s\S]*?<\/aside>/.exec(html)?.[0] ?? ''
+  const cabecera = (html: string) => /<nav class="vnav"[\s\S]*?<\/nav>/.exec(html)?.[0] ?? ''
+
+  it('la cabecera de la vista trae un botón «Catálogo» a `/`', async () => {
     const html = await render({})
-    expect(html).toMatch(/<a class="tray-catalog" href="\/"[^>]*>← Catálogo<\/a>/)
+    expect(cabecera(html)).toMatch(/<a class="vnav-btn vnav-catalogo" href="\/"[^>]*>Catálogo<\/a>/)
   })
 
-  it('va ANTES del primer tab de la bandeja (posicionalmente en el HTML)', async () => {
+  it('la bandeja ya no trae el acceso al catálogo', async () => {
     const html = await render({})
-    expect(html.indexOf('class="tray-catalog"')).toBeLessThan(html.indexOf('class="tray-tabs"'))
-    expect(html.indexOf('class="tray-catalog"')).toBeLessThan(html.indexOf('class="tray-tablabel'))
-  })
-
-  it('en print NO viaja: sin bandeja no hay entrada (D4)', async () => {
-    const html = await render({ print: true })
+    expect(bandeja(html)).not.toBe('')
+    expect(bandeja(html)).not.toContain('Catálogo')
     expect(html).not.toContain('tray-catalog')
-    expect(html).not.toContain('← Catálogo')
+  })
+
+  it('la cabecera va antes del contenido de la vista', async () => {
+    const html = await render({})
+    expect(html.indexOf('class="vnav"')).toBeGreaterThan(-1)
+    expect(html.indexOf('class="vnav"')).toBeLessThan(html.indexOf('<table'))
+  })
+
+  it('en print NO viaja: en papel no hay a dónde ir (D4)', async () => {
+    const html = await render({ print: true })
+    expect(html).not.toContain('class="vnav"')
     expect(html).not.toContain('class="tray"')
   })
 
