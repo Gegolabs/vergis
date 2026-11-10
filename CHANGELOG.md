@@ -63,6 +63,26 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
+Lo que pidió la certificación interna de los PI de la instancia GH (10-11-2026): filtrar en un detalle sin perder el registro, volver y llegar al inicio sin buscar el camino, el catálogo fuera de la bandeja, el panel con su nombre y la tabla que deja ver su final.
+
+### Mira: el filtro de bandeja en una vista alcanzada por drill conserva el registro y su regreso (#458)
+
+Elegir, quitar o limpiar un filtro de bandeja en una vista de detalle perdía las claves del drill y el `from`: la vista caía en la pieza-guía («Selecciona un registro en otra vista…») y el regreso desaparecía. Los enlaces de los filtros conservan ahora el contexto completo de la vista y su `from`. La pieza-guía deja de nombrar parámetros técnicos («falta: empresa_codigo, cliente»); esos nombres van al log del operador como `mira-context-missing`. Medido con `tests/drill-filtro-bandeja.test.ts`, que recorre drill → filtro → quitar siguiendo los `href` servidos (control negativo: en 0.49.0 caen los tres casos).
+
+### Render: «← Volver», «Inicio» y «Catálogo» como botones en la cabecera de toda vista (#459, #460)
+
+Toda vista abre con una cabecera de navegación. «← Volver» lleva a la vista de origen del drill, con su estado (#422); sin origen no aparece. «Inicio» lleva a la primera vista del PI, con el alcance de cabecera. «Catálogo» lleva al listado de PI y deja de ser la primera entrada de la bandeja, que queda para filtros, agrupación y vistas guardadas. Con dos o más niveles de drill, la ruta de migas va debajo de los botones. En papel no se pinta. `CAP-228`.
+
+### Render: el panel lateral se llama «Bandeja» (#461)
+
+El rótulo del panel, la uña que lo abre y su nombre para lectores de pantalla dicen «Bandeja» en lugar de «Inspector», igual que la documentación de la plataforma.
+
+### Render: la caja de la tabla mide hasta el borde inferior de la pantalla (#462)
+
+La caja de una tabla interactiva tenía un alto fijo (`70vh`), así que con cabecera, controles, chips y aviso de frescura encima, la barra horizontal de una tabla ancha y las últimas filas quedaban bajo el pliegue. Ahora el runtime la mide desde donde empieza hasta el borde inferior, descontando su pie, y la recalcula al cambiar el tamaño de la ventana y al abrir o cerrar la bandeja. Si la tabla empieza muy abajo, la caja mide lo que deja la banda de contexto, para caber entera al llegar a ella. Sin JavaScript rige el `70vh` de siempre. Medido en Chromium headless con 19 columnas: con 0.49.0 el fondo de la caja queda fuera en 1280×800, 1366×768 y 1920×1080; con este cambio, la tabla entera queda dentro. `CAP-229`.
+
+**Qué exige:** nada. Ningún spec cambia, no hay env nuevo ni migración. **Lo que cambia para quien mira:** la cabecera de botones aparece en todo PI y el catálogo ya no está en la bandeja.
+
 ## 0.49.0 — 2026-11-10
 
 Un pedido de una instalación beta (la instancia GH, PI-15): al agrupar una tabla, ver los totales por grupo y abrir el detalle con un clic.
