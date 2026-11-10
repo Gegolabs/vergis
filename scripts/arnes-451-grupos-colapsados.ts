@@ -106,6 +106,34 @@ for (const modo of ['collapsed', 'sin opción'] as const) {
   chk('collapsed · grupos que aparecen al quitar el filtro nacen colapsados (Norte, Este)', s.hojas === 3 && s.heads.length === 3, s)
 }
 
+// El defecto VIGENTE y el DECLARADO (catálogo §4·decies): «Expandir todo» cambia el defecto vigente hasta
+// que el lector agrega o quita un nivel, que vuelve al declarado. (Agregado por el juez: sin estos casos,
+// un `resetGroups` que no restituye el defecto pasaba el arnés y la suite enteros.)
+{
+  const t = abrir(await html(tabla('collapsed')))
+  t.agrupar('area'); t.clic('.vt-expand-all')
+  const abierto = t.st().hojas === 7
+  t.agrupar('empresa')
+  let s = t.st()
+  chk('collapsed · tras «Expandir todo», agregar un nivel vuelve al declarado', abierto && s.heads.length === 3 && s.hojas === 0, s)
+  t.clic('.vt-expand-all')
+  const abierto2 = t.st().hojas === 7
+  t.clic('.vt-gl-rm', 0) // quita el primer nivel (Área): queda Empresa
+  s = t.st()
+  chk('collapsed · tras «Expandir todo», quitar un nivel vuelve al declarado', abierto2 && s.heads.length === 5 && s.hojas === 0, s)
+}
+
+// «Colapsar todo» cambia el DEFECTO, no solo las rutas presentes: con un filtro puesto, los grupos que
+// aparecen al limpiarlo nacen colapsados. (Agregado por el juez: con el `collapseAll()` de siempre en su
+// lugar, el arnés quedaba verde.)
+{
+  const t = abrir(await html(tabla('collapsed')))
+  t.agrupar('area'); t.clic('.vt-expand-all')
+  await t.buscar('Sur'); t.clic('.vt-collapse-all'); await t.buscar('')
+  const s = t.st()
+  chk('collapsed · «Colapsar todo» con un filtro puesto: lo que aparece al limpiarlo nace colapsado', s.heads.length === 3 && s.hojas === 0, s)
+}
+
 // Ida y vuelta del detalle (#422): lo abierto sobrevive.
 {
   const h = await html(tabla('collapsed'))
