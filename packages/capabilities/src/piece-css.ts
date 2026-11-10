@@ -108,8 +108,6 @@ export const MAGNITUDE_CSS = `
 export const TRAY_CSS = `
 .tray{display:flex;flex-direction:column}
 /* «Volver al catálogo» (#136): primera entrada de la bandeja, enlace discreto al índice (/). */
-.tray-catalog{display:block;margin:-4px 0 12px;font-size:12px;color:var(--fg-dim,#94a3b8);text-decoration:none}
-.tray-catalog:hover{color:var(--green,#2563eb)}
 .tray-foot{margin-top:auto;padding-top:14px;text-align:center}
 .tray-version{font-size:10px;color:var(--fg-dim,#94a3b8);opacity:.6;letter-spacing:.03em}
 .tray-version a{color:inherit;text-decoration:none}
