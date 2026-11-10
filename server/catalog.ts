@@ -40,7 +40,7 @@ export function indexHtml(
   const lis = items.map((r) => `<li><a href="/${encodeURIComponent(r.slug)}"><div class="pi-id"><span class="c">${escapeHtml(r.code)}</span> ${escapeHtml(r.name)}</div>${govLine(r)}</a></li>`).join('')
   const logo = opts.logoUrl ? `<img class="logo" src="${opts.logoUrl}" alt="">` : ''
   const avatar = opts.avatar ?? ''
-  // La versión ENLAZA a `/novedades` (issue #308), igual que el pie del inspector: el catálogo es la
+  // La versión ENLAZA a `/novedades` (issue #308), igual que el pie de la bandeja: el catálogo es la
   // otra puerta por la que un consumidor llega sin pasar por un PI. Sin versión declarada, el pie
   // queda byte a byte como estaba — jamás un número fantasma.
   const version = VERGIS_VERSION ? ` · <a href="/novedades">v${escapeHtml(VERGIS_VERSION)}</a>` : ''

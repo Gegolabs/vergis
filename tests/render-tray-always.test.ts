@@ -1,8 +1,8 @@
-// El shell del Inspector (uña + tabs Controles·Vistas·Config + Apariencia + pie de versión) es
+// El shell de la bandeja (uña + tabs Controles·Vistas·Config + Apariencia + pie de versión) es
 // contenido UNIVERSAL a todo PI: no debe gatearse por la presencia de maquinaria (tabla interactiva
 // o facetas de dashboard). Regresión del bug cazado en PI-17 (2026-07-22): una vista de dashboard
 // puro (KPIs + charts, sin tabla, con la interactividad de gráficos aún no construida) caía en el
-// `else` sin rama → renderTrayShell NUNCA se llamaba → sin Inspector, sin Apariencia, sin Config.
+// `else` sin rama → renderTrayShell NUNCA se llamaba → sin bandeja, sin Apariencia, sin Config.
 import { describe, it, expect } from 'vitest'
 import { renderHtmlPiece, type ResolvedNode } from '@vergis/capabilities'
 
@@ -41,10 +41,10 @@ function tabla2(): ResolvedNode {
   } as ResolvedNode
 }
 
-describe('render · el shell del Inspector se renderiza SIEMPRE (no gateado por maquinaria)', () => {
+describe('render · el shell de la bandeja se renderiza SIEMPRE (no gateado por maquinaria)', () => {
   it('dashboard puro (sin tabla, sin interactive) → uña + aside.tray + tab Config + TRAY_CSS', async () => {
     const html = await render({ piece: dashboardPuro(), title: 'PI-17 dashboard', theme: 'roble' })
-    // la uña/pestaña que abre el Inspector
+    // la uña/pestaña que abre la bandeja
     expect(html).toContain('class="tray-tab"')
     expect(html).toContain('for="vergis-tray-toggle"')
     // el panel lateral

@@ -1,11 +1,11 @@
 /**
  * NOVEDADES (`GET /novedades`, issue #308) — el nodo publica por HTTP el `CHANGELOG.md` que viaja
- * DENTRO de su imagen (`/app/CHANGELOG.md`, issue #229), para que el número de versión del pie del
- * inspector deje de ser un callejón sin salida.
+ * DENTRO de su imagen (`/app/CHANGELOG.md`, issue #229), para que el número de versión del pie de la
+ * bandeja deje de ser un callejón sin salida.
  *
  * Hasta acá, la única forma declarada de leer ese archivo era
  * `docker run --rm --entrypoint cat <imagen> /app/CHANGELOG.md`: acceso de OPERADOR con shell. Un
- * especificador que ve `Vergis v0.31.0` al pie del inspector no tenía ningún camino a «¿qué trae?».
+ * especificador que ve `Vergis v0.31.0` al pie de la bandeja no tenía ningún camino a «¿qué trae?».
  *
  * Tres propiedades que esta superficie sostiene, y por qué:
  *

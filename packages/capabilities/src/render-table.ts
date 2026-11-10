@@ -59,7 +59,7 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
 
   // Heurística de plataforma (TX-11 WP4·1): una tabla DISPLAY —single_row, o que rinde 1 fila— es
   // presentación pura, no recibe maquinaria (runtime interactivo, iconos de filtro por columna, kit
-  // del Inspector). `interactive: true` explícito la conserva. El kill-switch `interactive: false`
+  // de la bandeja). `interactive: true` explícito la conserva. El kill-switch `interactive: false`
   // fuerza estática igual.
   const displayByRows = node.interactive !== true && rows.length === 1
   if (node.interactive === false || displayByRows) {

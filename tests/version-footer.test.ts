@@ -1,4 +1,4 @@
-// El pie del Inspector muestra la versión del MOTOR. Regresión del bug de producción (P-67,
+// El pie de la bandeja muestra la versión del MOTOR. Regresión del bug de producción (P-67,
 // verificado en la VM el 2026-07-28): la versión se leía del filesystem en runtime resolviendo
 // `../../../package.json` relativo a `import.meta.url`; en el layout del contenedor el bundle vive
 // en `dist/serve-rls.mjs` y ese path no alcanza el package.json ⇒ el catch devolvía el fallback
@@ -23,7 +23,7 @@ const render = async (params: Record<string, unknown>): Promise<string> =>
 const piece = (): ResolvedNode =>
   ({ layout: 'grid', columns: 1, elements: [{ type: 'kpi', label: 'Total', value: 1, format: 'int' }] }) as ResolvedNode
 
-describe('render · versión del motor en el pie del Inspector', () => {
+describe('render · versión del motor en el pie de la bandeja', () => {
   it('la constante resuelve exactamente la versión del package.json raíz', () => {
     expect(rootVersion).toMatch(/^\d+\.\d+\.\d+/)
     expect(VERGIS_VERSION).toBe(rootVersion)
