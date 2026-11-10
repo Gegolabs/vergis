@@ -94,7 +94,7 @@ for (const modo of ['collapsed', 'sin opción'] as const) {
   await t.buscar('Norte'); s = t.st()
   chk(`${modo} · 3 filtrar conserva lo abierto`, s.hojas === abiertoAntes && s.heads[0].includes('Norte'), [abiertoAntes, s])
   await t.buscar(''); s = t.st()
-  chk(`${modo} · 3 al limpiar el filtro los grupos que vuelven nacen colapsados`, s.hojas === abiertoAntes && s.heads.length === 5, s)
+  chk(`${modo} · 3 al limpiar el filtro lo abierto sigue abierto y lo demás vuelve cerrado`, s.hojas === abiertoAntes && s.heads.length === 5, s)
 }
 
 // Grupo que aparece DESPUÉS: con 'collapsed', agrupar con un filtro puesto y luego quitarlo.
