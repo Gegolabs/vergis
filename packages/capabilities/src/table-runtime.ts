@@ -740,6 +740,21 @@ export function vtGroupTree(rows: Record<string, unknown>[], fields: string[]): 
 }
 
 /**
+ * #451 · ¿Está colapsado el grupo `path`? El estado de los grupos es un DEFECTO más sus EXCEPCIONES:
+ * `collapsedByDefault` dice cómo nace todo grupo y `flips` guarda las rutas que el lector invirtió con
+ * un clic. Así, un grupo que aparece después (al filtrar o buscar) nace como dice el defecto, y no
+ * abierto por no estar en una lista de rutas cerradas — que es lo que pasaría con «colapsado por
+ * omisión» si se conservara el conjunto de rutas cerradas de siempre.
+ *
+ * Con `collapsedByDefault = false` es exactamente la regla de siempre (`!!collapsed[path]`).
+ * AUTOCONTENIDA: viaja al browser vía `.toString()` en la variante de grupos colapsados.
+ */
+export function vtGroupCollapsed(collapsedByDefault: boolean, flips: Record<string, unknown>, path: string): boolean {
+  const flipped = !!(flips && flips[path])
+  return collapsedByDefault ? !flipped : flipped
+}
+
+/**
  * Agregado al pie de UNA tabla por columna (#314) — la ÚNICA implementación del cálculo: la usan el
  * render server-side (`renderTableFoot`) y el runtime del browser (viaja en `PURE_FNS` vía
  * `.toString()`), para que el pie servido y el pie recalculado tras un filtro no puedan divergir.
@@ -1527,6 +1542,92 @@ Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
 
 export const TABLE_RUNTIME_SOURCE: string =
   '(function(){\n' + PURE_FNS.map((f) => f.toString()).join('\n') + '\n' + SAVED_VIEWS_JS + '\n' + DOM_GLUE + '\n})();'
+
+/**
+ * #451 · Los puntos del cableado que cambian cuando un documento trae alguna tabla con
+ * `group: { start: collapsed }`. Cada par es [texto de siempre, texto de la variante] y cada texto de
+ * siempre aparece EXACTAMENTE una vez en `DOM_GLUE` (lo exige `groupsCollapsedGlue` al cargar el
+ * módulo): si alguien edita el cableado y un ancla deja de calzar, el módulo no carga en vez de emitir
+ * una variante a medias.
+ *
+ * El modelo: `state.gDefault` es el defecto de la tabla (colapsado o no) y `state.collapsed` pasa a
+ * ser el conjunto de rutas INVERTIDAS respecto de ese defecto (`vtGroupCollapsed`). Una tabla del
+ * mismo documento que no declaró la opción tiene `gStart = false` y conserva la conducta de siempre,
+ * incluido «Colapsar todo», que para ella sigue marcando las rutas presentes.
+ */
+const GROUPS_COLLAPSED_PATCHES: [string, string][] = [
+  [
+    `var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, numFilters:{}, dateFilters:{}, groupLevels:[], collapsed:{} };`,
+    `var state = { sort:{field:'',dir:'asc'}, globalSearch:'', colSearch:{}, facets:{}, numFilters:{}, dateFilters:{}, groupLevels:[], collapsed:{} };
+  /* #451 · gStart = la tabla declaró group.start: collapsed. gDefault = el defecto vigente (lo cambian
+     Expandir/Colapsar todo); state.collapsed = rutas invertidas respecto de ese defecto. */
+  var gStart = payload.groupStart==='collapsed'; state.gDefault = gStart;
+  function resetGroups(){ state.gDefault = gStart; state.collapsed = {}; }`,
+  ],
+  [
+    `state.groupLevels.push(addSel.value); state.collapsed={};`,
+    `state.groupLevels.push(addSel.value); resetGroups();`,
+  ],
+  [
+    `state.groupLevels=state.groupLevels.filter(function(x){return x!==f;}); state.collapsed={};`,
+    `state.groupLevels=state.groupLevels.filter(function(x){return x!==f;}); resetGroups();`,
+  ],
+  [
+    `addEventListener('click', function(){ state.collapsed={}; render(); });`,
+    `addEventListener('click', function(){ state.gDefault=false; state.collapsed={}; render(); });`,
+  ],
+  [
+    `addEventListener('click', function(){ collapseAll(); render(); });`,
+    `addEventListener('click', function(){ if(gStart){ state.gDefault=true; state.collapsed={}; } else collapseAll(); render(); });`,
+  ],
+  [`state.groupLevels=[]; state.collapsed={};`, `state.groupLevels=[]; resetGroups();`],
+  [`    state.collapsed = {};\n    if(gs) gs.value = state.globalSearch;`, `    resetGroups();\n    if(gs) gs.value = state.globalSearch;`],
+  [`var collapsed=!!state.collapsed[path];`, `var collapsed=vtGroupCollapsed(state.gDefault, state.collapsed, path);`],
+  /* Al ir al detalle y volver (#422), la tabla vuelve con los grupos que el lector tenía abiertos: sin
+     esto, en una tabla que parte colapsada el regreso cerraría el grupo que se estaba mirando. */
+  [
+    `JSON.stringify({ s: snapshot(), y: window.scrollY, t: sb ? sb.scrollTop : 0 })`,
+    `JSON.stringify({ s: snapshot(), y: window.scrollY, t: sb ? sb.scrollTop : 0, g: { d: state.gDefault, c: state.collapsed } })`,
+  ],
+  [
+    `if(saved && saved.s){ applySnapshot(saved.s);`,
+    `if(saved && saved.s){ applySnapshot(saved.s); if(gStart && saved.g && state.groupLevels.length){ state.gDefault=!!saved.g.d; state.collapsed=saved.g.c||{}; render(); }`,
+  ],
+]
+
+/** #451 · Aplica los parches de grupos colapsados; cada ancla debe calzar exactamente una vez. */
+function groupsCollapsedGlue(glue: string): string {
+  let out = glue
+  for (const [from, to] of GROUPS_COLLAPSED_PATCHES) {
+    const n = out.split(from).length - 1
+    if (n !== 1) throw new Error(`#451 · el ancla del cableado aparece ${n} veces (se esperaba 1): ${from.slice(0, 80)}`)
+    out = out.replace(from, () => to)
+  }
+  return out
+}
+
+/**
+ * El runtime que corresponde a las capacidades que el documento trae. Sin ninguna, son los bytes del
+ * runtime de siempre (`TABLE_RUNTIME_SOURCE`); con `tones`, los de `TABLE_RUNTIME_SOURCE_TONES`. Cada
+ * capacidad agrega sus funciones al final de las puras y parcha su parte del cableado, así un
+ * documento sin ella no recibe ni un byte suyo.
+ */
+export function tableRuntimeSource(opts: { tones?: boolean; groupsCollapsed?: boolean } = {}): string {
+  const fns: { toString(): string }[] = [...PURE_FNS]
+  let glue = DOM_GLUE
+  if (opts.tones) {
+    fns.push(vtToneKey, vtToneCls)
+    glue = glue.replace(VT_CELL, () => VT_CELL_TONES)
+  }
+  if (opts.groupsCollapsed) {
+    fns.push(vtGroupCollapsed)
+    glue = groupsCollapsedGlue(glue)
+  }
+  return '(function(){\n' + fns.map((f) => f.toString()).join('\n') + '\n' + SAVED_VIEWS_JS + '\n' + glue + '\n})();'
+}
+
+/** #451 · El runtime de un documento con alguna tabla que parte con los grupos colapsados (sin tonos). */
+export const TABLE_RUNTIME_SOURCE_GROUPS_COLLAPSED: string = tableRuntimeSource({ groupsCollapsed: true })
 
 /**
  * #441 · El runtime de un documento con alguna columna `tones`: las mismas piezas más `vtToneKey` /

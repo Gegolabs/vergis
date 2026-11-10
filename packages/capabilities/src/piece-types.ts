@@ -231,6 +231,8 @@ export interface ResolvedNode {
   interactive?: boolean
   /** Tabla: acciones de drill-through por fila (a la vista `to` pasando las claves `by`). */
   drills?: Drill[]
+  /** #451 · Tabla: al agrupar desde la bandeja, los grupos nacen colapsados. Ausente = expandidos (como siempre). */
+  groupStart?: 'collapsed'
   /** Tabla: llave de negocio declarada por su dataset (`anchor`) + lo ya comentado sobre las filas
    *  servidas. Presente ⇒ cada fila lleva su llave canónica y el gesto de comentar se ofrece;
    *  ausente ⇒ no se ofrece (fail-closed, D16). */
@@ -282,4 +284,6 @@ export interface RenderSignals {
   tableTotals: boolean
   /** #441 · Hay al menos una columna con `tones` → requiere TABLE_TONES_CSS y el runtime con tonos. */
   tableTones?: boolean
+  /** #451 · Hay al menos una tabla interactiva con `group.start: collapsed` → runtime con esa variante. */
+  tableGroupsCollapsed?: boolean
 }

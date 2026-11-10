@@ -75,6 +75,8 @@ export function renderTable(node: ResolvedNode, opts: RenderOpts): string {
   }
   // Interactiva (auto-on): recién aquí se prende la señal → runtime + bandeja + CSS interactivo.
   opts.signals.interactiveTable = true
+  // #451 · solo la tabla INTERACTIVA agrupa: la estática y el papel no reciben la variante.
+  if (node.groupStart === 'collapsed') opts.signals.tableGroupsCollapsed = true
   const ssrComplete = rows.length <= TABLE_SSR_MAX_ROWS
   const tbody = renderTableBody(cols, ssrComplete ? rows : rows.slice(0, TABLE_SSR_MAX_ROWS), ranges, drills, carry, node.ancla, fltQ)
   return renderInteractiveTable(node, cols, rows, ranges, tbody, titleHtml, drills, carry, ssrComplete, fltQ, stateKey)
@@ -233,7 +235,9 @@ function renderInteractiveTable(
   //   con un solo drill, además habilita el doble-clic de fila. `carryCtx` se preserva en cada href.
   // `ssrComplete`: el tbody servido trae TODAS las filas (≤ TABLE_SSR_MAX_ROWS) — el runtime puede
   //   saltarse el render() inicial (que reconstruiría un tbody idéntico) si el estado es vacío.
-  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, fltQ, ssrComplete, ancla: node.ancla, stateKey }).replace(/</g, '\\u003c')
+  // `groupStart` (#451) solo viaja si la tabla lo declaró: sin él, el payload es el de siempre.
+  const groupStart = node.groupStart === 'collapsed' ? node.groupStart : undefined
+  const payload = JSON.stringify({ rows, cols: colMeta, drills, carryCtx: carry, fltQ, ssrComplete, ancla: node.ancla, stateKey, groupStart }).replace(/</g, '\\u003c')
 
   // Pie con el contador de filas (TX-11 WP4·3): información del documento, no control — vive en la
   // CARA de cada tabla interactiva (el runtime lo puebla) y se imprime (estado honesto).

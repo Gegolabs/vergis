@@ -549,6 +549,39 @@ tono de cada valor. La celda se pinta con el fondo y el texto de ese tono:
 - **Sin `tones`, nada cambia:** ni el CSS ni el runtime de la tabla llevan un byte de esta capacidad.
 - **Fuera de alcance:** las cabeceras y subtotales de grupo, los gráficos, el CSV y el export.
 
+## 4·decies · Grupos que nacen colapsados al agrupar (`group.start`)
+
+Cuando el lector agrupa la tabla desde la bandeja, los grupos nacen **expandidos**. Una tabla que se
+lee como drill-down —primero los totales por grupo, después el detalle del que interesa— puede
+declarar que nazcan **colapsados**:
+
+```yaml
+- table:
+    data: data.cartera
+    group: { start: collapsed }
+    columns:
+      - { field: area, label: "Área" }
+      - { field: empresa, label: "Empresa" }
+      - { field: monto, label: "Monto", format: int_0, total: sum }
+```
+
+- **Al agrupar, solo las cabeceras:** cada grupo muestra su rótulo, su conteo y los subtotales de las
+  columnas con `total` (§4·quinquies). El total al pie no cambia. Un clic en la cabecera abre su
+  detalle y otro lo cierra; con dos niveles, abrir el primero muestra las cabeceras del segundo,
+  también colapsadas.
+- **El defecto manda sobre los grupos nuevos:** un grupo que aparece después —al quitar un filtro o la
+  búsqueda— nace colapsado, no abierto. «Expandir todo» y «Colapsar todo» siguen en la bandeja y
+  cambian el defecto vigente hasta que el lector agregue o quite un nivel, que vuelve al declarado.
+- **Ir al detalle y volver** (#422) conserva los grupos que el lector tenía abiertos.
+- **No agrupa la tabla por sí sola:** la tabla se sirve plana como siempre; agrupar sigue siendo un
+  acto del lector. Tampoco toca las vistas guardadas, que no guardan qué grupos estaban abiertos.
+- `start` es `collapsed` o `expanded` (el defecto). Otro valor rechaza la spec
+  (`table-group-start-unknown`), igual que un `group` que no es un mapa o trae otra llave
+  (`table-group-invalid`) y `start: collapsed` en una tabla con `interactive: false`, que no agrupa
+  (`table-group-static`). En papel la opción no tiene efecto.
+- **Sin `group`, nada cambia:** ni el payload de la tabla ni el runtime llevan un byte de esta
+  capacidad.
+
 ## 5 · El resto del catálogo: diseñado, no construido
 
 Estos elementos del catálogo de diseño quedan **especificados pero sin construir**; su disparador de
