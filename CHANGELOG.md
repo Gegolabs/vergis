@@ -63,13 +63,19 @@ veinte minutos después del tag. Detalle y comandos en [`scripts/README-fabric-l
 
 ## Sin publicar
 
-### Mira: una tabla puede declarar que sus grupos nacen colapsados al agrupar (`group: { start: collapsed }`) (#451)
+## 0.49.0 — 2026-11-10
+
+Un pedido de una instalación beta (la instancia GH, PI-15): al agrupar una tabla, ver los totales por grupo y abrir el detalle con un clic.
+
+### Mira: una tabla puede declarar que sus grupos nacen colapsados al agrupar (`group: { start: collapsed }`) (#451, PR #455)
 
 Al agrupar una tabla desde la bandeja («Agrupar por»), cada grupo nacía expandido; ver solo los totales por grupo exigía un segundo paso («Colapsar todo»). Lo pidió un usuario de la instancia GH (PI-15) como un drill-down: «al agrupar, ver el total de las agrupaciones y no el detalle; al hacer clic sobre una, que muestre su detalle». Ahora `table.group: { start: collapsed }` hace que todo grupo nazca colapsado —solo su cabecera, con el conteo y los subtotales de las columnas con `total`— y el clic en la cabecera abre su detalle; con dos niveles, abrir el primero muestra las cabeceras del segundo, también colapsadas. El total al pie no cambia. «Expandir todo» y «Colapsar todo» siguen, y un grupo que aparece después (al quitar un filtro o la búsqueda) nace como dice el defecto vigente, no abierto. Al ir al detalle y volver (#422), la tabla conserva los grupos que el lector tenía abiertos. `expanded` es el defecto. Catálogo §4·decies, `CAP-227`.
 
 Validación con nombre: `table-group-start-unknown`, `table-group-invalid`, `table-group-static` (la tabla estática no agrupa).
 
 **Sin `group`, el render es idéntico byte a byte**: sha256 del HTML de cinco tablas (interactiva, con tonos, estática, papel, con drill), calculado con `main` antes del cambio, fijado como golden en `tests/table-grupos-colapsados.test.ts`. La conducta del navegador se mide con `scripts/arnes-451-grupos-colapsados.ts` (jsdom, con control negativo).
+
+**Qué exige:** nada en los specs existentes. **Pero el orden importa:** un spec que declare `table.group: { start: collapsed }` necesita esta versión. Con una imagen anterior el spec **no se rechaza**: el esquema admite llaves extra en el elemento, así que la opción se ignora en silencio y los grupos nacen abiertos, como siempre (medido sobre `v0.48.0` con el validador y el esquema que carga el server). La spec de PI-15 de A.R.B.O.L. la usa: **promueve la imagen antes de publicar la spec**, y comprueba que la instancia corre 0.49.0 antes de leer el resultado.
 
 ## 0.48.0 — 2026-11-06
 
