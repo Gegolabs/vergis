@@ -66,7 +66,7 @@ export const renderHtmlPiece: Capability = {
     // BANDEJA COMÚN (un solo shell por documento) — contenido UNIVERSAL a TODO PI: Apariencia (Theme),
     // los tabs Controles·Vistas·Config y el pie de versión. El shell NO se gatea por maquinaria: una
     // vista de dashboard puro (KPIs+charts, sin tabla, con la interactividad de gráficos aún no
-    // construida — capacidad #82) también merece su Inspector con Apariencia+Config. El tab
+    // construida — capacidad #82) también merece su bandeja con Apariencia+Config. El tab
     // «Controles» reúne las facetas del dashboard / los controles del runtime de tabla; cuando no hay
     // ninguna, muestra un empty-state (no un panel en blanco).
     // El tab «Controles» reúne los filtros SERVER-SIDE (#82, re-render por navegación) y las facetas
@@ -82,18 +82,18 @@ export const renderHtmlPiece: Capability = {
     // runtime de tabla que las inyecta client-side. Decide el empty-state y el tab por defecto — NO
     // decide si hay bandeja.
     const controlesHasMachinery = !!facets || hasTable || !!notas
-    // Etiqueta de versión del PI (instancia) para el pie del inspector: "<code> · v<version>".
+    // Etiqueta de versión del PI (instancia) para el pie de la bandeja: "<code> · v<version>".
     const piLabel = meta?.code
       ? `${meta.code}${meta.version ? ' · v' + meta.version : ''}`
       : meta?.version
         ? `v${meta.version}`
         : ''
     let tail = '' // scripts al FINAL del body (DOM ya parseado)
-    // PAPEL (#65 · D4): en print NO se compone el shell del Inspector ni viaja NINGÚN script — en un
+    // PAPEL (#65 · D4): en print NO se compone el shell de la bandeja ni viaja NINGÚN script — en un
     // motor de print el JS no corre, así que un botón o un runtime embebido solo prometerían algo que
     // el papel no puede cumplir. Queda la CARA: banda de contexto, chips, nav de la vista activa.
     if (!print) {
-      // El shell del Inspector se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
+      // El shell de la bandeja se compone SIEMPRE (una sola vez). Las facetas de dashboard van al tab
       // Controles solo cuando `interactive`; si no, `''` (y el tab muestra su empty-state).
       body = renderTrayShell(facets, theme.palettes, palette, piLabel, controlesHasMachinery, hasTable, !!notas, signals.magnitude) + body
       if (interactive) tail += renderInteractiveScript(interactive)
@@ -102,7 +102,7 @@ export const renderHtmlPiece: Capability = {
     // pintaba el HTML sin estilar mientras parseaba miles de filas + el JSON embebido, y solo
     // aplicaba el CSS al llegar al `<style>` del final). Todo el CSS por-documento va junto, arriba.
     let css = ''
-    if (!print) css += TRAY_CSS // el shell del Inspector existe SIEMPRE (salvo en papel) → su CSS también
+    if (!print) css += TRAY_CSS // el shell de la bandeja existe SIEMPRE (salvo en papel) → su CSS también
     if (hasTable) css += TABLE_INTERACTIVE_CSS
     if (notas) css += NOTAS_CSS
     if (pages) css += PAGES_NAV_CSS
@@ -798,7 +798,7 @@ function renderTrayShell(
       `<div class="faceta-options">${radios}</div></div>`
   }
   // Restaura el estado del usuario (persistido POR REPORTE, como la paleta y las anotaciones) sobre
-  // los defaults de plataforma: (1) la paleta elegida y (2) si el Inspector queda abierto. El colapso
+  // los defaults de plataforma: (1) la paleta elegida y (2) si la bandeja queda abierta. El colapso
   // es CSS-only (un checkbox), así que un POST→redirect→GET —aplicar un filtro server-side, enviar
   // cualquier form— re-renderiza la página y lo devolvía a cerrado en cada turno. Mismo mecanismo que
   // ya usan paleta y anotaciones: localStorage + re-aplicación al cargar.
@@ -807,7 +807,7 @@ function renderTrayShell(
     `try{var t=localStorage.getItem('vergis:tray:'+location.pathname);if(t!==null){var c=document.getElementById('vergis-tray-toggle');if(c)c.checked=(t==='1');}}catch(e){}` +
     `try{var m=localStorage.getItem('vergis:magnitude:'+location.pathname);if(m==='1'){document.documentElement.dataset.magnitude='on';var mc=document.getElementById('vergis-magnitude');if(mc)mc.checked=true;}}catch(e){}})();</script>`
   // Pie de la bandeja (pegado al fondo): versión + crédito discreto. URL como texto, sin links.
-  // Pie del inspector: versión del PI (instancia) + versión de Mira (motor) — pistas DISTINTAS.
+  // Pie de la bandeja: versión del PI (instancia) + versión de Mira (motor) — pistas DISTINTAS.
   const footer =
     `<div class="tray-foot">` +
     (piLabel ? `<div class="tray-version tray-piversion">${escapeHtml(piLabel)}</div>` : '') +
@@ -837,13 +837,13 @@ function renderTrayShell(
   return (
     // El colapso se PERSISTE (por reporte) al cambiar: sin esto, cada POST→redirect→GET lo resetea.
     `<input type="checkbox" id="vergis-tray-toggle" class="tray-toggle" hidden onchange="try{localStorage.setItem('vergis:tray:'+location.pathname,this.checked?'1':'0')}catch(e){}">` +
-    `<label for="vergis-tray-toggle" class="tray-tab" title="Inspector" aria-label="Abrir inspector">` +
-    // Ícono de sliders/controles (no embudo): el panel es un Inspector (controles + vistas + config).
+    `<label for="vergis-tray-toggle" class="tray-tab" title="Bandeja" aria-label="Abrir la bandeja">` +
+    // Ícono de sliders/controles (no embudo): el panel es la bandeja (controles + vistas + config).
     `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.7" fill="currentColor" stroke="none"/><circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none"/><circle cx="5" cy="11.5" r="1.7" fill="currentColor" stroke="none"/></svg>` +
     `<span class="faceta-count" id="vergis-count"></span>` +
     `</label>` +
-    `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Inspector">` +
-    `<div class="tray-head"><strong>Inspector</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
+    `<aside class="tray" id="vergis-filters" role="dialog" aria-label="Bandeja">` +
+    `<div class="tray-head"><strong>Bandeja</strong><label for="vergis-tray-toggle" class="tray-close" title="Cerrar">✕</label></div>` +
     // El acceso al catálogo NO vive acá (#460): está en la cabecera de navegación, junto a «Volver» e
     // «Inicio». La bandeja queda para filtros, agrupación y vistas guardadas.
     // 3 tabs (radios CSS puros): Controles · Guardados · Config

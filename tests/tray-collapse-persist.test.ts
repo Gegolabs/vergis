@@ -1,4 +1,4 @@
-// El colapso del Inspector es CSS-only (un checkbox). Un POST→redirect→GET —aplicar un filtro
+// El colapso de la bandeja es CSS-only (un checkbox). Un POST→redirect→GET —aplicar un filtro
 // server-side, enviar cualquier form— re-renderiza la página y devolvía el panel a su default
 // (cerrado) en cada turno, mientras paleta y anotaciones sí sobrevivían vía localStorage. Se iguala
 // el patrón: se persiste al cambiar y se re-aplica al cargar, con la MISMA clave por-reporte
@@ -16,7 +16,7 @@ const piece = (): ResolvedNode =>
     elements: [{ type: 'kpi', label: 'Total', value: 42, format: 'int' }],
   }) as ResolvedNode
 
-describe('render · el colapso del Inspector sobrevive el turno (localStorage)', () => {
+describe('render · el colapso de la bandeja sobrevive el turno (localStorage)', () => {
   it('el checkbox del colapso escribe su estado en localStorage al cambiar', async () => {
     const html = await render({ piece: piece(), title: 'PI test', theme: 'roble' })
     expect(html).toContain('id="vergis-tray-toggle"')
@@ -40,7 +40,7 @@ describe('render · el colapso del Inspector sobrevive el turno (localStorage)',
     }
   })
 
-  it('el default no cambia: el Inspector se renderiza cerrado (checkbox sin `checked`)', async () => {
+  it('el default no cambia: la bandeja se renderiza cerrada (checkbox sin `checked`)', async () => {
     const html = await render({ piece: piece(), title: 'PI test', theme: 'roble' })
     const tag = html.slice(html.indexOf('<input type="checkbox" id="vergis-tray-toggle"'))
     expect(tag.slice(0, tag.indexOf('>'))).not.toContain(' checked')

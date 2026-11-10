@@ -27,7 +27,7 @@ export interface DashboardMeta {
   classification?: string
   /** Código del reporte (se muestra discreto en el pie). */
   code?: string
-  /** Versión del PI (instancia/spec) — distinta de la versión de Mira (motor). Se muestra en el inspector. */
+  /** Versión del PI (instancia/spec) — distinta de la versión de Mira (motor). Se muestra en la bandeja. */
   version?: string
   subtitle?: string
 }

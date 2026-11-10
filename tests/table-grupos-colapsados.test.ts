@@ -52,7 +52,7 @@ async function html(piece: ResolvedNode, opts: { print?: boolean } = {}): Promis
   )) as { html: string }
   return out.html
 }
-// La etiqueta de versión del inspector cambia en cada corte: se normaliza para que el golden mida la tabla.
+// La etiqueta de versión de la bandeja cambia en cada corte: se normaliza para que el golden mida la tabla.
 const sha = (h: string) => createHash('sha256').update(h.split(VERGIS_VERSION_LABEL).join('Vergis vX')).digest('hex')
 const payload = (h: string): Record<string, unknown> => {
   const m = /<script type="application\/json" class="vtable-data">([\s\S]*?)<\/script>/.exec(h)
@@ -148,15 +148,16 @@ describe('render · la opción viaja solo cuando se declara', () => {
  * el documento entero, así que el cromo nuevo cambia los hashes sin tocar la tabla. Antes de aceptar los
  * hashes nuevos se diferenció el HTML de `main` (0bd9738) contra la rama: las únicas líneas distintas son
  * el CSS y el `<nav class="vnav">` de la cabecera y la entrada `.tray-catalog` retirada. Papel, sin cromo,
- * conserva su hash.
+ * conserva su hash. Y otra vez por #461: el diff contra el paso anterior es solo el rótulo, el aria
+ * de la bandeja y un comentario del runtime de tabla que viaja en el documento («Inspector» → «Bandeja»).
  */
 describe('golden · un spec sin la opción se ve igual que en main, byte a byte', () => {
   const GOLDEN: [string, Partial<ResolvedNode>, { print?: boolean }, string][] = [
-    ['interactiva', {}, {}, '52a3374c3dba56d4b2e7244ac5e6019ce21bcfb45526759b698e5dc9fbbf8055'],
-    ['interactiva · tones', { columnsSpec: cols(true) }, {}, '089630c2bafa0eff6f97da8ee29ab3478599e3b3d41a7a934dde6d9d13dbddea'],
-    ['estática', { interactive: false }, {}, 'f1cbfc802be6ef4a7fddeb395a4ee23c0878e22a69fdea5a5eda52d8d43410bb'],
+    ['interactiva', {}, {}, '72b20ee2698437c4143519780e02d2aff3006bf659056c39fb237174925122dc'],
+    ['interactiva · tones', { columnsSpec: cols(true) }, {}, 'a8cabc7d0ce1ba9b750222d8ee14c9f26ff9eeff2e8a602a975131c7ad4484c9'],
+    ['estática', { interactive: false }, {}, 'c4b7a4a4684d75c39f83c07407b6ccedf7aa853c059d2e7b9f4ad99832aba25b'],
     ['papel', {}, { print: true }, 'ce5992eae9ae066350571f7c80e3aacc50d3afa17c349172037d76fbf0595e35'],
-    ['interactiva · drill', { drills: [{ to: 'det', by: ['empresa'] }] }, {}, '5523d01e4097c3b10b576bda2c45c4c9fc7f6a2129582f84213c65d60622e30d'],
+    ['interactiva · drill', { drills: [{ to: 'det', by: ['empresa'] }] }, {}, 'e26afbce088cd5f31c893e09dc6ca399f30919b7c9adab7eed31c59eaa071485'],
   ]
   it.each(GOLDEN)('%s', async (_n, over, opts, esperado) => {
     expect(sha(await html(tabla(over), opts))).toBe(esperado)

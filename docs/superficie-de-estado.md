@@ -1,7 +1,7 @@
 # Superficie de estado — cómo un PI expone su alcance, sus filtros y su maquinaria
 
 > **Documentación canónica del Producto** (TX-11). Define la convención de superficie de todo PI:
-> qué se ve en la **cara**, qué vive en la **bandeja** (Inspector) y qué se lleva el **print**.
+> qué se ve en la **cara**, qué vive en la **bandeja** y qué se lleva el **print**.
 > Comportamiento **genérico**, 100 % de presentación: no toca el DSL, los specs, el camino de datos
 > ni la semántica de URL. Es también el contrato de superficie que consume el PDF server-side (TX-09).
 
@@ -11,7 +11,7 @@
 
 - La **cara** muestra el estado del documento: qué alcance se está viendo (los sellos), qué filtros
   están activos (los chips) y cuántas filas rinde cada tabla (el pie de contador).
-- La **bandeja** (Inspector) guarda la **maquinaria**: los pickers de filtro, la búsqueda, el
+- La **bandeja** guarda la **maquinaria**: los pickers de filtro, la búsqueda, el
   agrupar-por, la descarga CSV, los guardados y la config. Nada de esto se imprime.
 - El **print** conserva solo el estado, como texto plano: el sello impreso es «OC 17400358», los
   filtros activos son letra chica («Filtros: …»), la maquinaria desaparece.
@@ -154,9 +154,9 @@ in-memory sobre un catálogo ya recortado. Un filtro **nunca** puede producir fi
 
 1. **Tablas display no reciben maquinaria.** Una tabla cuyo dataset es `single_row` o que rinde 1
    fila es presentación pura: sin runtime interactivo, sin iconos de filtro por columna, sin bloque en
-   el Inspector. (`interactive: true` explícito y las tablas con **anotación** la conservan — editar
+   la bandeja. (`interactive: true` explícito y las tablas con **anotación** la conservan — editar
    es su propósito, no filtrar.)
-2. **Kit ÚNICO en el Inspector.** Las afordancias (BUSCAR · AGRUPAR POR · DESCARGAR CSV · Limpiar
+2. **Kit ÚNICO en la bandeja.** Las afordancias (BUSCAR · AGRUPAR POR · DESCARGAR CSV · Limpiar
    todo) aparecen UNA vez. Si una página tiene **≥2 tablas interactivas** (raro tras la regla 1), el
    kit lleva un **selector de objetivo** («Tabla: … ▾», default = la de más filas) — jamás kits
    apilados. *Nota de gobierno:* ≥2 tablas interactivas en una vista es un *smell* del spec (preferir

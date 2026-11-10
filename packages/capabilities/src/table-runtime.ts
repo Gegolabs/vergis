@@ -1521,7 +1521,7 @@ function vtBootstrap(root){
   }
 }
 Array.prototype.forEach.call(document.querySelectorAll('.vtable'), vtBootstrap);
-// ---- Kit ÚNICO en el Inspector (TX-11 WP4·2): con 1 tabla interactiva, su kit va tal cual. Con ≥2
+// ---- Kit ÚNICO en la bandeja (TX-11 WP4·2): con 1 tabla interactiva, su kit va tal cual. Con ≥2
 //      (raro tras la heurística display), un solo kit visible + selector de objetivo (default = la de
 //      más filas) — jamás kits apilados. Cada tabla ya cableó su propio kit; aquí solo se impone la
 //      visibilidad y el conmutador. ----

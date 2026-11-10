@@ -85,7 +85,7 @@ describe('TX-11 WP2 · los controles salen de la bandeja', () => {
       controls: [{ id: 'oc', label: 'OC', options: ['A', 'B'], value: 'A' }],
     })
     expect(html).toContain('class="vctxbar"') // el sello sí está (en la banda)
-    // La bandeja/Inspector es UNIVERSAL (Apariencia + Config): existe aunque no haya maquinaria.
+    // La bandeja es UNIVERSAL (Apariencia + Config): existe aunque no haya maquinaria.
     expect(html).toContain('id="vergis-tray-toggle"')
     expect(html).toContain('<aside class="tray"')
     // pero el control NO se cuela a la bandeja (vive en la banda) → Controles muestra su empty-state.

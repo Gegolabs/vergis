@@ -217,10 +217,10 @@ describe('render · control de cabecera default=max', () => {
     expect(html).toContain('"carryCtx":{"semana":"W21"}')
   })
 
-  it('versión del PI (instancia) se muestra DISTINTA de la versión de Mira (motor) en el inspector', async () => {
+  it('versión del PI (instancia) se muestra DISTINTA de la versión de Mira (motor) en la bandeja', async () => {
     const { out } = await render(YAML)
     const html = out.html ?? ''
-    // Pie del inspector: la versión del PI (code · v) y la de Mira, por separado.
+    // Pie de la bandeja: la versión del PI (code · v) y la de Mira, por separado.
     expect(html).toContain('PI-CTRL · v1.0')
     expect(html).toMatch(/Vergis v\d+\.\d+\.\d+/)
   })
@@ -236,7 +236,7 @@ describe('render · control de cabecera default=max', () => {
   it('el onchange del selector sobrevive al scoping de handler inline (document.URL sombrea a URL)', async () => {
     // En un handler inline el browser mete a `document` en la cadena de scope: `URL` resuelve a
     // `document.URL` (un STRING), no al constructor global → `new URL(…)` lanza «URL is not a
-    // constructor» y el selector del Inspector queda muerto. El handler debe usar `window.URL`.
+    // constructor» y el selector de la bandeja queda muerto. El handler debe usar `window.URL`.
     // Este test EJECUTA el handler generado bajo ese scoping (with(document)), no solo su sintaxis.
     const { out } = await render(YAML)
     const html = out.html ?? ''

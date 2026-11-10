@@ -79,7 +79,7 @@ hito H2 del diseño `work/004-cluster-disenos-backlog-2026-08-07/05-111-rubrica-
 ## CV-01 · Los controles viven en la bandeja; la cara muestra estado
 
 - **Convención:** todo control —filtros, selectores, búsqueda, agrupar-por, descarga, configuración—
-  vive en la **bandeja** (el panel lateral, alias Inspector). El cuerpo del PI es la pieza (tablas,
+  vive en la **bandeja** (el panel lateral). El cuerpo del PI es la pieza (tablas,
   tarjetas, gráficos) más la navegación; lo que queda arriba sobre el documento es **estado**: los
   sellos de alcance y los **chips** de los filtros activos. En una línea: *cara = estado · bandeja =
   maquinaria · print = estado como texto*. Existe por tres razones propias: el PI es un documento

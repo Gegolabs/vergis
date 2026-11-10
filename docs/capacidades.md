@@ -78,7 +78,7 @@ una versión ya cortada.
 | `CAP-17` | Ancla de negocio de un dataset (habilita comentar una fila) | `data.<ds>.anchor` = `{ entity, key[], display }` | 0.13.0 | [capa-de-notas.md §4](capa-de-notas.md) |
 | `CAP-18` | Identidad del PI | `identity.id`, `identity.display_name`, `identity.description`, `identity.owner`, `identity.tags` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 | `CAP-19` | Clasificación del PI | `identity.classification`: `public` · `internal` · `confidential` · `regulated` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
-| `CAP-20` | Versión del PI, visible en el pie del inspector | `identity.version` | 0.2.1 | [CHANGELOG 0.2.1](../CHANGELOG.md) |
+| `CAP-20` | Versión del PI, visible en el pie de la bandeja | `identity.version` | 0.2.1 | [CHANGELOG 0.2.1](../CHANGELOG.md) |
 | `CAP-21` | Slug de URL derivado del código del PI | `identity.code` | 0.18.0 | [CHANGELOG 0.18.0 (#207)](../CHANGELOG.md) |
 | `CAP-22` | Contrato de datos de un dataset | `data.<ds>.capability` + `params` + `shape` | ≤0.9 | [arquitectura-multi-reporte.md §2](arquitectura-multi-reporte.md) |
 | `CAP-23` | Bloques de calidad y de entrega del spec | `quality` (frescura: `watermark_field`, `max_age`, `timezone`; sin `max_age` la marca de agua declara el corte del header sin SLA ni banner, #411) · `delivery.render[]` | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
@@ -141,13 +141,13 @@ una versión ya cortada.
 | `CAP-223` | **Contexto del drill visible, regreso con su ruta y estado de la tabla al volver**: sellos de solo lectura por clave de `context` (nombre resuelto del dato de la vista destino, nunca de la URL), migas `← vista de origen` con su ctx y filtros (cadena de hasta 3), y orden, facetas, búsqueda, agrupación y scroll restituidos al volver por atrás o por miga | `pages[].context[]` como objeto `{ key, label?, display? }` (o string); query `from` y `vret` (las pone la plataforma); evento `mira-context-display-missing` | 0.46.0 (#422) | [superficie-de-estado.md §3·bis](superficie-de-estado.md) |
 | `CAP-56` | PI de una sola vista | `piece` (excluyente con `pages`) | ≤0.9 | [schema/mira-spec.schema.json](../schema/mira-spec.schema.json) |
 
-## Bandeja / inspector
+## Bandeja
 
 | ID | Capacidad | Cómo se llama / se declara | Desde | Dónde se explica |
 |--|--|--|--|--|
 | `CAP-57` | La convención: **cara = estado · bandeja = maquinaria · print = estado como texto** | banda de contexto `vctxbar` + bandeja lateral | 0.8.0 | [superficie-de-estado.md §1](superficie-de-estado.md) |
 | `CAP-58` | Sello de alcance clickeable (la banda de contexto ES el selector) | `vctxbar` con `<select>` / `<details>` nativos | 0.8.0 | [superficie-de-estado.md §3](superficie-de-estado.md) |
-| `CAP-59` | Kit de afordancias del inspector: buscar · agrupar · descargar · limpiar | tab «Controles» de la bandeja | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
+| `CAP-59` | Kit de afordancias de la bandeja: buscar · agrupar · descargar · limpiar | tab «Controles» de la bandeja | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
 | `CAP-60` | Selector de tabla objetivo cuando hay ≥2 tablas interactivas | selector del kit | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
 | `CAP-61` | Orden, búsqueda global y por columna, y agrupación en la tabla | runtime de tabla (`vtApply`) | ≤0.9 | [table-runtime.ts](../packages/capabilities/src/table-runtime.ts) |
 | `CAP-62` | Contador de filas al pie de cada tabla, imprimible | pie discreto de la tabla | 0.8.0 | [superficie-de-estado.md §5](superficie-de-estado.md) |
@@ -158,7 +158,7 @@ una versión ya cortada.
 | `CAP-67` | Modo **print**: mismo pipeline, sin maquinaria ni scripts, tablas completas | `print: true` (render dedicado; `TABLE_PRINT_MAX_ROWS`) | 0.14.0 (#65) | [piece-types.ts · `RenderParams.print`](../packages/capabilities/src/piece-types.ts) |
 | `CAP-68` | **Vistas guardadas** de una tabla, con vista por defecto fijable | tab «Vistas» de la bandeja (★ = por defecto, ↻ actualizar, × eliminar); persistidas por reporte | ≤0.9 | [table-runtime.ts](../packages/capabilities/src/table-runtime.ts) |
 | `CAP-69` | Faceta por columna desde el encabezado de la tabla (popover con buscador) | popover del `<th>` («Buscar valor…», «Todos» / «Limpiar») | ≤0.9 | [table-runtime.ts](../packages/capabilities/src/table-runtime.ts) |
-| `CAP-70` | Doble pista de versión en el pie del inspector | versión del PI + `Mira v<versión>` (de `package.json`) | 0.2.1 | [CHANGELOG 0.2.1](../CHANGELOG.md) |
+| `CAP-70` | Doble pista de versión en el pie de la bandeja | versión del PI + `Mira v<versión>` (de `package.json`) | 0.2.1 | [CHANGELOG 0.2.1](../CHANGELOG.md) |
 
 ## Gráficos
 
@@ -355,7 +355,7 @@ una versión ya cortada.
 | `CAP-190` | Secciones de menú declaradas por la INSTANCIA en el avatar (rótulo + enlaces; agrega, no reemplaza) | `VERGIS_MENU` → `menu: [{ title, links: [{ label, href, description?, newTab? }] }]` | 0.28.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
 | `CAP-194` | **Las secciones de menú de la instancia se recargan en caliente**; una recarga inválida conserva lo vigente y el nodo sigue sirviendo | `VERGIS_MENU` entra en `RELOADABLE_SLICES` — el watch de config de instancia y `SIGHUP` la recargan | 0.30.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
 | `CAP-195` | **El nodo sirve las colecciones de archivos estáticos declaradas por la instancia**, bajo la misma autorización del catálogo: publicar una página deja de exigir un bloque en el borde. Prefijo validado al cargar (un Let con el mismo slug gana), contención de ruta verificada léxica y realmente (`..`, `%2e%2e%2f` y symlink que escapa ⇒ 403), `Content-Type` por lista blanca + `nosniff`, lectura por request (sin caché) y recarga en caliente | `VERGIS_STATIC` → `static: [{ path, dir, label? }]`; entra en `RELOADABLE_SLICES` y `GET /contrato` la declara con `exists`/`readable`/`shadowedByLet` | 0.31.0 | [arquitectura-multi-reporte.md §Config declarativa](arquitectura-multi-reporte.md) |
-| `CAP-196` | **El nodo publica sus novedades**: el `CHANGELOG.md` que viaja dentro de la imagen, servido como página con el marco de la plataforma y **la misma autorización que el resto del nodo** (sin rol nuevo). La versión que corre encabeza, el historial va debajo con anclas estables, y la sección «Sin publicar» **no se sirve**. El número de versión del pie del inspector y del catálogo enlaza a la ruta | `GET /novedades` · `/novedades#<versión>`; sin env nueva (503 si el changelog no viajó en la imagen) | 0.32.0 | [CHANGELOG · Sin publicar](../CHANGELOG.md) |
+| `CAP-196` | **El nodo publica sus novedades**: el `CHANGELOG.md` que viaja dentro de la imagen, servido como página con el marco de la plataforma y **la misma autorización que el resto del nodo** (sin rol nuevo). La versión que corre encabeza, el historial va debajo con anclas estables, y la sección «Sin publicar» **no se sirve**. El número de versión del pie de la bandeja y del catálogo enlaza a la ruta | `GET /novedades` · `/novedades#<versión>`; sin env nueva (503 si el changelog no viajó en la imagen) | 0.32.0 | [CHANGELOG · Sin publicar](../CHANGELOG.md) |
 | `CAP-197` | **El nodo GENERA y sirve el Datadoc**: el catálogo del esquema de datos de la instancia —qué existe en cada conexión, qué significa, quién lo escribe, quién lo lee, con qué frescura y bajo qué gobierno—, medido por conexión en modo estrictamente de solo lectura, cacheado en disco con sello por conexión, con builds inmutables y puntero atómico, y servido en `/datadoc/` por la misma vía que `CAP-195`. Una conexión que no responde conserva su medición anterior y el sitio la marca. **Los conteos de filas solo se piden donde la RLS no filtra** (clasificación por la forma COMPLETA del predicado, jamás por substring), y un build marcado rancio por una recarga de gobierno los retira | `VERGIS_DATADOC=1` (exige `VERGIS_ENGINE=fabric`) · `VERGIS_WRITERS` · `VERGIS_SEMANTICA` (ambos en `RELOADABLE_SLICES`) · `domains[].connections` · `GET /datadoc/` · `/admin/datadoc` (estado, generar, schedule y política de conteos) · lazo `datadoc` · sección en `GET /contrato` | 0.33.0 | [arquitectura-multi-reporte.md §El nodo genera el catálogo del esquema](arquitectura-multi-reporte.md) |
 
 ## Operación de una instalación (plugins `vergis`, `custos` y `mira`)
